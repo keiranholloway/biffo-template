@@ -19,8 +19,9 @@ name: Core-direct-paths estate audit
 # and ci.yml only ever checks out THIS repo.
 #
 # This workflow is the cross-repo half: it clones the live estate fresh and
-# runs the identical entrypoint against each sibling's real frontend and this
-# core's real routes -- `--sibling`/`--frontend-src`/`--core-src` exist on
+# runs the identical entrypoint against each sibling's real frontend and the
+# sibling's OWN real core (see the 2026-08-10 correction below for why "this
+# core" was wrong) -- `--sibling`/`--frontend-src`/`--estate` exist on
 # `check-core-direct-paths.ts` precisely for this call shape (see that file's
 # own module doc comment, which spells out this exact invocation).
 #
@@ -60,6 +61,31 @@ name: Core-direct-paths estate audit
 # Offset 30 minutes after `shared-sync-report.yml`'s 06:00 UTC so the two
 # scheduled jobs are not cloning ~15-20 repos each from the same two owners
 # in the same couple of minutes.
+#
+# ## Corrected 2026-08-10 (#1377): resolve each sibling's OWN core, not this
+# ## repo's
+#
+# The first real run against the live estate (run 31366788388) found nine
+# "failures" -- and every single one was a false positive. This workflow was
+# resolving `--core-src` to biffo-template's OWN `services/api/src` for every
+# sibling. A sibling's deployed core is not the template -- it is the
+# INSTANCE it was scaffolded against (`tabsii-platform` for `tabsii-*`,
+# `biffo-platform` for `biffo-*`), and an instance serves the template's
+# routes PLUS its own `domains/<name>/` routes. All nine findings were
+# `/api/v1/public/*` -- entirely instance-owned, zero of it in the template --
+# so every one resolved cleanly once checked against the sibling's real core.
+#
+# The fix does not hardcode that mapping (a hardcoded `tabsii-* ->
+# tabsii-platform` table would mis-audit the next sibling or a third instance
+# born after it was written). It reads `<estate>/<sibling>/biffo.sibling.json`'s
+# `core_project` field -- the same file `sibling-create.ts` already writes,
+# the one place this mapping is declared -- via `resolveSiblingCoreSrc` in
+# `cli/src/lib/core-direct-paths-audit.ts`. That resolver fails LOUD (the
+# whole audit run fails) rather than skipping a sibling whose instance is
+# missing from the clone, which would silently shrink the denominator this
+# workflow exists to keep honest. See that function's doc comment for the
+# full account, and biffo-template#1377's comment thread for the measured
+# before/after.
 
 on:
   schedule:
@@ -164,16 +190,15 @@ jobs:
         if: ${{ !cancelled() && steps.estate.outcome == 'success' && steps.install.outcome == 'success' }}
         run: |
           set -u
-          root=$(git rev-parse --show-toplevel)
-          core_src="$root/services/api/src"
           estate="${{ steps.estate.outputs.estate }}"
           log="$RUNNER_TEMP/core-direct-paths-audit.log"
+          cores_seen="$RUNNER_TEMP/core-direct-paths-cores-seen.txt"
           : > "$log"
+          : > "$cores_seen"
 
           total_extracted=0
           total_frontend_files=0
           audited_repos=0
-          core_prefix_count=0
           findings=0
           failed_repos=""
 
@@ -186,10 +211,16 @@ jobs:
               continue
             fi
 
+            # Resolve THIS sibling's own core (#1377) via its biffo.sibling.json
+            # -- never biffo-template's own services/api/src, which is a
+            # different app that does not serve the sibling at all. Fails loud
+            # (non-zero exit) rather than silently skipping when the mapping or
+            # the instance checkout is missing -- see resolveSiblingCoreSrc in
+            # cli/src/lib/core-direct-paths-audit.ts.
             echo "== ${name} ==" >> "$log"
             set +e
             out=$(sh scripts/biffo.sh check core-direct-paths \
-              --sibling "$name" --frontend-src "$frontend_src" --core-src "$core_src" 2>&1)
+              --sibling "$name" --frontend-src "$frontend_src" --estate "$estate" 2>&1)
             rc=$?
             set -e
             printf '%s\n' "$out" >> "$log"
@@ -199,15 +230,23 @@ jobs:
             line=$(printf '%s\n' "$out" | grep -E '^audited [0-9]+ core-direct call site' | tail -1)
             n=$(printf '%s' "$line" | sed -E 's/^audited ([0-9]+) .*/\1/')
             m=$(printf '%s' "$line" | sed -E 's/.*across ([0-9]+) frontend file.*/\1/')
-            r=$(printf '%s' "$line" | sed -E 's/.*against ([0-9]+) route prefix.*/\1/')
+            core_project=$(printf '%s' "$line" | sed -nE 's/.*\(core project: ([^)]+)\).*/\1/p')
             case "$n" in ''|*[!0-9]*) n=0 ;; esac
             case "$m" in ''|*[!0-9]*) m=0 ;; esac
-            case "$r" in ''|*[!0-9]*) r=0 ;; esac
 
             total_extracted=$((total_extracted + n))
             total_frontend_files=$((total_frontend_files + m))
             audited_repos=$((audited_repos + 1))
-            core_prefix_count=$r
+
+            if [ -n "$core_project" ]; then
+              echo "$core_project" >> "$cores_seen"
+            else
+              # The audit line never printed a resolved core -- either
+              # resolution failed loudly (rc != 0, already about to be counted
+              # as a finding below) or this was somehow run without --estate.
+              # Record it rather than silently omitting it from the summary.
+              echo "UNRESOLVED(${name})" >> "$cores_seen"
+            fi
 
             if [ "$rc" -ne 0 ]; then
               findings=$((findings + 1))
@@ -215,7 +254,10 @@ jobs:
             fi
           done
 
-          denom="audited ${total_extracted} core-direct call site(s) across ${total_frontend_files} frontend file(s) in ${audited_repos} repo(s), against ${core_prefix_count} route prefix(es)"
+          core_list=$(sort -u "$cores_seen" | paste -sd, - | sed 's/,/, /g')
+          [ -n "$core_list" ] || core_list="(no repo carried a frontend to audit)"
+
+          denom="audited ${total_extracted} core-direct call site(s) across ${total_frontend_files} frontend file(s) in ${audited_repos} repo(s), against core instance(s): ${core_list}"
 
           echo "$denom"
           {

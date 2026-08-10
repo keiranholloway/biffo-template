@@ -113,15 +113,27 @@ checkCommand
   .description(
     "Refuse a frontend's core-direct call site (bypassing its own BFF) naming a route " +
       'prefix core does not register (#1377). Defaults to a self-check of the sibling ' +
-      "skeleton against this repo's own services/api/src; --sibling/--frontend-src/--core-src " +
-      'point it at a real checked-out sibling instead',
+      "skeleton against this repo's own services/api/src; --sibling/--frontend-src plus " +
+      "either --estate (resolve the sibling's OWN core from its biffo.sibling.json) or " +
+      '--core-src (an explicit override) point it at a real checked-out sibling instead',
   )
   .option('--sibling <name>', 'Label for the report')
   .option('--frontend-src <dir>', "Sibling's frontend source directory to scan")
-  .option('--core-src <dir>', "Core API's source directory (ground truth for route prefixes)")
-  .action(async (opts: { sibling?: string; frontendSrc?: string; coreSrc?: string }) => {
-    await runCoreDirectPathsCheck(opts)
-  })
+  .option(
+    '--estate <dir>',
+    "Directory holding every cloned repo; resolves --sibling's OWN core from its " +
+      'biffo.sibling.json core_project field (ignored if --core-src is also given)',
+  )
+  .option(
+    '--core-src <dir>',
+    "Core API's source directory (ground truth for route prefixes) — explicit override, " +
+      'takes precedence over --estate resolution',
+  )
+  .action(
+    async (opts: { sibling?: string; frontendSrc?: string; coreSrc?: string; estate?: string }) => {
+      await runCoreDirectPathsCheck(opts)
+    },
+  )
 
 checkCommand
   .command('cognito-invite-template')

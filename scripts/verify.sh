@@ -746,10 +746,20 @@ pg_test_run() {
       timeout "$PG_TEST_BUDGET_SECONDS" uv run --directory "$1" \
       pytest -q -m 'not serial' -n auto --dist loadfile $2 >"$_out" 2>&1
     _pg_rc=$?
+    # pytest exits 5 when `-m 'not serial'` matches nothing -- correct when
+    # every currently-collected pg module happens to be serial-only (a repo's
+    # first test_*_pg.py file can legitimately start out that way; this repo
+    # hit it the moment its only pg module went 3-for-3 serial,
+    # biffo-template#1453). Symmetric with the identical exit-5 tolerance on
+    # the serial pass below: "nothing to run in THIS pass" is not "the lane
+    # failed", and treating it as a hard failure here would stop the serial
+    # pass -- which DOES have tests to run -- from ever executing.
+    [ "$_pg_rc" -eq 5 ] && _pg_rc=0
 
-    # Only if the parallel pass actually passed. A failure there is the answer
-    # already, and running the serial pass on top would append a second summary
-    # line that the "did it exercise anything" grep below would happily match.
+    # Only if the parallel pass actually passed (or had nothing to run, per
+    # the exit-5 tolerance above). A failure there is the answer already, and
+    # running the serial pass on top would append a second summary line that
+    # the "did it exercise anything" grep below would happily match.
     if [ "$_pg_rc" -eq 0 ]; then
       _pg_left=$((PG_TEST_BUDGET_SECONDS - ($(date +%s) - _pg_started)))
       [ "$_pg_left" -lt 10 ] && _pg_left=10

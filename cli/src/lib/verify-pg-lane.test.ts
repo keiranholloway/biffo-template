@@ -455,6 +455,36 @@ describe('verify.sh runs the pg lane concurrently where that is safe (#703)', ()
     expect(run.stdout).not.toContain('verify failed:')
   })
 
+  it('treats "no tests collected" from the PARALLEL pass as fine too, and still runs the serial pass', () => {
+    // The mirror-image state (biffo-template#1453): every test in the only
+    // test_*_pg.py file this repo currently has is marked serial, so
+    // `-m 'not serial'` matches nothing and pytest exits 5 there instead.
+    // Before this, a bare exit-5 read as a real failure and the serial pass
+    // -- which DOES have tests -- never even ran, breaking this repo's own
+    // pg lane the moment its first pg module went all-serial.
+    const run = runIn(
+      {
+        ...lane,
+        '_stub-bin/uv': [
+          '#!/bin/sh',
+          XDIST_OK.trim(),
+          'case "$*" in',
+          '  *"-m not serial"*) exit 5 ;;',
+          '  *"-m serial"*) echo "3 passed"; exit 0 ;;',
+          'esac',
+          'echo "3 passed"',
+          'exit 0',
+          '',
+        ].join('\n'),
+      },
+      dsn,
+    )
+
+    expect(run.status).toBe(0)
+    expect(run.stdout).toContain('verify passed')
+    expect(run.stdout).not.toContain('verify failed:')
+  })
+
   it('falls back to one undivided pass, loudly, when pytest-xdist is missing', () => {
     // A repo that has taken the script but not re-run `uv sync`. `-n` would
     // abort with a usage error -- the gate failing over its own dependency

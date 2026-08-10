@@ -231,9 +231,23 @@ resource "aws_cognito_user" "admin" {
   username = var.admin_email
 
   attributes = {
-    email              = var.admin_email
-    email_verified     = true
-    "custom:tenant_id" = "default"
+    email          = var.admin_email
+    email_verified = true
+    # Unprefixed, deliberately: the AWS provider's Cognito user resource
+    # strips the `custom:` namespace when it reads state back
+    # (flattenAttributeTypes, internal/service/cognitoidp/user.go) but this
+    # config declared the prefixed key, so state held `tenant_id` while
+    # config held `custom:tenant_id` — a plain key-equality diff never
+    # matched, so every OTHER apply wrote the attribute and then deleted it
+    # a second later (issue #1476, CloudTrail-confirmed against provider
+    # 5.100.0 source: 23 deletions in biffo-platform, 50+ in
+    # tabsii-platform). The write path (expandAttributeTypes ->
+    # normalizeUserAttributeKey) re-prefixes on the way out regardless of
+    # which form is declared here, so AWS still ends up with
+    # `custom:tenant_id` — only the config/state key form changes, and the
+    # transition is non-destructive because Read has always stripped the
+    # prefix before writing state.
+    tenant_id = "default"
   }
 
   force_alias_creation = false

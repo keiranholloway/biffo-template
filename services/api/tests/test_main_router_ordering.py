@@ -264,12 +264,34 @@ def test_the_pre_fix_order_really_does_lose_the_routes(
 # --------------------------------------------------------------------------
 
 
+#: Pairs where a second registration is DELIBERATE and documented, so the
+#: first-mounted route winning is the intent rather than an accident.
+#:
+#: ``routers/whoami.py`` is registered LAST in ``main.py`` precisely so that an
+#: instance serving a richer ``/whoami`` from a product domain wins the path —
+#: its own module docstring says "this never runs" in that case. The core copy
+#: exists because the template-owned portal login page calls the endpoint on
+#: every sign-in, and instances without a product implementation were serving a
+#: 404 that looked exactly like a rejected password.
+#:
+#: Upstream that pair never collides, because the template has no product
+#: domain to shadow it. It collides in EVERY instance that has one — so the
+#: guard and the thing it guards disagreed, and only downstream could tell.
+_INTENTIONAL_SHADOWS: frozenset[tuple[str, str]] = frozenset({("/api/v1/whoami", "GET")})
+
+
 def test_no_two_routes_claim_the_same_path_and_method() -> None:
     """Mounting domains first is safe only while no domain claims a
     (path, method) pair generic CRUD also claims. Asserted against the real
     assembled app, so an instance that adds such a domain fails here instead of
-    losing a CRUD route in production."""
-    duplicates = _duplicates(_route_keys(api_main.app))
+    losing a CRUD route in production.
+
+    ``_INTENTIONAL_SHADOWS`` is subtracted rather than the assertion being
+    softened: an undocumented duplicate still fails, and adding a new exemption
+    is a deliberate edit with a reason attached."""
+    duplicates = [
+        k for k in _duplicates(_route_keys(api_main.app)) if k not in _INTENTIONAL_SHADOWS
+    ]
     assert not duplicates, (
         "these (path, method) pairs are claimed by more than one route, so only "
         f"the first-mounted one is reachable: {duplicates}. Domains are mounted "
@@ -287,3 +309,20 @@ def test_the_collision_guard_detects_a_domain_shadowing_generic_crud(
     table = "test_collision_widgets"
     app = _assemble(_mains_include_order(), table, monkeypatch, hand_written_method="GET")
     assert _duplicates(_route_keys(app)) == [(f"/api/v1/data/{table}", "GET")]
+
+
+def test_the_intentional_shadow_exemption_is_narrow() -> None:
+    """The exemption must not become a blanket hole.
+
+    Every pair in ``_INTENTIONAL_SHADOWS`` has to be a real route the assembled
+    app actually serves — an entry naming a path that no longer exists is dead
+    permission, and would silently keep excusing a future collision on a path
+    that came to mean something else.
+    """
+    live = set(_route_keys(api_main.app))
+    stale = sorted(pair for pair in _INTENTIONAL_SHADOWS if pair not in live)
+    assert not stale, (
+        f"these exemptions name routes the app does not serve: {stale}. "
+        "Remove them — an exemption for a path that no longer exists excuses a "
+        "collision nobody has reasoned about."
+    )

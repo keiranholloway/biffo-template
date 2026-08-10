@@ -14,6 +14,7 @@ import {
   extractCoreRoutePrefixes,
   frontendSourceFiles,
   pathMatchesAnyCorePrefix,
+  resolveSiblingCoreSrc,
 } from './core-direct-paths-audit.js'
 
 // ── extractCoreDirectPaths ──────────────────────────────────────────────────
@@ -413,5 +414,81 @@ describe('auditSiblingCoreDirectPaths', () => {
 
   it('reports the API_ROUTE_PREFIX constant matches what it actually uses', () => {
     expect(API_ROUTE_PREFIX).toBe('/api/v1')
+  })
+})
+
+// ── resolveSiblingCoreSrc ────────────────────────────────────────────────────
+//
+// #1377's second finding: the estate audit's first real run reported nine
+// false positives because it compared every sibling against biffo-template's
+// OWN core instead of the instance that actually serves it. These tests
+// exercise the resolver that reads `biffo.sibling.json`'s `core_project`
+// directly, rather than reasoning about the fix from the source.
+
+describe('resolveSiblingCoreSrc', () => {
+  it("resolves a sibling's core_project to its instance's services/api/src", () => {
+    const estateDir = makeTmpDir('resolve-core-ok')
+    mkdirSync(join(estateDir, 'tabsii-intake'), { recursive: true })
+    writeFileSync(
+      join(estateDir, 'tabsii-intake', 'biffo.sibling.json'),
+      JSON.stringify({ name: 'tabsii-intake', core_project: 'tabsii-platform' }),
+    )
+    mkdirSync(join(estateDir, 'tabsii-platform', 'services', 'api', 'src'), { recursive: true })
+
+    const resolution = resolveSiblingCoreSrc({ estateDir, sibling: 'tabsii-intake' })
+
+    expect(resolution.coreProject).toBe('tabsii-platform')
+    expect(resolution.coreApiSrcDir).toBe(
+      join(estateDir, 'tabsii-platform', 'services', 'api', 'src'),
+    )
+  })
+
+  it('throws rather than falling back to any default when biffo.sibling.json is missing', () => {
+    const estateDir = makeTmpDir('resolve-core-no-config')
+    mkdirSync(join(estateDir, 'orphan-sibling'), { recursive: true })
+
+    expect(() => resolveSiblingCoreSrc({ estateDir, sibling: 'orphan-sibling' })).toThrow(
+      /biffo\.sibling\.json/,
+    )
+  })
+
+  it('throws on unparsable JSON rather than silently skipping the sibling', () => {
+    const estateDir = makeTmpDir('resolve-core-bad-json')
+    mkdirSync(join(estateDir, 'broken-sibling'), { recursive: true })
+    writeFileSync(join(estateDir, 'broken-sibling', 'biffo.sibling.json'), '{ not json')
+
+    expect(() => resolveSiblingCoreSrc({ estateDir, sibling: 'broken-sibling' })).toThrow(
+      /not valid JSON/,
+    )
+  })
+
+  it('throws when core_project is absent or blank, never silently picks a fallback', () => {
+    const estateDir = makeTmpDir('resolve-core-blank')
+    mkdirSync(join(estateDir, 'blank-sibling'), { recursive: true })
+    writeFileSync(
+      join(estateDir, 'blank-sibling', 'biffo.sibling.json'),
+      JSON.stringify({ name: 'blank-sibling', core_project: '' }),
+    )
+
+    expect(() => resolveSiblingCoreSrc({ estateDir, sibling: 'blank-sibling' })).toThrow(
+      /core_project/,
+    )
+  })
+
+  it("fails loud — never silently skips — when the named core_project's instance isn't in this checkout", () => {
+    // This is exactly the failure mode #1377's fix must not recreate: an
+    // unresolvable core is reported as a failure, not folded into a quieter
+    // passing run that shrinks the audit's own denominator.
+    const estateDir = makeTmpDir('resolve-core-missing-instance')
+    mkdirSync(join(estateDir, 'tabsii-marketplace'), { recursive: true })
+    writeFileSync(
+      join(estateDir, 'tabsii-marketplace', 'biffo.sibling.json'),
+      JSON.stringify({ name: 'tabsii-marketplace', core_project: 'tabsii-platform' }),
+    )
+    // tabsii-platform is deliberately NOT cloned into this estate.
+
+    expect(() => resolveSiblingCoreSrc({ estateDir, sibling: 'tabsii-marketplace' })).toThrow(
+      /tabsii-platform.*does not exist/s,
+    )
   })
 })

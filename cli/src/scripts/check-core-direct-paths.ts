@@ -27,23 +27,39 @@
  * (see biffo-template#1413's PR body for the estate-wide follow-up this
  * implies).
  *
- * `--sibling`/`--frontend-src`/`--core-src` let this same entrypoint audit a
- * REAL sibling: `sh scripts/biffo.sh check core-direct-paths --sibling
- * tabsii-intake --frontend-src ~/code/tabsii-intake/apps/frontend/src
- * --core-src ~/code/biffo-template/services/api/src`. That is the shape an
- * estate-wide script (run locally, or from a future workflow with the right
- * checkout) would drive per sibling — this module is deliberately
- * directory-parametrised for exactly that reuse (see
+ * `--sibling`/`--frontend-src`/`--estate` let this same entrypoint audit a
+ * REAL sibling against the core THAT ACTUALLY SERVES IT: `sh scripts/biffo.sh
+ * check core-direct-paths --sibling tabsii-intake --frontend-src
+ * ~/code/tabsii-intake/apps/frontend/src --estate ~/code`. `--estate` points
+ * at the directory holding every cloned repo; the sibling's own
+ * `biffo.sibling.json` (`<estate>/<sibling>/biffo.sibling.json`) names its
+ * `core_project`, and THAT instance's `services/api/src` is resolved as the
+ * core to check against — never biffo-template's own, which is a different
+ * app that does not serve the sibling at all (see
+ * `resolveSiblingCoreSrc`'s doc comment in `core-direct-paths-audit.ts` for
+ * the false-positive run this replaced: comparing every sibling against
+ * biffo-template's own core, on `dev`, produced nine findings, one on every
+ * `/api/v1/public/*` call site, that all vanished once each sibling was
+ * checked against ITS OWN instance instead).
+ *
+ * `--core-src` remains as a direct override for ad-hoc/local use (it always
+ * wins over `--estate` resolution) — the shape a future estate-wide
+ * co-checkout script would drive per sibling either way, since this module is
+ * deliberately directory-parametrised for exactly that reuse (see
  * `core-direct-paths-audit.ts`'s own module doc comment).
  */
 import { join } from 'node:path'
 import { execa } from 'execa'
-import { auditSiblingCoreDirectPaths } from '../lib/core-direct-paths-audit.js'
+import {
+  auditSiblingCoreDirectPaths,
+  resolveSiblingCoreSrc,
+} from '../lib/core-direct-paths-audit.js'
 
 export interface CoreDirectPathsCheckOptions {
   sibling?: string
   frontendSrc?: string
   coreSrc?: string
+  estate?: string
 }
 
 export async function runCoreDirectPathsCheck(
@@ -54,16 +70,45 @@ export async function runCoreDirectPathsCheck(
   const sibling = opts.sibling ?? 'sibling-template (self-check)'
   const frontendSrcDir =
     opts.frontendSrc ?? join(root, '_skeletons', 'sibling-template', 'apps', 'frontend', 'src')
-  const coreApiSrcDir = opts.coreSrc ?? join(root, 'services', 'api', 'src')
+
+  // Resolution order: an explicit `--core-src` always wins (ad-hoc/local
+  // override); otherwise, given a real `--sibling` and an `--estate`, resolve
+  // the sibling's OWN core from its `biffo.sibling.json` -- fails loud rather
+  // than falling back to this repo's core, which is exactly the bug being
+  // fixed here. With neither, default to this repo's own core (the
+  // self-check shape ci.yml runs, auditing the sibling skeleton against
+  // biffo-template itself -- correct there, because the skeleton has no
+  // instance to resolve).
+  let coreApiSrcDir: string
+  let coreProject: string | null = null
+  if (opts.coreSrc) {
+    coreApiSrcDir = opts.coreSrc
+  } else if (opts.sibling && opts.estate) {
+    let resolution: ReturnType<typeof resolveSiblingCoreSrc>
+    try {
+      resolution = resolveSiblingCoreSrc({ estateDir: opts.estate, sibling: opts.sibling })
+    } catch (err) {
+      console.error(`✗ core-direct-paths guard (${sibling}): ${(err as Error).message}`)
+      process.exit(1)
+    }
+    coreApiSrcDir = resolution.coreApiSrcDir
+    coreProject = resolution.coreProject
+  } else {
+    coreApiSrcDir = join(root, 'services', 'api', 'src')
+  }
 
   const report = auditSiblingCoreDirectPaths({ sibling, frontendSrcDir, coreApiSrcDir })
 
   // Denominator first, unconditionally — a green run that never says how much
-  // it looked at is indistinguishable from one that looked at nothing.
+  // it looked at is indistinguishable from one that looked at nothing. The
+  // resolved core project (when there is one) is printed IN this line so a
+  // wrong-core comparison is visible without anyone reproducing it by hand
+  // (#1377's second finding was exactly this, invisible until it was printed).
   console.log(
     `audited ${report.extractedCount} core-direct call site(s) across ${report.frontendFiles} ` +
       `frontend file(s) under ${frontendSrcDir}, against ${report.corePrefixCount} route ` +
-      `prefix(es) from ${report.coreFiles} core file(s) under ${coreApiSrcDir}`,
+      `prefix(es) from ${report.coreFiles} core file(s) under ${coreApiSrcDir}` +
+      (coreProject ? ` (core project: ${coreProject})` : ''),
   )
 
   if (!report.ok) {

@@ -92,7 +92,7 @@
  *    nothing.
  */
 
-import { readFileSync, readdirSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 
 /** Interpolated identifiers that mean "this call goes to core directly,
@@ -526,6 +526,96 @@ export function pathMatchesAnyCorePrefix(
     if (normalized === full || normalized.startsWith(`${full}/`)) return true
   }
   return false
+}
+
+// ── Resolving a sibling's ACTUAL core ───────────────────────────────────────
+//
+// #1377's second finding (triaged 2026-08-10, after the estate-wide workflow
+// ran for the first time): every one of the nine findings from that first run
+// was a FALSE POSITIVE, because the caller resolved `coreApiSrcDir` to
+// biffo-template's OWN `services/api/src` for every sibling. A sibling's
+// deployed core is not the template — it is the INSTANCE scaffolded from the
+// template that the sibling was registered against, and an instance serves
+// the template's routes PLUS its own `domains/<name>/` routes. Measured
+// directly: `biffo-template`'s own source registers ZERO `/public/...`
+// routes, while `tabsii-platform` registers all seven `tabsii-intake` calls
+// and `biffo-platform` registers the one `biffo-platform-app` calls. Every
+// `/api/v1/public/*` finding was this guard comparing a sibling against a
+// core that has never served it.
+//
+// The mapping is not reinvented or hardcoded here. `biffo.sibling.json`
+// already declares it — `core_project`, written by `sibling-create.ts` at
+// birth and read nowhere else for this purpose until now — so a sibling born
+// after this guard exists is resolved the same way as one born before it,
+// with no second list to keep in sync (the `_extract_detail` mistake, #1108).
+export interface SiblingCoreResolution {
+  sibling: string
+  coreProject: string
+  coreApiSrcDir: string
+}
+
+/**
+ * Resolve the core API source directory that ACTUALLY serves `sibling`,
+ * reading `<estateDir>/<sibling>/biffo.sibling.json`'s `core_project` field
+ * and pointing at `<estateDir>/<core_project>/services/api/src`.
+ *
+ * Fails LOUD — throws, never returns a partial/undefined result — on every
+ * way this can go wrong: the sibling directory or its `biffo.sibling.json`
+ * missing or unreadable, the JSON unparsable, `core_project` absent or blank,
+ * or the resolved instance directory not existing in this checkout. Returning
+ * `null` and letting a caller silently skip the sibling would recreate
+ * exactly the "a check that skips an input it cannot evaluate shrinks its own
+ * denominator" defect #1363/#1374 exist to prevent — an unresolvable core is
+ * reported as a failure, not folded into a quieter passing run.
+ */
+export function resolveSiblingCoreSrc(params: {
+  estateDir: string
+  sibling: string
+}): SiblingCoreResolution {
+  const { estateDir, sibling } = params
+  const configPath = join(estateDir, sibling, 'biffo.sibling.json')
+
+  let raw: string
+  try {
+    raw = readFileSync(configPath, 'utf8')
+  } catch (err) {
+    throw new Error(
+      `cannot resolve ${sibling}'s core: ${configPath} does not exist or is unreadable ` +
+        `(${(err as Error).message}) -- refusing to guess which core serves this sibling.`,
+    )
+  }
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch (err) {
+    throw new Error(
+      `cannot resolve ${sibling}'s core: ${configPath} is not valid JSON ` +
+        `(${(err as Error).message}).`,
+    )
+  }
+
+  const coreProject =
+    parsed !== null && typeof parsed === 'object' && 'core_project' in parsed
+      ? (parsed as { core_project?: unknown }).core_project
+      : undefined
+  if (typeof coreProject !== 'string' || coreProject.trim() === '') {
+    throw new Error(
+      `cannot resolve ${sibling}'s core: ${configPath} has no non-empty "core_project" field.`,
+    )
+  }
+
+  const coreApiSrcDir = join(estateDir, coreProject, 'services', 'api', 'src')
+  if (!existsSync(coreApiSrcDir)) {
+    throw new Error(
+      `cannot resolve ${sibling}'s core: biffo.sibling.json names core_project ` +
+        `"${coreProject}", but ${coreApiSrcDir} does not exist -- the instance is missing ` +
+        `from this estate checkout, not merely unmatched. Refusing to silently skip ` +
+        `${sibling} and shrink the audit's denominator.`,
+    )
+  }
+
+  return { sibling, coreProject, coreApiSrcDir }
 }
 
 /** The whole audit for one sibling: extract its core-direct call sites,

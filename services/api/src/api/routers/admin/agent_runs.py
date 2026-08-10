@@ -55,6 +55,7 @@ def _summary(run: AgentRun) -> AgentRunSummary:
         status=run.status,
         dry_run=run.dry_run,
         model=model if isinstance(model, str) else None,
+        caller_plugin=run.caller_plugin,
         input_tokens=run.input_tokens,
         output_tokens=run.output_tokens,
         cost_usd=run.cost_usd,

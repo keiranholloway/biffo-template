@@ -828,3 +828,89 @@ def test_a_real_run_alongside_a_dry_one_is_still_announced(client, publisher):
     client.post(f"{_RUNS}/{real_id}/complete", json={"status": "completed"})
 
     assert [e.payload["run_id"] for e in publisher.events] == [real_id]
+
+
+# --- caller_plugin attribution (#1438) ------------------------------------
+#
+# "How much did tenant X spend via plugin Y" needed a column. These pin the
+# three properties that make the answer trustworthy: it records the right
+# identity, it resolves BOTH ways a plugin can authenticate, and a plugin cannot
+# claim to be another one.
+
+
+def _app_with_principal(agents_app, principal: ServicePrincipal) -> TestClient:
+    agents_app.dependency_overrides[require_service_principal] = lambda: principal
+    return TestClient(agents_app)
+
+
+def test_caller_plugin_is_recorded_for_a_host_mounted_plugin(agents_app):
+    """The shared host asserts the plugin identity; that is what gets stored."""
+    client = _app_with_principal(
+        agents_app,
+        ServicePrincipal(
+            principal_arn="arn:aws:sts::123456789012:assumed-role/test-host-role/session",
+            asserted_plugin="idea-scout",
+        ),
+    )
+    resp = client.post("/api/v1/internal/agent-runs", json=_create_body())
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["caller_plugin"] == "system:idea-scout"
+
+
+def test_caller_plugin_is_recorded_for_an_isolated_plugin(agents_app):
+    """Resolved from the role ARN, with no asserted header in play.
+
+    This is the case `asserted_plugin` alone would miss — an `isolated: true`
+    plugin runs in its own Lambda and never goes through the host, so it has no
+    asserted identity, only its role. Reading `logical_names` rather than
+    `asserted_plugin` is what makes both work, and this test is the reason that
+    choice cannot be quietly simplified later.
+    """
+    client = _app_with_principal(
+        agents_app,
+        ServicePrincipal(
+            principal_arn=(
+                "arn:aws:sts::123456789012:assumed-role/biffo-dev-plugin-marketing-role/session"
+            )
+        ),
+    )
+    resp = client.post("/api/v1/internal/agent-runs", json=_create_body())
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["caller_plugin"] == "system:marketing"
+
+
+def test_a_plugin_cannot_claim_to_be_another_one(agents_app):
+    """The body is not consulted. If it were, spend would be forgeable.
+
+    A plugin billing another plugin's budget is the whole reason this is sourced
+    from the verified principal, so it is asserted rather than assumed.
+    """
+    client = _app_with_principal(
+        agents_app,
+        ServicePrincipal(
+            principal_arn="arn:aws:sts::123456789012:assumed-role/test-host-role/session",
+            asserted_plugin="idea-scout",
+        ),
+    )
+    resp = client.post(
+        "/api/v1/internal/agent-runs",
+        json=_create_body(caller_plugin="system:some-other-plugin"),
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["caller_plugin"] == "system:idea-scout"
+
+
+def test_caller_plugin_is_null_when_the_caller_is_not_a_plugin(agents_app):
+    """A non-conforming ARN resolves to no logical name, and NULL is honest.
+
+    Forcing a plugin-shaped answer here would be worse than none: a spend report
+    would attribute orchestrator and admin activity to whichever plugin the ARN
+    happened to look like.
+    """
+    client = _app_with_principal(
+        agents_app,
+        ServicePrincipal(principal_arn="arn:aws:iam::123456789012:user/some-human"),
+    )
+    resp = client.post("/api/v1/internal/agent-runs", json=_create_body())
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["caller_plugin"] is None

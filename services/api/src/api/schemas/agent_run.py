@@ -76,6 +76,12 @@ class AgentRunResponse(BiffoBaseSchema):
     # rather than from the registry. Defaulted for backward compat.
     prompt_version_id: str | None = None
     prompt_version: int | None = None
+    #: Which plugin requested this run, as ``system:<plugin>``. See the model's
+    #: column docstring for what it does and does not attribute — it records who
+    #: POSTed, so orchestrator-created fan-in runs read ``system:orchestrator``
+    #: rather than the plugin that started the chain. Defaulted so a caller
+    #: reading an older response shape still parses.
+    caller_plugin: str | None = None
     agent_name: str
     status: str
     run_as_kind: str
@@ -111,6 +117,11 @@ class AgentRunSummary(BiffoBaseSchema):
     agent_name: str
     status: str
     model: str | None = None
+    #: Which plugin requested this run, as ``system:<plugin>``. See the column's
+    #: docstring on the model for what it does and does not attribute — briefly,
+    #: it records who POSTed, so orchestrator-created fan-in runs read
+    #: ``system:orchestrator`` rather than the plugin that started the chain.
+    caller_plugin: str | None = None
     # Same reason as on the full response: a persisted preview must be labellable
     # in the list, not just on the detail page (#726).
     dry_run: bool = False

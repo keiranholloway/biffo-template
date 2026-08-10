@@ -161,6 +161,29 @@ class AgentRun(TenantScopedModel):
 
     # Cost accounting (§8). Nullable: unknown until the run terminates, and a
     # failure may terminate before any tokens were spent.
+    #: Which plugin asked for this run, as ``system:<plugin>`` — or ``None``.
+    #:
+    #: Set from the *verified* ``ServicePrincipal``, never from the request body,
+    #: so a plugin cannot claim to be another one. It resolves both host-mounted
+    #: plugins (via the SigV4-signed ``X-Biffo-Plugin`` header the host binds) and
+    #: ``isolated: true`` plugins (from their own role ARN).
+    #:
+    #: **It means "who POSTed this run", which is narrower than "which product
+    #: this run belongs to".** The orchestration engine creates fan-in synthesis
+    #: runs *on a plugin's behalf*, and those record ``system:orchestrator`` —
+    #: correctly, because the orchestrator is what called. So a per-plugin spend
+    #: total built on this column alone under-reports any plugin that uses
+    #: fan-out/fan-in, which today means the main agentic consumer. Attributing a
+    #: whole chain needs a ``causation_id`` join as well.
+    #:
+    #: That limit is why this is documented at length rather than named and left:
+    #: a number that looks complete and is not is worse than an absent one.
+    #:
+    #: ``NULL`` on runs created before this column existed, and on runs requested
+    #: by something that is not a plugin at all (a workflow, an admin action).
+    #: Not backfilled — there is no correct value to invent.
+    caller_plugin: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
     input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     cost_usd: Mapped[float | None] = mapped_column(Float, nullable=True)

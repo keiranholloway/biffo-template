@@ -186,7 +186,15 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "plugin_media" {
 # The browser PUTs bytes straight to S3 from a page served on the platform
 # domain, so the bucket must permit that origin. GET is included because a
 # presigned GET is also a cross-origin browser request.
+#
+# Conditional on a non-empty origins list (biffo-template#1461). S3's
+# PutBucketCors rejects an empty AllowedOrigins outright -- it is not a valid
+# "allow nothing" configuration, it is a validation error at apply time. The
+# only way to express "allows none" is to not create this resource at all,
+# which is also what a bucket with no CORS configuration actually does to a
+# cross-origin browser request.
 resource "aws_s3_bucket_cors_configuration" "plugin_media" {
+  count  = length(var.plugin_media_cors_origins) > 0 ? 1 : 0
   bucket = aws_s3_bucket.plugin_media.id
   cors_rule {
     allowed_headers = ["*"]

@@ -83,11 +83,35 @@ export function toPx(value, unit) {
   return null
 }
 
-const CSS_PROPERTY_RE =
-  /(font-size|line-height|gap|row-gap|column-gap)\s*:\s*([0-9]*\.?[0-9]+)(px|rem)\b/g
+// The numeric group below is deliberately NOT `[0-9]*\.?[0-9]+` -- that shape
+// has two quantifiers (`*` and `+`) running over the SAME character class
+// with nothing but an OPTIONAL literal between them, so a run of digits with
+// no unit suffix (e.g. a hand-crafted "gap:00000000...") has O(n) equally
+// valid ways to split between the two, and the engine tries all of them
+// before giving up when `(px|rem)` fails to follow -- polynomial blowup on
+// attacker- or generator-controlled CSS, flagged by CodeQL's
+// js/polynomial-redos on this exact shape (high severity, all three
+// instances of it in this file, tabsii-platform#377 follow-up). The fix
+// removes the ambiguity rather than papering over it: `[0-9]+(?:\.[0-9]+)?`
+// greedily consumes every digit in one pass with a SINGLE quantifier, and
+// the trailing `(?:\.[0-9]+)?` is only ever entered by matching a literal
+// "." first -- so on a dot-free digit run it resolves to "no match" in one
+// O(1) check with nothing left to backtrack into. `|\.[0-9]+` keeps
+// `.5rem`-style CSS (a leading-dot decimal with no integer part) matching,
+// as an alternative that starts on a DIFFERENT character (".") to the first
+// branch (a digit) -- so the two branches never compete over the same
+// characters either.
+const NUMBER_RE_SOURCE = '(?:[0-9]+(?:\\.[0-9]+)?|\\.[0-9]+)'
 
-const TAILWIND_ARBITRARY_RE =
-  /\b(text|leading|gap|row-gap|column-gap)-\[([0-9]*\.?[0-9]+)(px|rem)\]/g
+const CSS_PROPERTY_RE = new RegExp(
+  `(font-size|line-height|gap|row-gap|column-gap)\\s*:\\s*(${NUMBER_RE_SOURCE})(px|rem)\\b`,
+  'g',
+)
+
+const TAILWIND_ARBITRARY_RE = new RegExp(
+  `\\b(text|leading|gap|row-gap|column-gap)-\\[(${NUMBER_RE_SOURCE})(px|rem)\\]`,
+  'g',
+)
 
 const CATEGORY_BY_CSS_PROPERTY = {
   'font-size': 'fontSize',
@@ -150,7 +174,21 @@ export function extractDeclarations(filePath, fileText) {
   return declarations
 }
 
-const TOKEN_LINE_RE = /^\s*--(text|space)-([a-z0-9-]+?)(-line-height)?:\s*([0-9]*\.?[0-9]+)px;/
+// Originally `([a-z0-9-]+?)(-line-height)?:` -- a LAZY key-name quantifier
+// immediately followed by an OPTIONAL literal that starts with a character
+// ("-") already inside the lazy group's own class. CodeQL flagged this too
+// ("may run slow on strings starting with '--text--:' and with many
+// repetitions"): a run of hyphens gives the engine many equally-valid points
+// to stop growing the lazy group and try the optional suffix, all of which
+// fail identically when no ":" ever follows (a malformed/attacker line).
+// Fixed the same way as the numeric patterns above -- remove the ambiguity
+// rather than bound it: capture the WHOLE key with a single greedy
+// quantifier bounded by the mandatory ":", then peel the "-line-height"
+// suffix off in plain JS below, where a `String.endsWith` is O(1) against
+// the engine, not a second regex quantifier competing for the same text.
+const TOKEN_LINE_RE = new RegExp(`^\\s*--(text|space)-([a-z0-9-]+):\\s*(${NUMBER_RE_SOURCE})px;`)
+
+const LINE_HEIGHT_KEY_SUFFIX = '-line-height'
 
 /**
  * Parses a tokens.css file into the three allowed-value sets a scanned
@@ -175,10 +213,10 @@ export function parseAllowedScale(tokensCssText) {
   for (const rawLine of tokensCssText.split('\n')) {
     const match = TOKEN_LINE_RE.exec(rawLine)
     if (!match) continue
-    const [, kind, , isLineHeight, value] = match
+    const [, kind, key, value] = match
     const px = parseFloat(value)
     if (kind === 'text') {
-      if (isLineHeight) lineHeight.add(px)
+      if (key.endsWith(LINE_HEIGHT_KEY_SUFFIX)) lineHeight.add(px)
       else fontSize.add(px)
     } else if (kind === 'space') {
       spacing.add(px)

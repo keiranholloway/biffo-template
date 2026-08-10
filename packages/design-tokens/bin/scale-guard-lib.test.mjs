@@ -213,3 +213,74 @@ describe('collectScannableFiles', () => {
     expect(files).toEqual(['/repo/src/app/globals.css', '/repo/src/app/page.tsx'])
   })
 })
+
+describe('pathological input (ReDoS regression)', () => {
+  // CodeQL (js/polynomial-redos, high severity) flagged all three regexes in
+  // this file: the numeric group `[0-9]*\.?[0-9]+` and the key-name group
+  // `([a-z0-9-]+?)(-line-height)?` each had two quantifiers competing over
+  // the same character class, separated only by something optional -- a run
+  // of the shared character with no terminator forces the engine through
+  // O(n) equally-valid ways to split it, and it tries all of them before
+  // giving up. This is not theoretical: this code is about to be scaffolded
+  // into every new Biffo sibling, so a single generated or pathological CSS
+  // file would hang that sibling's CI with no obvious cause.
+  //
+  // These tests don't assert the OLD patterns are slow (nothing here runs
+  // them) -- they assert the CURRENT ones stay fast against exactly the
+  // input shapes CodeQL named, with a generous-but-real budget, so a future
+  // rewrite that reintroduces the ambiguous shape is caught by a failing
+  // test rather than a slow CI run somewhere downstream. 200ms is roughly
+  // 100-1000x the observed time (see the timing note logged by each test) --
+  // tight enough to fail on a real O(n^2) regression at this input size,
+  // loose enough not to flake on a slow CI runner.
+  const BUDGET_MS = 200
+  const N = 200_000
+
+  it('extractDeclarations: a long unterminated digit run after "gap:" stays linear', () => {
+    // The exact shape CodeQL named: "may run slow on strings starting with
+    // 'gap:' and with many repetitions of '0'". No px/rem ever follows, so
+    // the old pattern would exhaust every split between `[0-9]*` and
+    // `[0-9]+` before failing.
+    const css = `.row { gap: ${'0'.repeat(N)}`
+    const start = performance.now()
+    const decls = extractDeclarations('attack.css', css)
+    const elapsed = performance.now() - start
+    console.log(`gap: + ${N} zeros, no unit: ${elapsed.toFixed(1)}ms`)
+    expect(decls).toEqual([]) // no unit suffix -- correctly not a match, not a hang
+    expect(elapsed).toBeLessThan(BUDGET_MS)
+  })
+
+  it('extractDeclarations: a long unterminated digit run in a Tailwind arbitrary value stays linear', () => {
+    const tsx = `<div className="text-[${'0'.repeat(N)}">`
+    const start = performance.now()
+    const decls = extractDeclarations('attack.tsx', tsx)
+    const elapsed = performance.now() - start
+    console.log(`text-[ + ${N} zeros, no closing unit/bracket: ${elapsed.toFixed(1)}ms`)
+    expect(decls).toEqual([])
+    expect(elapsed).toBeLessThan(BUDGET_MS)
+  })
+
+  it('parseAllowedScale: a long unterminated hyphen run in a token key stays linear', () => {
+    // The exact shape CodeQL named: "may run slow on strings starting with
+    // '--text--:' and with many repetitions". No terminating ": <num>px;"
+    // ever appears, so the old lazy key-group + optional "-line-height"
+    // suffix would try every stopping point along the hyphen run.
+    const css = `--text-${'-'.repeat(N)}`
+    const start = performance.now()
+    const scale = parseAllowedScale(css)
+    const elapsed = performance.now() - start
+    console.log(`--text- + ${N} hyphens, no terminator: ${elapsed.toFixed(1)}ms`)
+    expect(isScaleConfigured(scale)).toBe(false) // no match -- correctly empty, not a hang
+    expect(elapsed).toBeLessThan(BUDGET_MS)
+  })
+
+  it('parseAllowedScale: a long unterminated digit run in a token value stays linear', () => {
+    const css = `--text-body-md: ${'0'.repeat(N)}`
+    const start = performance.now()
+    const scale = parseAllowedScale(css)
+    const elapsed = performance.now() - start
+    console.log(`--text-body-md: + ${N} zeros, no "px;": ${elapsed.toFixed(1)}ms`)
+    expect(isScaleConfigured(scale)).toBe(false)
+    expect(elapsed).toBeLessThan(BUDGET_MS)
+  })
+})

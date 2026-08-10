@@ -8,7 +8,7 @@
 // wrong package).
 import { describe, expect, it } from 'vitest'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -156,7 +156,11 @@ describe('with a configured scale (fixture tokens)', () => {
       '--init',
     ])
     expect(result.status, result.stdout + result.stderr).toBe(0)
-    const written = JSON.parse(spawnSync('cat', [baseline], { encoding: 'utf8' }).stdout)
+    // readFileSync, not a spawned `cat` -- flagged by CodeQL
+    // (js/unnecessary-use-of-cat, warning): a subprocess for something
+    // Node's own fs module does in-process is unnecessary cost and attack
+    // surface for no benefit here.
+    const written = JSON.parse(readFileSync(baseline, 'utf8'))
     expect(written.count).toBe(1)
     rmSync(dir, { recursive: true })
   })

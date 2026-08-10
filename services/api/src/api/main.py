@@ -20,6 +20,7 @@ from .routers import (
     internal_plugin_storage,
     orchestration,
     users,
+    whoami,
 )
 from .routers.admin import agent_chat as admin_agent_chat
 from .routers.admin import agent_runs as admin_agent_runs
@@ -167,6 +168,13 @@ app.include_router(build_domain_router(), prefix="/api/v1")
 # the domain router above so it sees an instance's domain models too — see the
 # comment there before reordering.
 app.include_router(build_core_crud_router(), prefix="/api/v1")
+# The whoami contract the template-owned portal login page consumes, LAST so
+# that an instance serving its own richer /whoami from a product domain (with
+# real scoped roles) keeps it — Starlette takes the first matching route, so
+# registering this any earlier would shadow that with core's honest empties and
+# route every scoped user to no-access. Asserted in
+# tests/test_whoami.py; see routers/whoami.py for the full why.
+app.include_router(whoami.router, prefix="/api/v1")
 
 handler = Mangum(app, lifespan="off")
 

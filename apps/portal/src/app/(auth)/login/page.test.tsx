@@ -10,7 +10,7 @@ const {
   confirmPasswordReset,
   completeNewPassword,
   setSessionMock,
-  fetchWhoamiMock,
+  resolveWhoamiMock,
 } = vi.hoisted(() => ({
   pushMock: vi.fn(),
   loginMock: vi.fn(),
@@ -18,7 +18,7 @@ const {
   confirmPasswordReset: vi.fn(),
   completeNewPassword: vi.fn(),
   setSessionMock: vi.fn(),
-  fetchWhoamiMock: vi.fn(),
+  resolveWhoamiMock: vi.fn(),
 }))
 
 // The query string the page is mounted with. Mutable so a test can put a
@@ -83,7 +83,11 @@ vi.mock('@/lib/api-client', () => ({
 }))
 
 vi.mock('@/lib/whoami-api', () => ({
-  fetchWhoami: fetchWhoamiMock,
+  // The page calls resolveWhoami, which wraps fetchWhoami and degrades to the
+  // ID token's claims when a deployment does not serve /api/v1/whoami. Its own
+  // fallback behaviour is tested in lib/whoami-api.test.ts; here it stands in
+  // for "the identity lookup", however it was obtained.
+  resolveWhoami: resolveWhoamiMock,
 }))
 
 // Cross-app destinations leave the portal, so the page uses a full page load
@@ -280,7 +284,7 @@ describe('LoginPage role-based routing', () => {
       session: mockSession(),
     })
 
-    fetchWhoamiMock.mockResolvedValue(whoami)
+    resolveWhoamiMock.mockResolvedValue(whoami)
 
     render(<LoginPage />)
     fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'founder@example.com' } })
@@ -316,7 +320,7 @@ describe('LoginPage role-based routing', () => {
       session: sessionWithAdminGroup,
     })
 
-    fetchWhoamiMock.mockResolvedValue(whoami)
+    resolveWhoamiMock.mockResolvedValue(whoami)
 
     render(<LoginPage />)
     fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'admin@example.com' } })
@@ -345,7 +349,7 @@ describe('LoginPage role-based routing', () => {
       session: mockSession(),
     })
 
-    fetchWhoamiMock.mockResolvedValue(whoami)
+    resolveWhoamiMock.mockResolvedValue(whoami)
 
     render(<LoginPage />)
     fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'user@example.com' } })
@@ -369,7 +373,7 @@ describe('LoginPage — arriving already signed in', () => {
 
   it('routes an already-authenticated visitor instead of asking again', async () => {
     currentSession = mockSession()
-    fetchWhoamiMock.mockResolvedValue({
+    resolveWhoamiMock.mockResolvedValue({
       sub: 's',
       email: 'e',
       username: 'u',
@@ -387,9 +391,50 @@ describe('LoginPage — arriving already signed in', () => {
     })
   })
 
+  it('gives up after one attempt when the identity lookup fails, instead of retrying forever', async () => {
+    // Regression: the forwarding effect's catch set `forwarding` back to false,
+    // and `forwarding` was in its own dependency array — so clearing it re-ran
+    // the effect, which called the lookup again, without limit.
+    //
+    // Against biffo-platform's dev API, which answered 404 to /api/v1/whoami,
+    // that was ~800 requests in seven minutes and the user simply saw the sign-in
+    // form return. Sign-in had SUCCEEDED at Cognito every time; the failure was
+    // read as a rejected password, and two days were spent resetting one.
+    //
+    // A count assertion rather than a "settles" assertion: the old code also
+    // eventually rendered the form, so anything weaker passes on the bug.
+    currentSession = mockSession()
+    // Reset rather than merely re-stub: this describe block has no
+    // clearAllMocks, so call counts accumulate across its tests and the
+    // assertion below would be counting earlier tests' lookups too.
+    resolveWhoamiMock.mockReset()
+    resolveWhoamiMock.mockRejectedValue(new Error('Not Found'))
+
+    render(<LoginPage />)
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Sign in' })).toBeInTheDocument()
+    })
+    // Let any re-entrant effect run before counting.
+    await new Promise((resolve) => setTimeout(resolve, 50))
+
+    expect(resolveWhoamiMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('says why it could not route, rather than silently re-presenting the form', async () => {
+    // The other half of the same incident: failing silently made a broken API
+    // indistinguishable from a wrong password.
+    currentSession = mockSession()
+    resolveWhoamiMock.mockRejectedValue(new Error('Not Found'))
+
+    render(<LoginPage />)
+
+    expect(await screen.findByText('Not Found')).toBeInTheDocument()
+  })
+
   it('offers a way out, because signing out is shared across every surface', async () => {
     currentSession = mockSession()
-    fetchWhoamiMock.mockResolvedValue({
+    resolveWhoamiMock.mockResolvedValue({
       sub: 's',
       email: 'e',
       username: 'u',
@@ -461,7 +506,7 @@ describe('LoginPage — return_to must not outlive the user it belonged to', () 
   function arriveAsAdminBouncedFromAdminConsole() {
     searchParams = { return_to: '/admin/' }
     currentSession = mockSession()
-    fetchWhoamiMock.mockResolvedValue(ADMIN)
+    resolveWhoamiMock.mockResolvedValue(ADMIN)
     render(<LoginPage />)
   }
 
@@ -479,7 +524,7 @@ describe('LoginPage — return_to must not outlive the user it belonged to', () 
     pushMock.mockClear()
     assignMock.mockClear()
 
-    fetchWhoamiMock.mockResolvedValue(LEARNER)
+    resolveWhoamiMock.mockResolvedValue(LEARNER)
     loginMock.mockResolvedValue({ kind: 'success', session: mockSession() })
     fireEvent.change(screen.getByLabelText('Email'), { target: { value: LEARNER.email } })
     fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'pw' } })
@@ -516,7 +561,7 @@ describe('LoginPage — return_to must not outlive the user it belonged to', () 
     // person who was sent.
     searchParams = { return_to: '/lms/course/abc/' }
     loginMock.mockResolvedValue({ kind: 'success', session: mockSession() })
-    fetchWhoamiMock.mockResolvedValue(LEARNER)
+    resolveWhoamiMock.mockResolvedValue(LEARNER)
 
     render(<LoginPage />)
     fireEvent.change(screen.getByLabelText('Email'), { target: { value: LEARNER.email } })

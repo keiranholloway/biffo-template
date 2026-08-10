@@ -7,7 +7,7 @@ import { useAuth } from '@/context/auth-context'
 import { completeNewPassword, confirmPasswordReset, requestPasswordReset } from '@/lib/auth'
 import { isWithinPortal, sanitizeReturnTo } from '@/lib/return-to'
 import { createApiClient } from '@/lib/api-client'
-import { fetchWhoami } from '@/lib/whoami-api'
+import { resolveWhoami } from '@/lib/whoami-api'
 import { resolveDestination } from '@/lib/login-routing'
 import { Button } from '@biffo/ui'
 
@@ -93,6 +93,24 @@ function LoginForm() {
   const [resetNewPassword, setResetNewPassword] = useState('')
   const [resetConfirmPassword, setResetConfirmPassword] = useState('')
 
+  // The session routing has already been attempted for, so a failure is not
+  // retried forever.
+  //
+  // The forwarding effect below used to re-enter without limit: its catch set
+  // `forwarding` back to false, `forwarding` is in its dependency array, so
+  // clearing it re-ran the effect, which called this again. Against an API that
+  // answers 404 to /api/v1/whoami — a route this shared portal calls and an
+  // un-upgraded instance does not serve — that produced roughly four requests a
+  // second for as long as the tab stayed open (~800 in seven minutes, observed
+  // in biffo-platform's dev API Gateway logs), while the user just saw the form
+  // come back.
+  //
+  // Recorded here rather than in the effect so it covers all three routes into
+  // this function — the effect, sign-in, and first-password — and a failure on
+  // any of them cannot be immediately re-driven by the other. A ref rather than
+  // state because it must not itself trigger a render.
+  const routedFor = useRef<CognitoUserSession | null>(null)
+
   // One place that decides where an authenticated caller goes, used by all
   // three routes into this page: sign-in, first-password, and arriving already
   // signed in. Takes the session in hand rather than reading it from context —
@@ -100,9 +118,17 @@ function LoginForm() {
   // when an await resumes, and returns null.
   const routeAfterAuth = useCallback(
     async (session: CognitoUserSession) => {
+      routedFor.current = session
       const idToken = session.getIdToken().getJwtToken()
-      const whoami = await fetchWhoami(createApiClient(() => idToken))
-      const groups = session.getIdToken().decodePayload()['cognito:groups'] as string[] | undefined
+      const claims = session.getIdToken().decodePayload()
+      // Degrades to the token's own claims when this deployment's API does not
+      // serve /api/v1/whoami — see resolveWhoami. A 404 there must not strand
+      // someone who has just authenticated successfully.
+      const whoami = await resolveWhoami(
+        createApiClient(() => idToken),
+        claims,
+      )
+      const groups = claims['cognito:groups'] as string[] | undefined
       const destination = resolveDestination(whoami, groups, returnTo || null)
       // Cross-app destinations leave the portal, so they need a full page load;
       // a client-side push would land on a route this app does not have.
@@ -145,10 +171,16 @@ function LoginForm() {
   const [forwarding, setForwarding] = useState(false)
   useEffect(() => {
     if (!session || pendingUser || resetMode || forwarding) return
+    // One attempt per session object. A genuinely new session (signing in
+    // again) is a different object and is retried; the one that just failed is
+    // not. See `routedFor` above.
+    if (routedFor.current === session) return
     setForwarding(true)
-    void routeAfterAuth(session).catch(() => {
-      // If we cannot resolve a destination, fall back to showing the form
-      // rather than trapping them on a blank page.
+    void routeAfterAuth(session).catch((err: unknown) => {
+      // Fall back to showing the form rather than trapping them on a blank
+      // page — but say why. Failing silently here is what made a broken API
+      // read as a rejected password.
+      setError(err instanceof Error ? err.message : 'Could not determine where to send you')
       setForwarding(false)
     })
   }, [session, pendingUser, resetMode, forwarding, routeAfterAuth])

@@ -145,12 +145,12 @@ label=${REPO:-$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")}
 # an older run because an API changed its sort is the same class of defect as the
 # truncated list this replaces. Ask for the newest explicitly.
 summary=$(gh_run list --branch "$BRANCH" --limit 200 \
-  --json workflowName,status,conclusion,headSha,createdAt,url \
+  --json workflowName,status,conclusion,headSha,createdAt,url,event \
   --jq 'group_by(.workflowName)
         | map(max_by(.createdAt))
         | .[]
         | [ (if .status == "completed" then (.conclusion // "unknown") else .status end),
-            .workflowName, .headSha[0:8], .createdAt[0:16], .url ]
+            .workflowName, .headSha[0:8], .createdAt[0:16], .url, .event ]
         | @tsv' 2>/dev/null)
 
 if [ -z "$summary" ]; then
@@ -165,12 +165,12 @@ cancelled=""
 skipped=""
 ok=""
 
-while IFS="$TAB" read -r state name sha when url; do
+while IFS="$TAB" read -r state name sha when url event; do
   [ -n "$name" ] || continue
   case "$state" in
     success) ok="${ok}${name}\n" ;;
     failure | timed_out | startup_failure)
-      failed="${failed}${state}\t${name}\t${sha}\t${when}\t${url}\n"
+      failed="${failed}${state}\t${name}\t${sha}\t${when}\t${url}\t${event}\n"
       ;;
     cancelled) cancelled="${cancelled}${name}\n" ;;
     skipped) skipped="${skipped}${name}\n" ;;
@@ -210,7 +210,14 @@ if [ -z "$failed" ]; then
 fi
 
 echo
-printf '%b' "$failed" | awk -F'\t' -v r="$RED" -v o="$OFF" 'NF{printf "  %s%s%s  %s  at %s  %s\n", r, $1, o, $2, $3, $5}'
+printf '%b' "$failed" | awk -F'\t' -v r="$RED" -v o="$OFF" -v y="$YELLOW" \
+  'NF{
+     line = sprintf("  %s%s%s  %s  at %s  %s", r, $1, o, $2, $3, $5)
+     if ($6 == "workflow_run") {
+       line = line sprintf("  %s(workflow_run trigger: this sha is not reliably the commit evaluated)%s", y, o)
+     }
+     print line
+   }'
 
 # --- Who actually broke it ----------------------------------------------------
 #
@@ -218,10 +225,41 @@ printf '%b' "$failed" | awk -F'\t' -v r="$RED" -v o="$OFF" 'NF{printf "  %s%s%s 
 # branch backwards from the newest failure through consecutive failures, and
 # report the OLDEST one in that unbroken streak. That run's commit is where the
 # breakage started, which is very often not the person now reading this.
+#
+# `workflow_run`-triggered workflows are excluded from that confident
+# attribution (#1463). A `workflow_run` run's own `headSha` (what `gh run
+# list --json headSha` reports, and what every query in this file uses) is
+# this run's ambient checkout ref — for this template's own
+# error-branch-coverage-gate.yml that happens to be the default branch's HEAD
+# at trigger time, not necessarily the commit the run's logic actually
+# evaluated. The commit actually under test only exists in the ORIGINAL
+# webhook payload (`github.event.workflow_run.head_sha`, which a workflow can
+# read live and post as a commit status), and the Runs API does not expose
+# that payload after the fact for an arbitrary workflow — confirmed against
+# this repo's own history: `gh api .../actions/runs/<id>` for a
+# `workflow_run`-triggered run carries no such field, only the ambient
+# `head_sha`, which repeatedly disagreed with the SHA the run's job logs
+# showed it actually reported a status against (e.g. run 31411324650 here:
+# reported headSha f0d697e1 — commit "fix(deploy): package plugins that
+# declare only admin_ingress (#1466)" — while its own job log named the
+# evaluated commit as 0c077cf0, an unrelated `feat(cli)` commit by a
+# different author). Naming the wrong commit with the same confidence as a
+# push-triggered failure is worse than naming none, per the tool's own
+# "cannot tell is never a pass" posture (see file header) — so this reports
+# "cannot attribute" instead of guessing.
 
 echo
-printf '%b' "$failed" | while IFS="$TAB" read -r state name sha when url; do
+printf '%b' "$failed" | while IFS="$TAB" read -r state name sha when url event; do
   [ -n "$name" ] || continue
+
+  if [ "$event" = "workflow_run" ]; then
+    echo "  ${RED}$name${OFF} is failing (latest observed sha ${YELLOW}$sha${OFF}, $when)"
+    echo "    ${DIM}This workflow is workflow_run-triggered — its headSha is this run's own"
+    echo "    ambient checkout ref, not necessarily the commit it evaluated. Cannot"
+    echo "    attribute which commit broke it from run metadata alone; read the commit"
+    echo "    status this workflow posts (or its job log) against the real commit.${OFF}"
+    continue
+  fi
 
   # Sort newest-first ourselves, cut the list at the most recent SUCCESS, and
   # take the oldest failure still inside that streak. Anything before a green run

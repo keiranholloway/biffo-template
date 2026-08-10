@@ -156,10 +156,12 @@ class WriteBackColumn:
 #: ``events/event_fields.py``, which derives the orchestration trigger-field
 #: catalogue. Adding ``email`` or ``phone`` there would strip them from
 #: state-change event payloads AND from the trigger fields the UI offers, which
-#: would silently break recipient-field templating: ``LeadCapturedPayload``
-#: carries ``email``/``phone``/``first_name``, and ``events/registry.py`` documents
-#: templating ``{email}`` into an email action's "To" field. Fixing a PII concern
-#: by breaking a shipped feature is not a trade worth making quietly.
+#: would silently break recipient-field templating: ``DemoRequestedPayload``
+#: carries ``email``, and ``events/registry.py`` documents templating ``{email}``
+#: into an email action's "To" field — the same argument every instance-registered
+#: event with contact fields relies on (``lead.captured`` in tabsii's own
+#: ``domains/tabsii/`` is the fuller worked example, #848). Fixing a PII concern by
+#: breaking a shipped feature is not a trade worth making quietly.
 #:
 #: Identifiers only, not free text. ``notes`` is where PII hides, but it is also
 #: where the *explanation* lives, and a run record scrubbed of its reasoning stops

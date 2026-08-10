@@ -24,7 +24,6 @@ from api.events.registry import (
     AGENT_RUN_COMPLETED,
     AGENT_RUN_REQUESTED,
     DEMO_REQUESTED,
-    LEAD_CAPTURED,
     AgentRunEventPayload,
     EventType,
     WorkflowDefinitionEventPayload,
@@ -43,10 +42,62 @@ FIELDLESS_EVENTS: frozenset[str] = frozenset()
 # (plugins, instance modules) may have registered globally in this test process.
 _CORE_EVENTS = [v for v in vars(registry).values() if isinstance(v, EventType)]
 
+# The EXHAUSTIVE set of (source, detail_type) identities registry.py may declare
+# (#848, class:boundary). Genericity is a judgement call, not something grep can
+# check — so rather than pattern-matching for "looks domain-specific", this is a
+# fixed allowlist of what the template declares TODAY. Extending it is a one-line,
+# REVIEWED diff: that visibility is the whole guard. Before #848, ``lead.captured``
+# sat here for weeks with no reviewer ever asked "is this platform-generic?" —
+# widening a payload in place was easier than relocating it (see the note on
+# "Canonical Core events" above), and nothing forced the question. A new franchising
+# (or any other product-domain) event landing here now fails this test by
+# construction; the fix is either "this genuinely is platform-generic, extend the
+# set" or "this belongs in the instance's domains/<name>/ instead" (ADR-0022) — the
+# same choice #848 made, just made BEFORE merge instead of months after.
+_EXPECTED_TEMPLATE_EVENT_IDENTITIES = frozenset(
+    {
+        ("biffo.core", "demo.requested"),
+        ("biffo.core", "user.created"),
+        ("biffo.core", "user.suspended"),
+        ("biffo.core", "user.reactivated"),
+        ("biffo.core", "user.deleted"),
+        ("biffo.core", "workflow_definition.created"),
+        ("biffo.core", "workflow_definition.updated"),
+        ("biffo.core", "workflow_definition.deleted"),
+        ("biffo.core", "agent.run.requested"),
+        ("biffo.core", "agent.run.completed"),
+    }
+)
+
 
 def test_core_events_were_discovered():
     # Guard the guard: if this list were empty the assertions below pass vacuously.
-    assert len(_CORE_EVENTS) >= 11
+    assert len(_CORE_EVENTS) >= 10
+
+
+def test_template_registry_declares_only_the_reviewed_platform_events():
+    """The boundary guard for #848's class (class:boundary).
+
+    registry.py is a SHARED artifact — every instance and sibling scaffolded from
+    this template inherits whatever it declares. ``lead.captured`` leaked in as a
+    franchising concept because nothing asserted the registry's membership, only
+    each event's shape (the tests above). This closes that gap: the declared set
+    must equal the reviewed allowlist exactly, so a new event here is a decision,
+    not a side effect of importing registry.py from wherever it was convenient to
+    add one.
+    """
+    actual = {(e.source, e.detail_type) for e in _CORE_EVENTS}
+    unreviewed = actual - _EXPECTED_TEMPLATE_EVENT_IDENTITIES
+    missing = _EXPECTED_TEMPLATE_EVENT_IDENTITIES - actual
+    assert actual == _EXPECTED_TEMPLATE_EVENT_IDENTITIES, (
+        f"registry.py's declared events differ from the reviewed template set.\n"
+        f"Unreviewed additions: {unreviewed or 'none'}. A product/domain concept "
+        f"(a franchising 'lead', a retailer's 'order', ...) belongs in the "
+        f"instance's own domains/<name>/ instead, registered at import time "
+        f"(ADR-0022), not here. Once confirmed platform-generic, extend "
+        f"_EXPECTED_TEMPLATE_EVENT_IDENTITIES.\n"
+        f"Missing (removed without updating this set): {missing or 'none'}."
+    )
 
 
 def test_every_core_event_describes_its_payload():
@@ -107,9 +158,10 @@ def test_every_registered_event_describes_its_payload():
 
     - **an instance**, which inherits ``services/api/tests/`` through
       ``core upgrade`` and registers its own domain events (ADR-0022);
-    - **the template**, the moment #848 relocates ``LEAD_CAPTURED`` out of Core
-      and into an instance domain — which is exactly the change this guard needs
-      to be in place *before*, not after.
+    - **the template**, since #848 relocated ``LEAD_CAPTURED`` out of Core and
+      into ``domains/tabsii/`` in the owning instance — this guard was put in
+      place *before* that move, not after, precisely so the move could not
+      silently regress the property.
 
     The ``FIELDLESS_EVENTS`` opt-out applies here too, keyed on ``detail_type``, so
     an instance event with genuinely no filterable payload has the same escape
@@ -148,46 +200,6 @@ def test_demo_requested_derives_its_full_payload():
         "email",
         "company",
     }
-
-
-def test_lead_captured_carries_the_fields_a_first_touch_needs():
-    """A first-touch message has to be addressed, and consent has to be gateable.
-
-    Both are payload questions, not action questions: an email action templates
-    its "To" from the trigger payload, and a ``trigger_filter`` matches over
-    payload keys. Before these fields travelled, the trigger was pickable,
-    configurable and silently undeliverable.
-    """
-    fields = {f.name: f for f in LEAD_CAPTURED.payload_fields()}
-
-    for addressing in ("email", "first_name", "last_name", "phone"):
-        assert addressing in fields, f"lead.captured cannot be addressed by {addressing}"
-
-    # Optional[bool] must survive the annotation mapping as a boolean, or the
-    # "Only when… consent is true" condition renders as free text.
-    assert fields["consent_to_contact"].type == "boolean"
-    assert fields["email"].type == "string"
-
-
-def test_lead_captured_can_name_the_brand_not_just_identify_it():
-    """A candidate-facing email has to say the brand, and ids are not sayable.
-
-    Regression: a live first-touch email rendered "Thank you for your interest in
-    00000000-0000-0000-0000-00000000000b", because ``brand_id`` and ``brand_slug``
-    were the only brand fields on the payload and the author templated the one
-    that looked most like the brand. The orchestrator renders through a
-    ``defaultdict(str)``, so ``{brand_name}`` would have rendered as *empty* had
-    the author guessed it — a missing name field cannot announce itself, which is
-    why it is asserted here rather than left to review.
-    """
-    fields = {f.name: f for f in LEAD_CAPTURED.payload_fields()}
-
-    assert "brand_name" in fields, (
-        "lead.captured carries no human-readable brand name, so an email action "
-        "templating the brand can only reach brand_id/brand_slug and will put an "
-        "opaque identifier in front of a candidate."
-    )
-    assert fields["brand_name"].type == "string"
 
 
 def test_agent_run_payload_model_matches_the_real_reference_payload():

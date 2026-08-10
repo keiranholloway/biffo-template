@@ -250,6 +250,64 @@ describe('claim.sh --guard', () => {
   })
 })
 
+describe('claim.sh --guard disagreement: `Refs #N` must read as a claim (#1411, class #1362)', () => {
+  // Same defect, same fix, as `claim-structured-refs.test.ts`'s disagreement
+  // block — repeated here because `--guard` is a SEPARATE call site with its
+  // own query, and #1411 was open in both. See that file's block comment for
+  // the full account of why `Refs #N` disagreed with the guard.
+
+  it('blocks on a PR saying "Refs #N" whose branch does not name N', () => {
+    const { dir } = stubBins({
+      openPrs: [
+        {
+          number: 80,
+          headRefName: 'fix/other-branch',
+          title: 'unrelated title',
+          body: 'This is instance 8 of #1362.\n\nRefs #1234',
+        },
+      ],
+    })
+    const { code, out } = run(dir, 'feat/1234-thing')
+
+    expect(code).toBe(1)
+    expect(out).toContain('#80')
+  })
+
+  it('does not block on a bare mention of #N with no claiming keyword', () => {
+    const { dir } = stubBins({
+      openPrs: [
+        {
+          number: 81,
+          headRefName: 'fix/other-branch',
+          title: 'unrelated title',
+          body: 'see also #1234 for context',
+        },
+      ],
+    })
+    const { code, out } = run(dir, 'feat/1234-thing')
+
+    expect(code).toBe(0)
+    expect(out).not.toContain('#81')
+  })
+
+  it('a keyword and #N split across a line break do not match', () => {
+    const { dir } = stubBins({
+      openPrs: [
+        {
+          number: 82,
+          headRefName: 'fix/other-branch',
+          title: 'unrelated title',
+          body: 'Refs\n#1234',
+        },
+      ],
+    })
+    const { code, out } = run(dir, 'feat/1234-thing')
+
+    expect(code).toBe(0)
+    expect(out).not.toContain('#82')
+  })
+})
+
 describe('claim.sh --guard: shell portability', () => {
   it('parses under sh, dash and bash', () => {
     for (const sh of ['sh', 'dash', 'bash']) {

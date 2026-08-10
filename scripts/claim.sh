@@ -235,6 +235,49 @@ remote_branches() {
   fi
 }
 
+# --- the structural claim predicate (#1411, class #1362 instance 8) ---------
+#
+# "Does this open PR claim issue $1?" used to be answered independently at
+# THREE call sites -- the `--guard` open-PR check, the plain-path open-PR
+# check, and (before #1281/#1311) a fourth that scanned body text for any
+# mention at all. Three copies of one question drift, which is exactly how
+# this class keeps recurring (#1281, #1311, #1327 were all this same guard,
+# fixed three separate times). This is now the ONE place the question is
+# answered, called from both surviving sites.
+#
+# Emits the boolean body of a jq `select(...)` over a PR object carrying
+# `number`/`headRefName`/`closingIssuesReferences`/`body`. Three signals, and
+# each one is either GitHub's own structured answer or this estate's own
+# documented convention -- never a bare "does the text mention #N anywhere"
+# scan, which is what #1327 and #1311 both were:
+#
+#   1. `closingIssuesReferences` -- GitHub's OWN parse of a recognised closing
+#      keyword (Closes/Fixes/Resolves and their inflections). Authoritative;
+#      never re-derived by a regex here.
+#   2. the branch name (`<type>/<number>-slug`), the same test used
+#      elsewhere in this file.
+#   3. the PR body, but ONLY AGENTS.md's own `Refs #N` convention -- the form
+#      this estate mandates for a PR that must reference an issue WITHOUT
+#      closing it (DDL PRs, "instance of a class" PRs like this one). A
+#      claiming keyword (`refs`/`ref`/`references`/`reference`, case
+#      insensitive) must be immediately followed by `#N` on the SAME LINE.
+#      `\s` matches a newline, which is precisely the shape #1334 found in
+#      GitHub's own closing-keyword parser (a keyword ending one line, `#N`
+#      starting the next); this uses `[ \t]` instead, so a keyword and a
+#      reference split across a line break -- or a bare mention of `#N` with
+#      no keyword at all -- cannot match. A prose sentence like "this does
+#      NOT claim #N" carries no claiming keyword adjacent to the `#N` and so
+#      correctly does not match either (#1327, #1311's exact shape).
+#
+# $2 is the repo slug (`owner/name`) the closing-reference check compares
+# against -- callers already resolve this via `repo_slug()` before calling.
+claim_select_expr() {
+  _n="$1"
+  _slug="$2"
+  printf '(([.closingIssuesReferences[]? | select(.number == %s and ((.repository.owner.login + "/" + .repository.name) == "%s"))] | length > 0) or (.headRefName | test("(^|[^0-9A-Za-z])%s([^0-9A-Za-z]|$)")) or ((.body // "") | test("(^|[^0-9A-Za-z])(refs?|references?)[ \\t]*:?[ \\t]*#%s([^0-9A-Za-z]|$)"; "i")))' \
+    "$_n" "$_slug" "$_n" "$_n"
+}
+
 LABEL=in-progress
 
 # --- holder identity (#1279) -------------------------------------------------
@@ -323,9 +366,9 @@ if [ -n "$GUARD_BRANCH" ]; then
   # --- an open PR referencing the issue, excluding our own branch's PR --------
   slug=$(repo_slug)
   pr_err=$(mktemp)
-  slug=$(repo_slug)
-open_prs=$(gh_pr list --state open --limit 100 --json number,headRefName,closingIssuesReferences \
-    --jq "[.[] | select(([.closingIssuesReferences[]? | select(.number == $guard_issue and ((.repository.owner.login + \"/\" + .repository.name) == \"$slug\"))] | length > 0) or (.headRefName | test(\"(^|[^0-9A-Za-z])$guard_issue([^0-9A-Za-z]|\$)\")))] | .[] | select(.headRefName != \"$GUARD_BRANCH\") | \"#\(.number) \(.headRefName)\"" \
+  select_expr=$(claim_select_expr "$guard_issue" "$slug")
+  open_prs=$(gh_pr list --state open --limit 100 --json number,headRefName,closingIssuesReferences,body \
+    --jq "[.[] | select($select_expr)] | .[] | select(.headRefName != \"$GUARD_BRANCH\") | \"#\(.number) \(.headRefName)\"" \
     2>"$pr_err")
   pr_status=$?
   pr_err_text=$(cat "$pr_err")
@@ -432,12 +475,16 @@ esac
 # --- 2. An open PR that references it ----------------------------------------
 #
 # The strongest signal, because a PR cannot be opened without the work existing.
-# Matches the issue number in the title or body as a whole number, so #118 does
-# not match #1188.
+# Uses `claim_select_expr` (above) -- the same structural predicate the
+# `--guard` path uses -- so a `Closes #N`, a branch naming N, or a `Refs #N`
+# (this estate's own convention for a PR that must not close its issue, e.g.
+# a DDL PR) are all detected identically in both places, and a bare mention of
+# `#N` in prose is not (#1281, #1311, #1327; #1411 is the `Refs` gap).
 
 slug=$(repo_slug)
-open_prs=$(gh_pr list --state open --limit 100 --json number,headRefName,closingIssuesReferences \
-  --jq "[.[] | select(([.closingIssuesReferences[]? | select(.number == $ISSUE and ((.repository.owner.login + \"/\" + .repository.name) == \"$slug\"))] | length > 0) or (.headRefName | test(\"(^|[^0-9A-Za-z])$ISSUE([^0-9A-Za-z]|\$)\")))] | .[] | \"#\(.number) \(.headRefName)\"" 2>/dev/null)
+select_expr=$(claim_select_expr "$ISSUE" "$slug")
+open_prs=$(gh_pr list --state open --limit 100 --json number,headRefName,closingIssuesReferences,body \
+  --jq "[.[] | select($select_expr)] | .[] | \"#\(.number) \(.headRefName)\"" 2>/dev/null)
 
 if [ -n "$open_prs" ]; then
   printf '%s\n' "$open_prs" | while IFS= read -r pr; do

@@ -15,6 +15,30 @@ Each scenario applies its own DDL import name against a `guarded_seed_<key>`
 table private to this test run (`<key>` is a fresh uuid4 hex per run), so the
 three `_run_ddl_import` calls below never collide with the checksum-based
 "already applied, skip" path — each genuinely executes rather than skipping.
+
+## Why the fixture also isolates the CRUD-schema completeness check
+
+`_run_ddl_import` unconditionally calls `assert_crud_schema_matches_async()`
+at the end of every invocation (`main.py`) — correct in production, where it
+runs once, after Alembic and after the instance's real `db/imports/<name>/`
+batch, so the whole registered generic-CRUD schema is complete by the time it
+runs. This fixture builds neither: no Alembic head beyond what
+`pg-test-db.sh` seeds, no real DDL import, just one throwaway
+`guarded_seed_<key>` table. In the bare template that is invisible, because
+no core table opts into generic CRUD. In an instance with registered
+generic-CRUD models (tabsii has 50), the check runs anyway, queries the same
+real database this fixture points at, and fails every one of them as
+"table does not exist" — none of them were ever created here (biffo-template
+#1453).
+
+That is a different guard doing its job against an input this test was never
+trying to give it a fair run at. This test's docstring is about the
+environment gate, not whole-schema completeness (`test_crud_schema_guard.py`
+covers the pure comparison logic, and a real deploy exercises it against a
+schema this fixture never attempts to build) — so the fixture isolates the
+schema check the same way it isolates the imports root, rather than trying
+to satisfy it with data the DDL-import path this test drives was never asked
+to create.
 """
 
 from __future__ import annotations
@@ -39,10 +63,19 @@ def _pg_dsn() -> str | None:
     return os.environ.get("BIFFO_TEST_PG_DSN") or os.environ.get("TABSII_TEST_PG_DSN")
 
 
-pytestmark = pytest.mark.skipif(
-    _pg_dsn() is None,
-    reason='no real Postgres DSN -- eval "$(sh scripts/pg-test-db.sh --export)"',
-)
+pytestmark = [
+    pytest.mark.skipif(
+        _pg_dsn() is None,
+        reason='no real Postgres DSN -- eval "$(sh scripts/pg-test-db.sh --export)"',
+    ),
+    # This file performs real DDL (CREATE TABLE, via _run_ddl_import) against
+    # the shared pg-lane database, so it cannot share the database with a
+    # concurrent worker -- the same shape test_serial_marker_coverage_pg.py
+    # (biffo-template#703 class) flags. Concurrently that produces "tuple
+    # concurrently updated" / "cache lookup failed" flakes, not a clean
+    # failure.
+    pytest.mark.serial,
+]
 
 
 @pytest.fixture
@@ -81,6 +114,29 @@ def guarded_seed_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setattr(
             sys.modules["src.api.config"].settings, "ddl_import_root", str(imports_root)
         )
+
+    # Isolate the whole-schema generic-CRUD completeness check the same way
+    # the imports root above is isolated (see the module docstring). This
+    # fixture never builds the full schema -- no Alembic head beyond what
+    # pg-test-db.sh seeds, no real DDL import -- so `_run_ddl_import`'s own
+    # unconditional call to `assert_crud_schema_matches_async()` is not a
+    # fair test of anything this file's docstring claims to prove. Patched at
+    # the same name `main.py`'s `_apply()` imports (`from .crud_schema_guard
+    # import assert_crud_schema_matches_async`), which resolves this module
+    # attribute at call time, so the stub is picked up regardless of how many
+    # times `_run_ddl_import` runs inside one test.
+    import src.api.crud_schema_guard as crud_schema_guard
+
+    async def _isolated_crud_schema_check() -> dict[str, Any]:
+        return {
+            "checked": 0,
+            "drift": [],
+            "reason": "isolated-for-ddl-import-env-gate-test",
+        }
+
+    monkeypatch.setattr(
+        crud_schema_guard, "assert_crud_schema_matches_async", _isolated_crud_schema_check
+    )
 
     monkeypatch.chdir(_SERVICES_API_DIR)
     try:
@@ -146,6 +202,11 @@ class TestDdlSeedEnvironmentGate:
 
         result = _run_ddl_import(import_name)
         assert result["applied"] == ["000_guarded_seed.sql"]
+        # Proof the fixture's isolation actually took effect here, not just
+        # that nothing raised -- asserted once (not in every scenario in this
+        # class) since it is a property of the fixture, not of the
+        # environment being tested.
+        assert result["crud_schema"]["reason"] == "isolated-for-ddl-import-env-gate-test"
 
         notes = asyncio.run(_fetch_notes(guarded_seed_env["database_url"], table))
         assert notes == [], (

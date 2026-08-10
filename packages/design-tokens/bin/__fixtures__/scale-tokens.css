@@ -1,0 +1,20 @@
+/* Fixture: a stand-in for a token source that HAS adopted a type scale,
+ * shaped exactly like what scripts/build-tokens-css.mjs produces in
+ * @tabsii-com/ui and what --tokens is documented to accept -- not a real
+ * Biffo scale (none exists yet; see scale-guard.mjs's header for why this
+ * package's own tokens.css deliberately ships none). Used by
+ * scale-guard.integration.test.mjs to prove the ratchet mechanics
+ * (PASS/FAIL/baseline) against a configured scale, independent of whatever
+ * @biffo/design-tokens does or does not declare on a given day. */
+:root {
+  --brand: #5457ee;
+  --radius: 14px;
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --text-body-md: 16px;
+  --text-body-md-line-height: 24px;
+  --text-headline-lg: 32px;
+  --text-headline-lg-line-height: 40px;
+}

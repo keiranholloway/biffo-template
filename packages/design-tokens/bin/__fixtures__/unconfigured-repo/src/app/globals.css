@@ -1,0 +1,12 @@
+/* Fixture: one hardcoded font-size, checked against a tokens.css that
+ * declares no type-scale tokens at all (--text- and --space- prefixed
+ * declarations are both absent, so parseAllowedScale returns three empty
+ * sets). Proves findViolations' documented behaviour for that case: nothing
+ * is exempted, so this is still flagged -- "no scale adopted yet" is not the
+ * same thing as "nothing to check". See isScaleConfigured() in
+ * scale-guard-lib.mjs and this repo's real @biffo/design-tokens/tokens.css,
+ * which is in exactly this state today. */
+
+h1 {
+  font-size: 22px;
+}

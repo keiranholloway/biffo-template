@@ -1,9 +1,12 @@
 import { Command } from 'commander'
 import { runAdrNumberingCheck } from '../scripts/check-adr-numbering.js'
 import { runBranchProtectionCheck } from '../scripts/check-branch-protection.js'
+import { runCoreDirectPathsCheck } from '../scripts/check-core-direct-paths.js'
 import { runOwnershipCheck } from '../scripts/check-core-ownership.js'
+import { runEventBridgeLogPermissionCheck } from '../scripts/check-eventbridge-log-permissions.js'
 import { runPluginCollisionCheck } from '../scripts/check-plugin-collisions.js'
 import { runPluginTerraformCheck } from '../scripts/check-plugin-terraform.js'
+import { runPluginToolSupplyCheck } from '../scripts/check-plugin-tool-supply.js'
 import { runReleaseSubjectCheck } from '../scripts/check-release-subject.js'
 
 /**
@@ -28,7 +31,9 @@ import { runReleaseSubjectCheck } from '../scripts/check-release-subject.js'
  * code path rather than two that can drift.
  */
 export const checkCommand = new Command('check').description(
-  'Repo guards (ownership, release subject, plugin terraform, plugin collisions) run in CI and git hooks, plus out-of-band audits (branch protection)',
+  'Repo guards (ownership, release subject, plugin terraform, plugin collisions, ' +
+    'eventbridge-log-permissions, plugin-tool-supply, core-direct-paths) run in CI and git ' +
+    'hooks, plus out-of-band audits (branch protection)',
 )
 
 checkCommand
@@ -73,6 +78,43 @@ checkCommand
   )
   .action(async () => {
     await runAdrNumberingCheck()
+  })
+
+checkCommand
+  .command('eventbridge-log-permissions')
+  .description(
+    'Refuse an EventBridge target writing to a CloudWatch Logs group no resource policy ' +
+      'grants it access to (#1356) — terraform apply succeeds and the rule reports ENABLED ' +
+      'on the broken shape, so this is the only signal available before either exists',
+  )
+  .action(async () => {
+    await runEventBridgeLogPermissionCheck()
+  })
+
+checkCommand
+  .command('plugin-tool-supply')
+  .description(
+    'Refuse a plugin manifest declaring a tool whose is_available predicate reads an env ' +
+      'var no Terraform environment_variables block ever wires (#822) — the shape that left ' +
+      'web_search silently unavailable in every environment, forever',
+  )
+  .action(async () => {
+    await runPluginToolSupplyCheck()
+  })
+
+checkCommand
+  .command('core-direct-paths')
+  .description(
+    "Refuse a frontend's core-direct call site (bypassing its own BFF) naming a route " +
+      'prefix core does not register (#1377). Defaults to a self-check of the sibling ' +
+      "skeleton against this repo's own services/api/src; --sibling/--frontend-src/--core-src " +
+      'point it at a real checked-out sibling instead',
+  )
+  .option('--sibling <name>', 'Label for the report')
+  .option('--frontend-src <dir>', "Sibling's frontend source directory to scan")
+  .option('--core-src <dir>', "Core API's source directory (ground truth for route prefixes)")
+  .action(async (opts: { sibling?: string; frontendSrc?: string; coreSrc?: string }) => {
+    await runCoreDirectPathsCheck(opts)
   })
 
 checkCommand

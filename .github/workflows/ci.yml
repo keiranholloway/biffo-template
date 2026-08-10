@@ -175,6 +175,31 @@ jobs:
       - name: Nested frontend tests (_skeletons/ and any other vendored tree)
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: sh scripts/nested-frontend-tests.sh
+      # An EventBridge target writing to a CloudWatch Logs group with no
+      # resource policy granting events.amazonaws.com access to it: terraform
+      # apply succeeds and the rule reports ENABLED, but the log group
+      # receives nothing, forever (#1356). Shipped with #1408 and had zero
+      # callers until #1413 wired it here.
+      - name: EventBridge log permission guard
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: sh scripts/biffo.sh check eventbridge-log-permissions
+      # A plugin manifest declaring a tool whose is_available predicate reads
+      # an env var no Terraform environment_variables block ever wires — the
+      # shape that left web_search silently unavailable in every environment
+      # (#822). Shipped with #1409 and had zero callers until #1413 wired it
+      # here.
+      - name: Plugin tool-supply guard
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: sh scripts/biffo.sh check plugin-tool-supply
+      # A frontend's core-direct call site (bypassing its own BFF) naming a
+      # route prefix core does not register (#1377). Self-checks the sibling
+      # skeleton against this repo's own services/api/src — the real
+      # estate-wide sweep across live siblings needs a cross-repo checkout
+      # this workflow does not have; see the entrypoint's own doc comment.
+      # Shipped with #1406 and had zero callers until #1413 wired it here.
+      - name: Core-direct-paths guard (skeleton self-check)
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: sh scripts/biffo.sh check core-direct-paths
 
   python:
     name: Python (lint, types, test, security)

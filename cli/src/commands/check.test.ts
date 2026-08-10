@@ -29,9 +29,12 @@ describe('biffo check', () => {
    */
   const ciGuards = [
     'adr-numbering',
+    'core-direct-paths',
+    'eventbridge-log-permissions',
     'ownership',
     'plugin-collisions',
     'plugin-terraform',
+    'plugin-tool-supply',
     'release-subject',
   ]
 

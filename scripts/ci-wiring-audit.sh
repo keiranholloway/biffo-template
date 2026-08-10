@@ -114,6 +114,19 @@ if [ -z "$PAIRS" ] || [ -z "$REQUIRED" ]; then
   exit 2
 fi
 
+# The denominator, printed unconditionally before anything else runs.
+#
+# This is the fix for #1413: `requiresCiStep` held exactly one entry
+# (`terraform/*.tf`) for months, so this audit checked one glob, passed, and
+# read as "CI wiring is sound" — hiding three guards (#1406/#1408/#1409) that
+# shipped with zero callers. "1 glob checked" would have made that visible at
+# zero cost the day it happened. A "1" here going forward is not itself a
+# failure — this script does not know what the RIGHT count is — but it is no
+# longer silent.
+PAIRS_COUNT=$(printf '%s\n' "$PAIRS" | grep -c .)
+REQUIRED_COUNT=$(printf '%s\n' "$REQUIRED" | grep -c .)
+printf 'checked %s requiresCiStep glob(s), %s supersedes pattern(s)\n' "$REQUIRED_COUNT" "$PAIRS_COUNT"
+
 # A raw command still being RUN, as opposed to mentioned.
 #
 # Only `run:` lines count. Both skeleton workflows explain the switch in a

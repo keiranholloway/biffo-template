@@ -126,6 +126,7 @@ async def create_run(
     idempotency_key: str | None = None,
     prompt_version_id: str | None = None,
     prompt_version: int | None = None,
+    caller_plugin: str | None = None,
 ) -> tuple[AgentRun, bool]:
     """Record a requested run in ``pending``, refusing anything past the ceiling.
 
@@ -188,6 +189,7 @@ async def create_run(
         idempotency_key=idempotency_key,
         prompt_version_id=prompt_version_id,
         prompt_version=prompt_version,
+        caller_plugin=caller_plugin,
     )
 
     if idempotency_key is None:
@@ -258,6 +260,8 @@ async def aggregate_run_costs(
             load_only(
                 AgentRun.definition_snapshot,
                 AgentRun.agent_name,
+                # Loaded so a caller-scoped cost view does not lazy-load per row.
+                AgentRun.caller_plugin,
                 AgentRun.input_tokens,
                 AgentRun.output_tokens,
                 AgentRun.cost_usd,
@@ -355,6 +359,12 @@ async def list_runs(
                 # attribute is unloaded rather than false, so the list would
                 # either lazy-load per row or report every run as real.
                 AgentRun.dry_run,
+                # Same reason as dry_run directly above: the summary carries it,
+                # so omitting it here does not yield None — it leaves the
+                # attribute *unloaded*, and touching it in `_summary` raises
+                # MissingGreenlet under async SQLAlchemy. The existing list tests
+                # caught exactly that.
+                AgentRun.caller_plugin,
                 AgentRun.definition_snapshot,
                 AgentRun.input_tokens,
                 AgentRun.output_tokens,

@@ -179,6 +179,12 @@ async def request_agent_run(
             idempotency_key=body.idempotency_key,
             prompt_version_id=prompt_version_id,
             prompt_version=prompt_version,
+            # From the verified principal, never the request body — a plugin
+            # must not be able to bill another one. `logical_names` resolves a
+            # host-mounted plugin from the SigV4-signed `X-Biffo-Plugin` header
+            # and an `isolated: true` plugin from its role ARN; `asserted_plugin`
+            # would silently miss the second.
+            caller_plugin=next(iter(principal.logical_names), None),
         )
     except DepthLimitExceededError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
@@ -260,6 +266,7 @@ def _summary(run: AgentRun) -> AgentRunSummary:
         status=run.status,
         dry_run=run.dry_run,
         model=model if isinstance(model, str) else None,
+        caller_plugin=run.caller_plugin,
         input_tokens=run.input_tokens,
         output_tokens=run.output_tokens,
         cost_usd=run.cost_usd,

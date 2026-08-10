@@ -42,23 +42,28 @@ import { makeTmpDir } from '../test-utils/tmp.js'
  * specifiers, and ask whether a guard module is reachable from the set of
  * `cli/src/commands/*.ts` entrypoints.
  *
- * ## Baseline: five guards this repo already shipped unwired
+ * ## Baseline: empty, since #1363
  *
  * `cognito-invite-template-guard.ts`, `lambda-output-guard.ts`,
  * `pipe-trap-guard.ts`, `skeleton-drift-guard.ts` and
- * `terraform-input-guard.ts` predate #1413 and are not reachable from
- * `cli/src/commands/` or named in any workflow. They are NOT the same
+ * `terraform-input-guard.ts` predated #1413 and were not reachable from
+ * `cli/src/commands/` or named in any workflow. They were NOT the same
  * failure shape as #1413's three, though: each one's own `.test.ts` calls
  * the guard function directly against this repo's real `repoRoot` (e.g.
  * `expect(checkTerraformInput(repoRoot)).toEqual([])`), which runs on every
  * PR via the `js` job's `Test` step — a real, but different, wiring channel
- * this sweep does not (yet) recognise. That gap is real and is reported
- * rather than silently fixed here (out of #1413's scope, which names three
+ * this sweep did not (at the time) recognise. That gap was reported rather
+ * than silently fixed in #1418 (out of #1413's scope, which named three
  * specific guards) or silently swept into invisibility: same ratchet posture
  * as `mustBeUniform`'s baseline in `AGENTS.md` §9 — pre-existing residue
- * never blocks, but the list only shrinks. A guard newly wired must be
- * removed from it (the test below enforces that direction too), and no new
- * name may be added.
+ * never blocks, but the list only shrinks. All five now have a
+ * `cli/src/commands/check.ts` entry and a `.github/workflows/ci.yml` step
+ * (biffo-template#1363), so `PRE_EXISTING_UNWIRED` is empty. It stays
+ * declared (rather than deleted) so the ratchet mechanism — and the "stale
+ * baseline" failure mode below — has somewhere to point if a sixth
+ * pre-existing guard is ever found un-enumerated by this sweep (see the
+ * "Latent weakness" comment on #1413's issue thread: `*-check.ts` and
+ * `*-fidelity.ts` guards are not discovered by the current glob).
  */
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -146,13 +151,7 @@ function workflowStepText(dir: string): string {
   return files.map((f) => readFileSync(join(dir, f), 'utf8')).join('\n')
 }
 
-const PRE_EXISTING_UNWIRED = new Set([
-  'cognito-invite-template-guard.ts',
-  'lambda-output-guard.ts',
-  'pipe-trap-guard.ts',
-  'skeleton-drift-guard.ts',
-  'terraform-input-guard.ts',
-])
+const PRE_EXISTING_UNWIRED = new Set<string>([])
 
 describe('guard wiring sweep (#1413): every cli/src/lib/*-audit.ts and *-guard.ts must have a caller', () => {
   it('discovers at least one real guard file — a sweep that finds none is not sweeping', () => {

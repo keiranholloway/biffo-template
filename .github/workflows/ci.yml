@@ -200,6 +200,52 @@ jobs:
       - name: Core-direct-paths guard (skeleton self-check)
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: sh scripts/biffo.sh check core-direct-paths
+      # A Cognito invite_message_template missing email_subject/email_message/
+      # sms_message, or one of the {username}/{####} placeholders Cognito's
+      # CreateUserPool requires — terraform validate is silent on this, so a
+      # fresh deploy fails on its very first apply (#356). Shipped with #356,
+      # exercised only by its own .test.ts until this pass wired it here
+      # (#1363's five-guard baseline).
+      - name: Cognito invite template guard
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: sh scripts/biffo.sh check cognito-invite-template
+      # An unsuppressed `aws lambda update-function-*` prints the whole
+      # resolved function configuration — every env var, plaintext — into the
+      # Actions log, and the response is never consumed (#334). Shipped with
+      # #334, exercised only by its own .test.ts until this pass wired it here
+      # (#1363's five-guard baseline).
+      - name: Lambda output guard
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: sh scripts/biffo.sh check lambda-output
+      # A status-bearing command (claim.sh, wait-for-checks, git push, ...)
+      # piped into another, or $? read on the line after one, reads the LAST
+      # command's exit status — how a rejected push or a failed claim has read
+      # as `exit: 0` before (#1231, AGENTS.md §4). Shipped with #1231,
+      # exercised only by its own .test.ts sweep until this pass wired it here
+      # (#1363's five-guard baseline).
+      - name: Pipe-trap guard
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: sh scripts/biffo.sh check pipe-trap
+      # A fix this repo made for itself (a hardcoded runner, the paid/broken
+      # gitleaks action, an unhardened dependency audit, a hard-coded app
+      # title) that never reached the scaffolding trees it hands out —
+      # invisible until someone scaffolds from the drifted skeleton, by which
+      # point it has already shipped into every repo created in the meantime.
+      # Exercised only by its own .test.ts until this pass wired it here
+      # (#1363's five-guard baseline).
+      - name: Skeleton drift guard
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: sh scripts/biffo.sh check skeleton-drift
+      # A Terraform subcommand that can prompt for an unresolved variable
+      # without -input=false, or a workflow running Terraform at all without
+      # TF_INPUT set as a backstop — a GitHub Actions runner has no stdin to
+      # answer a prompt, so the step hangs until the job is killed (#322).
+      # -auto-approve does NOT prevent this. Shipped with #322, exercised only
+      # by its own .test.ts until this pass wired it here (#1363's five-guard
+      # baseline).
+      - name: Terraform-input guard
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: sh scripts/biffo.sh check terraform-input
 
   python:
     name: Python (lint, types, test, security)

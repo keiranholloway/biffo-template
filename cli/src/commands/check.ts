@@ -1,13 +1,18 @@
 import { Command } from 'commander'
 import { runAdrNumberingCheck } from '../scripts/check-adr-numbering.js'
 import { runBranchProtectionCheck } from '../scripts/check-branch-protection.js'
+import { runCognitoInviteTemplateCheck } from '../scripts/check-cognito-invite-template.js'
 import { runCoreDirectPathsCheck } from '../scripts/check-core-direct-paths.js'
 import { runOwnershipCheck } from '../scripts/check-core-ownership.js'
 import { runEventBridgeLogPermissionCheck } from '../scripts/check-eventbridge-log-permissions.js'
+import { runLambdaOutputCheck } from '../scripts/check-lambda-output.js'
+import { runPipeTrapCheck } from '../scripts/check-pipe-trap.js'
 import { runPluginCollisionCheck } from '../scripts/check-plugin-collisions.js'
 import { runPluginTerraformCheck } from '../scripts/check-plugin-terraform.js'
 import { runPluginToolSupplyCheck } from '../scripts/check-plugin-tool-supply.js'
 import { runReleaseSubjectCheck } from '../scripts/check-release-subject.js'
+import { runSkeletonDriftCheck } from '../scripts/check-skeleton-drift.js'
+import { runTerraformInputCheck } from '../scripts/check-terraform-input.js'
 
 /**
  * The repo guards, as CLI subcommands.
@@ -32,8 +37,9 @@ import { runReleaseSubjectCheck } from '../scripts/check-release-subject.js'
  */
 export const checkCommand = new Command('check').description(
   'Repo guards (ownership, release subject, plugin terraform, plugin collisions, ' +
-    'eventbridge-log-permissions, plugin-tool-supply, core-direct-paths) run in CI and git ' +
-    'hooks, plus out-of-band audits (branch protection)',
+    'eventbridge-log-permissions, plugin-tool-supply, core-direct-paths, ' +
+    'cognito-invite-template, lambda-output, pipe-trap, skeleton-drift, terraform-input) ' +
+    'run in CI and git hooks, plus out-of-band audits (branch protection)',
 )
 
 checkCommand
@@ -115,6 +121,56 @@ checkCommand
   .option('--core-src <dir>', "Core API's source directory (ground truth for route prefixes)")
   .action(async (opts: { sibling?: string; frontendSrc?: string; coreSrc?: string }) => {
     await runCoreDirectPathsCheck(opts)
+  })
+
+checkCommand
+  .command('cognito-invite-template')
+  .description(
+    'Refuse a Cognito invite_message_template missing a required member or placeholder ' +
+      '(#356) — terraform validate is silent on this, so a fresh deploy fails on its first apply',
+  )
+  .action(async () => {
+    await runCognitoInviteTemplateCheck()
+  })
+
+checkCommand
+  .command('lambda-output')
+  .description(
+    'Refuse an unsuppressed aws lambda update-function-* call (#334) — its default output is ' +
+      'the full function configuration, env vars in plaintext, leaked into the Actions log',
+  )
+  .action(async () => {
+    await runLambdaOutputCheck()
+  })
+
+checkCommand
+  .command('pipe-trap')
+  .description(
+    'Refuse a status-bearing command (claim.sh, wait-for-checks, git push, ...) piped into ' +
+      "another, or $? read after one (#1231) — both read the LAST command's exit status",
+  )
+  .action(async () => {
+    await runPipeTrapCheck()
+  })
+
+checkCommand
+  .command('skeleton-drift')
+  .description(
+    'Refuse a fix this repo made for itself that never reached _skeletons/ — a hardcoded ' +
+      'runner, the paid gitleaks action, an unhardened dependency audit, a hard-coded app title',
+  )
+  .action(async () => {
+    await runSkeletonDriftCheck()
+  })
+
+checkCommand
+  .command('terraform-input')
+  .description(
+    'Refuse a Terraform invocation that can prompt on stdin without -input=false, or a ' +
+      'workflow running Terraform without TF_INPUT set (#322) — a runner has no stdin to answer',
+  )
+  .action(async () => {
+    await runTerraformInputCheck()
   })
 
 checkCommand

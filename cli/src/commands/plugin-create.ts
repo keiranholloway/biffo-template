@@ -18,7 +18,7 @@ import {
   type SourcesFile,
 } from '../lib/registry-sources.js'
 import { workflowCheckContexts } from '../lib/workflow-check-contexts.js'
-import { INSTANCE_CORE_FILE } from '../lib/core-version.js'
+import { getLatestCoreVersion, INSTANCE_CORE_FILE } from '../lib/core-version.js'
 import { log } from '../lib/logger.js'
 import { pluginDir, type PluginChannel } from '../lib/plugin-locations.js'
 import { validateManifest } from '../lib/plugin-manifest.js'
@@ -358,6 +358,26 @@ async function runStandaloneCreate(
   }
   log.success(
     `Manifest valid — ${String(manifest.tables.length)} table(s), ${String(manifest.api_routes.length)} route(s)`,
+  )
+
+  // The pin `scripts/biffo.sh` reads to resolve the version-pinned CLI
+  // (#1109), same as `sibling-create.ts` stamps at birth. A standalone plugin
+  // repo carries neither `biffo.core.json` nor `cli/`, so without this its
+  // hooks fail every commit after the first with "no biffo.core.json, no
+  // .biffo-shared-version, and no cli/ here" — the scaffold commit lands
+  // before hooks are armed, and every commit after that is blocked until
+  // someone runs shared-sync by hand from the template (#1449).
+  //
+  // Read from THIS checkout's own version rather than baked into the
+  // skeleton: the skeleton is copied verbatim into every plugin repo ever
+  // scaffolded, so a value frozen into it would go stale the moment the
+  // template moves on, while the version the CLI is actually running as
+  // (falls back to the highest local `core-v*` tag in a template checkout,
+  // same source `RUNNER_LABEL` propagation and sibling-create use) is current
+  // by construction.
+  writeFileSync(
+    join(destDir, '.biffo-shared-version'),
+    `core-v${getLatestCoreVersion().replace(/^core-v/, '')}\n`,
   )
 
   if (options.commit) {

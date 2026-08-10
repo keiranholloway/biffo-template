@@ -180,15 +180,13 @@ jobs:
     name: Python (lint, types, test, security)
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     timeout-minutes: 20
-    # `actions: read` is least-privilege for the "Fetch RLS coverage artefact"
-    # step below (#637): it needs to list workflow runs and download an
-    # artifact from a DIFFERENT workflow's run via the API, which the default
-    # token scope does not reliably grant. `contents: read` is restated
-    # explicitly rather than left to the ambient default, matching the
-    # `security-secrets` job's own pattern in this file.
+    # `contents: read` is restated explicitly rather than left to the ambient
+    # default, matching the `security-secrets` job's own pattern in this file.
+    # The cross-workflow `actions: read` this job used to need for #637's
+    # best-effort artefact fetch moved with that logic to
+    # `error-branch-coverage-gate.yml`, which now owns it.
     permissions:
       contents: read
-      actions: read
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       - uses: astral-sh/setup-uv@v6
@@ -236,99 +234,47 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         # Exit code 5 = no tests collected — valid for the template repo before tests are added
         run: uv run pytest --cov --cov-report=xml --cov-report=json || [ $? -eq 5 ]
-      # An instance's `RLS Tests` workflow (instance-owned, not this file) can
-      # upload an `rls-coverage` artefact of its own — coverage from a
-      # real-Postgres lane this job structurally cannot run (#637). It is a
-      # DIFFERENT WORKFLOW, not a different job of this one, so
-      # actions/download-artifact's same-run default cannot see it; reaching
-      # it needs the run id of that workflow's own run for this exact commit,
-      # found via the API.
-      #
-      # That makes this reachable, not guaranteed to BE reached on any given
-      # run, and the difference was measured rather than assumed
-      # (tabsii-platform's actual run history, 2026-08-08): `ci.yml` and
-      # `rls-tests.yml` both trigger on the same push with no ordering between
-      # them, and in 3 of 4 completed same-commit pairs checked, `RLS Tests`
-      # finished AFTER this job — by seconds to ~90s, not reliably either way.
-      # So on a typical first push the artefact usually will NOT exist yet by
-      # the time the next step runs; it becomes available on a RE-run of this
-      # job once `RLS Tests` has finished for the same commit (a retry, or a
-      # manual `workflow_dispatch`/"re-run failed jobs"). Absence here is the
-      # ORDINARY case for a repo that has this lane, not evidence of anything
-      # wrong — but it must still be SAID, loudly, every time it happens (see
-      # the next step): #637 was filed on "a check that skips an input it
-      # cannot evaluate is not neutral", and a quiet fallback here would close
-      # this issue with the exact shape it was opened for.
-      #
-      # `hashFiles(...)` on the `if:` below is a repo-level gate, not a
-      # per-run one: a repo with no `RLS Tests` workflow at all (this
-      # template, and every instance that has not adopted one) never has
-      # anything to fetch, so this step — and the warnings inside it — must
-      # never fire there. Warning on every push in a repo that structurally
-      # can never produce this artefact would be permanent, unactionable
-      # noise, exactly the "red on day-one residue" shape AGENTS.md warns
-      # trains people to stop reading a gate (§9, the orphan-ratchet
-      # discussion). The check below is therefore identical to the one on the
-      # "Error-branch coverage" step's inline expression — both must agree on
-      # what "this repo has the lane" means.
-      - name: Fetch RLS coverage artefact (best-effort, cross-workflow, #637)
-        if: ${{ !cancelled() && steps.install.outcome == 'success' && hashFiles('.github/workflows/rls-tests.yml') != '' }}
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -uo pipefail
-          run_id=$(gh api "repos/${{ github.repository }}/actions/runs?head_sha=${{ github.sha }}&status=success&per_page=50" \
-            --jq '[.workflow_runs[] | select(.name == "RLS Tests")] | first | .id // empty' 2>/dev/null)
-          if [ -z "$run_id" ]; then
-            echo "::warning::error-branch coverage: this repo has an RLS Tests lane but no completed run of it was found yet for ${{ github.sha }} — the Error-branch coverage step below will run over coverage.json alone. Re-run it after RLS Tests finishes to combine both lanes."
-            exit 0
-          fi
-          echo "Found RLS Tests run $run_id for this commit — downloading its rls-coverage artefact."
-          if gh run download "$run_id" --repo "${{ github.repository }}" --name rls-coverage --dir .; then
-            echo "::notice::error-branch coverage: combined coverage.json with rls-coverage.json from RLS Tests run $run_id."
-          else
-            echo "::warning::error-branch coverage: found RLS Tests run $run_id for ${{ github.sha }} but could not download its rls-coverage artefact — the Error-branch coverage step below will run over coverage.json alone."
-          fi
-      - name: Error-branch coverage
+      # Published as an artefact (not just left on disk) because the
+      # deterministic cross-workflow gate (`error-branch-coverage-gate.yml`,
+      # #637) downloads it from a DIFFERENT workflow run via the API, the same
+      # way an instance's `RLS Tests` lane already publishes `rls-coverage`.
+      # `if-no-files-found: error` matches that producer's own posture: this
+      # step running with no coverage.json to publish means pytest's coverage
+      # plugin silently produced nothing, which is worth failing THIS job on
+      # immediately rather than surfacing as an unexplained download failure
+      # in the downstream gate an entire workflow later.
+      - name: Upload coverage artefact
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        # Fails only when error handling is ADDED with nothing exercising it
-        # (#956). An unexecuted `except` is unverified, and that is where every
-        # fail-open this estate has found actually lived.
-        #
-        # `--coverage rls-coverage.json` is added by an INLINE expression, not
-        # a shell conditional, and only when this repo actually has an RLS
-        # lane (same `hashFiles(...)` test as the step above — the two must
-        # stay in agreement, or a repo with the lane could silently stop being
-        # asked for it). Two things this achieves together:
-        #
-        # 1. It keeps this a single physical `run:` line no matter which
-        #    branch the expression takes — load-bearing for
-        #    `verify-parity.test.ts`, which harvests CI checks line-by-line
-        #    and cannot see inside a multi-line `run:` block (a shell `if`
-        #    here silently orphaned that test's EXCLUDED entry on a first
-        #    draft of this change; caught by the pre-push gate).
-        # 2. It means a repo with NO RLS lane never requests the second
-        #    artefact at all, so error_branch_coverage.py's own "requested
-        #    but not found" warning — which fires for every genuinely
-        #    requested-and-missing artefact — never fires there either. Only
-        #    a repo that actually has the lane sees that warning, and only
-        #    when it is true.
-        #
-        # The posture here is deliberately the OPPOSITE of the RLS lane's own
-        # upload, which is fail-CLOSED (`if-no-files-found: error`) — there, a
-        # missing file means the lane ran and produced nothing, which is a
-        # real defect worth failing on. Here, "the RLS artefact didn't reach
-        # this job in time" is a legitimate, expected outcome even for a repo
-        # that HAS the lane (see the race measured above) — so this does not
-        # fail closed on it. It does not go quiet about it either:
-        # error_branch_coverage.py prints a `::warning::` GitHub Actions
-        # annotation naming exactly what was requested and not found, and
-        # states the denominator ("N/M coverage artefact(s)") in its own
-        # summary line, so a clean result is falsifiable rather than merely
-        # quiet (#637's own complaint, AGENTS.md §2's "a check that skips an
-        # input it cannot evaluate is not neutral").
-        run: uv run python scripts/error_branch_coverage.py --check --coverage coverage.json ${{ hashFiles('.github/workflows/rls-tests.yml') != '' && '--coverage rls-coverage.json' || '' }}
+        uses: actions/upload-artifact@v5
+        with:
+          name: python-coverage
+          path: coverage.json
+          if-no-files-found: error
+      # Fails only when error handling is ADDED with nothing exercising it
+      # (#956). An unexecuted `except` is unverified, and that is where every
+      # fail-open this estate has found actually lived.
+      #
+      # This asserts over coverage.json ALONE, and is skipped entirely in a
+      # repo that has an `RLS Tests` lane (`hashFiles(...)` below — same test
+      # `error-branch-coverage-gate.yml` uses, and the two must stay in
+      # agreement). That is a deliberate narrowing, not the pre-#637 gate
+      # brought back: a repo WITH the lane has error branches reachable only
+      # under real Postgres (an RLS refusal, a constraint violation), which
+      # this job structurally cannot execute — asserting here regardless would
+      # flag every one of them as newly unexecuted on every PR that touches
+      # them, which is exactly the false-positive #637 was filed over (PR
+      # #750, `except StaleDataError`, both measured in #637's own comments).
+      # The combined assertion for a repo with the lane happens exactly once,
+      # deterministically, in `error-branch-coverage-gate.yml` — see that
+      # file for why splitting enforcement out of this racy, best-effort spot
+      # closes the gap rather than papering over it.
+      #
+      # A repo with NO lane (this template, and most instances) sees no
+      # change at all: this is byte-for-byte the assertion that ran here
+      # before the #637 best-effort combine existed.
+      - name: Error-branch coverage
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && hashFiles('.github/workflows/rls-tests.yml') == '' }}
+        run: uv run python scripts/error_branch_coverage.py --check --coverage coverage.json
       - name: Coverage upload
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         uses: codecov/codecov-action@v5

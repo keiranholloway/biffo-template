@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Command } from 'commander'
@@ -141,5 +141,48 @@ describe('create-path birth-test coverage (#1459)', () => {
         expect(coverage.reason, `'${path}' has no birth test and no reason recorded`).toBeTruthy()
       }
     }
+  })
+
+  /**
+   * `ROOT_COMMANDS` above is a SECOND COPY of what `index.ts` registers on the
+   * real `program`, and the docstring at the top of this file asserts the two
+   * are the same set. Nothing checked that, which made this guard an instance
+   * of the very class it belongs to (#1362: a guard resolving its answer from a
+   * different document than the actor).
+   *
+   * The failure it admits is silent and shrinks the denominator: add a
+   * top-level command to `index.ts` that owns a `create` subcommand, forget to
+   * list it here, and `CREATE_PATHS` simply never sees it. Every assertion above
+   * still passes — over a set with a hole in it. That is #1459's own founding
+   * mistake (a hand-maintained list of create paths) reappearing one level up,
+   * and #1363's (a green result over an unprinted denominator).
+   *
+   * `index.ts` cannot be imported — it calls `program.parseAsync()` at module
+   * load — so this reads its source and compares the identifiers it passes to
+   * `addCommand(...)` against the ones assembled here.
+   */
+  it('ROOT_COMMANDS matches every command index.ts registers', () => {
+    const indexSource = readFileSync(join(commandsDir, '..', 'index.ts'), 'utf8')
+    const registered = [...indexSource.matchAll(/addCommand\(\s*([A-Za-z_$][\w$]*)/g)]
+      .map((m) => m[1])
+      .sort()
+
+    // Guard the guard: a regex that matched nothing would make this pass
+    // vacuously, which is the failure mode being fixed.
+    expect(registered.length, 'found no addCommand() calls in index.ts').toBeGreaterThan(0)
+    expect(new Set(registered).size, 'index.ts registers a command twice').toBe(registered.length)
+
+    const walked = ROOT_COMMANDS.map((c) => c.name()).sort()
+    const registeredNames = registered
+      .map((ident) =>
+        ident.replace(/Command$/, '').replace(/[A-Z]/g, (ch) => `-${ch.toLowerCase()}`),
+      )
+      .sort()
+
+    expect(
+      walked.length,
+      `index.ts registers ${registered.length} commands, ROOT_COMMANDS has ${walked.length}`,
+    ).toBe(registered.length)
+    expect(walked).toEqual(registeredNames)
   })
 })

@@ -157,3 +157,78 @@ describe('claim.sh matches structured closing references (#1281, #1311)', () => 
     expect(out).toMatch(/open PR/i)
   })
 })
+
+describe('disagreement: `Refs #N` must read as a claim, not as a mention (#1411, class #1362)', () => {
+  // The guard (this script, deriving "claimed?" from `closingIssuesReferences`
+  // and the branch name) and the authority (AGENTS.md's own documented `Refs
+  // #N` convention, MANDATED for a PR that must not close the issue it names
+  // -- a DDL PR, or an "instance of a class" PR referencing its class issue,
+  // like this one referencing #1362) used to disagree: a PR body reading
+  // `Refs #N` populates neither `closingIssuesReferences` (Refs is not a
+  // GitHub closing keyword) nor the branch name (the branch is usually named
+  // for the ISSUE the PR closes, not the one it merely references) — so the
+  // guard reported the issue free while a PR for it was open. Observed live
+  // on #1352/#1410.
+  //
+  // These construct the exact state where the two disagree and assert the
+  // script returns what the convention says a claim is — in both directions,
+  // so this is a resolution rule and not a rule that only ever forgives.
+  // Mirrors `wait-for-checks.test.ts`'s own disagreement block for #1333.
+
+  it('a PR saying "Refs #N", on a branch that does NOT name N, is detected as claiming N', () => {
+    const dir = stub([
+      {
+        number: 70,
+        headRefName: 'fix/1411-claim-structural-resolver', // does not contain "1362"
+        body: 'This is instance 8 of #1362.\n\nRefs #1362',
+        closingIssuesReferences: [], // "Refs" is not a GitHub closing keyword
+      },
+    ])
+    const { code, out } = claim(dir, 1362)
+    expect(code, out).toBe(1)
+    expect(out).toMatch(/open PR/i)
+    expect(out).toContain('#70')
+  })
+
+  it('a PR that merely MENTIONS #N in prose, with no claiming keyword, is still NOT detected (#1327, #1311)', () => {
+    const dir = stub([
+      {
+        number: 71,
+        headRefName: 'fix/999-unrelated',
+        body: 'see also #1362 for background',
+        closingIssuesReferences: [],
+      },
+    ])
+    const { code, out } = claim(dir, 1362)
+    expect(code, out).toBe(0)
+    expect(out).toContain('Free')
+  })
+
+  it("a keyword and `#N` split across a line break do not match (#1334's shape, not this guard's)", () => {
+    const dir = stub([
+      {
+        number: 72,
+        headRefName: 'fix/999-unrelated',
+        body: 'Refs\n#1362',
+        closingIssuesReferences: [],
+      },
+    ])
+    const { code, out } = claim(dir, 1362)
+    expect(code, out).toBe(0)
+    expect(out).toContain('Free')
+  })
+
+  it('a PR saying "Closes #N" is still detected — unchanged', () => {
+    const dir = stub([
+      {
+        number: 73,
+        headRefName: 'fix/999-unrelated',
+        body: 'Closes #1362',
+        closingIssuesReferences: [local(1362)],
+      },
+    ])
+    const { code, out } = claim(dir, 1362)
+    expect(code, out).toBe(1)
+    expect(out).toMatch(/open PR/i)
+  })
+})

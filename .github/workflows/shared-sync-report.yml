@@ -229,6 +229,25 @@ jobs:
       - name: Run shared-sync --check against the cloned estate
         id: sync
         if: steps.estate.outcome == 'success'
+        env:
+          # #1426: this step's `diff_files` calls `git -C "$d" fetch origin
+          # --prune` against every applicable repo -- 12 of them private, on
+          # this run. The clone above authenticated with BIFFO_GITHUB_TOKEN,
+          # but a git credential helper reads the token from THIS process's
+          # environment at invocation time, not from whatever step configured
+          # it -- GitHub Actions does not carry env vars between steps unless
+          # a step declares them itself. With no GH_TOKEN here, `gh auth
+          # git-credential` (the helper `gh repo clone` wires up) had nothing
+          # to offer, so every private fetch failed with "could not read
+          # Username for 'https://github.com'" and every one of those repos
+          # was reported UNFETCHABLE. Reproduced directly: the same clones
+          # with `credential.helper` cleared and no token in the environment
+          # fail identically on the 15 private repos and succeed on the 2
+          # public ones -- which is exactly the "2 current, 0 drifted" this
+          # run reported, because the 2 public plugin repos were the only
+          # ones that could still answer. `applies()` itself was never wrong;
+          # every candidate that reached it had its marker file on disk.
+          GH_TOKEN: ${{ secrets.BIFFO_GITHUB_TOKEN }}
         run: |
           set -u
           log="$RUNNER_TEMP/shared-sync-check.log"
@@ -282,16 +301,45 @@ jobs:
 
             unreadable=$(grep -c 'cannot fetch\|repo(s) could not be read' "$clean_log" || true)
 
-            denom="checked ${checked_n} satellites, ${drifted_n} drifted: ${drifted_names}"
+            # #1426: "checked N satellites" alone -- current+drifted, excluding
+            # anything applies() accepted but diff_files could not read -- is
+            # exactly the number that read as fine at 2 while 12 of the 17
+            # cloned repos were silently unreadable. shared-sync.sh now prints
+            # its own "$applicable of $considered ... judged applicable"
+            # line (and hard-fails itself, exit 2, if that ratio collapses) --
+            # this pulls the same number into the headline a human actually
+            # reads, rather than leaving it to a line buried under 17 repo
+            # rows and only implied by the "N could not be read" aside.
+            applicable_line=$(grep -E '^[0-9]+ of [0-9]+ repo\(s\) under .* judged applicable by applies\(\)' "$clean_log" | tail -1 || true)
+            applicable_n=$(printf '%s' "$applicable_line" | sed -E 's/^([0-9]+) of.*/\1/')
+            case "$applicable_n" in ''|*[!0-9]*) applicable_n=0 ;; esac
+
+            denom="cloned ${cloned:-0}, applicable ${applicable_n}, checked ${checked_n} satellites, ${drifted_n} drifted: ${drifted_names}"
 
             hard_fail=0
             # rc from shared-sync.sh --check: 0 clean, 1 drift/unreadable-repo,
-            # 2 cannot-tell (including "surveyed zero repos"). Any non-zero is
-            # a red job -- see the workflow header for why zero is never a pass.
+            # 2 cannot-tell (including "surveyed zero repos" and, since #1426,
+            # applicable collapsing to under half of considered). Any non-zero
+            # is a red job -- see the workflow header for why zero is never a
+            # pass.
             [ "$rc" -ne 0 ] 2>/dev/null && hard_fail=1
             [ "$checked_n" -eq 0 ] && hard_fail=1
 
+            # Belt-and-suspenders at the layer a human actually reads: even if
+            # shared-sync.sh's own ratchet above did not fire (a parsing
+            # mismatch, a log truncated before that line), a cloned/applicable
+            # ratio under 50% here is loud on its own terms. Same threshold and
+            # same justification as scripts/shared-sync.sh's -- see the
+            # comment there for the 4-of-17 (~24%) measured exclusion rate this
+            # is sized against.
+            if [ -n "${cloned:-}" ] && [ "$cloned" -gt 0 ] 2>/dev/null && \
+               [ "$((applicable_n * 2))" -lt "$cloned" ]; then
+              hard_fail=1
+              body_extra_ratio="cloned ${cloned} candidate repo(s) but only ${applicable_n} were judged applicable -- under the 50% floor. That is the #1426 shape: a scope collapse, not ordinary exclusion. Check whether every applicable repo could actually be fetched (git credentials/token reaching the check step) before trusting anything else in this report."
+            fi
+
             body_extra="Cloned ${cloned:-0} candidate repo(s) under \`biffo-*\`/\`tabsii-*\` from keiranholloway and tabsii-com; shared-sync.sh --check exited ${rc}. ${unreadable:-0} line(s) reported an unreadable repo."
+            [ -n "${body_extra_ratio:-}" ] && body_extra="${body_extra_ratio} ${body_extra}"
           fi
 
           echo "$denom"

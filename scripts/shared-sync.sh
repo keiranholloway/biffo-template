@@ -561,6 +561,7 @@ drifted=0
 synced=0
 current=0
 failed=0
+considered=0
 
 # Field separator for the two state files below. A literal tab in a `grep`
 # pattern or a `${var%%...}` expansion is invisible in a diff and one editor
@@ -2070,6 +2071,12 @@ for d in "$ESTATE"/*/; do
   # target of its own distribution and opened a sync PR against its own dev.
   [ "$(repo_dir "$d")" = "$TEMPLATE_REPO" ] && continue
   [ -n "$ONLY" ] && [ "$label" != "$ONLY" ] && continue
+  # Every directory that reaches this line is a genuine candidate this run was
+  # asked to look at -- present under --estate, not the template, not excluded
+  # by --repo. `considered` counts them BEFORE applies() filters, so it is
+  # directly comparable to a caller's own "how many did I hand you" number
+  # (the CI workflow's `cloned` count, or `ls ~/code | wc -l` by hand).
+  considered=$((considered + 1))
   applies "$d" || continue
   delta=$(diff_files "$d")
   case "$delta" in
@@ -2118,8 +2125,46 @@ done
 # (every repo present, applicable, and current) still has `current` > 0, so
 # this cannot fire on a real clean day -- only on an empty or
 # nothing-applies `--estate`.
-if [ "$((current + drifted + failed))" -eq 0 ]; then
+applicable=$((current + drifted + failed))
+
+if [ "$applicable" -eq 0 ]; then
   echo "surveyed zero repos under --estate $ESTATE -- refusing to report a clean run against nothing" >&2
+  exit 2
+fi
+
+# #1426: a run that clones 17 candidates and judges 2 of them in scope passed
+# through this script (and the CI job wrapping it) with no complaint -- the
+# survey itself was silently a shadow of what it was handed, and nothing said
+# so out loud. `applicable` here is deliberately `current + drifted + failed`,
+# i.e. every repo applies() accepted, INCLUDING the ones diff_files could not
+# read -- a repo applies() let in and then failed to fetch is still evidence
+# the survey reached it, and folding it into "excluded" would hide the exact
+# failure #1426 was filed for (12 of 14 applicable repos went UNFETCHABLE
+# because a later CI step ran with no git credentials at all).
+#
+# `considered` is every repo this run was actually handed (present under
+# --estate, minus the template and any --repo mismatch) -- directly
+# comparable to a caller's own count of what it prepared, such as the CI
+# workflow's `cloned N candidate repo(s)` line.
+#
+# Threshold: applicable must be at least HALF of considered. Excluding
+# instances (biffo.core.json) and the handful of repos that are neither a
+# sibling, a plugin, nor already bridged (scripts/biffo.sh) is real and
+# expected -- measured against this template's own estate on 2026-08-10, 4 of
+# 17 candidates (~24%) are legitimately out of scope. Requiring at least half
+# to remain applicable leaves that healthy exclusion rate more than double the
+# room it currently needs, while still catching a collapse like #1426's
+# 17 cloned / 2 judged-in-scope (~12%) by a wide margin. This is a coarse
+# tripwire, not a precise budget -- the point is to fail LOUDLY on an
+# order-of-magnitude drop, not to police the exact exclusion count.
+printf '\n%s of %s repo(s) under %s judged applicable by applies()\n' \
+  "$applicable" "$considered" "$ESTATE"
+if [ "$considered" -gt 0 ] && [ "$((applicable * 2))" -lt "$considered" ]; then
+  printf '\n\033[31mapplicable count is drastically below considered.\033[0m %s of %s (%s%%) is\n' \
+    "$applicable" "$considered" "$((applicable * 100 / considered))"
+  printf 'below the 50%% floor -- something is shrinking scope, not the estate. Check the\n'
+  printf 'clone/checkout this run is reading (branch, depth, sparse checkout, missing\n'
+  printf 'marker files) before trusting anything else this run reports.\n'
   exit 2
 fi
 

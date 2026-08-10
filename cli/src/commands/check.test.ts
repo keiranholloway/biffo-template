@@ -29,13 +29,18 @@ describe('biffo check', () => {
    */
   const ciGuards = [
     'adr-numbering',
+    'cognito-invite-template',
     'core-direct-paths',
     'eventbridge-log-permissions',
+    'lambda-output',
     'ownership',
+    'pipe-trap',
     'plugin-collisions',
     'plugin-terraform',
     'plugin-tool-supply',
     'release-subject',
+    'skeleton-drift',
+    'terraform-input',
   ]
 
   /**

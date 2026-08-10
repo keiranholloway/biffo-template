@@ -1,5 +1,5 @@
 import { cpSync, existsSync, mkdirSync, readFileSync, statSync } from 'node:fs'
-import { basename, join, relative, resolve } from 'node:path'
+import { join, relative, resolve } from 'node:path'
 import chalk from 'chalk'
 import { Command } from 'commander'
 import { GitAdapter } from '../adapters/git/index.js'
@@ -8,6 +8,7 @@ import { RegistryAdapter, type RegistryPluginEntry } from '../adapters/registry/
 import { log } from '../lib/logger.js'
 import { pluginDir } from '../lib/plugin-locations.js'
 import { validateManifest, type PluginManifest } from '../lib/plugin-manifest.js'
+import { copyPluginSource } from '../lib/plugin-source-copy.js'
 import { syncPluginTerraform } from '../lib/plugin-terraform-wiring.js'
 import { applyWorkspaceSources } from '../lib/plugin-workspace-sources.js'
 
@@ -83,24 +84,6 @@ export interface ResolvedPluginSource {
   /** Release any temp resources. No-op for a local source. */
   cleanup: () => void
 }
-
-/**
- * Build/VCS detritus never copied out of a local plugin directory. Exported
- * so `plugin upgrade --local` (a refresh of an already-installed plugin from
- * the same kind of local checkout) filters identically rather than
- * re-declaring this list and letting the two drift.
- */
-export const LOCAL_COPY_EXCLUDES = new Set([
-  '.git',
-  '.venv',
-  'node_modules',
-  '__pycache__',
-  '.ruff_cache',
-  '.pytest_cache',
-  '.mypy_cache',
-  'dist',
-  '.terraform',
-])
 
 /**
  * Resolve a local, unpublished plugin directory into the same shape a registry
@@ -321,10 +304,7 @@ export async function runPluginInstall(
       log.info(`${relTargetDir}/ is already in this checkout — installing in place.`)
     } else {
       mkdirSync(targetDir, { recursive: true })
-      cpSync(source!.sourceDir, targetDir, {
-        recursive: true,
-        filter: (src) => !LOCAL_COPY_EXCLUDES.has(basename(src)),
-      })
+      await copyPluginSource(source!.sourceDir, targetDir)
       log.success(`Installed plugin source at ${relTargetDir}/`)
     }
 

@@ -793,7 +793,8 @@ jobs:
           uv pip install -r host-requirements.txt --target "$pkg/"
           uv pip install ./packages/python-sdk --target "$pkg/" --no-deps
           cp -r services/_plugin-host/src/. "$pkg/"
-          # Each user-facing plugin (a manifest with user_ingress.app) becomes pure
+          # Each host-mounted plugin (a manifest with user_ingress.app OR
+          # admin_ingress.app) becomes pure
           # code inside the host: its package at the task root so load_app("<mod>:
           # <attr>") imports it, and its manifest under services/<name>/ so
           # discover_plugins() — which scans BIFFO_PLUGINS_ROOT=/var/task/services —
@@ -802,7 +803,12 @@ jobs:
           # its export; the host already installed the SDK above.
           mkdir -p "$pkg/services"
           for manifest in services/*/biffo.plugin.json services/_plugins/*/biffo.plugin.json; do
-            jq -e '.user_ingress.app' "$manifest" >/dev/null 2>&1 || continue
+            # EITHER surface makes a plugin host-mounted. Filtering on
+            # user_ingress alone silently dropped admin-only plugins: they were
+            # `continue`d before the admin_ingress checks below ever ran, so the
+            # host never carried their code and every route 404'd, with nothing
+            # anywhere reporting it.
+            jq -e '.user_ingress.app // .admin_ingress.app' "$manifest" >/dev/null 2>&1 || continue
             plugin_dir="$(dirname "$manifest")"
             name="$(basename "$plugin_dir")"
             echo "::group::host mount: $name"
@@ -1630,7 +1636,8 @@ jobs:
           uv pip install -r host-requirements.txt --target "$pkg/"
           uv pip install ./packages/python-sdk --target "$pkg/" --no-deps
           cp -r services/_plugin-host/src/. "$pkg/"
-          # Each user-facing plugin (a manifest with user_ingress.app) becomes pure
+          # Each host-mounted plugin (a manifest with user_ingress.app OR
+          # admin_ingress.app) becomes pure
           # code inside the host: its package at the task root so load_app("<mod>:
           # <attr>") imports it, and its manifest under services/<name>/ so
           # discover_plugins() — which scans BIFFO_PLUGINS_ROOT=/var/task/services —
@@ -1639,7 +1646,12 @@ jobs:
           # its export; the host already installed the SDK above.
           mkdir -p "$pkg/services"
           for manifest in services/*/biffo.plugin.json services/_plugins/*/biffo.plugin.json; do
-            jq -e '.user_ingress.app' "$manifest" >/dev/null 2>&1 || continue
+            # EITHER surface makes a plugin host-mounted. Filtering on
+            # user_ingress alone silently dropped admin-only plugins: they were
+            # `continue`d before the admin_ingress checks below ever ran, so the
+            # host never carried their code and every route 404'd, with nothing
+            # anywhere reporting it.
+            jq -e '.user_ingress.app // .admin_ingress.app' "$manifest" >/dev/null 2>&1 || continue
             plugin_dir="$(dirname "$manifest")"
             name="$(basename "$plugin_dir")"
             echo "::group::host mount: $name"
@@ -2479,7 +2491,8 @@ jobs:
           uv pip install -r host-requirements.txt --target "$pkg/"
           uv pip install ./packages/python-sdk --target "$pkg/" --no-deps
           cp -r services/_plugin-host/src/. "$pkg/"
-          # Each user-facing plugin (a manifest with user_ingress.app) becomes pure
+          # Each host-mounted plugin (a manifest with user_ingress.app OR
+          # admin_ingress.app) becomes pure
           # code inside the host: its package at the task root so load_app("<mod>:
           # <attr>") imports it, and its manifest under services/<name>/ so
           # discover_plugins() — which scans BIFFO_PLUGINS_ROOT=/var/task/services —
@@ -2488,7 +2501,12 @@ jobs:
           # its export; the host already installed the SDK above.
           mkdir -p "$pkg/services"
           for manifest in services/*/biffo.plugin.json services/_plugins/*/biffo.plugin.json; do
-            jq -e '.user_ingress.app' "$manifest" >/dev/null 2>&1 || continue
+            # EITHER surface makes a plugin host-mounted. Filtering on
+            # user_ingress alone silently dropped admin-only plugins: they were
+            # `continue`d before the admin_ingress checks below ever ran, so the
+            # host never carried their code and every route 404'd, with nothing
+            # anywhere reporting it.
+            jq -e '.user_ingress.app // .admin_ingress.app' "$manifest" >/dev/null 2>&1 || continue
             plugin_dir="$(dirname "$manifest")"
             name="$(basename "$plugin_dir")"
             echo "::group::host mount: $name"

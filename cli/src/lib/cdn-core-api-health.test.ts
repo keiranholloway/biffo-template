@@ -35,14 +35,34 @@ function behaviourFor(needle: string): string | null {
 }
 
 describe('CloudFront routes the Core API health endpoint', () => {
-  it('declares a core-api origin, gated on the variable', () => {
+  it('declares a core-api origin, gated on the resolved domain', () => {
     const tf = cdn()
     expect(tf).toContain('origin_id   = "core-api"')
-    // Gated: an instance that does not set the variable gets no origin at all,
-    // so this cannot silently add an API origin to every distribution.
+    // Still gated — an instance enabling neither Core-API route gets no origin
+    // at all, so this cannot silently add an API origin to every distribution.
+    //
+    // The gate widened when tracked links became a second consumer. It used to
+    // read `var.core_api_health_domain` directly, which was correct while that
+    // was the only behaviour using the origin; with two independently opt-in
+    // behaviours it would leave an instance wanting tracked links but not the
+    // health route pointing a behaviour at an origin that does not exist —
+    // which fails the apply and takes the whole distribution down, portal
+    // included.
     expect(tf).toMatch(
-      /var\.core_api_health_domain == "" \? \[\] : \[var\.core_api_health_domain\]/,
+      /local\.core_api_origin_domain == "" \? \[\] : \[local\.core_api_origin_domain\]/,
     )
+  })
+
+  it('resolves that origin from EITHER Core-API variable', () => {
+    // The property the gate above depends on: the local must consider every
+    // variable that can enable a core-api behaviour. A new behaviour added
+    // later without extending this local reintroduces exactly the
+    // origin-does-not-exist failure the widening was for, and the apply error
+    // names neither the behaviour nor the variable.
+    const tf = cdn()
+    const local = tf.match(/core_api_origin_domain\s*=\s*try\(([\s\S]*?)\)\n/)?.[1] ?? ''
+    expect(local).toContain('var.core_api_health_domain')
+    expect(local).toContain('var.tracked_link_api_domain')
   })
 
   it('routes exactly api/v1/health to it', () => {

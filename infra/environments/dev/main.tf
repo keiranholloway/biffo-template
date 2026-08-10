@@ -157,6 +157,11 @@ module "cdn" {
   # plugin_host_api_domain above — the same value, when both are in use.
   core_api_health_domain = var.core_api_health_domain
 
+  # Tracked marketing links — baseurl.com/c/<token> to the Core API, which
+  # records the click and redirects. Same value as the two above when in use;
+  # separate so each route can be enabled independently.
+  tracked_link_api_domain = var.tracked_link_api_domain
+
   tags = local.tags
 }
 

@@ -95,8 +95,8 @@ variable "sibling_origins" {
   # fail the apply with an opaque duplicate-key error — reject it here, where
   # the message can say why.
   validation {
-    condition     = length([for s in var.sibling_origins : s.name if contains(["admin", "login"], s.name)]) == 0
-    error_message = "Sibling names \"admin\" and \"login\" are reserved for the portal's own CloudFront routes."
+    condition     = length([for s in var.sibling_origins : s.name if contains(["admin", "login", "c"], s.name)]) == 0
+    error_message = "Sibling names \"admin\", \"login\" and \"c\" are reserved for the portal's own CloudFront routes and for tracked marketing links (c/*)."
   }
 
   # "app" is the third reserved name, and it is reserved differently from the
@@ -162,4 +162,38 @@ variable "core_api_health_domain" {
   EOT
   type        = string
   default     = ""
+}
+
+# Tracked marketing links (`baseurl.com/c/<token>`).
+#
+# Set to the same value as core_api_health_domain when both are in use — they are
+# two variables rather than one so an instance can enable either route without
+# the other, and so neither feature's presence is inferred from the other's.
+#
+# Reserved name: enabling this claims the `c/*` prefix on the distribution, which
+# is why "c" is rejected as a sibling name above. Two behaviours sharing a
+# path_pattern is not a silent shadow — CloudFront rejects the distribution — but
+# it fails at apply with a message that names neither the sibling nor this
+# feature, so it is caught at the variable instead.
+variable "tracked_link_api_domain" {
+  description = <<-EOT
+    Regional domain of the Core API Gateway that serves tracked marketing links,
+    e.g. "abc123.execute-api.eu-west-1.amazonaws.com" — NO scheme, NO path. When
+    set, CloudFront routes baseurl.com/c/* to the Core API, which records the
+    click and redirects to the campaign destination.
+
+    The short branded form is the feature: these URLs are published in social
+    posts, emails and ads, where a raw execute-api hostname reads as suspicious.
+    It also cannot be changed later without breaking every link already in
+    circulation.
+
+    Empty by default (no behaviour, and no c/* prefix claimed).
+  EOT
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.tracked_link_api_domain == "" || can(regex("^[a-z0-9.-]+$", var.tracked_link_api_domain))
+    error_message = "tracked_link_api_domain must be a bare domain — no scheme, no path, no trailing slash."
+  }
 }

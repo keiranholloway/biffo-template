@@ -1,0 +1,258 @@
+name: Core-direct-paths estate audit
+
+# core-direct-paths guard (#1377): does a live sibling's core-direct API call
+# site (one that bypasses its own BFF, prefixed with a declared external base
+# like `CORE_API_URL`) name a route prefix THIS core actually registers?
+#
+# `sh scripts/biffo.sh check core-direct-paths` was wired into ci.yml by
+# #1418/#1413 and ran for the first time on 2026-08-10:
+#
+#   audited 0 core-direct call site(s) across 9 frontend file(s)
+#     under _skeletons/sibling-template/apps/frontend/src
+#
+# Zero, on every run, forever -- ci.yml self-checks the SIBLING SKELETON
+# against this repo's own core, and the skeleton has no core-direct calls.
+# That is a real, cheap assertion (a fresh scaffold should ship none) and it
+# stays exactly as it is in ci.yml. It cannot be the whole guard, though,
+# because the defect #1377 was filed about lives entirely outside what
+# ci.yml can see: `tabsii-intake` is 100% core-direct (7 of 7 call sites),
+# and ci.yml only ever checks out THIS repo.
+#
+# This workflow is the cross-repo half: it clones the live estate fresh and
+# runs the identical entrypoint against each sibling's real frontend and this
+# core's real routes -- `--sibling`/`--frontend-src`/`--core-src` exist on
+# `check-core-direct-paths.ts` precisely for this call shape (see that file's
+# own module doc comment, which spells out this exact invocation).
+#
+# ## This is a NEW workflow, not a step added to ci.yml
+#
+# ci.yml checks out only this repo, so it structurally cannot reach a
+# sibling's source without a cross-repo checkout and a token that can read
+# it. That is a different trust boundary and a different failure mode
+# (network/clone failures, not just this repo's own tests), so it gets its
+# own file -- the same reasoning `release-guards.yml` gives for splitting off
+# from ci.yml, and the same shape `shared-sync-report.yml` (#1421/#1422) just
+# established for an adjacent cross-repo problem. That file is this one's
+# direct model: same `BIFFO_GITHUB_TOKEN` cross-repo auth (the default
+# `GITHUB_TOKEN` cannot read another repo), same `user/repos?affiliation=owner`
+# + `orgs/tabsii-com/repos` discovery (`users/<name>/repos` silently narrows
+# to PUBLIC repos regardless of token -- proven against this exact token
+# there), same archival read from each repo's own `.archived` field rather
+# than a hardcoded skip list, and the same `package-manager-cache: false`
+# fix on `actions/setup-node` for a job that (in the discovery step) runs no
+# pnpm -- that exact failure cost `shared-sync-report.yml` a run on
+# 2026-08-10. The audit step here DOES need pnpm (`scripts/biffo.sh` execs
+# `cli/node_modules/.bin/tsx`), so this workflow installs it the normal way
+# for that step, unlike the discovery step, which never touches pnpm at all.
+#
+# ## Expect this to be RED until tabsii-intake's paths are fixed
+#
+# That is not a bug in this workflow -- it is the deliverable. #1377's whole
+# point is that a real, unguarded gap exists today. Softening this to
+# warn-only, or narrowing it to skip the sibling that fails, would recreate
+# the exact vacuity #1377 was filed about, one layer further out. A run that
+# finds zero call sites, or that surveys zero repos, is treated with the same
+# suspicion the "audited 0" log line above already earned -- see the "zero
+# repos surveyed" checks below.
+#
+# ## Cadence
+#
+# Offset 30 minutes after `shared-sync-report.yml`'s 06:00 UTC so the two
+# scheduled jobs are not cloning ~15-20 repos each from the same two owners
+# in the same couple of minutes.
+
+on:
+  schedule:
+    - cron: '30 6 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: core-direct-paths-report
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: '22'
+
+jobs:
+  audit:
+    name: Audit live siblings' core-direct paths against core's routes
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      - name: Discover the governed set and clone it fresh
+        id: estate
+        env:
+          GH_TOKEN: ${{ secrets.BIFFO_GITHUB_TOKEN }}
+        run: |
+          set -u
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error title=core-direct-paths: no cross-repo token::BIFFO_GITHUB_TOKEN is not set. The default GITHUB_TOKEN cannot read other repos, so this job cannot see any sibling's frontend -- refusing to report a clean run against nothing it could reach." >&2
+            exit 1
+          fi
+
+          ESTATE="$RUNNER_TEMP/core-direct-paths-estate"
+          mkdir -p "$ESTATE"
+
+          # Same discovery as shared-sync-report.yml, same reason: `GET
+          # /users/keiranholloway/repos` returns PUBLIC repos only regardless
+          # of token; `GET /user/repos?affiliation=owner` is the authenticated,
+          # owner-scoped call that actually sees the private estate.
+          if ! gh api "user/repos?affiliation=owner&per_page=100" --paginate \
+              --jq '.[] | select(.owner.login == "keiranholloway" and .archived == false and .fork == false) | .full_name' \
+              >> "$RUNNER_TEMP/candidates.txt.tmp"; then
+            echo "::error title=core-direct-paths: could not list keiranholloway's repos::gh api user/repos?affiliation=owner failed -- refusing to survey a shrunk, silently-partial estate." >&2
+            exit 1
+          fi
+          if ! gh api "orgs/tabsii-com/repos?per_page=100" --paginate \
+              --jq '.[] | select(.archived == false and .fork == false) | .full_name' \
+              >> "$RUNNER_TEMP/candidates.txt.tmp"; then
+            echo "::error title=core-direct-paths: could not list tabsii-com's repos::gh api orgs/tabsii-com/repos failed -- refusing to survey a shrunk, silently-partial estate." >&2
+            exit 1
+          fi
+          candidates="$RUNNER_TEMP/candidates.txt"
+          mv "$RUNNER_TEMP/candidates.txt.tmp" "$candidates"
+
+          : > "$candidates.filtered"
+          while IFS= read -r slug; do
+            name="${slug##*/}"
+            case "$name" in
+              biffo-template) continue ;;   # this repo IS core; nothing to audit it against itself
+              biffo-*|tabsii-*) ;;
+              *) continue ;;
+            esac
+            printf '%s\n' "$slug" >> "$candidates.filtered"
+          done < "$candidates"
+
+          cloned=0
+          while IFS= read -r slug; do
+            [ -n "$slug" ] || continue
+            name="${slug##*/}"
+            echo "cloning ${slug}"
+            if ! gh repo clone "$slug" "$ESTATE/$name" -- --quiet --depth 1 2>&1; then
+              echo "::error title=core-direct-paths: could not clone ${slug}::A repo this job could see in the listing but could not clone is a LOUD failure, not a skip -- the alternative silently shrinks the denominator the same way #1145 did for branch protection." >&2
+              exit 1
+            fi
+            cloned=$((cloned + 1))
+          done < "$candidates.filtered"
+
+          if [ "$cloned" -eq 0 ]; then
+            echo "::error title=core-direct-paths: zero candidate repos::Listed keiranholloway and tabsii-com and found nothing matching biffo-*/tabsii-* to even attempt -- a configuration error in this workflow or a naming-convention change, not a clean estate." >&2
+            exit 1
+          fi
+
+          echo "estate=$ESTATE" >> "$GITHUB_OUTPUT"
+          echo "cloned ${cloned} candidate repo(s) into ${ESTATE}"
+
+      - uses: pnpm/action-setup@v4
+        if: steps.estate.outcome == 'success'
+      - uses: actions/setup-node@v5
+        if: steps.estate.outcome == 'success'
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - name: Install this repo's dependencies (the CLI that runs the audit)
+        id: install
+        if: steps.estate.outcome == 'success'
+        run: pnpm install --frozen-lockfile
+
+      - name: Run the audit against every cloned repo with a frontend, and report the denominator
+        id: audit
+        if: ${{ !cancelled() && steps.estate.outcome == 'success' && steps.install.outcome == 'success' }}
+        run: |
+          set -u
+          root=$(git rev-parse --show-toplevel)
+          core_src="$root/services/api/src"
+          estate="${{ steps.estate.outputs.estate }}"
+          log="$RUNNER_TEMP/core-direct-paths-audit.log"
+          : > "$log"
+
+          total_extracted=0
+          total_frontend_files=0
+          audited_repos=0
+          core_prefix_count=0
+          findings=0
+          failed_repos=""
+
+          for dir in "$estate"/*/; do
+            [ -d "$dir" ] || continue
+            name=$(basename "$dir")
+            frontend_src="${dir%/}/apps/frontend/src"
+            if [ ! -d "$frontend_src" ]; then
+              echo "SKIP ${name}: no apps/frontend/src" >> "$log"
+              continue
+            fi
+
+            echo "== ${name} ==" >> "$log"
+            set +e
+            out=$(sh scripts/biffo.sh check core-direct-paths \
+              --sibling "$name" --frontend-src "$frontend_src" --core-src "$core_src" 2>&1)
+            rc=$?
+            set -e
+            printf '%s\n' "$out" >> "$log"
+            echo "(exit ${rc})" >> "$log"
+            echo "" >> "$log"
+
+            line=$(printf '%s\n' "$out" | grep -E '^audited [0-9]+ core-direct call site' | tail -1)
+            n=$(printf '%s' "$line" | sed -E 's/^audited ([0-9]+) .*/\1/')
+            m=$(printf '%s' "$line" | sed -E 's/.*across ([0-9]+) frontend file.*/\1/')
+            r=$(printf '%s' "$line" | sed -E 's/.*against ([0-9]+) route prefix.*/\1/')
+            case "$n" in ''|*[!0-9]*) n=0 ;; esac
+            case "$m" in ''|*[!0-9]*) m=0 ;; esac
+            case "$r" in ''|*[!0-9]*) r=0 ;; esac
+
+            total_extracted=$((total_extracted + n))
+            total_frontend_files=$((total_frontend_files + m))
+            audited_repos=$((audited_repos + 1))
+            core_prefix_count=$r
+
+            if [ "$rc" -ne 0 ]; then
+              findings=$((findings + 1))
+              failed_repos="${failed_repos} ${name}"
+            fi
+          done
+
+          denom="audited ${total_extracted} core-direct call site(s) across ${total_frontend_files} frontend file(s) in ${audited_repos} repo(s), against ${core_prefix_count} route prefix(es)"
+
+          echo "$denom"
+          {
+            echo "### Core-direct-paths estate audit"
+            echo
+            echo "\`$denom\`"
+            echo
+            if [ "$findings" -gt 0 ]; then
+              echo "**${findings} of ${audited_repos} repo(s) failed the audit:**${failed_repos}"
+            else
+              echo "All ${audited_repos} frontend-carrying repo(s) matched."
+            fi
+            echo
+            echo '```'
+            cat "$log"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "denom=$denom" >> "$GITHUB_OUTPUT"
+
+          # Fail closed (#1377, #1363): a run that surveyed zero repos is
+          # exactly the vacuity this workflow exists to end, whether that is
+          # because nothing cloned had a frontend at all, or because every
+          # repo's audit call itself errored before producing a line this
+          # script could parse.
+          if [ "$audited_repos" -eq 0 ]; then
+            echo "::error title=core-direct-paths: zero repos surveyed::Cloned ${estate} but none of its repos carried apps/frontend/src -- refusing to report a clean run against nothing, the same failure #1377 was filed about." >&2
+            exit 1
+          fi
+
+          # Fail closed, loudly, on genuine findings -- this is expected to
+          # fire on tabsii-intake today. Do NOT soften this to a warning: a
+          # real unmatched call site on a live public surface is the entire
+          # reason this workflow exists.
+          if [ "$findings" -gt 0 ]; then
+            echo "::error title=core-direct-paths: unmatched or unresolved call site(s)::${findings} of ${audited_repos} repo(s) failed:${failed_repos}. See the job step summary or log above for the unmatched/unresolved detail from each." >&2
+            exit 1
+          fi
+
+          exit 0

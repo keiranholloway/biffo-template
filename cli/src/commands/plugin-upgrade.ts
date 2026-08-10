@@ -8,7 +8,7 @@ import { PluginMigrationsAdapter } from '../adapters/plugin-migrations/index.js'
 import { RegistryAdapter, type RegistryPluginEntry } from '../adapters/registry/index.js'
 import { log } from '../lib/logger.js'
 import { validateManifest } from '../lib/plugin-manifest.js'
-import { ensureWorkspaceSources, workspaceMemberNames } from '../lib/plugin-workspace-sources.js'
+import { applyWorkspaceSources } from '../lib/plugin-workspace-sources.js'
 import {
   cloneAndValidatePlugin,
   LOCAL_COPY_EXCLUDES,
@@ -273,7 +273,7 @@ export async function runPluginUpgrade(
  * the `--local` counterpart of the registry replace flow above. Shares its
  * shape deliberately: replace services/<name>/, re-wire
  * modules/plugins/<name>/, regenerate the migration if the table set
- * changed, commit. It differs from the registry path in three ways specific
+ * changed, commit. It differs from the registry path in four ways specific
  * to refreshing from disk rather than a fresh clone:
  *
  * 1. Resolution is `resolveLocalPlugin` (shared with `plugin install
@@ -301,6 +301,13 @@ export async function runPluginUpgrade(
  *    the fresh copy re-adds exactly the section the copy just wiped — no
  *    separate "merge the old file's adaptation into the new one" logic is
  *    needed.
+ * 4. It guards the case where `--local <path>` resolves to services/<name>/
+ *    itself (`plugin install --local` calls this `inTreeSource`). Without
+ *    the guard, `rmSync(targetDir)` deletes the plugin and then
+ *    `cpSync(source.sourceDir, targetDir)` copies the now-empty directory
+ *    onto itself — a silent, committed data-loss bug, not an error, because
+ *    nothing in the copy or the subsequent `git add`/`git commit` notices
+ *    the source no longer has anything in it.
  */
 async function runLocalPluginRefresh(
   localPath: string,
@@ -319,11 +326,15 @@ async function runLocalPluginRefresh(
     )
   }
 
+  // See point 4 above — the local path IS the installed copy, so there is
+  // nothing to copy from; only Terraform/migration re-sync applies.
+  const inTreeSource = resolve(source.sourceDir) === resolve(targetDir)
+
   const currentVersion = readInstalledVersion(targetDir)
   const modulesDir = join(options.cwd, 'modules', 'plugins', source.name)
 
   if (options.dryRun) {
-    printLocalDryRun(source, currentVersion)
+    printLocalDryRun(source, currentVersion, inTreeSource)
     return
   }
 
@@ -348,13 +359,20 @@ async function runLocalPluginRefresh(
       `Manifest valid — ${manifest.tables.length} table(s), ${manifest.api_routes.length} route(s)`,
     )
 
-    rmSync(targetDir, { recursive: true, force: true })
-    mkdirSync(targetDir, { recursive: true })
-    cpSync(source.sourceDir, targetDir, {
-      recursive: true,
-      filter: (src) => !LOCAL_COPY_EXCLUDES.has(basename(src)),
-    })
-    log.success(`Refreshed plugin source at services/${source.name}/ from ${source.origin}`)
+    if (inTreeSource) {
+      log.info(
+        `services/${source.name}/ is already the local checkout — nothing to copy; ` +
+          're-syncing its Terraform module and checking for a migration.',
+      )
+    } else {
+      rmSync(targetDir, { recursive: true, force: true })
+      mkdirSync(targetDir, { recursive: true })
+      cpSync(source.sourceDir, targetDir, {
+        recursive: true,
+        filter: (src) => !LOCAL_COPY_EXCLUDES.has(basename(src)),
+      })
+      log.success(`Refreshed plugin source at services/${source.name}/ from ${source.origin}`)
+    }
     applyWorkspaceSources(targetDir, options.cwd, `services/${source.name}`)
 
     const stagePaths = [`services/${source.name}`]
@@ -397,8 +415,23 @@ async function runLocalPluginRefresh(
       log.info(`${source.name} declares no tables — nothing to migrate.`)
     }
 
-    const commitMessage = `chore(plugins): refresh ${source.name} from local checkout`
     await deps.git.add(options.cwd, stagePaths)
+
+    // A --local refresh legitimately has nothing to commit — an in-place
+    // refresh (inTreeSource, above), or an out-of-tree checkout
+    // byte-identical to what's already installed, which is the *expected*
+    // case mid-iteration per point 1 in this function's docstring (the
+    // manifest version is often left unchanged). `git commit` exits non-zero
+    // for "nothing to commit", which would otherwise surface as a raw git
+    // failure for what is not an error — the registry path is protected from
+    // this by its `currentVersion === entry.version` short-circuit, which
+    // this path deliberately does not have.
+    if (!(await deps.git.hasUncommittedChanges(options.cwd))) {
+      log.warn(`services/${source.name}/ already matches ${source.origin} — nothing to commit.`)
+      return
+    }
+
+    const commitMessage = `chore(plugins): refresh ${source.name} from local checkout`
     await deps.git.commit(options.cwd, commitMessage)
     log.success(`Committed: ${commitMessage}`)
 
@@ -409,28 +442,6 @@ async function runLocalPluginRefresh(
     console.log(chalk.dim(`    biffo deploy <environment> --app-only\n`))
   } finally {
     source.cleanup()
-  }
-}
-
-/**
- * Re-applies the install-time `[tool.uv.sources]` adaptation
- * (`ensureWorkspaceSources`) to a plugin directory that was just replaced
- * wholesale. Shared by both the registry and local refresh paths — a full
- * `rmSync`+`cpSync` replace always lands the plugin's own, unmodified
- * `pyproject.toml`, which never carries the workspace-source lines `plugin
- * install` originally appended (the standalone plugin repo resolves the
- * same dependency from PyPI instead). Without this, the migration step
- * immediately below is the first `uv run` to hit the missing-source error.
- */
-function applyWorkspaceSources(targetDir: string, cwd: string, relTargetDir: string): void {
-  const pluginPyproject = join(targetDir, 'pyproject.toml')
-  if (!existsSync(pluginPyproject)) return
-  const sourced = ensureWorkspaceSources(pluginPyproject, workspaceMemberNames(cwd))
-  if (sourced.length > 0) {
-    log.info(
-      `Sourced ${sourced.join(', ')} from the workspace in ${relTargetDir}/pyproject.toml ` +
-        '(the instance provides it as a workspace member).',
-    )
   }
 }
 
@@ -485,12 +496,20 @@ function printDryRun(entry: RegistryPluginEntry, currentVersion: string | undefi
   console.log(`  Would commit:  feat(plugins): upgrade ${entry.name} to ${entry.version}\n`)
 }
 
-function printLocalDryRun(source: ResolvedPluginSource, currentVersion: string | undefined): void {
+function printLocalDryRun(
+  source: ResolvedPluginSource,
+  currentVersion: string | undefined,
+  inTreeSource: boolean,
+): void {
   console.log(chalk.bold('\n  Dry run — no changes will be made\n'))
   console.log(`  Plugin:        ${source.name}`)
   console.log(`  Installed:     ${currentVersion ?? '(unknown — manifest unreadable)'}`)
   console.log(`  Local source:  ${source.origin} (manifest version ${source.version})`)
-  console.log(`  Would replace: services/${source.name}/`)
+  console.log(
+    inTreeSource
+      ? `  Already in tree at services/${source.name}/ — nothing to copy, only Terraform/migration re-sync`
+      : `  Would replace: services/${source.name}/`,
+  )
   console.log(
     `  Would replace Terraform module at: modules/plugins/${source.name}/ (if the checkout has one)`,
   )

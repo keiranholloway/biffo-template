@@ -59,6 +59,9 @@ function makeGitMock(clonedDir: string) {
     cloneToTemp: vi.fn().mockResolvedValue(clonedDir),
     cleanup: vi.fn((dir: string) => rmSync(dir, { recursive: true, force: true })),
     add: vi.fn().mockResolvedValue(undefined),
+    // Defaults to "yes, something changed" so every existing commit-path test
+    // keeps committing; --local's no-op-refresh tests override this to false.
+    hasUncommittedChanges: vi.fn().mockResolvedValue(true),
     commit: vi.fn().mockResolvedValue(undefined),
   }
 }
@@ -439,6 +442,48 @@ describe('runPluginUpgrade --local', () => {
       projectRoot,
       'chore(plugins): refresh widgets from local checkout',
     )
+  })
+
+  it('does not destroy the plugin when --local points at its own installed location (the self-copy trap)', async () => {
+    // The installed copy IS the "local checkout" — e.g. someone runs
+    // `biffo plugin upgrade --local services/widgets` from the project root.
+    // A naive rmSync-then-cpSync would delete the plugin, then copy an empty
+    // directory onto itself, and commit the empty result with no error.
+    const installedDir = join(projectRoot, 'services', 'widgets')
+    writeFileSync(join(installedDir, 'existing_module.py'), '# must survive\n')
+    const registry = makeRegistryMock()
+    const git = makeGitMock(makeClonedPluginDir())
+    const migrations = makeMigrationsMock()
+
+    await runPluginUpgrade(
+      undefined,
+      { local: installedDir, dryRun: false, force: true, cwd: projectRoot },
+      { registry: registry as never, git: git as never, migrations: migrations as never },
+    )
+
+    expect(existsSync(join(installedDir, 'existing_module.py'))).toBe(true)
+    expect(existsSync(join(installedDir, 'biffo.plugin.json'))).toBe(true)
+  })
+
+  it('does not crash committing when the refresh has nothing to stage (a legitimate no-op)', async () => {
+    // git.hasUncommittedChanges reporting false is what a byte-identical
+    // refresh (or an in-place one) looks like at the git-status level — the
+    // real `git commit` would exit non-zero with "nothing to commit" here.
+    const localDir = makeLocalPluginDir()
+    const registry = makeRegistryMock()
+    const git = makeGitMock(makeClonedPluginDir())
+    git.hasUncommittedChanges.mockResolvedValue(false)
+    const migrations = makeMigrationsMock()
+
+    await expect(
+      runPluginUpgrade(
+        undefined,
+        { local: localDir, dryRun: false, force: true, cwd: projectRoot },
+        { registry: registry as never, git: git as never, migrations: migrations as never },
+      ),
+    ).resolves.toBeUndefined()
+
+    expect(git.commit).not.toHaveBeenCalled()
   })
 
   it('re-applies the [tool.uv.sources] workspace adaptation the fresh copy wipes (the install-time trap)', async () => {

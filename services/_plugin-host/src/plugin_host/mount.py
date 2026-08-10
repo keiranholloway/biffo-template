@@ -62,8 +62,9 @@ class MountedPlugin:
     mounted at ``/<name>/admin``."""
 
     name: str
-    app: Any
-    required_group: str
+    #: ``None`` when the plugin declares only ``admin_ingress``.
+    app: Any | None
+    required_group: str | None
     admin_app: Any | None = None
     admin_required_group: str | None = None
     #: Manifest-declared api_routes (ADR-0003). Served by Core, not by the
@@ -293,6 +294,10 @@ def build_host(
         # gating them on the plugin's user group as well would reject the admin
         # an admin-only required_role exists to admit (#652). Everything else
         # falls through to the gated plugin app untouched.
+        # An admin-only plugin has no user-facing app; its admin mount above is
+        # the whole of its surface.
+        if p.app is None or p.required_group is None:
+            continue
         user_app = group_gate(p.app, p.required_group, p.name, authorize)
         if p.api_routes and send_to_core is not None:
             user_app = forwarding_gate(

@@ -38,8 +38,9 @@ class DeclaredRoute:
 @dataclass(frozen=True)
 class DiscoveredPlugin:
     name: str
-    app_ref: str  # "module:attr"
-    required_group: str
+    #: ``None`` when the plugin declares only ``admin_ingress``.
+    app_ref: str | None  # "module:attr"
+    required_group: str | None
     admin_app_ref: str | None = None  # "module:attr" or None if admin_ingress not declared
     admin_required_group: str | None = None  # Cognito group or None if admin_ingress not declared
     #: Manifest-declared api_routes, forwarded to Core rather than served here.
@@ -62,17 +63,28 @@ def discover_plugins(services_root: str | Path) -> list[DiscoveredPlugin]:
             manifest = json.loads(manifest_path.read_text())
         except (ValueError, OSError):
             continue
+        # EITHER surface makes a plugin host-mounted. Requiring user_ingress
+        # here discarded admin-only plugins at runtime even once the deploy had
+        # packaged their code onto the host — the same filter, one layer down
+        # from the packaging loop fixed in #1466.
         ingress = manifest.get("user_ingress")
-        if not isinstance(ingress, dict):
+        admin_ingress = manifest.get("admin_ingress")
+        if not isinstance(ingress, dict) and not isinstance(admin_ingress, dict):
             continue
         name = manifest.get("name")
-        app_ref = ingress.get("app")
-        required_group = ingress.get("required_group")
-        if not (name and app_ref and required_group):
+        app_ref = None
+        required_group = None
+        if isinstance(ingress, dict):
+            app_ref = ingress.get("app")
+            required_group = ingress.get("required_group")
+            # A user_ingress that is declared but incomplete is a broken
+            # declaration, not an admin-only plugin — skip as before.
+            if not (app_ref and required_group):
+                continue
+        if not name:
             continue
 
         # Parse admin_ingress if present
-        admin_ingress = manifest.get("admin_ingress")
         admin_app_ref = None
         admin_required_group = None
         if isinstance(admin_ingress, dict):

@@ -230,10 +230,29 @@ resource "aws_cognito_user" "admin" {
   # (see services/api/tests/test_email_is_the_identity.py) rather than a comment.
   username = var.admin_email
 
+  # The custom attribute is declared WITHOUT its `custom:` prefix, and that is
+  # load-bearing rather than a style choice — see
+  # services/api/tests/test_cognito_user_attribute_keys.py.
+  #
+  # The provider strips the prefix when it reads state
+  # (`flattenAttributeTypes`) but re-adds it when it writes
+  # (`expandAttributeTypes` → `normalizeUserAttributeKey`). Declaring the
+  # PREFIXED form here therefore made state (`tenant_id`) and config
+  # (`custom:tenant_id`) permanently disagree: the diff never matched, so every
+  # apply both wrote the attribute and put it in the delete list, deleting the
+  # value it had just written one second earlier.
+  #
+  # The effect was an oscillation — roughly every other apply stripped
+  # `custom:tenant_id` from the seeded admin and the next restored it. Measured
+  # before the fix: 23 deletions in biffo-platform and 50+ in tabsii-platform
+  # (#1476). Harmless only because nothing reads the claim today
+  # (`_user_from_claims` hardcodes `tenant_id="default"`), which is exactly why
+  # it went unnoticed for six weeks and why it is a trap for ADR-0001's
+  # multi-tenant seam.
   attributes = {
-    email              = var.admin_email
-    email_verified     = true
-    "custom:tenant_id" = "default"
+    email          = var.admin_email
+    email_verified = true
+    tenant_id      = "default"
   }
 
   force_alias_creation = false

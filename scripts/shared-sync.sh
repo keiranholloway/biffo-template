@@ -334,7 +334,28 @@ CONDITIONAL=$(node -e "const m=JSON.parse(require('fs').readFileSync('$MANIFEST'
 #     again (CLAUDE.md carries a per-repo "What this repo is" paragraph, and four
 #     of the repos being backfilled are not sibling apps at all, so overwriting it
 #     would assert in each of them that they are one).
-FROM_SKELETON=$(node -e "const m=JSON.parse(require('fs').readFileSync('$MANIFEST','utf8')).filesFromSkeleton||{};console.log(Object.entries(m).map(([p,mode])=>p+'='+mode).join('\n'))")
+#
+#   - AN ENTRY MAY BE SCOPED TO PARTICULAR MARKERS (#1445). A value is either a
+#     bare policy string (unscoped -- every applicable repo, the original
+#     behaviour) or `{"policy": ..., "markers": [...]}`. Repos carrying NEITHER
+#     marker reach $SKELETON_DEFAULT, which is the sibling skeleton; that is
+#     right for AGENTS.md/CLAUDE.md, which every satellite genuinely needs, and
+#     wrong for anything sibling-shaped. Unscoped, the frontend-to-BFF guard
+#     would have been CREATED in the two runner fleets, the design repo,
+#     tabsii-map and tabsii-ui -- a file doing `from api.main import app` in five
+#     repos with no `services/api` at all. #1431 already made exactly this
+#     argument for plugin repos (hence their inert placeholder); the marker-less
+#     repos were missed because the fallback silently calls them siblings.
+#
+#     Emitted as THREE fields, `path=policy=markers`, with `*` for unscoped, so
+#     the shell never has to decide whether a second `=` was present.
+FROM_SKELETON=$(node -e "
+const m=JSON.parse(require('fs').readFileSync('$MANIFEST','utf8')).filesFromSkeleton||{};
+console.log(Object.entries(m).map(([p,v])=>{
+  const policy = typeof v === 'string' ? v : v.policy;
+  const markers = (typeof v === 'string' || !v.markers) ? '*' : v.markers.join(',');
+  return p+'='+policy+'='+markers;
+}).join('\n'))")
 SKELETON_FOR=$(node -e "const m=JSON.parse(require('fs').readFileSync('$MANIFEST','utf8')).skeletonForMarker||{};console.log(Object.entries(m).map(([mk,sk])=>mk+'='+sk).join('\n'))")
 SKELETON_DEFAULT=$(node -e "const m=JSON.parse(require('fs').readFileSync('$MANIFEST','utf8'));console.log(m.skeletonDefault||'')")
 
@@ -651,6 +672,36 @@ skeleton_for() {
   printf '%s' "$SKELETON_DEFAULT"
 }
 
+# Does this repo fall inside a `filesFromSkeleton` entry's marker scope (#1445)?
+#
+#   $1  repo directory
+#   $2  comma-separated marker list, or `*` for unscoped
+#   $3  optional git ref to read markers from -- same reason skeleton_for takes
+#       one: reading markers off whichever branch a clone is parked on describes
+#       a different repo than the one that ships.
+#
+# `*` admits everything, which is what every pre-#1445 entry means and why the
+# change is backward compatible. Otherwise the repo must carry one of the named
+# markers -- so a repo with NEITHER, which skeleton_for correctly resolves to
+# $SKELETON_DEFAULT for AGENTS.md's sake, is excluded from sibling-shaped
+# entries rather than silently treated as a sibling.
+in_marker_scope() {
+  [ "$2" = "*" ] && return 0
+  _saved_ifs=$IFS
+  IFS=,
+  for _mk in $2; do
+    IFS=$_saved_ifs
+    if [ -n "${3:-}" ]; then
+      git -C "$1" cat-file -e "$3:$_mk" 2>/dev/null && return 0
+    else
+      [ -f "$1/$_mk" ] && return 0
+    fi
+    IFS=,
+  done
+  IFS=$_saved_ifs
+  return 1
+}
+
 # Fail closed on a manifest that names a source which is not there. `cp` writes
 # its complaint to a stderr this script discards, so the repo would receive
 # nothing while the run reported success -- the silent-empty-copy failure
@@ -664,11 +715,24 @@ if [ -n "$FROM_SKELETON" ]; then
     [ -n "$_skel" ] || continue
     for _entry in $FROM_SKELETON; do
       _target=${_entry%%=*}
-      _mode=${_entry#*=}
+      _rest=${_entry#*=}
+      _mode=${_rest%%=*}
+      _markers=${_rest#*=}
       case "$_mode" in
         sync|seed) ;;
         *) echo "filesFromSkeleton['$_target'] must be 'sync' or 'seed', got '$_mode'" >&2; exit 2 ;;
       esac
+      # Only require the source in skeletons this entry can actually be
+      # delivered from. A scoped entry naming only `biffo.sibling.json` has no
+      # business being present in plugin-template, and demanding it there would
+      # force exactly the inert-placeholder busywork the scoping removes.
+      _skel_marker=""
+      for _p in $SKELETON_FOR; do
+        [ "${_p#*=}" = "$_skel" ] && _skel_marker=${_p%%=*} && break
+      done
+      if [ "$_markers" != "*" ] && [ -n "$_skel_marker" ]; then
+        case ",$_markers," in *",$_skel_marker,"*) ;; *) continue ;; esac
+      fi
       [ -f "$TEMPLATE_ROOT/_skeletons/$_skel/$_target" ] || {
         echo "filesFromSkeleton names _skeletons/$_skel/$_target, which does not exist" >&2
         exit 2
@@ -768,7 +832,13 @@ diff_files() {
     skel=$(skeleton_for "$d" "origin/$base")
     for entry in $FROM_SKELETON; do
       target=${entry%%=*}
-      mode=${entry#*=}
+      _rest=${entry#*=}
+      mode=${_rest%%=*}
+      markers=${_rest#*=}
+      # Out of scope is NOT drift (#1445). A repo this entry was never meant for
+      # must not be reported missing it, or the report grows a permanent red
+      # nobody can clear and people stop reading it.
+      in_marker_scope "$d" "$markers" "origin/$base" || continue
       remote=$(git -C "$d" show "origin/$base:$target" 2>/dev/null)
       if [ -z "$remote" ]; then
         out="$out $target(missing)"
@@ -1680,7 +1750,13 @@ stage_repo() {
     _skel=$(skeleton_for "$wt")
     for _entry in $FROM_SKELETON; do
       _target=${_entry%%=*}
-      _mode=${_entry#*=}
+      _rest=${_entry#*=}
+      _mode=${_rest%%=*}
+      _markers=${_rest#*=}
+      # The write half of the same rule. Without this the survey could correctly
+      # decline to report a repo, and the ship path would still create the file
+      # in it -- the two halves disagreeing is worse than either being wrong.
+      in_marker_scope "$wt" "$_markers" || continue
       if [ "$_mode" = seed ] && [ -f "$wt/$_target" ]; then continue; fi
       mkdir -p "$wt/$(dirname "$_target")"
       cp "$TEMPLATE_ROOT/_skeletons/$_skel/$_target" "$wt/$_target"
@@ -1933,6 +2009,7 @@ $(printf '%s\n' "$CONDITIONAL" | while IFS="$TAB" read -r t s; do
 $(for _entry in $FROM_SKELETON; do
       _t=${_entry%%=*}
       _m=${_entry#*=}
+      _m=${_m%%=*}
       # Only what this PR actually carries: a `seed` entry the repo already held
       # was not written, and listing it would claim a change that is not in the
       # diff.

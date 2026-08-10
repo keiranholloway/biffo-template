@@ -205,6 +205,19 @@ describe('shared-files.json filesIfPresent', () => {
  *    third value would silently take the `seed` branch and quietly stop keeping
  *    `AGENTS.md` in step — which is #559 with no symptom;
  *  - no path appears in two lists, for the same reason as above.
+ *
+ * An entry is either a bare policy string (unscoped — every applicable repo) or
+ * `{ policy, markers }` scoping it to repos carrying one of those markers
+ * (#1445). The scoped form exists because marker-less repos resolve through
+ * `skeletonDefault`, which is the SIBLING skeleton — right for AGENTS.md, which
+ * every satellite needs, and wrong for anything sibling-shaped. Unscoped, the
+ * frontend-to-BFF guard would have been created in two runner fleets, a design
+ * repo, tabsii-map and tabsii-ui: a file doing `from api.main import app` in
+ * five repos with no `services/api` at all.
+ *
+ * A scoped entry is only required to exist in the skeletons its markers can
+ * select — demanding it everywhere would force back exactly the inert-placeholder
+ * busywork the scoping removes.
  */
 describe('shared-files.json filesFromSkeleton', () => {
   const entries = Object.entries(skeletonFiles)
@@ -223,12 +236,45 @@ describe('shared-files.json filesFromSkeleton', () => {
     }
   })
 
-  it.each(entries)('%s declares a policy shared-sync.sh implements (%s)', (_path, policy) => {
-    expect(['sync', 'seed']).toContain(policy)
+  /** Both accepted forms, flattened. Mirrors shared-sync.sh's own parser. */
+  const normalise = (v: unknown): { policy: unknown; markers: string[] | null } =>
+    typeof v === 'string'
+      ? { policy: v, markers: null }
+      : {
+          policy: (v as { policy?: unknown }).policy,
+          markers: ((v as { markers?: string[] }).markers ?? null) as string[] | null,
+        }
+
+  it.each(entries)('%s declares a policy shared-sync.sh implements', (_path, value) => {
+    expect(['sync', 'seed']).toContain(normalise(value).policy)
   })
 
-  it.each(entries)('%s exists in every selectable skeleton', (path) => {
-    for (const skeleton of sources) {
+  it.each(entries)('%s scopes itself to markers that exist', (path, value) => {
+    const { markers } = normalise(value)
+    if (markers === null) return
+    // An unscoped entry admits every repo; a scoped one must name markers the
+    // marker table actually knows, or it silently matches nothing and the entry
+    // is delivered nowhere — a typo would read exactly like "deliberately
+    // narrow", which is the failure this asserts against.
+    expect(markers.length, `${path} declares an empty marker list`).toBeGreaterThan(0)
+    for (const marker of markers) {
+      expect(
+        Object.keys(skeletonForMarker),
+        `${path} scopes to ${marker}, which skeletonForMarker does not know`,
+      ).toContain(marker)
+    }
+  })
+
+  it.each(entries)('%s exists in every skeleton it can be delivered from', (path, value) => {
+    const { markers } = normalise(value)
+    // Unscoped entries can reach a marker-less repo through skeletonDefault, so
+    // every selectable skeleton must hold them. A scoped entry can only ever be
+    // sourced from the skeletons its own markers select.
+    const required =
+      markers === null
+        ? sources
+        : markers.map((m) => (skeletonForMarker as Record<string, string>)[m])
+    for (const skeleton of required) {
       expect(
         existsSync(join(root, '_skeletons', skeleton as string, path)),
         `_skeletons/${skeleton}/${path} is named as a canonical source but does not exist`,

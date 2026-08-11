@@ -20,8 +20,9 @@ from .plugin import (
 # identity, and for callers/tests to reference the header name. Not in __all__ (a
 # ContextVar/str has no package __module__, so the public-surface guard excludes
 # them) — the `as` alias marks these as deliberate re-exports for the linter.
+from .signed_client import FORWARDED_USER_HEADER as FORWARDED_USER_HEADER
 from .signed_client import PLUGIN_IDENTITY_HEADER as PLUGIN_IDENTITY_HEADER
-from .signed_client import SignedCoreClient, create_core_client
+from .signed_client import PrincipalCoreClient, SignedCoreClient, create_core_client
 from .signed_client import acting_as_plugin as acting_as_plugin
 from .user_serving import (
     CognitoConfig,
@@ -46,6 +47,7 @@ __all__ = [
     "IndexDefinition",
     "PermissionRule",
     "PluginManifest",
+    "PrincipalCoreClient",
     "RouteDef",
     "SignedCoreClient",
     "TableDefinition",

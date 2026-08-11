@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,6 +15,20 @@ from ..models.plugin_table import (
     PluginTableDefinition,
     resolve_type_call,
 )
+
+
+class MigrationScanError(RuntimeError):
+    """Raised when an existing migration file in versions_dir cannot be
+    parsed to determine which tables it already creates.
+
+    Deliberately fails the whole generation (see `generate_migration_for_plugin`)
+    rather than treating an unreadable file as creating nothing: silently
+    under-counting "already applied" tables is exactly how a plugin upgrade
+    could recreate a table with DuplicateTableError, or worse — chain a
+    downgrade that drops a table this migration never actually created
+    (issue #1511). A failed generation is recoverable; a wrong guess here
+    is not.
+    """
 
 
 def generate_migration_name(table_name: str) -> str:
@@ -68,6 +83,92 @@ def _compute_plugin_revision(
     return _short_sha256(
         f"{manifest.get('name', '')}-{'-'.join(t.name for t in tables)}"
     )
+
+
+def _table_name_arg(call: ast.Call) -> ast.expr | None:
+    """The AST node holding an `op.create_table(...)` call's table name,
+    however it was passed.
+
+    Alembic's real signature is `create_table(table_name, *columns, **kw)` —
+    `table_name` is an ordinary parameter, callable positionally (as every
+    migration this generator writes does) or by keyword
+    (`op.create_table(table_name='x', ...)`, which is valid Python a
+    hand-written or vendored migration could use). Checking only `call.args[0]`
+    would silently treat the keyword form as "no table name" and skip it
+    without raising — under-counting "already applied" tables exactly the way
+    `MigrationScanError` exists to prevent. Returns None only when neither
+    form is present, i.e. the call genuinely doesn't name a table.
+    """
+    if call.args:
+        return call.args[0]
+    for kw in call.keywords:
+        if kw.arg == "table_name":
+            return kw.value
+    return None
+
+
+def _tables_created_in_source(source: str, filename: str) -> set[str]:
+    """Return every table name passed to an `op.create_table(...)` call found
+    in `source`, positionally or via `table_name=`.
+
+    Parses with `ast` rather than regex, so a table name embedding a quote
+    or parenthesis still resolves correctly (mirrors the injection-safety
+    reasoning in `_column_to_alembic_def`'s docstring) and so a call whose
+    table name isn't a plain string literal is caught explicitly rather than
+    silently contributing nothing to the result.
+    """
+    try:
+        tree = ast.parse(source, filename=filename)
+    except SyntaxError as exc:
+        raise MigrationScanError(
+            f"Could not parse existing migration {filename!r} as Python: {exc}"
+        ) from exc
+
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not (isinstance(func, ast.Attribute) and func.attr == "create_table"):
+            continue
+        if not (isinstance(func.value, ast.Name) and func.value.id == "op"):
+            continue
+        name_arg = _table_name_arg(node)
+        if isinstance(name_arg, ast.Constant) and isinstance(name_arg.value, str):
+            names.add(name_arg.value)
+        else:
+            raise MigrationScanError(
+                f"{filename!r} calls op.create_table() with a table name that "
+                "isn't a plain string literal — cannot determine what table it creates."
+            )
+    return names
+
+
+def already_created_tables(versions_dir: Path) -> set[str]:
+    """Union of every table name any existing migration file in `versions_dir`
+    already creates (via `op.create_table(...)`).
+
+    This is how `generate_migration_for_plugin` computes the delta a plugin
+    upgrade should actually emit (issue #1511): without it, a plugin that
+    gained one table regenerated its ENTIRE table set on every upgrade,
+    which fails wherever the plugin is already installed
+    (`asyncpg.exceptions.DuplicateTableError`) and whose `downgrade()` would
+    drop every table the plugin owns — including ones holding live data the
+    upgrade never touched.
+
+    Matches purely by table name across *every* file in `versions_dir`, not
+    by any notion of "the same plugin" — nothing in a generated migration
+    currently records which plugin produced it (the revision id is a hash of
+    table names, not a plugin marker), and table names are the estate's only
+    real namespace: two plugins declaring the same table name would collide
+    at the database regardless of this generator's bookkeeping. Raises
+    `MigrationScanError` (via `_tables_created_in_source`) rather than
+    guessing when an existing file can't be read this way.
+    """
+    names: set[str] = set()
+    for path in sorted(versions_dir.glob("*.py")):
+        names |= _tables_created_in_source(path.read_text(), path.name)
+    return names
 
 
 def parse_plugin_tables_from_manifest(
@@ -172,18 +273,46 @@ def _build_index_statements(table: PluginTableDefinition) -> list[tuple[str, str
 def generate_migration_for_plugin(
     manifest: dict[str, Any],
     versions_dir: Path,
-) -> Path:
-    """Generate an Alembic migration file for a plugin's table definitions.
+) -> Path | None:
+    """Generate an Alembic migration file for the tables a plugin manifest
+    declares that no earlier migration in `versions_dir` already creates.
 
-    Creates a migration file with proper up/downgrade functions that
-    create/drop all tables defined in the plugin manifest.
+    Only the delta is emitted — issue #1511. Before this, every call emitted
+    *every* table in the manifest, so a plugin that gained one table
+    regenerated a migration recreating tables previous migrations had
+    already applied: `alembic upgrade` failed with `DuplicateTableError`
+    everywhere the plugin was already installed, and the accompanying
+    `downgrade()` dropped every table the plugin owns — including ones
+    holding live data this migration never touched. Real case: upgrading
+    `biffo-plugin-marketing` by one table (`marketing_channel`) generated a
+    migration recreating all six of its tables.
+
+    Known limitation, pre-existing and unchanged by this fix: the delta is
+    computed by table NAME only. A manifest change to an *already-migrated*
+    table's columns or indexes (same table name, different shape) produces no
+    migration and no error, on the normal `sync_plugin_migrations` path, both
+    before and after issue #1511 — the old revision hash was also derived
+    from table names only, so a name-preserving schema change never altered
+    it either. Detecting that is a materially different feature (column-level
+    diffing against a prior migration's declared columns) and is out of
+    scope here; it is not the destructive-downgrade defect this fix closes.
 
     Args:
         manifest: The parsed plugin manifest JSON.
         versions_dir: Directory where Alembic stores migration files.
 
     Returns:
-        Path to the generated migration file.
+        Path to the generated migration file, or None if every table the
+        manifest declares is already created by an earlier migration in
+        `versions_dir` — nothing to do, not an error.
+
+    Raises:
+        ValueError: the manifest declares no tables, or an existing
+            migration file in `versions_dir` can't be parsed to determine
+            what it already creates (`MigrationScanError`) — refusing here
+            is deliberate: generating a migration without knowing what
+            already exists risks a `downgrade()` that drops a table this
+            migration never created.
     """
     tables = parse_plugin_tables_from_manifest(manifest)
     if not tables:
@@ -191,7 +320,26 @@ def generate_migration_for_plugin(
             f"Plugin '{manifest.get('name', '<unknown>')}' has no tables to migrate."
         )
 
-    # Generate a unique migration name
+    try:
+        already_created = already_created_tables(versions_dir)
+    except MigrationScanError as exc:
+        raise ValueError(
+            f"Refusing to generate a migration for plugin "
+            f"'{manifest.get('name', '<unknown>')}': {exc} Fix or remove the "
+            "unreadable migration before retrying."
+        ) from exc
+
+    new_tables = [t for t in tables if t.name not in already_created]
+    if not new_tables:
+        # Every table this manifest declares already has a migration —
+        # correctly a no-op (mirrors the "table set unchanged" case), not a
+        # forced empty migration.
+        return None
+    tables = new_tables
+
+    # Generate a unique migration name — from the delta being emitted, not
+    # the plugin's full table set, so the filename/migration name describe
+    # what this migration actually does.
     table_names = "_".join(t.name for t in tables)
     migration_name = generate_migration_name(table_names)
 
@@ -285,12 +433,6 @@ def downgrade() -> None:
     return migration_path
 
 
-def _migration_already_generated(revision: str, versions_dir: Path) -> bool:
-    """Whether a migration file for this deterministic revision id already
-    exists in versions_dir."""
-    return any(versions_dir.glob(f"{revision}_*.py"))
-
-
 def sync_plugin_migrations(
     versions_dir: Path,
     services_root: Path | None = None,
@@ -310,11 +452,24 @@ def sync_plugin_migrations(
     silently regenerated with a different down_revision on every deploy,
     corrupting the revision graph — see ADR-0003's implementation note.)
 
-    Idempotent — a plugin whose manifest+tables already produced a migration
-    file (matched by the deterministic revision id `generate_migration_for_plugin`
-    derives from the manifest name and table names) is skipped, so calling this
-    against a persistent versions_dir doesn't generate duplicate migrations or
-    fork new heads. Plugins with no tables are skipped (nothing to migrate).
+    Idempotent — a plugin whose declared tables are all already created by an
+    earlier migration is skipped, so calling this against a persistent
+    versions_dir doesn't generate duplicate migrations or fork new heads.
+    Plugins with no tables are skipped (nothing to migrate).
+
+    Delegates the "is there anything new" question entirely to
+    `generate_migration_for_plugin` (it returns None when there isn't) rather
+    than pre-checking via a revision computed from the plugin's *full*
+    current table set, as an earlier version of this function did. That
+    pre-check's hash only ever matched a file generated from the same full
+    set — so the first time a plugin's table set changed, the hash permanently
+    stopped matching (the on-disk file's revision is now hashed from the
+    *delta* tables only, not the full set — see `generate_migration_for_plugin`),
+    silently defeating the fast path forever after for that plugin. It still
+    produced correct output (`generate_migration_for_plugin` independently
+    recomputes the delta and correctly no-ops), just via a full
+    `already_created_tables` re-scan on every call instead of an O(1) glob —
+    correctness was never at risk, only the shortcut (issue #1511 review).
 
     Args:
         versions_dir: Directory where Alembic stores migration files.
@@ -335,8 +490,7 @@ def sync_plugin_migrations(
         tables = parse_plugin_tables_from_manifest(manifest)
         if not tables:
             continue
-        revision = _compute_plugin_revision(manifest, tables)
-        if _migration_already_generated(revision, versions_dir):
-            continue
-        generated.append(generate_migration_for_plugin(manifest, versions_dir))
+        result = generate_migration_for_plugin(manifest, versions_dir)
+        if result is not None:
+            generated.append(result)
     return generated

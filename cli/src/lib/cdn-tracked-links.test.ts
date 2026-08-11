@@ -49,12 +49,37 @@ describe('CloudFront routes tracked marketing links', () => {
     expect(block).not.toContain('caching_optimized')
   })
 
-  it('does not attach the rewrite function', () => {
-    // `rewrite.js` rewrites clean URLs to index.html for static export. Applied
+  it('does not attach the static-export rewrite function', () => {
+    // rewrite.js rewrites clean URLs to index.html for static export. Applied
     // here it would turn every tracked link into a request for the SPA shell,
-    // and the redirect would never happen.
+    // and the redirect would never happen. This asserted "no
+    // function_association at all" until biffo-plugin-marketing#52: that was
+    // the bug, not the fix — see the next test.
     const block = behaviourFor('"c/*"')
-    expect(block).not.toContain('function_association')
+    expect(block).not.toContain('aws_cloudfront_function.rewrite.arn')
+  })
+
+  it('attaches its own click-rewrite function, viewer-request, to reach the API route it actually declares', () => {
+    // Without this, CloudFront forwards the viewer path unchanged: a request
+    // for `/c/<token>` asks API Gateway for exactly `/c/<token>`, which
+    // matches no declared route (the API only declares
+    // `GET /api/v1/public/c/{token}`) and falls through to $default, which
+    // requires a Cognito JWT — every tracked link 401ed instead of
+    // redirecting (biffo-plugin-marketing#52). click-rewrite.js is the fix;
+    // its own test (cdn-click-rewrite-function.test.ts) covers the rewrite
+    // logic and the security properties it must preserve.
+    const block = behaviourFor('"c/*"')
+    expect(block).toContain('aws_cloudfront_function.click_rewrite')
+    expect(block).toMatch(/event_type\s*=\s*"viewer-request"/)
+  })
+
+  it('gates the click-rewrite function behind the same opt-in guard as the behaviour', () => {
+    // The feature must stay fully opt-in end to end: an instance without
+    // tracked links gets no behaviour AND no function resource, not an inert
+    // one sitting unused.
+    const fnBlock = cdn().split('resource "aws_cloudfront_function" "click_rewrite"')[1] ?? ''
+    const declaration = fnBlock.split('\n').slice(0, 10).join('\n')
+    expect(declaration).toContain('count   = var.tracked_link_api_domain == "" ? 0 : 1')
   })
 
   it('allows only read methods', () => {

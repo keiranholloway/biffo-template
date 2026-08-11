@@ -123,7 +123,54 @@ jobs:
       contents: read
       issues: write
     steps:
+      # `ref: dev` + `fetch-depth: 0`, and then a hard reset to origin/dev
+      # below, because shared-sync.sh REFUSES to run from a checkout that is
+      # behind origin/dev:
+      #
+      #   shared-sync: this template checkout is 1 commit(s) behind origin/dev.
+      #   Everything it would ship, and everything --check compares against,
+      #   comes from THIS tree.
+      #
+      # That guard is right, and it is written for a workstation, where a stale
+      # checkout is a mistake. In CI it is not: `actions/checkout` pins the
+      # SHA that triggered the run, so in a repo with any merge traffic the
+      # tree is behind origin/dev by the time the job starts — through no
+      # fault of anyone's. The guard then exits 2 ("cannot tell") before
+      # surveying a single repo.
+      #
+      # That is what made this report red from 2026-08-10 until #1508: every
+      # run refused, the denominator line it prints was therefore never
+      # emitted, and the reporting step's `grep ... judged applicable` found
+      # nothing and defaulted to 0 — so the tracking issue said
+      # "applicable 0 ... a scope collapse", which is a true statement about a
+      # survey that never happened and points at entirely the wrong thing.
+      #
+      # Checking out the TIP is also what this job actually wants to measure:
+      # "is the estate in step with the template as it stands NOW?", not "as it
+      # stood at whatever commit triggered this run".
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: dev
+          fetch-depth: 0
+
+      # `ref: dev` resolves to the tip at CHECKOUT time, which still leaves a
+      # window: a merge landing between checkout and the check step puts the
+      # tree behind again and reproduces the refusal. Re-point at the tip
+      # immediately before the survey, and — critically — FAIL LOUDLY if that
+      # cannot be done, rather than proceeding from a tree the guard will
+      # reject for reasons the report cannot explain.
+      - name: Re-point the checkout at the current origin/dev tip
+        run: |
+          set -eu
+          git fetch origin dev --prune
+          git reset --hard origin/dev
+          behind=$(git rev-list --count HEAD..origin/dev)
+          if [ "$behind" -ne 0 ]; then
+            echo "::error title=shared-sync: checkout still behind origin/dev::Reset to origin/dev but still $behind commit(s) behind. shared-sync.sh will refuse to survey from this tree, so this job would report a denominator of zero with no explanation." >&2
+            exit 1
+          fi
+          echo "checkout is at origin/dev tip: $(git rev-parse --short HEAD)"
+
       - uses: actions/setup-node@v5
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -343,6 +390,27 @@ jobs:
             applicable_n=$(printf '%s' "$applicable_line" | sed -E 's/^([0-9]+) of.*/\1/')
             case "$applicable_n" in ''|*[!0-9]*) applicable_n=0 ;; esac
 
+            # ABSENT is not ZERO, and conflating the two is what made #1508
+            # misdiagnose itself. When shared-sync.sh refuses BEFORE surveying
+            # anything -- the "template checkout is behind origin/dev" exit 2
+            # was the real case, red from 2026-08-10 -- it never prints the
+            # line grepped above, `applicable_n` falls back to 0, and the
+            # ratio check below then reports a confident "scope collapse"
+            # about a survey that never ran. A reader is sent to look at
+            # clone credentials and applies(), neither of which was involved.
+            #
+            # So: distinguish "the line was missing" from "the line said 0",
+            # and say which. This is the same lesson as the metric-denominator
+            # one -- a zero means nothing until you know whether it counted
+            # something and found none, or could not count at all.
+            if [ -z "$applicable_line" ]; then
+              applicable_absent=1
+              refusal=$(grep -m1 -E 'shared-sync: (this template checkout is|surveyed zero)' "$clean_log" || true)
+            else
+              applicable_absent=0
+              refusal=""
+            fi
+
             denom="cloned ${cloned:-0}, applicable ${applicable_n}, checked ${checked_n} satellites, ${drifted_n} drifted: ${drifted_names}"
 
             hard_fail=0
@@ -362,12 +430,16 @@ jobs:
             # comment there for the 4-of-17 (~24%) measured exclusion rate this
             # is sized against.
             if [ -n "${cloned:-}" ] && [ "$cloned" -gt 0 ] 2>/dev/null && \
+               [ "$applicable_absent" -eq 0 ] && \
                [ "$((applicable_n * 2))" -lt "$cloned" ]; then
               hard_fail=1
               body_extra_ratio="cloned ${cloned} candidate repo(s) but only ${applicable_n} were judged applicable -- under the 50% floor. That is the #1426 shape: a scope collapse, not ordinary exclusion. Check whether every applicable repo could actually be fetched (git credentials/token reaching the check step) before trusting anything else in this report."
             fi
 
             body_extra="Cloned ${cloned:-0} candidate repo(s) under \`biffo-*\`/\`tabsii-*\` from keiranholloway and tabsii-com; shared-sync.sh --check exited ${rc}. ${unreadable:-0} line(s) reported an unreadable repo."
+            if [ "$applicable_absent" -eq 1 ]; then
+              body_extra="**shared-sync.sh never surveyed anything** -- it exited ${rc} before printing its applicability line, so \`applicable 0\` above is ABSENT, not measured. Do not read it as a scope collapse. The refusal it printed was:\n\n> ${refusal:-(no recognised refusal line -- read the run log)}\n\n${body_extra}"
+            fi
             [ -n "${body_extra_ratio:-}" ] && body_extra="${body_extra_ratio} ${body_extra}"
           fi
 

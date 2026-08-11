@@ -121,9 +121,14 @@ const defaultGit: GitRunner = (args) => execFileSync('git', args, { encoding: 'u
  * Lets one `ls-tree` answer for the whole plan instead of spawning `git show`
  * per file. A blob id is `sha1("blob <byte-length>\0" + bytes)` — the same
  * value `git hash-object` prints, and the same one `ls-tree` reports.
+ *
+ * Accepts a `Buffer` as well as a `string` (#1506): `MergeEntry.content` is a
+ * `Buffer` for any file that is not valid UTF-8, and `Buffer.from(buffer,
+ * 'utf8')` would silently re-decode it — this must hash the exact bytes the
+ * upgrade is about to write, not a re-encoding of them.
  */
-function blobId(content: string): string {
-  const bytes = Buffer.from(content, 'utf8')
+function blobId(content: string | Buffer): string {
+  const bytes = Buffer.isBuffer(content) ? content : Buffer.from(content, 'utf8')
   return createHash('sha1')
     .update(`blob ${String(bytes.length)}\0`)
     .update(bytes)
@@ -219,14 +224,22 @@ export function assertTargetFidelity(options: AssertTargetFidelityOptions): Fide
   let checked = 0
 
   for (const entry of options.entries) {
-    let content: string | undefined
+    let content: string | Buffer | undefined
     let source: 'output' | 'merge-input'
     if (VERBATIM_STATUSES.has(entry.status)) {
       content = entry.content
       source = 'output'
     } else if (DERIVED_STATUSES.has(entry.status)) {
       const abs = join(options.theirsDir, entry.path)
-      content = existsSync(abs) ? readFileSync(abs, 'utf8') : undefined
+      // Raw bytes, never a UTF-8 decode (#1506). This used to read `'utf8'`
+      // and then paper over the resulting corruption with a second,
+      // equally-lossy `git show` re-read below — comparing two independently
+      // mangled strings and calling a match "verified". Reading real bytes on
+      // both sides of the comparison (here and in `blobId`) makes that
+      // workaround not just unnecessary but actively wrong to keep: it could
+      // report NO finding for a binary file that silently differs from the
+      // tag, provided both reads happened to mangle it the same way.
+      content = existsSync(abs) ? readFileSync(abs) : undefined
       source = 'merge-input'
     } else {
       continue
@@ -239,21 +252,7 @@ export function assertTargetFidelity(options: AssertTargetFidelityOptions): Fide
       findings.push({ path: entry.path, reason: 'absent-from-tag', source })
       continue
     }
-    if (blobId(content) === expected) continue
-
-    // A blob-id mismatch can also mean the bytes did not survive being read as
-    // UTF-8 — the planner reads every tree that way, so a file that is not
-    // valid UTF-8 is already lossy before it reaches here, and reporting it as
-    // unreleased content would be a false alarm about the wrong thing.
-    // Re-compare through the same encoding on both sides to rule that out.
-    let tagText: string
-    try {
-      tagText = git(['-C', options.templateRepo, 'show', `${tag}:${entry.path}`])
-    } catch {
-      findings.push({ path: entry.path, reason: 'content-differs', source })
-      continue
-    }
-    if (tagText !== content) {
+    if (blobId(content) !== expected) {
       findings.push({ path: entry.path, reason: 'content-differs', source })
     }
   }

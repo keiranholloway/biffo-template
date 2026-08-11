@@ -423,6 +423,222 @@ describe('applyUpgradePlan', () => {
   })
 })
 
+/**
+ * #1506. `biffo core upgrade` reads every file as a UTF-8 *string*
+ * (`readFileSync(path, 'utf8')`) and writes it back the same way. Any byte
+ * that is not valid UTF-8 decodes to U+FFFD (the replacement character), and
+ * re-encoding U+FFFD writes 3 bytes for the 1-3 that were lost — corrupting
+ * the file. Reproduced directly against the real fixture this repo ships:
+ * `modules/cloud/aws/compute/placeholder.zip` is 156 bytes and passes
+ * `unzip -t`; round-tripped through the pre-fix `readFileSync(p,
+ * 'utf8')` / `writeFileSync(p, decoded)` pair it comes out 166 bytes (5
+ * invalid byte sequences, each replaced by a 3-byte U+FFFD: 156 + 5*(3-1) =
+ * 166) and fails `unzip -t` with "zipfile corrupt".
+ *
+ * The enumerable form, not a placeholder.zip-specific test: for every status
+ * that carries content, the bytes `applyUpgradePlan` writes must equal the
+ * bytes the plan read from the source tree — byte equality, never a string
+ * or length comparison, because a string comparison of two mangled strings
+ * (the exact shape of the bug this guard exists to catch) passes.
+ */
+describe('binary content survives the upgrade byte-for-byte (#1506)', () => {
+  let base: string
+  let ours: string
+  let theirs: string
+  let apply: string
+
+  // Deliberately not a `text/plain`-flavoured byte range: every one of these
+  // is an invalid UTF-8 *starting* byte (0x80-0xBF are continuation bytes
+  // with nothing preceding them; 0xC0/0xC1 can only start an overlong
+  // encoding, which is invalid), so `isUtf8`/`Buffer.isUtf8` is guaranteed to
+  // reject the buffer built from them — this cannot accidentally decode as
+  // valid text and take the wrong branch.
+  const INVALID_UTF8_BYTES = Buffer.from([
+    0x80, 0x81, 0xff, 0xfe, 0xc0, 0x00, 0x01, 0x02, 0xed, 0xa0, 0x80, 0x00,
+  ])
+
+  function realPlaceholderZip(): Buffer {
+    return readFileSync(join(repoRoot, 'modules/cloud/aws/compute/placeholder.zip'))
+  }
+
+  beforeEach(() => {
+    base = makeTmpDir('bin-base')
+    ours = makeTmpDir('bin-ours')
+    theirs = makeTmpDir('bin-theirs')
+    apply = makeTmpDir('bin-apply')
+  })
+  afterEach(() => {
+    for (const d of [base, ours, theirs, apply]) rmSync(d, { recursive: true, force: true })
+  })
+
+  function wb(root: string, rel: string, content: Buffer): void {
+    const p = join(root, rel)
+    mkdirSync(dirname(p), { recursive: true })
+    writeFileSync(p, content)
+  }
+
+  async function planAndApply(): Promise<UpgradePlan> {
+    const plan = await planCoreUpgrade({
+      baseDir: base,
+      oursDir: ours,
+      theirsDir: theirs,
+      manifest: MANIFEST,
+      mergeFile: fakeMerge,
+    })
+    applyUpgradePlan(apply, plan, theirs)
+    return plan
+  }
+
+  it('carries a freshly-added binary file byte-for-byte (status: added)', async () => {
+    const zip = realPlaceholderZip()
+    wb(theirs, 'services/api/asset.zip', zip)
+
+    const plan = await planAndApply()
+    const entry = plan.entries.find((e) => e.path === 'services/api/asset.zip')
+    expect(entry?.status).toBe('added')
+    expect(Buffer.isBuffer(entry?.content)).toBe(true)
+
+    const written = readFileSync(join(apply, 'services/api/asset.zip'))
+    expect(written.equals(zip)).toBe(true)
+    expect(written.length).toBe(zip.length) // 156 bytes — not 166
+  })
+
+  it('carries an upgraded binary file byte-for-byte (status: take-theirs)', async () => {
+    const oldZip = Buffer.from(INVALID_UTF8_BYTES) // instance never touched it
+    const newZip = realPlaceholderZip() // upstream shipped a new version
+    // Under services/api/ so the test MANIFEST (templateOwned) actually
+    // governs it — the real placeholder.zip's OWN path is exercised by the
+    // 'added' test above; this one is about the take-theirs mechanics.
+    wb(base, 'services/api/placeholder.zip', oldZip)
+    wb(ours, 'services/api/placeholder.zip', oldZip)
+    wb(theirs, 'services/api/placeholder.zip', newZip)
+
+    const plan = await planAndApply()
+    const entry = plan.entries.find((e) => e.path === 'services/api/placeholder.zip')
+    expect(entry?.status).toBe('take-theirs')
+
+    const written = readFileSync(join(apply, 'services/api/placeholder.zip'))
+    expect(written.equals(newZip)).toBe(true)
+  })
+
+  it('restores a deleted binary file byte-for-byte (status: restored, #395)', async () => {
+    const zip = realPlaceholderZip()
+    wb(base, 'services/api/placeholder.zip', zip)
+    wb(theirs, 'services/api/placeholder.zip', zip)
+    // absent from `ours` — the instance deleted a template-owned binary.
+
+    const plan = await planAndApply()
+    const entry = plan.entries.find((e) => e.path === 'services/api/placeholder.zip')
+    expect(entry?.status).toBe('restored')
+
+    const written = readFileSync(join(apply, 'services/api/placeholder.zip'))
+    expect(written.equals(zip)).toBe(true)
+  })
+
+  it('carries the template side verbatim when both sides add the same binary path differently (add-conflict)', async () => {
+    const theirsZip = realPlaceholderZip()
+    const oursZip = INVALID_UTF8_BYTES
+    wb(ours, 'services/api/asset.bin', oursZip)
+    wb(theirs, 'services/api/asset.bin', theirsZip)
+
+    const plan = await planAndApply()
+    const entry = plan.entries.find((e) => e.path === 'services/api/asset.bin')
+    expect(entry?.status).toBe('add-conflict')
+    expect(entry?.conflicted).toBe(true)
+
+    const written = readFileSync(join(apply, 'services/api/asset.bin'))
+    expect(written.equals(theirsZip)).toBe(true)
+  })
+
+  it('never routes a binary file through the text merge engine, even when all three sides diverge', async () => {
+    // The trap the issue names explicitly: `result.stdout` at the merge-driver
+    // path (`gitMergeFile`) is a string, so a binary reaching it is mangled a
+    // SECOND time even if the read that feeds it hadn't been. `fakeMerge`
+    // below stands in for `gitMergeFile` and would corrupt/misbehave on binary
+    // input; asserting it is never called (via the spy) proves the bypass,
+    // not just its output.
+    let mergeFileCalls = 0
+    const spyMerge: MergeFileFn = async (b, o, t) => {
+      mergeFileCalls++
+      return fakeMerge(b, o, t)
+    }
+
+    const baseZip = Buffer.from([...INVALID_UTF8_BYTES]) // three genuinely
+    const oursZip = realPlaceholderZip() // different byte
+    const theirsZip = Buffer.from([...INVALID_UTF8_BYTES, 0x99]) // sequences
+
+    wb(base, 'services/api/asset.bin', baseZip)
+    wb(ours, 'services/api/asset.bin', oursZip)
+    wb(theirs, 'services/api/asset.bin', theirsZip)
+
+    const plan = await planCoreUpgrade({
+      baseDir: base,
+      oursDir: ours,
+      theirsDir: theirs,
+      manifest: MANIFEST,
+      mergeFile: spyMerge,
+    })
+
+    expect(mergeFileCalls).toBe(0) // never handed to the text merge engine
+    const entry = plan.entries.find((e) => e.path === 'services/api/asset.bin')
+    // No meaningful three-way merge exists for a binary — surfaced as a
+    // conflict for a human, resolved to the upstream bytes verbatim (the same
+    // choice `restored` makes), never a synthesized diff3 of opaque bytes.
+    expect(entry?.status).toBe('conflict')
+    expect(entry?.conflicted).toBe(true)
+    expect(Buffer.isBuffer(entry?.content)).toBe(true)
+    expect((entry?.content as Buffer).equals(theirsZip)).toBe(true)
+
+    applyUpgradePlan(apply, plan, theirs)
+    const written = readFileSync(join(apply, 'services/api/asset.bin'))
+    expect(written.equals(theirsZip)).toBe(true)
+  })
+
+  it('does not disturb a byte-identical binary file (status: unchanged, no write)', async () => {
+    const zip = realPlaceholderZip()
+    wb(base, 'services/api/asset.zip', zip)
+    wb(ours, 'services/api/asset.zip', zip)
+    wb(theirs, 'services/api/asset.zip', zip)
+
+    const plan = await planAndApply()
+    const entry = plan.entries.find((e) => e.path === 'services/api/asset.zip')
+    expect(entry?.status).toBe('unchanged')
+    expect(entry?.content).toBeUndefined()
+    expect(existsSync(join(apply, 'services/api/asset.zip'))).toBe(false) // nothing written
+  })
+
+  it('still three-way merges genuine UTF-8 text containing multi-byte characters', async () => {
+    // Confirms the binary detection is not overbroad: real multi-byte UTF-8
+    // (accents, emoji) must still take the ordinary text path, not the binary
+    // bypass. Enough surrounding context lines that the two edits are a
+    // genuine non-overlapping diff3 merge, not a same-line collision.
+    const l = (greeting: string, extra = ''): string =>
+      `l1\nl2\ngreeting = "${greeting}"\nl3\nl4\n${extra}`
+    w(base, 'services/api/i18n.py', l('héllo'))
+    w(ours, 'services/api/i18n.py', l('héllo 👋'))
+    w(theirs, 'services/api/i18n.py', l('héllo', 'farewell = "au revoir"\n'))
+
+    const plan = await planCoreUpgrade({
+      baseDir: base,
+      oursDir: ours,
+      theirsDir: theirs,
+      manifest: MANIFEST,
+      mergeFile: gitMergeFile, // the REAL merge driver, not the fake
+    })
+    const entry = plan.entries.find((e) => e.path === 'services/api/i18n.py')
+    expect(entry?.status).toBe('merged')
+    expect(typeof entry?.content).toBe('string')
+    expect(entry?.content).toContain('👋')
+    expect(entry?.content).toContain('au revoir')
+  })
+
+  function w(root: string, rel: string, content: string): void {
+    const p = join(root, rel)
+    mkdirSync(dirname(p), { recursive: true })
+    writeFileSync(p, content)
+  }
+})
+
 describe('parseGitHubRepo', () => {
   it.each([
     ['git@github.com:acme/my-app.git', 'acme', 'my-app'],

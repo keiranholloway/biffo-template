@@ -29,6 +29,7 @@ describe('biffo check', () => {
    */
   const ciGuards = [
     'adr-numbering',
+    'codeql-suppression',
     'cognito-invite-template',
     'core-direct-paths',
     'eventbridge-log-permissions',

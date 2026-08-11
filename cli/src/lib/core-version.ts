@@ -474,8 +474,16 @@ export function serializeInstanceCoreVersion(
  * (they share a git index, a branch and a working tree), so serialising one
  * JSON write inside that would buy nothing real. The upgrade is single-writer
  * by construction, per instance checkout.
+ *
+ * CodeQL flagged this as `js/file-system-race` (alert #12) and it was dismissed
+ * by hand ("won't fix") with this reasoning recorded as the dismissal comment —
+ * NOT by an inline comment. See biffo-template#1491: a `// codeql[query-id]`
+ * comment claims a suppression CodeQL does not implement here (no
+ * `paths-ignore`/query-filter reads it), so this repo stopped writing them.
+ * If the code changes enough to re-trigger the finding, it will reopen as a
+ * new alert and need dismissing again — that re-trigger is the check working,
+ * not a regression.
  */
-// codeql[js/file-system-race]
 export function writeInstanceCoreVersion(cwd: string, version: string): void {
   const path = join(cwd, INSTANCE_CORE_FILE)
   let rest: Record<string, unknown> = {}
@@ -483,8 +491,7 @@ export function writeInstanceCoreVersion(cwd: string, version: string): void {
     rest = { ...parseInstanceCoreManifest(path).raw }
     delete rest.version // re-supplied by serializeInstanceCoreVersion, and first
   }
-  // codeql[js/file-system-race] — see the block comment above: this is a
-  // read-modify-write, not an overwrite guard, so there is no check to race.
+  // Read-modify-write, not an overwrite guard — see the block comment above.
   writeFileSync(path, serializeInstanceCoreVersion(version, rest))
 }
 

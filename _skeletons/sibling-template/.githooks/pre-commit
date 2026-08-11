@@ -62,4 +62,40 @@ if ! node -e "const p=require('./package.json');process.exit(p['lint-staged']||p
   echo "  To make this real: add a lint-staged config (see local-gates.md)." >&2
   exit 0
 fi
+# A DECLARED gate that this checkout cannot run is a third state, and it is not
+# an abstention (#1231). The two branches above mean "this repo has no gate";
+# this one means "this repo HAS a real gate and these node_modules are missing"
+# — almost always a fresh worktree where nobody ran `pnpm install` yet, which
+# AGENTS.md section 2 asks for and which is easy to skip.
+#
+# Without this branch the commit dies on pnpm's own message:
+#
+#   ERR_PNPM_RECURSIVE_EXEC_FIRST_FAIL  Command "lint-staged" not found
+#
+# which names neither the cause nor the fix. Worse, it is easy to read as noise
+# and miss that THE COMMIT DID NOT HAPPEN — and a `git push` afterwards then
+# reports success having pushed nothing, because there was nothing to push. That
+# exact sequence cost three separate retries in one session on 2026-08-11, in a
+# repo whose AGENTS.md already said to install dependencies first.
+#
+# Deliberately fatal, and deliberately NOT auto-installing. Fatal because the
+# gate is real here and skipping it would silently downgrade this repo to the
+# abstaining ones. Not auto-installing because a hook that starts a multi-minute
+# network install as a side effect of `git commit` is a surprise, and a surprise
+# in a hook is how hooks get disabled.
+if ! pnpm exec lint-staged --help >/dev/null 2>&1; then
+  echo "pre-commit: CANNOT RUN — lint-staged is configured here but not installed." >&2
+  echo "" >&2
+  echo "  YOUR COMMIT DID NOT HAPPEN. Nothing has been recorded." >&2
+  echo "" >&2
+  echo "  Almost certainly a fresh worktree with no dependencies (AGENTS.md section 2)." >&2
+  echo "  Fix it with:" >&2
+  echo "" >&2
+  echo "      pnpm install" >&2
+  echo "" >&2
+  echo "  then re-run your commit. If pnpm itself is missing, install it first;" >&2
+  echo "  this repo declares a lint-staged gate and will not commit without it." >&2
+  exit 1
+fi
+
 exec pnpm exec lint-staged

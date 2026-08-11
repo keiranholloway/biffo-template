@@ -1008,6 +1008,12 @@ export function mergeContention(prs, runsByBranch) {
   let raced = 0
   let measured = 0
   let stale = 0
+  // The two ways a PR counted in `measured` can never reach `raced` (#1419).
+  // Both continues below fire *after* `measured += 1`, so `racedShare` (which
+  // divides by `measured`) is deflated by exactly this population — see the
+  // field comments on the return value for what that does and does not mean.
+  let noGreenRun = 0
+  let mergedBeforeGreen = 0
 
   // Merge times bucketed by base branch. Keyed by base ref because a repo's
   // `dev` and `staging` are separate races — a merge to `staging` does not make
@@ -1036,12 +1042,18 @@ export function mergeContention(prs, runsByBranch) {
       .filter((run) => run.conclusion === 'success')
       .map((run) => Date.parse(/** @type {string} */ (run.updated_at ?? run.created_at)))
       .sort((a, b) => a - b)
-    if (greens.length === 0) continue
+    if (greens.length === 0) {
+      noGreenRun += 1
+      continue
+    }
 
     const lag = (Date.parse(/** @type {string} */ (pr.mergedAt)) - greens[0]) / 60000
     // A negative lag means the merge landed before any run completed — the PR
     // was merged without waiting, which is not contention.
-    if (lag <= 0) continue
+    if (lag <= 0) {
+      mergedBeforeGreen += 1
+      continue
+    }
     greenToMerge.push(lag)
     if (lag > RACE_THRESHOLD_MINUTES && churn.revisions > 0) raced += 1
 
@@ -1088,7 +1100,35 @@ export function mergeContention(prs, runsByBranch) {
     // The cleanest single indicator — green for longer than the threshold *and*
     // forced to repush. tabsii-crm scores 0% here and biffo-template 13.9%,
     // which is the difference a busy shared integration branch makes.
+    //
+    // **Deflated by construction (#1419).** `measured` counts every merged PR
+    // with known churn, including two kinds that are structurally incapable of
+    // ever being `raced`: no run ever went green (`racedExcludedNoGreenRun`),
+    // or the merge landed before any run completed — "merged without waiting",
+    // see the comment above (`racedExcludedMergedBeforeGreen`). Both continue
+    // past `measured += 1` before `raced` can fire. This key is kept computing
+    // exactly what it always has, so historical figures stay comparable — but
+    // never read it without `racedExcludedNoGreenRun` /
+    // `racedExcludedMergedBeforeGreen` / `racedEligible` beside it. Read
+    // `racedShareEligible` for the share over the population that could
+    // actually have raced.
     racedShare: rate(raced, measured),
+    // The exclusions themselves, so the gap in `racedShare` above is visible
+    // rather than silently folded into a smaller number (the estate's recorded
+    // failure shape: `gates.share` read 80% locally-catchable when 12 of 17
+    // inputs were excluded unread and the honest figure was 47.1%).
+    racedExcludedNoGreenRun: noGreenRun,
+    racedExcludedMergedBeforeGreen: mergedBeforeGreen,
+    // The population that survived both exclusions — identical to
+    // `prsWithGreen` below, named again here so `racedShareEligible`'s
+    // denominator never has to be inferred from a differently-named field.
+    racedEligible: greenToMerge.length,
+    // `racedShare` recomputed over `racedEligible` instead of `measured` — the
+    // corrected reading. Only PRs that *could* have raced are in this
+    // denominator, so it is not deflated by merge-without-waiting or
+    // never-went-green PRs. Compare the two: a wide gap means this repo's
+    // `racedShare` history has been understating contention.
+    racedShareEligible: rate(raced, greenToMerge.length),
     // H3's counter-metric (#977): the share of merges whose base moved between
     // first green and merge, so the landed combination was never tested. Reads
     // as exposure, not damage — see the note above before quoting it.

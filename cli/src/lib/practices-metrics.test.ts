@@ -821,6 +821,45 @@ describe('mergeContention', () => {
     expect(result.repushRate).toBeNull()
     expect(result.racedShare).toBeNull()
   })
+
+  /**
+   * Pins the two exclusions behind `racedShare`'s denominator (#1419).
+   * `measured` counts all three of these merged PRs, but only one of them is
+   * structurally capable of becoming `raced`: one never had a successful run,
+   * one merged before its only run completed, and the third is a genuine
+   * race. `racedShare` must keep computing exactly what it always has (over
+   * `measured`), while `racedShareEligible` — computed over the population
+   * that survived both exclusions — must read differently, and each PR must
+   * land in the right bucket.
+   */
+  it('separates the two exclusions from a genuine race and corrects the share', () => {
+    const runsByBranch = indexRunsByBranch([
+      // No successful run at all — CI never went green.
+      run('feat/no-green', 'aaa', 'failure', '2026-07-20T09:30:00Z'),
+      // Merged before its only run completed — not contention.
+      run('feat/before-green', 'bbb', 'success', '2026-07-20T10:30:00Z'),
+      // A genuine race: green well ahead of the threshold, repushed, merged late.
+      run('feat/raced', 'ccc', 'success', '2026-07-20T08:00:00Z'),
+      run('feat/raced', 'ddd', 'success', '2026-07-20T08:20:00Z'),
+    ])
+    const result = mergeContention(
+      [
+        pr('feat/no-green', '2026-07-20T09:00:00Z', '2026-07-20T10:00:00Z', 1),
+        pr('feat/before-green', '2026-07-20T10:00:00Z', '2026-07-20T10:05:00Z', 2),
+        pr('feat/raced', '2026-07-20T07:00:00Z', '2026-07-20T08:40:00Z', 3),
+      ],
+      runsByBranch,
+    )
+
+    expect(result.prsMeasured).toBe(3)
+    expect(result.racedExcludedNoGreenRun).toBe(1)
+    expect(result.racedExcludedMergedBeforeGreen).toBe(1)
+    expect(result.racedEligible).toBe(1)
+    // Unchanged historical reading: 1 raced of 3 measured — must not move.
+    expect(result.racedShare).toBeCloseTo(33.3, 1)
+    // Corrected reading: 1 raced of 1 PR that could actually have raced.
+    expect(result.racedShareEligible).toBe(100)
+  })
 })
 
 describe('summariseRepo', () => {

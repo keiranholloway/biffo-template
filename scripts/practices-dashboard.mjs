@@ -506,9 +506,24 @@ export function renderDashboard(snapshot, sessions = null, definitionBreak = nul
     .filter(([, r]) => r && !r.error && r.mergedPrs > 0)
     .sort((a, b) => b[1].mergedPrs - a[1].mergedPrs)
 
-  const cell = (v, suffix, hot, mid) => {
+  const cell = (v, suffix, hot, mid, title) => {
     const cls = v === null || v === undefined ? '' : v > hot ? 'hot' : v > mid ? 'mid' : ''
-    return `<td class="num ${cls}">${fmt(v, suffix)}</td>`
+    const titleAttr = title ? ` title="${esc(title)}"` : ''
+    return `<td class="num ${cls}"${titleAttr}>${fmt(v, suffix)}</td>`
+  }
+
+  // The denominator behind `racedShare`, on hover rather than a new column
+  // (#1419). `racedShare` is kept computing exactly what it always has for
+  // historical comparability, so its own cell cannot show the corrected
+  // figure without becoming a different metric — the exclusion counts and
+  // `racedShareEligible` go in the tooltip instead of being silently absent.
+  const racedTitle = (c) => {
+    if (!c) return ''
+    const noGreen = c.racedExcludedNoGreenRun ?? 0
+    const beforeGreen = c.racedExcludedMergedBeforeGreen ?? 0
+    const eligible = c.racedEligible ?? 0
+    const eligibleShare = fmt(c.racedShareEligible, '%')
+    return `racedShare excludes ${noGreen + beforeGreen} of ${c.prsMeasured ?? 0} measured PRs that could never race (no green run: ${noGreen}, merged before any run completed: ${beforeGreen}). Over the ${eligible} eligible PRs, racedShareEligible is ${eligibleShare}.`
   }
 
   const rows = repos
@@ -520,7 +535,7 @@ export function renderDashboard(snapshot, sessions = null, definitionBreak = nul
       <td class="num">${fmt(r.mergedPrs)}</td>
       ${cell(r.ciFailureRate, '%', 25, 15)}
       ${cell(r.contention?.repushRate, '%', 30, 15)}
-      ${cell(r.contention?.racedShare, '%', 10, 3)}
+      ${cell(r.contention?.racedShare, '%', 10, 3, racedTitle(r.contention))}
       <td class="num">${fmt(r.contention?.staleMergeShare, '%')}</td>
       ${cell(r.contention?.greenButUnmergedHours, 'h', 50, 10)}
       ${cell(r.workMix?.toilRatio, '%', 50, 35)}
@@ -617,7 +632,7 @@ export function renderDashboard(snapshot, sessions = null, definitionBreak = nul
       <thead>
         <tr>
           <th>Repository</th><th>24h</th><th>PRs 90d</th><th>CI fail</th>
-          <th>Repush</th><th>Raced</th>
+          <th>Repush</th><th title="Share of measured PRs green-then-repushed past the wait threshold. Deflated by construction (#1419): PRs with no green run, or merged before any run completed, are structurally excluded from the numerator but stay in the denominator. Hover a value to see this repo's exclusion counts and the corrected racedShareEligible.">Raced</th>
           <th title="Merges whose base moved between the last green run and the merge, so the landed combination was never tested. Exposure, not damage — deliberately uncoloured: a high number is the risk window H3 accepted, not an incident count.">Stale</th>
           <th>Green wait</th><th>Toil</th><th>Rework lag</th>
         </tr>

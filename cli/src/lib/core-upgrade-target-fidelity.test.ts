@@ -409,5 +409,84 @@ describe('assertTargetFidelity', () => {
       expect(report.findings).toEqual([])
       expect(report.checked).toBe(0)
     })
+
+    /**
+     * The #1362 instance 11 exposure, applied to the migration carry
+     * specifically — not the VERBATIM_STATUSES loop #1512 already fixed.
+     *
+     * Before this test's fix, the migration loop verified a carried migration
+     * by decoding BOTH the tag (`git show ... {encoding:'utf8'}`) and
+     * `theirsDir`'s copy (via `core-migrations.ts`'s own `readFileSync(p,
+     * 'utf8')`, upstream of what reaches `migration.content` here) through
+     * the identical lossy UTF-8 decoder, then comparing the decoded text.
+     * Two DIFFERENT invalid bytes standing alone (0xff and 0xfe below) are
+     * each replaced by the SAME U+FFFD by Node's UTF-8 decoder, so two
+     * genuinely different raw byte sequences decode to an IDENTICAL string —
+     * the same matching-control trap #1506 fixed for binaries, unfixed here
+     * because migrations necessarily go through a semantic (docstring/
+     * revision-stripped) text comparison rather than a plain byte comparison.
+     *
+     * `theirsAbs`'s bytes (0xfe) and the tag's bytes (0xff) are NOT the same
+     * git blob — `blobId` on the raw bytes proves that independently of any
+     * decode, which is exactly the property the fix adds: a raw check BEFORE
+     * the semantic one, so a theirsDir that has silently diverged from the
+     * tag is caught even when the divergence happens to decode identically.
+     */
+    it('catches theirsDir bytes that differ from the tag even when both decode to the same mangled text (#1362 instance 11, migration half)', () => {
+      const prefix = Buffer.from(
+        'revision = "0003"\ndown_revision = None\n\n\ndef upgrade():\n    op.add_column("t", "re',
+      )
+      const suffix = Buffer.from('al")\n')
+      const tagBytes = Buffer.concat([prefix, Buffer.from([0xff]), suffix])
+      const wrongTheirsBytes = Buffer.concat([prefix, Buffer.from([0xfe]), suffix])
+
+      // Both single invalid bytes decode to the same U+FFFD in Node's UTF-8
+      // decoder — the premise the test depends on, checked rather than
+      // assumed, or a change to Node's decoder would silently stop proving
+      // anything.
+      expect(tagBytes.toString('utf8')).toBe(wrongTheirsBytes.toString('utf8'))
+
+      const g = (args: string[]): string =>
+        execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8' })
+      writeFileSync(join(repo, 'services/api/migrations/versions/0003_bad_bytes.py'), tagBytes)
+      g(['add', '-A'])
+      g(['commit', '-qm', 'migration with an invalid byte'])
+      g(['tag', 'core-v0.261.0'])
+
+      // theirsDir's copy genuinely differs at the byte level (0xfe, not
+      // 0xff) — the real-world shape is a stale or corrupted theirsDir
+      // checkout, mirroring #1399/#1506's own root causes.
+      mkdirSync(join(theirs, 'services/api/migrations/versions'), { recursive: true })
+      writeFileSync(
+        join(theirs, 'services/api/migrations/versions/0003_bad_bytes.py'),
+        wrongTheirsBytes,
+      )
+
+      // What the real carry would produce: the (mangled) decoded body with
+      // revision/down_revision re-chained onto the instance's head — the
+      // ordinary, faithful-looking carry output migrationBodyHash is meant
+      // to pass.
+      const rechainedContent = wrongTheirsBytes
+        .toString('utf8')
+        .replace('revision = "0003"', 'revision = "core_deadbeef"')
+        .replace('down_revision = None', 'down_revision = "0009"')
+
+      const report = assertTargetFidelity({
+        entries: [],
+        migrations: [{ file: '0003_bad_bytes.py', content: rechainedContent }],
+        templateRepo: repo,
+        toVersion: '0.261.0',
+        theirsDir: theirs,
+      })
+
+      expect(report.checked).toBe(1)
+      expect(report.findings).toEqual([
+        {
+          path: 'services/api/migrations/versions/0003_bad_bytes.py',
+          reason: 'content-differs',
+          source: 'migration',
+        },
+      ])
+    })
   })
 })

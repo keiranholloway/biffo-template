@@ -263,10 +263,37 @@ export function assertTargetFidelity(options: AssertTargetFidelityOptions): Fide
   for (const migration of options.migrations ?? []) {
     const path = `${MIGRATIONS_VERSIONS_DIR}/${migration.file}`
     checked++
-    if (!blobs.has(path)) {
+    const expected = blobs.get(path)
+    if (expected === undefined) {
       findings.push({ path, reason: 'absent-from-tag', source: 'migration' })
       continue
     }
+
+    // Independent raw-byte check FIRST (#1362 instance 11's sharper property:
+    // "the guard's answer must be derived independently of the actor's
+    // mechanism", not merely "guard and actor agree"). theirsDir's copy at
+    // this path is never touched by the three-way merge — planMigrationCarry
+    // reads it verbatim before re-chaining — so it must equal the tag's own
+    // git blob id exactly, checked here with the SAME algorithm `ls-tree`
+    // itself uses (`blobId`), never a text decode. This is what actually
+    // proves theirsDir is faithful to the tag; the semantic check below only
+    // proves the CARRY step's rewrite preserved the body, and would be blind
+    // on its own to two differing byte sequences that decode to the same
+    // UTF-8-replacement-mangled string (the exact #1506 mechanism, applied
+    // here to migrations instead of a binary: see
+    // core-upgrade-target-fidelity.test.ts's "two differing raw migration
+    // bytes" case). Skipped, not failed, when theirsDir lacks the file —
+    // callers that supply `migrations` without a matching theirsDir copy
+    // (e.g. a fixture exercising only the semantic half) still get that half.
+    const theirsAbs = join(options.theirsDir, path)
+    if (existsSync(theirsAbs)) {
+      const rawBytes = readFileSync(theirsAbs)
+      if (blobId(rawBytes) !== expected) {
+        findings.push({ path, reason: 'content-differs', source: 'migration' })
+        continue
+      }
+    }
+
     let tagText: string
     try {
       tagText = git(['-C', options.templateRepo, 'show', `${tag}:${path}`])
@@ -279,7 +306,11 @@ export function assertTargetFidelity(options: AssertTargetFidelityOptions): Fide
     // the written file is never byte-identical to the tag even when faithful.
     // migrationBodyHash is core-migrations.ts's own definition of "changed" —
     // reused rather than re-derived, so the two mechanisms cannot disagree
-    // about what counts as drift.
+    // about what counts as drift. Safe to decode as UTF-8 here specifically
+    // BECAUSE the raw-byte check above already proved (when it could run)
+    // that theirsDir's bytes are the tag's bytes — decoding known-identical
+    // bytes the same way on both sides is no longer the two-wrongs-cancel
+    // trap, since there is nothing left for the decode to hide.
     if (migrationBodyHash(tagText) !== migrationBodyHash(migration.content)) {
       findings.push({ path, reason: 'content-differs', source: 'migration' })
     }

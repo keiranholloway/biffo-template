@@ -104,6 +104,46 @@ describe('guard/authority inventory sweep (#1362): every discovered guard is cla
     expect(uncovered.every((r) => r.note.length > 0)).toBe(true)
   })
 
+  /**
+   * Instance 11's ratchet: a `disagreementTest` proves a guard catches two
+   * documents that differ. It says nothing about whether the guard's OWN
+   * read shares a decode step with the actor's — which is precisely what let
+   * `core-upgrade-target-fidelity` pass a real #1399 disagreement test while
+   * still being blind to a corrupted binary (see the module's own docstring
+   * for the empirical proof: `{ checked: 1, findings: [] }` over a file that
+   * had just been written corrupt). So `independence` is asked of every
+   * in-class guard independently of whether it already has a
+   * `disagreementTest` — the two questions are orthogonal, and a guard can
+   * answer one without the other.
+   */
+  it('every in-class entry answers independence — instance 11 showed a disagreement test alone is not enough', () => {
+    const unanswered = GUARD_AUTHORITY_INVENTORY.filter((r) => r.inClass && !r.independence)
+    expect(
+      unanswered,
+      `${unanswered.length} in-class guard(s) have no \`independence\` verdict: ` +
+        `${unanswered.map((r) => r.id).join(', ')}. A new in-class guard must say whether its ` +
+        "own derivation shares a helper/parser/decode step with the actor's — " +
+        "'independent' | 'shared-path' | 'unclear' — not merely whether a disagreement test " +
+        'exists for it (#1362 instance 11: the two are different properties, and a guard can ' +
+        'pass one while failing the other).',
+    ).toEqual([])
+  })
+
+  it('reports the instance-11 remainder: in-class guards whose independence is shared-path or unclear', () => {
+    const exposed = GUARD_AUTHORITY_INVENTORY.filter(
+      (r) => r.inClass && (r.independence === 'shared-path' || r.independence === 'unclear'),
+    )
+    // Same posture as the disagreement-test remainder above: printed, not
+    // failed, so the honest count is visible without reading source, and a
+    // guard newly found to share its actor's decode step can be recorded
+    // here before anyone has had time to fix it.
+    console.log(
+      `guard-authority-inventory: ${exposed.length} in-class guard(s) with independence ` +
+        `shared-path/unclear: ${exposed.map((r) => `${r.id} (${r.independence ?? 'unset'})`).join(', ')}`,
+    )
+    expect(exposed.every((r) => r.note.length > 0)).toBe(true)
+  })
+
   describe('a disagreement-test claim is checked, not trusted — proven against REAL fixed instances', () => {
     it('#1333 (wait-for-checks): the referenced test really does construct a stale-vs-fresh divergence', () => {
       const record = GUARD_AUTHORITY_INVENTORY.find((r) => r.id === 'wait-for-checks')

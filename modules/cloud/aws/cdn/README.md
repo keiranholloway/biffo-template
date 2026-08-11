@@ -74,3 +74,63 @@ cannot unstick retroactively.
 Only bites an instance that already had the OAC/ORP applied — a fresh
 instance never creates the vulnerable pattern, so this is a one-time
 migration hazard, not a recurring one.
+
+## Non-production distributions are `noindex`
+
+Every distribution where `environment != "prod"` attaches a response headers
+policy adding:
+
+```
+X-Robots-Tag: noindex, nofollow
+```
+
+`count = 0` on production, so a prod distribution has **no such policy attached
+at all** rather than one that happens to be empty — the difference is visible in
+`terraform plan` and in the CloudFront console, which is where somebody will
+actually look to confirm prod is unaffected.
+
+### Why this is here and not in each app
+
+A non-production distribution serves real, working, publicly reachable pages
+whose content is routinely **not true**: placeholder marketing statistics,
+seeded demo brands for businesses that do not exist, testimonials attributed to
+invented people. Indexed and surfaced in search, that is false advertising about
+a real company.
+
+`robots.txt` is the weaker half of the control and belongs to whichever app
+serves the domain root. It asks a crawler not to **fetch**; it does not stop a
+URL discovered elsewhere — a link, a sitemap, someone's post — from being
+**indexed**. `X-Robots-Tag` is the half that does, and only the distribution
+sees every response from every sibling, so putting it here is one place to get
+right instead of N places to forget.
+
+The estate learned both halves the hard way. `dev.tabsii.com` ran with no
+crawler control of any kind while serving exactly that content, and
+`curl /robots.txt` answered **HTTP 200 with a body** — the front page's HTML,
+because the rewrite function serves `index.html` for anything it cannot resolve.
+Any check reading only the status code said it was fine. When a real
+`robots.txt` was then added, it deployed as `content-type: text/x-component`,
+because the deploy forces that type on every `*.txt` (Next's RSC flight payloads
+use that extension) — again 200, again the right body, again not actually in
+force.
+
+**The recurring shape: a control that is present, responds successfully, and
+does nothing.** Verify this one by reading the header, not the status:
+
+```bash
+curl -sI https://<non-prod-domain>/ | grep -i x-robots-tag
+# x-robots-tag: noindex, nofollow
+```
+
+### Which behaviours carry it
+
+Every behaviour that returns a body to an **anonymous crawler**: the root, every
+sibling/portal prefix, tracked links (`c/*`) and `.well-known/*`.
+
+Deliberately **not** the two API behaviours — `api/v1/plugins/*` sits behind a
+Cognito authorizer so a crawler gets 401, and `api/v1/health` returns a JSON
+health payload. Neither is indexable content, and leaving their configuration
+untouched keeps this change scoped to the pages it is about.
+
+`override = true`, so an origin that sets its own `X-Robots-Tag` cannot weaken
+it: on a non-production distribution CloudFront's answer wins.

@@ -241,6 +241,62 @@ data "aws_cloudfront_origin_request_policy" "all_viewer_except_host" {
 # race ahead of CloudFront finishing the detach and fail with 409 OriginAccessControlInUse
 # / OriginRequestPolicyInUse. (The `portal` OAC below doesn't need this: it's ALSO
 # referenced from a static, always-present origin block, so the edge can never disappear.)
+# ── Non-production: tell crawlers to stay out ──────────────────────────────
+#
+# Every non-production distribution serves real, working, publicly reachable
+# pages whose content is routinely NOT TRUE — placeholder marketing statistics,
+# seeded demo brands that do not exist, testimonials attributed to invented
+# people. Indexed and surfaced in search, that is false advertising about a
+# real company.
+#
+# `robots.txt` is the weaker half and belongs to whichever app serves the domain
+# root: it asks a crawler not to FETCH, and does not stop a URL discovered
+# elsewhere — a link, a sitemap, someone's post — from being INDEXED.
+# `X-Robots-Tag: noindex` is the half that does, and it belongs HERE because
+# only the distribution sees every response from every sibling. Per-app is N
+# places to forget, and the estate found that out the hard way: dev.tabsii.com
+# ran with no crawler control of any kind while serving exactly this content,
+# and `curl /robots.txt` answered 200 with the front page's HTML, so a
+# status-code check said it was fine.
+#
+# `count` rather than a conditional id, so a PRODUCTION distribution has no such
+# policy attached at all rather than one that happens to be empty. The
+# difference is visible in `terraform plan` and in the console, which is where
+# somebody will actually look to confirm prod is unaffected.
+#
+# `override = true`: an origin that sets its own X-Robots-Tag — a Next route
+# handler, a future S3 metadata header — must not be able to weaken this. On a
+# non-production distribution CloudFront's answer wins.
+resource "aws_cloudfront_response_headers_policy" "noindex" {
+  count = var.environment == "prod" ? 0 : 1
+
+  name    = "${var.project_name}-${var.environment}-noindex"
+  comment = "Non-production only: X-Robots-Tag noindex, nofollow. See this module's README."
+
+  custom_headers_config {
+    items {
+      header   = "X-Robots-Tag"
+      value    = "noindex, nofollow"
+      override = true
+    }
+  }
+}
+
+locals {
+  # Null on prod — which is how Terraform expresses an unset optional argument —
+  # so the behaviour blocks below serve both environments with no duplication
+  # and no second code path to keep in step.
+  #
+  # Attached to every behaviour that returns a body to an ANONYMOUS crawler:
+  # the root, every sibling/portal prefix, tracked links, and .well-known.
+  # Deliberately NOT attached to the two API behaviours — `api/v1/plugins/*` is
+  # behind a Cognito authorizer so a crawler gets 401, and `api/v1/health`
+  # returns a JSON health payload. Neither is indexable content, and leaving
+  # their config untouched keeps the blast radius of this change to the pages
+  # it is actually about.
+  noindex_policy_id = one(aws_cloudfront_response_headers_policy.noindex[*].id)
+}
+
 resource "aws_cloudfront_distribution" "portal" {
   #checkov:skip=CKV_AWS_310:Single static S3 origin; no secondary origin exists to fail over to. Failover origin block stays optional/config-driven.
   #checkov:skip=CKV_AWS_374:Public franchise marketplace must serve all geographies; geo-restriction would break the product.
@@ -344,11 +400,12 @@ resource "aws_cloudfront_distribution" "portal" {
   # local.default_target_origin_id for why this is a conditional rather than a
   # dynamic block, and what a request to `/` does in each case.
   default_cache_behavior {
-    allowed_methods        = ["GET", "HEAD", "OPTIONS"]
-    cached_methods         = ["GET", "HEAD"]
-    target_origin_id       = local.default_target_origin_id
-    viewer_protocol_policy = "redirect-to-https"
-    compress               = true
+    allowed_methods            = ["GET", "HEAD", "OPTIONS"]
+    cached_methods             = ["GET", "HEAD"]
+    target_origin_id           = local.default_target_origin_id
+    viewer_protocol_policy     = "redirect-to-https"
+    compress                   = true
+    response_headers_policy_id = local.noindex_policy_id
 
     forwarded_values {
       query_string = false
@@ -449,6 +506,9 @@ resource "aws_cloudfront_distribution" "portal" {
       compress                 = true
       cache_policy_id          = data.aws_cloudfront_cache_policy.caching_disabled.id
       origin_request_policy_id = data.aws_cloudfront_origin_request_policy.all_viewer_except_host.id
+      # A tracked link is a public URL a crawler can follow; noindex its
+      # response so the redirect endpoint itself never lands in an index.
+      response_headers_policy_id = local.noindex_policy_id
     }
   }
 
@@ -468,12 +528,13 @@ resource "aws_cloudfront_distribution" "portal" {
   dynamic "ordered_cache_behavior" {
     for_each = { for b in local.ordered_cache_behaviors : b.path_pattern => b }
     content {
-      path_pattern           = ordered_cache_behavior.value.path_pattern
-      allowed_methods        = ["GET", "HEAD", "OPTIONS"]
-      cached_methods         = ["GET", "HEAD"]
-      target_origin_id       = ordered_cache_behavior.value.target_origin_id
-      viewer_protocol_policy = "redirect-to-https"
-      compress               = true
+      path_pattern               = ordered_cache_behavior.value.path_pattern
+      allowed_methods            = ["GET", "HEAD", "OPTIONS"]
+      cached_methods             = ["GET", "HEAD"]
+      target_origin_id           = ordered_cache_behavior.value.target_origin_id
+      viewer_protocol_policy     = "redirect-to-https"
+      compress                   = true
+      response_headers_policy_id = local.noindex_policy_id
 
       forwarded_values {
         query_string = false
@@ -507,12 +568,13 @@ resource "aws_cloudfront_distribution" "portal" {
   # It must be its own behaviour so it does not fall through to
   # default_cache_behavior, which belongs to the root application sibling.
   ordered_cache_behavior {
-    path_pattern           = ".well-known/*"
-    allowed_methods        = ["GET", "HEAD", "OPTIONS"]
-    cached_methods         = ["GET", "HEAD"]
-    target_origin_id       = "S3-${var.portal_bucket_name}"
-    viewer_protocol_policy = "redirect-to-https"
-    compress               = true
+    path_pattern               = ".well-known/*"
+    allowed_methods            = ["GET", "HEAD", "OPTIONS"]
+    cached_methods             = ["GET", "HEAD"]
+    target_origin_id           = "S3-${var.portal_bucket_name}"
+    viewer_protocol_policy     = "redirect-to-https"
+    compress                   = true
+    response_headers_policy_id = local.noindex_policy_id
 
     forwarded_values {
       query_string = false

@@ -1,3 +1,4 @@
+import { isUtf8 } from 'node:buffer'
 import {
   chmodSync,
   existsSync,
@@ -28,6 +29,21 @@ import { type GitRunner, gitTrackedFiles } from './git-tracked-files.js'
  * This module is pure planning: it computes the merged content and flags
  * conflicts but writes nothing to the instance repo. Applying the plan to a
  * branch and opening a PR is Phase 3b.
+ *
+ * ## Binary content (#1506)
+ *
+ * Every file is read as raw bytes (`readFile` below) and decoded to a string
+ * ONLY when that decoding is lossless UTF-8 (`node:buffer`'s `isUtf8`, not a
+ * latin1 round-trip — latin1 accepts every byte sequence, so it can never
+ * tell a binary file from text and would silently "succeed" at corrupting
+ * one). A file that is not valid UTF-8 is carried as a `Buffer`, verbatim,
+ * through every status that produces content, and is NEVER routed through
+ * `mergeFile` — `git merge-file` treats its input as lines of text, and its
+ * own stdout capture is a string (execa decodes it), so a binary reaching
+ * that path would be corrupted a second time even if the read above hadn't
+ * been. A binary cannot be three-way merged in any meaningful sense anyway:
+ * the two honest resolutions are take-theirs or keep-ours, and every status
+ * below already reduces to one of those for binary content — see `classify`.
  */
 
 export type MergeStatus =
@@ -49,8 +65,17 @@ export interface MergeEntry {
   conflicted: boolean
   /** Resolved content to write for the upgrade, when the status produces one
    * (take-theirs / merged / conflict / added / add-conflict / restored). Undefined
-   * for unchanged / keep-ours (leave the instance file as-is) and removed (delete). */
-  content?: string
+   * for unchanged / keep-ours (leave the instance file as-is) and removed (delete).
+   *
+   * `string` for a file whose bytes decode as valid UTF-8 — every existing
+   * text-oriented behaviour (three-way merge, conflict markers, trailing
+   * newline handling) is unchanged. A `Buffer` here means the file is NOT
+   * valid UTF-8 and was never decoded: it is the source bytes, verbatim,
+   * exactly as read from disk (#1506). `writeFileSync` accepts both, so
+   * `applyUpgradePlan` needs no branch on which one it got — but nothing else
+   * may re-derive a string from this Buffer, or the byte-for-byte guarantee
+   * breaks the same way it did before the fix. */
+  content?: string | Buffer
   /**
    * True only for the subset of `keep-ours` entries produced when a
    * template-owned path exists SOLELY in the instance — no base, no theirs
@@ -139,8 +164,37 @@ export const gitMergeFile: MergeFileFn = async (base, ours, theirs) => {
   }
 }
 
-function read(root: string, rel: string): string {
-  return readFileSync(join(root, rel), 'utf8')
+/**
+ * One file snapshot, read exactly once as raw bytes (#1506).
+ *
+ * `buffer` is the single source of truth for both equality and for what
+ * eventually gets written back — every comparison below reads `.buffer`,
+ * never a decoded string, so it is correct for text and binary alike (for
+ * valid UTF-8, byte equality and decoded-string equality are the same fact,
+ * since a valid UTF-8 decode is injective; for anything else there IS no
+ * string to compare).
+ *
+ * `text` is the UTF-8 decoding of `buffer`, but ONLY when that decoding is
+ * lossless (`isUtf8`, not a latin1 round-trip — see the module docstring).
+ * `null` means the file is binary: every branch below must treat a null
+ * `text` as "do not decode, do not hand this to the text merge engine."
+ */
+interface FileRead {
+  buffer: Buffer
+  text: string | null
+}
+
+function readFile(root: string, rel: string): FileRead {
+  const buffer = readFileSync(join(root, rel))
+  return { buffer, text: isUtf8(buffer) ? buffer.toString('utf8') : null }
+}
+
+/** What to hand back as `MergeEntry.content`: the decoded string for text (so
+ * every existing string-typed caller — trailing-newline checks, the target
+ * fidelity blob-id comparison, tests — keeps working unchanged), the raw
+ * Buffer otherwise. Never a lossy re-encoding either way. */
+function contentOf(file: FileRead): string | Buffer {
+  return file.text ?? file.buffer
 }
 
 export interface PlanCoreUpgradeOptions {
@@ -262,27 +316,29 @@ async function classify(
 
   // Added upstream (not in base).
   if (!inBase && inTheirs) {
-    const theirsContent = read(opts.theirsDir, path)
-    if (!inOurs) return { path, status: 'added', conflicted: false, content: theirsContent }
-    const oursContent = read(opts.oursDir, path)
-    if (oursContent === theirsContent) return { path, status: 'unchanged', conflicted: false }
+    const theirsFile = readFile(opts.theirsDir, path)
+    if (!inOurs) return { path, status: 'added', conflicted: false, content: contentOf(theirsFile) }
+    const oursFile = readFile(opts.oursDir, path)
+    if (oursFile.buffer.equals(theirsFile.buffer))
+      return { path, status: 'unchanged', conflicted: false }
     // Both added the same path with different content.
-    return { path, status: 'add-conflict', conflicted: true, content: theirsContent }
+    return { path, status: 'add-conflict', conflicted: true, content: contentOf(theirsFile) }
   }
 
   // Removed upstream (in base, not in theirs).
   if (inBase && !inTheirs) {
     if (!inOurs) return { path, status: 'removed', conflicted: false } // already gone
-    const baseContent = read(opts.baseDir, path)
-    const oursContent = read(opts.oursDir, path)
-    if (oursContent === baseContent) return { path, status: 'removed', conflicted: false }
+    const baseFile = readFile(opts.baseDir, path)
+    const oursFile = readFile(opts.oursDir, path)
+    if (oursFile.buffer.equals(baseFile.buffer))
+      return { path, status: 'removed', conflicted: false }
     // Upstream deleted a file the instance had modified — needs a human.
     return { path, status: 'remove-conflict', conflicted: true }
   }
 
   // In base and theirs.
-  const baseContent = read(opts.baseDir, path)
-  const theirsContent = read(opts.theirsDir, path)
+  const baseFile = readFile(opts.baseDir, path)
+  const theirsFile = readFile(opts.theirsDir, path)
 
   if (!inOurs) {
     // The instance deleted a template-owned file the template still ships. That
@@ -296,12 +352,12 @@ async function classify(
       noteDivergenceSkip(path)
       return { path, status: 'removed', conflicted: false }
     }
-    return { path, status: 'restored', conflicted: false, content: theirsContent }
+    return { path, status: 'restored', conflicted: false, content: contentOf(theirsFile) }
   }
 
-  const oursContent = read(opts.oursDir, path)
-  const oursChanged = oursContent !== baseContent
-  const theirsChanged = theirsContent !== baseContent
+  const oursFile = readFile(opts.oursDir, path)
+  const oursChanged = !oursFile.buffer.equals(baseFile.buffer)
+  const theirsChanged = !theirsFile.buffer.equals(baseFile.buffer)
 
   if (!theirsChanged) {
     // Upstream didn't touch it; keep whatever the instance has.
@@ -309,14 +365,28 @@ async function classify(
   }
   if (!oursChanged) {
     // Instance never diverged; fast-forward to theirs.
-    return { path, status: 'take-theirs', conflicted: false, content: theirsContent }
+    return { path, status: 'take-theirs', conflicted: false, content: contentOf(theirsFile) }
   }
-  if (oursContent === theirsContent) {
+  if (oursFile.buffer.equals(theirsFile.buffer)) {
     // Both made the identical change.
     return { path, status: 'unchanged', conflicted: false }
   }
-  // Both changed differently — three-way merge.
-  const { conflicted, content } = await mergeFile(baseContent, oursContent, theirsContent)
+
+  // Both changed, differently — the case that would otherwise be a three-way
+  // text merge. Binary content cannot go through `mergeFile` (see the module
+  // docstring): resolve to the upstream bytes, verbatim — the same choice
+  // `restored` above already makes when upstream and the instance disagree —
+  // but keep `conflicted: true` so the upgrade still surfaces it for a human
+  // to confirm the instance's own change to a binary asset wasn't meant to
+  // survive. This never silently drops an instance edit: it is reported in
+  // `plan.conflicts` exactly like a text conflict, just without markers a
+  // binary has no way to carry.
+  if (baseFile.text === null || oursFile.text === null || theirsFile.text === null) {
+    return { path, status: 'conflict', conflicted: true, content: contentOf(theirsFile) }
+  }
+
+  // All three are text — the normal three-way merge.
+  const { conflicted, content } = await mergeFile(baseFile.text, oursFile.text, theirsFile.text)
   return { path, status: conflicted ? 'conflict' : 'merged', conflicted, content }
 }
 

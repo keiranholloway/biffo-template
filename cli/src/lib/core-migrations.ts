@@ -783,7 +783,7 @@ const TEST_PATH_RE = /(^|\/)tests?\/.*\btest_[^/]*\.py$/
  * engine's own types.
  */
 export function findMigrationTestPairings(
-  changes: readonly { path: string; content?: string | undefined }[],
+  changes: readonly { path: string; content?: string | Buffer | undefined }[],
   divergedBodies: readonly DivergedMigrationBody[],
 ): MigrationTestPairing[] {
   if (divergedBodies.length === 0) return []
@@ -791,7 +791,11 @@ export function findMigrationTestPairings(
   for (const change of changes) {
     if (!TEST_PATH_RE.test(change.path)) continue
     const content = change.content
-    if (content === undefined) continue
+    // A test file is always source text; a Buffer here would mean the merge
+    // planner decided this path is not valid UTF-8 (#1506), which a `.py` test
+    // never legitimately is. Skip rather than force a decode — there is no
+    // pairing to find in bytes this function was never meant to read.
+    if (typeof content !== 'string') continue
     for (const d of divergedBodies) {
       if (content.includes(d.file)) {
         pairings.push({ testPath: change.path, migration: d.file, instanceFile: d.instanceFile })

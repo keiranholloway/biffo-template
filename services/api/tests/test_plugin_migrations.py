@@ -4,8 +4,11 @@ import shutil
 import tempfile
 from pathlib import Path
 
+import pytest
 from api.migrations.plugin_migrations import (
+    MigrationScanError,
     _column_to_alembic_def,
+    already_created_tables,
     generate_migration_for_plugin,
     generate_migration_name,
     get_current_head_revision,
@@ -142,6 +145,7 @@ class TestGenerateMigrationForPlugin:
     def test_generates_up_and_down_functions(self):
         manifest = {"name": "rbac", "version": "1.0.0", "tables": [{"name": "roles"}]}
         migration_file = generate_migration_for_plugin(manifest, self.versions_dir)
+        assert migration_file is not None
         content = migration_file.read_text()
         assert "def upgrade()" in content
         assert "def downgrade()" in content
@@ -149,18 +153,21 @@ class TestGenerateMigrationForPlugin:
     def test_up_creates_tables(self):
         manifest = {"name": "rbac", "version": "1.0.0", "tables": [{"name": "roles"}]}
         migration_file = generate_migration_for_plugin(manifest, self.versions_dir)
+        assert migration_file is not None
         content = migration_file.read_text()
         assert "create_table" in content.lower() or "create_table" in content
 
     def test_down_drops_tables(self):
         manifest = {"name": "rbac", "version": "1.0.0", "tables": [{"name": "roles"}]}
         migration_file = generate_migration_for_plugin(manifest, self.versions_dir)
+        assert migration_file is not None
         content = migration_file.read_text()
         assert "drop_table" in content.lower() or "drop_table" in content
 
     def test_file_has_revision_id(self):
         manifest = {"name": "rbac", "version": "1.0.0", "tables": [{"name": "roles"}]}
         migration_file = generate_migration_for_plugin(manifest, self.versions_dir)
+        assert migration_file is not None
         content = migration_file.read_text()
         assert "revision =" in content
         assert "down_revision =" in content
@@ -168,6 +175,7 @@ class TestGenerateMigrationForPlugin:
     def test_file_is_valid_python(self):
         manifest = {"name": "rbac", "version": "1.0.0", "tables": [{"name": "roles"}]}
         migration_file = generate_migration_for_plugin(manifest, self.versions_dir)
+        assert migration_file is not None
         # Should compile without syntax errors
         content = migration_file.read_text()
         compile(content, str(migration_file), "exec")
@@ -184,6 +192,7 @@ class TestGenerateMigrationForPlugin:
             ],
         }
         migration_file = generate_migration_for_plugin(manifest, self.versions_dir)
+        assert migration_file is not None
         content = migration_file.read_text()
         assert "create_index" in content
         assert "drop_index" in content
@@ -204,6 +213,7 @@ class TestGenerateMigrationForPlugin:
             ],
         }
         migration_file = generate_migration_for_plugin(manifest, self.versions_dir)
+        assert migration_file is not None
         content = migration_file.read_text()
         compile(content, str(migration_file), "exec")
 
@@ -217,6 +227,7 @@ class TestGenerateMigrationForPlugin:
             ],
         }
         migration_file = generate_migration_for_plugin(manifest, self.versions_dir)
+        assert migration_file is not None
         content = migration_file.read_text()
         assert "roles" in content
         assert "permissions" in content
@@ -246,6 +257,7 @@ class TestGenerateMigrationForPlugin:
             ],
         }
         migration_file = generate_migration_for_plugin(manifest, self.versions_dir)
+        assert migration_file is not None
         content = migration_file.read_text()
         compile(content, str(migration_file), "exec")
         assert content.count("op.create_table(") == 2
@@ -254,6 +266,7 @@ class TestGenerateMigrationForPlugin:
     def test_migration_name_in_filename(self):
         manifest = {"name": "rbac", "version": "1.0.0", "tables": [{"name": "roles"}]}
         migration_file = generate_migration_for_plugin(manifest, self.versions_dir)
+        assert migration_file is not None
         assert "roles" in migration_file.name
         assert migration_file.suffix == ".py"
 
@@ -277,6 +290,7 @@ class TestGetCurrentHeadRevision:
     def test_first_generated_migration_has_no_down_revision(self):
         manifest = {"name": "rbac", "version": "1.0.0", "tables": [{"name": "roles"}]}
         migration_file = generate_migration_for_plugin(manifest, self.versions_dir)
+        assert migration_file is not None
         content = migration_file.read_text()
         assert "down_revision = None" in content
 
@@ -294,6 +308,7 @@ class TestGetCurrentHeadRevision:
 
         manifest = {"name": "rbac", "version": "1.0.0", "tables": [{"name": "roles"}]}
         migration_file = generate_migration_for_plugin(manifest, self.versions_dir)
+        assert migration_file is not None
         content = migration_file.read_text()
         assert "down_revision = '0001'" in content
         # The generated migration is now itself the head — it appended to
@@ -318,6 +333,8 @@ class TestGetCurrentHeadRevision:
             {"name": "billing", "version": "1.0.0", "tables": [{"name": "invoices"}]},
             self.versions_dir,
         )
+        assert first is not None
+        assert second is not None
         first_revision = first.stem.split("_")[0]
         second_content = second.read_text()
         assert f"down_revision = '{first_revision}'" in second_content
@@ -415,3 +432,271 @@ class TestSyncPluginMigrations:
         )
         assert len(first) == 1
         assert second == []
+
+    def test_stays_idempotent_after_the_plugin_gains_a_table(self):
+        """Regression (issue #1511 review): sync_plugin_migrations used to
+        pre-check idempotency via a revision hashed from the plugin's FULL
+        current table set, but the on-disk migration's own revision is now
+        hashed from only the DELTA it emitted. The first time a plugin's
+        table set changed, the pre-check's hash could never match the file
+        on disk again, silently defeating the fast path for that plugin
+        forever after (it stayed correct via the fallback, but the point of
+        an idempotency guard is not to have to fall back)."""
+        self._write_manifest(
+            "marketing",
+            {
+                "name": "marketing",
+                "version": "1.0.0",
+                "tables": [{"name": "marketing_campaign"}],
+            },
+        )
+        first = sync_plugin_migrations(self.versions_dir, services_root=self.services_root)
+        assert len(first) == 1
+
+        # Plugin gains a table.
+        (self.services_root / "marketing" / "biffo.plugin.json").write_text(
+            '{"name": "marketing", "version": "1.1.0", "tables": '
+            '[{"name": "marketing_campaign"}, {"name": "marketing_channel"}]}'
+        )
+        second = sync_plugin_migrations(self.versions_dir, services_root=self.services_root)
+        assert len(second) == 1
+        assert "marketing_channel" in second[0].name
+
+        # Re-running against the now-unchanged (post-upgrade) manifest must
+        # still be a clean no-op — the case the old full-set hash broke.
+        third = sync_plugin_migrations(self.versions_dir, services_root=self.services_root)
+        assert third == []
+        assert len(list(self.versions_dir.glob("*.py"))) == 2
+
+
+class TestPluginUpgradeEmitsOnlyTheDelta:
+    """Issue #1511: `biffo plugin upgrade` generated a migration containing
+    the plugin's ENTIRE table set, not the delta — breaking every existing
+    installation (`DuplicateTableError`) and, worse, shipping a `downgrade()`
+    that dropped every table the plugin owns, including ones holding live
+    data the upgrade never touched.
+
+    Real case this reproduces exactly: upgrading `biffo-plugin-marketing`
+    by one table (`marketing_channel`) against a versions_dir that already
+    carries a migration for its other five tables.
+    """
+
+    def setup_method(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.versions_dir = Path(self.tmpdir) / "versions"
+        self.versions_dir.mkdir()
+
+    def teardown_method(self):
+        shutil.rmtree(self.tmpdir)
+
+    def test_plugin_already_installed_gains_one_table_emits_only_that_table(self):
+        # First install: five tables, matching the marketing plugin's shape
+        # before it gained marketing_channel.
+        v1 = {
+            "name": "marketing",
+            "version": "1.0.0",
+            "tables": [
+                {"name": "marketing_campaign"},
+                {"name": "marketing_artefact"},
+                {"name": "marketing_asset"},
+                {"name": "marketing_link"},
+                {"name": "marketing_click"},
+            ],
+        }
+        first = generate_migration_for_plugin(v1, self.versions_dir)
+        assert first is not None
+        assert first.read_text().count("op.create_table(") == 5
+
+        # Upgrade: the plugin now also declares marketing_channel.
+        v2 = {
+            "name": "marketing",
+            "version": "1.1.0",
+            "tables": v1["tables"]
+            + [
+                {
+                    "name": "marketing_channel",
+                    "columns": [{"name": "key", "type": "String(64)", "index": True}],
+                }
+            ],
+        }
+        second = generate_migration_for_plugin(v2, self.versions_dir)
+
+        assert second is not None
+        content = second.read_text()
+        # This is the failing assertion before the fix: it generated 6.
+        assert content.count("op.create_table(") == 1
+        assert "marketing_channel" in content
+        for already_installed in (
+            "marketing_campaign",
+            "marketing_artefact",
+            "marketing_asset",
+            "marketing_link",
+            "marketing_click",
+        ):
+            assert already_installed not in content
+
+        # Chains onto the first migration rather than forking a head.
+        first_revision = first.stem.split("_")[0]
+        assert f"down_revision = '{first_revision}'" in content
+
+    def test_downgrade_is_the_exact_inverse_of_the_delta_upgrade(self):
+        v1 = {"name": "marketing", "version": "1.0.0", "tables": [{"name": "marketing_campaign"}]}
+        generate_migration_for_plugin(v1, self.versions_dir)
+
+        v2 = {
+            "name": "marketing",
+            "version": "1.1.0",
+            "tables": v1["tables"] + [{"name": "marketing_channel"}],
+        }
+        second = generate_migration_for_plugin(v2, self.versions_dir)
+        assert second is not None
+        content = second.read_text()
+
+        # The generated downgrade used to drop every table the plugin owns.
+        # It must drop only the table(s) this migration's own upgrade
+        # creates — never marketing_campaign, which a prior migration
+        # created and which may hold live data by the time this runs.
+        assert content.count("op.drop_table(") == 1
+        assert "op.drop_table('marketing_channel')" in content
+        assert "op.drop_table('marketing_campaign')" not in content
+        compile(content, str(second), "exec")
+
+    def test_several_prior_migrations_still_yields_only_the_new_table(self):
+        # Simulates a plugin whose tables were generated across several
+        # separate migrations (not necessarily all in one file), plus an
+        # unrelated core migration in the same versions_dir.
+        (self.versions_dir / "0001_core.py").write_text(
+            "revision = '0001'\n"
+            "down_revision = None\n"
+            "branch_labels = None\n"
+            "depends_on = None\n"
+            "def upgrade():\n"
+            "    pass\n"
+            "def downgrade():\n"
+            "    pass\n"
+        )
+        generate_migration_for_plugin(
+            {"name": "marketing", "version": "1.0.0", "tables": [{"name": "marketing_campaign"}]},
+            self.versions_dir,
+        )
+        generate_migration_for_plugin(
+            {"name": "marketing", "version": "1.0.1", "tables": [{"name": "marketing_artefact"}]},
+            self.versions_dir,
+        )
+
+        final = generate_migration_for_plugin(
+            {
+                "name": "marketing",
+                "version": "1.1.0",
+                "tables": [
+                    {"name": "marketing_campaign"},
+                    {"name": "marketing_artefact"},
+                    {"name": "marketing_channel"},
+                ],
+            },
+            self.versions_dir,
+        )
+
+        assert final is not None
+        content = final.read_text()
+        assert content.count("op.create_table(") == 1
+        assert "marketing_channel" in content
+        assert "marketing_campaign" not in content
+        assert "marketing_artefact" not in content
+
+    def test_unchanged_table_set_produces_no_migration(self):
+        manifest = {
+            "name": "marketing",
+            "version": "1.0.0",
+            "tables": [{"name": "marketing_campaign"}, {"name": "marketing_artefact"}],
+        }
+        generate_migration_for_plugin(manifest, self.versions_dir)
+
+        # Calling again for the identical table set — every table it
+        # declares is already created — must be a no-op, not an empty
+        # migration and not a re-creation.
+        result = generate_migration_for_plugin(dict(manifest), self.versions_dir)
+        assert result is None
+        assert len(list(self.versions_dir.glob("*.py"))) == 1
+
+    def test_refuses_rather_than_guesses_when_an_existing_migration_is_unreadable(self):
+        # An existing migration file that isn't valid Python — the
+        # generator cannot know whether it already creates a table this
+        # manifest also declares, so it must refuse rather than risk
+        # recreating (or later dropping) a table it can't see.
+        (self.versions_dir / "0001_broken.py").write_text("def upgrade(:\n    pass\n")
+
+        manifest = {
+            "name": "marketing",
+            "version": "1.0.0",
+            "tables": [{"name": "marketing_campaign"}],
+        }
+        with pytest.raises(ValueError, match="Refusing to generate"):
+            generate_migration_for_plugin(manifest, self.versions_dir)
+
+    def test_refuses_when_create_table_name_is_not_a_literal(self):
+        # A dynamically-computed table name defeats the static scan
+        # entirely — refuse rather than silently treat it as "not already
+        # created" and risk a duplicate/destructive migration later.
+        (self.versions_dir / "0001_dynamic.py").write_text(
+            "TABLE_NAME = 'marketing_campaign'\n"
+            "def upgrade():\n"
+            "    op.create_table(TABLE_NAME)\n"
+            "def downgrade():\n"
+            "    pass\n"
+        )
+
+        manifest = {
+            "name": "marketing",
+            "version": "1.0.0",
+            "tables": [{"name": "marketing_campaign"}],
+        }
+        with pytest.raises(ValueError, match="Refusing to generate"):
+            generate_migration_for_plugin(manifest, self.versions_dir)
+
+
+class TestAlreadyCreatedTables:
+    """Direct tests of the scan `generate_migration_for_plugin` relies on to
+    compute the delta."""
+
+    def setup_method(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.versions_dir = Path(self.tmpdir) / "versions"
+        self.versions_dir.mkdir()
+
+    def teardown_method(self):
+        shutil.rmtree(self.tmpdir)
+
+    def test_empty_versions_dir_has_no_created_tables(self):
+        assert already_created_tables(self.versions_dir) == set()
+
+    def test_finds_tables_across_multiple_files(self):
+        (self.versions_dir / "0001_a.py").write_text(
+            "def upgrade():\n    op.create_table('roles')\n"
+        )
+        (self.versions_dir / "0002_b.py").write_text(
+            "def upgrade():\n    op.create_table('permissions')\n"
+        )
+        assert already_created_tables(self.versions_dir) == {"roles", "permissions"}
+
+    def test_raises_migration_scan_error_on_unparseable_file(self):
+        (self.versions_dir / "0001_broken.py").write_text("def upgrade(:\n")
+        with pytest.raises(MigrationScanError):
+            already_created_tables(self.versions_dir)
+
+    def test_recognises_table_name_passed_as_a_keyword_argument(self):
+        # Alembic's real signature is create_table(table_name, *columns, **kw)
+        # — `table_name` is callable by keyword too, not just positionally.
+        # Checking only the positional args used to silently treat this form
+        # as "no table name" and skip it without raising.
+        (self.versions_dir / "0001_kwarg.py").write_text(
+            "def upgrade():\n    op.create_table(table_name='legacy_widgets')\n"
+        )
+        assert already_created_tables(self.versions_dir) == {"legacy_widgets"}
+
+    def test_raises_on_create_table_call_with_no_determinable_name(self):
+        (self.versions_dir / "0001_no_name.py").write_text(
+            "kwargs = {'table_name': 'x'}\ndef upgrade():\n    op.create_table(**kwargs)\n"
+        )
+        with pytest.raises(MigrationScanError):
+            already_created_tables(self.versions_dir)

@@ -555,6 +555,77 @@ skip() {
   printf '  \033[90m--   %-16s n/a - %s\033[0m\n' "$1" "$2"
 }
 
+# A JS-flavoured `run_check`, for `pnpm run <script>` calls only
+# (biffo-template#1497).
+#
+# ## The defect
+#
+# A fresh worktree (AGENTS.md SS1) has no node_modules until `pnpm install`
+# runs there. `pnpm run format:check` in that state does not fail on the
+# CONTENT of the files -- it fails because prettier itself was never
+# installed: pnpm's recursive runner exits non-zero with
+# `ERR_PNPM_RECURSIVE_EXEC_FIRST_FAIL` / `Command "prettier" not found` /
+# a plain shell `sh: 1: prettier: not found`. Plain `run_check` cannot tell
+# that apart from a real formatting problem -- both are "the command exited
+# non-zero" -- so it landed in FAILED, and the summary then printed
+# `pnpm run format` as the fix: a command that fails IDENTICALLY, because
+# there is still no formatter to run. The files were correctly formatted the
+# whole time.
+#
+# ## Why this is a THIRD state, and why it is INCONCLUSIVE not NOT_RUN
+#
+# #1471 already separated "ran and found a problem" (FAILED) from "could not
+# produce a verdict" (INCONCLUSIVE), for a lane that got killed mid-run. A
+# missing toolchain is the same shape wearing different clothes: the check
+# was applicable and was attempted, but could not execute. It is NOT the
+# NOT_RUN case used elsewhere in this file (terraform/uv/gitleaks absent from
+# the MACHINE) -- NOT_RUN is a considered, low-cost gating decision that
+# still lets the rest of the run stand as a pass with an amber note, because
+# the repo itself is fine and only the auditing machine is short a tool. Here
+# the WORKTREE itself is not ready to be checked, which is the pg-test
+# timeout's shape, not terraform's -- so it exits 2 ("cannot tell", never a
+# pass), the same convention pg-test's own inconclusive case already uses,
+# rather than 0-with-a-warning.
+#
+# ## Why detection is post-hoc pattern matching, not a pre-flight `[ -d
+# node_modules ]` check
+#
+# A pre-flight check was tried first and reverted: several of this repo's own
+# fixtures (this file's own test suite) declare a script like `"lint": "true"`
+# that needs no installed binary at all, and a directory can legitimately
+# have no `node_modules` and still run its scripts successfully (nothing in
+# `have_script` requires one). Refusing to even ATTEMPT the check in that
+# case would be the fail-open shape this whole file exists to eliminate,
+# reported the opposite way round: a check that could have passed, marked
+# inconclusive instead. So the check DOES run, and only a genuine
+# "the binary named in the script is not there" signature in its own output
+# is reclassified -- a real lint/type/format finding still reads as FAILED.
+run_check_js() {
+  name="$1"
+  shift
+  if [ -n "$LIST" ]; then
+    echo "$*"
+    return 0
+  fi
+  start=$(date +%s)
+  if "$@" >"/tmp/biffo-verify.$$" 2>&1; then
+    PASSED="$PASSED $name"
+    LAST_CHECK_SECONDS=$(($(date +%s) - start))
+    printf '  \033[32mOK\033[0m   %-16s %ss\n' "$name" "$LAST_CHECK_SECONDS"
+  elif grep -qE 'ERR_PNPM_RECURSIVE_EXEC_FIRST_FAIL|Command "[^"]*" not found|: not found$|command not found' \
+    "/tmp/biffo-verify.$$"; then
+    INCONCLUSIVE="$INCONCLUSIVE $name"
+    printf '  \033[33mINCONCLUSIVE\033[0m %-16s %ss - dependencies not installed\n' \
+      "$name" "$(($(date +%s) - start))"
+    printf "       \033[33mrun 'pnpm install' in this worktree first (AGENTS.md SS1) -- 'pnpm run format' cannot fix a missing toolchain\033[0m\n"
+  else
+    FAILED="$FAILED $name"
+    printf '  \033[31mFAIL\033[0m %-16s %ss\n' "$name" "$(($(date +%s) - start))"
+    sed 's/^/      /' "/tmp/biffo-verify.$$" | tail -25
+  fi
+  rm -f "/tmp/biffo-verify.$$"
+}
+
 if [ -z "$LIST" ]; then
   # State which template this gate came from. A gate two versions old is the
   # condition that let tabsii-crm print `verify passed` on a 700-line change
@@ -1309,13 +1380,14 @@ if [ -n "$JS_DIRS" ]; then
     # end up fixing the wrong one.
     suffix=""
     [ "$d" != "." ] && suffix="(${d#./})"
+
     for s in lint typecheck format:check test; do
       label="$(printf '%s' "$s" | tr -d ':')$suffix"
       if have_script "$s" "$d"; then
         if [ "$d" = "." ]; then
-          run_check "$label" pnpm run "$s"
+          run_check_js "$label" pnpm run "$s"
         else
-          run_check "$label" pnpm --dir "$d" run "$s"
+          run_check_js "$label" pnpm --dir "$d" run "$s"
         fi
       else
         skip "$label" "no \"$s\" script"

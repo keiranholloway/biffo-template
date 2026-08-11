@@ -1,0 +1,40 @@
+/* Shares the design tokens the rest of the estate uses so a plugin admin panel
+   does not become its own brand blue (the drift @biffo/design-tokens was
+   created to end). */
+@import '@biffo/design-tokens/tokens.css';
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans, system-ui, sans-serif);
+  color: var(--text, #1b1c1f);
+  background: var(--bg, #f7f8fa);
+}
+
+.page {
+  max-width: 60rem;
+  margin: 0 auto;
+  padding: 2rem 1.5rem 4rem;
+}
+
+h1 {
+  font-size: 1.55rem;
+  margin: 0 0 0.35rem;
+}
+
+.muted {
+  color: var(--text-muted, #5b6070);
+  font-size: 0.9rem;
+  margin: 0 0 1.25rem;
+}
+
+.error {
+  background: var(--state-negative-soft, #fdeaea);
+  color: var(--state-negative, #8c2b2b);
+  padding: 0.6rem 0.8rem;
+  border-radius: 6px;
+  font-size: 0.9rem;
+}

@@ -1,3 +1,4 @@
+import { execSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -230,4 +231,44 @@ describe('the real _skeletons/plugin-template', () => {
       }
     }
   })
+
+  // Guards #647/#1492: the shared plugin host HARD-FAILS a deploy if a plugin
+  // declares `admin_ingress` without a built `web-admin/dist`. A file-existence
+  // check is not enough evidence that scaffolding satisfies that gate — three
+  // real plugins each had a `web-admin/` that lint, typecheck and unit tests
+  // all passed on, yet still shipped a broken `base` path invisible to every
+  // one of those (biffo-template#1492). The only check that catches that class
+  // is running the real build and reading what it emitted, so this does.
+  //
+  // Network + toolchain dependent (a real `pnpm install`), so it is slower and
+  // more failure-prone than the rest of this file — skipped outright unless
+  // the real skeleton is present, same guard as the test above, and given a
+  // long timeout for a cold pnpm store.
+  it.runIf(realSkeleton)(
+    "a scaffolded plugin's web-admin actually builds, with assets under its own base path",
+    () => {
+      const dest = join(root, 'buildable')
+      scaffoldPlugin(realSkeleton!, dest, deriveNames('acme-crm'))
+      const webAdmin = join(dest, 'web-admin')
+      expect(
+        existsSync(join(webAdmin, 'package.json')),
+        'no web-admin/package.json scaffolded',
+      ).toBe(true)
+
+      execSync('pnpm install --no-frozen-lockfile', { cwd: webAdmin, stdio: 'pipe' })
+      execSync('pnpm run build', { cwd: webAdmin, stdio: 'pipe' })
+
+      const indexHtml = readFileSync(join(webAdmin, 'dist', 'index.html'), 'utf8')
+      const assetRefs = [...indexHtml.matchAll(/(?:src|href)="([^"]+)"/g)]
+        .map((m) => m[1])
+        .filter((s) => s.includes('/assets/'))
+      expect(assetRefs.length, 'no asset references in the built HTML').toBeGreaterThan(0)
+      for (const ref of assetRefs) {
+        expect(ref.startsWith('/api/v1/plugins/acme-crm/admin/'), `bad asset path: ${ref}`).toBe(
+          true,
+        )
+      }
+    },
+    180_000,
+  )
 })

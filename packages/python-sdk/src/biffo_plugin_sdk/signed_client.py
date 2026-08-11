@@ -48,6 +48,16 @@ PLUGIN_IDENTITY_HEADER = "X-Biffo-Plugin"
 #: plugin running in its own Lambda asserts nothing and is identified by its role.
 acting_as_plugin: ContextVar[str | None] = ContextVar("biffo_acting_as_plugin", default=None)
 
+#: Header a SigV4-signed request carries the calling user's own Cognito token
+#: in, alongside the signature — the "principal" dual-auth pattern (issue
+#: #1490). Must match Core's own ``middleware/forwarded_user.FORWARDED_USER_HEADER``
+#: and the shared plugin host's ``plugin_host.forward.FORWARDED_USER_HEADER``,
+#: which this SDK constant is now the canonical source for: three independent
+#: copies of this exact string (the plugin host, and two hand-rolled plugin
+#: transports) had already drifted apart on where the token is added relative
+#: to signing before this constant existed to keep them in step.
+FORWARDED_USER_HEADER = "X-Biffo-User-Token"
+
 
 class SignedCoreClient(BiffoAPIClient):
     """A ``BiffoAPIClient`` that signs each request with AWS SigV4."""
@@ -158,8 +168,77 @@ class SignedCoreClient(BiffoAPIClient):
     async def put(self, path: str, json: dict[str, Any] | None = None) -> Any:
         return await self._send("PUT", path, json_body=json)
 
+    async def patch(self, path: str, json: dict[str, Any] | None = None) -> Any:
+        return await self._send("PATCH", path, json_body=json)
+
     async def delete(self, path: str) -> Any:
         return await self._send("DELETE", path)
+
+
+class PrincipalCoreClient(SignedCoreClient):
+    """A ``SignedCoreClient`` that also forwards the calling user's own token —
+    the "dual-auth" pattern (issue #1490) a plugin needs to reach Core's
+    per-plugin internal CRUD mount under the *user's* identity rather than only
+    the plugin's own.
+
+    Consolidates three independent implementations of exactly this shape:
+    ``services/_plugin-host/src/plugin_host/app.py::core_sender`` (this repo,
+    the reference — already correct, using ``raw_request``'s
+    ``extra_signed_headers``), and two hand-rolled ``CoreTransport`` subclasses
+    in ``biffo-plugin-idea-scout`` and ``biffo-plugin-ideation`` that instead
+    added the header to the dict ``_sign()`` returned, i.e. **after** signing —
+    outside the SigV4-covered header set. ``biffo-plugin-marketing``'s
+    ``PrincipalCoreClient`` (the name this class borrows) got it right by
+    building on ``raw_request`` directly, the same way the plugin host does.
+
+    The fix is structural, not a call-site discipline: overriding ``_sign``
+    (SignedCoreClient's single signing choke point, also used internally by
+    ``get``/``post``/``put``/``patch``/``delete`` and by ``raw_request``) means
+    every request path this class exposes carries the forwarded token inside
+    the signature automatically — there is no second place a caller could add
+    it after the fact and get it wrong.
+
+    ``user_token`` is bound once per client, matching every existing caller's
+    lifecycle: idea-scout/ideation's ``CoreTransport`` and marketing's
+    ``PrincipalCoreClient`` are both constructed fresh per founder/admin
+    request, never shared across identities.
+    """
+
+    def __init__(
+        self,
+        user_token: str,
+        *,
+        base_url: str | None = None,
+        region: str | None = None,
+        credentials: Any | None = None,
+        service: str = _SERVICE,
+        client: Any | None = None,
+        timeout: float = 30.0,
+    ) -> None:
+        super().__init__(
+            base_url=base_url,
+            region=region,
+            credentials=credentials,
+            service=service,
+            client=client,
+            timeout=timeout,
+        )
+        self._user_token = user_token
+
+    def _sign(
+        self,
+        method: str,
+        url: str,
+        body: bytes | None,
+        extra: dict[str, str] | None = None,
+    ) -> dict[str, str]:
+        # Merged in BEFORE calling the base signer, same as the plugin-identity
+        # header below it: anything the receiver authenticates on must be
+        # covered by the signature, or a man-in-the-middle on the internal hop
+        # could strip or replace it without invalidating SigV4.
+        merged = dict(extra) if extra else {}
+        merged[FORWARDED_USER_HEADER] = self._user_token
+        return super()._sign(method, url, body, merged)
 
 
 _AUTH_MODE_ENV = "BIFFO_CORE_AUTH_MODE"

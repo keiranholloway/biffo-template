@@ -125,6 +125,12 @@ class BiffoAPIClient:
         self._raise_if_error(response)
         return self._parse_json(response)
 
+    async def patch(self, path: str, json: dict[str, Any] | None = None) -> Any:
+        """Issue an authenticated PATCH request and return the parsed JSON body."""
+        response = await self._client.patch(self._url(path), headers=self._headers(), json=json)
+        self._raise_if_error(response)
+        return self._parse_json(response)
+
     async def delete(self, path: str) -> Any:
         """Issue an authenticated DELETE request and return the parsed JSON body."""
         response = await self._client.delete(self._url(path), headers=self._headers())

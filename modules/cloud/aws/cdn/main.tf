@@ -141,6 +141,28 @@ resource "aws_cloudfront_function" "rewrite" {
   code    = file("${path.module}/rewrite.js")
 }
 
+# Viewer-request rewrite for the opt-in `c/*` tracked-link behaviour ONLY —
+# see that ordered_cache_behavior block below for the full defect this fixes
+# (biffo-plugin-marketing#52) and click-rewrite.js's header for the rationale
+# and the security properties it must preserve.
+#
+# A SEPARATE function from aws_cloudfront_function.rewrite above, deliberately:
+# that one's job is Next.js static-export routing (directory->index.html, the
+# RSC self-heal) and must never touch an API request. This one does the
+# opposite — an API path rewrite — and nothing else.
+#
+# count, not an unconditional resource: matches the SAME for_each guard as the
+# `c/*` behaviour itself (var.tracked_link_api_domain), so an instance without
+# tracked links gets no such function created at all, not an inert one sitting
+# unused — the feature stays fully opt-in end to end.
+resource "aws_cloudfront_function" "click_rewrite" {
+  count   = var.tracked_link_api_domain == "" ? 0 : 1
+  name    = "${local.name_prefix}-click-rewrite"
+  runtime = "cloudfront-js-2.0"
+  publish = true
+  code    = file("${path.module}/click-rewrite.js")
+}
+
 resource "aws_cloudfront_origin_access_control" "portal" {
   name                              = "${local.name_prefix}-portal-oac"
   description                       = "OAC for ${local.name_prefix} portal S3 bucket"
@@ -493,8 +515,21 @@ resource "aws_cloudfront_distribution" "portal" {
   # work perfectly and silently undercount — the failure mode that looks like
   # success.
   #
-  # GET/HEAD/OPTIONS only; following a link is a read. No rewrite function, for
-  # the same reason as the two routes above.
+  # GET/HEAD/OPTIONS only; following a link is a read.
+  #
+  # DOES carry a rewrite function — unlike the two routes above, but for a
+  # different reason than either of theirs. CloudFront forwards this
+  # behaviour's viewer path to the `core-api` origin UNCHANGED, so a request
+  # for `/c/<token>` reaches API Gateway asking for exactly `/c/<token>`. The
+  # route the API actually declares is `GET /api/v1/public/c/{token}`
+  # (authorization_type = NONE); `/c/<token>` itself matches nothing and falls
+  # through to API Gateway's $default stage, which requires a Cognito JWT —
+  # every tracked link 401ed instead of redirecting, and never reached the
+  # handler that would answer it correctly (biffo-plugin-marketing#52).
+  # aws_cloudfront_function.click_rewrite fixes exactly that one path prefix
+  # and nothing else; see its own comment and click-rewrite.js's header for
+  # the security properties (constant-404 preserved, no token leakage, no
+  # branching on the token) it must not weaken.
   dynamic "ordered_cache_behavior" {
     for_each = var.tracked_link_api_domain == "" ? {} : { "c/*" = "core-api" }
     content {
@@ -509,6 +544,11 @@ resource "aws_cloudfront_distribution" "portal" {
       # A tracked link is a public URL a crawler can follow; noindex its
       # response so the redirect endpoint itself never lands in an index.
       response_headers_policy_id = local.noindex_policy_id
+
+      function_association {
+        event_type   = "viewer-request"
+        function_arn = one(aws_cloudfront_function.click_rewrite[*].arn)
+      }
     }
   }
 

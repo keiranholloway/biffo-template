@@ -16,6 +16,32 @@ module "cdn" {
 }
 ```
 
+## Tracked links (`c/*`) — the API path contract, and why nothing enforces it automatically
+
+Setting `tracked_link_api_domain` claims `baseurl.com/c/*` and routes it to the
+Core API, but CloudFront forwards the viewer path unchanged — `c/*` is a
+literal prefix match, not a rewrite rule. `aws_cloudfront_function.click_rewrite`
+(`click-rewrite.js`) closes that gap by rewriting `/c/<token>` to exactly
+`/api/v1/public/c/<token>` before the request leaves the edge.
+
+**That literal path is a contract, not a convention.** Any instance that
+enables this feature must implement `GET /api/v1/public/c/{token}` with
+`authorization_type = "NONE"` — if the instance's own Terraform/API declares a
+different path, or forgets the unauthenticated route, tracked links will 401
+or 404 with no error anywhere in this module, because this module has no
+visibility into an instance's routes at all (it lives in `infra/environments/`
+and `services/api/src/api/domains/`, both user-owned, outside `modules/`).
+
+This is precisely the gap biffo-plugin-marketing#52 was filed against: a
+CDN behaviour and an API Gateway route agreeing with neither, previously
+verified separately (Python router vs. Terraform authorization_type) and never
+against each other, only surfacing as a live 401 through a real CloudFront
+request. **No automated check closes this end-to-end** — see that issue and
+biffo-template#1502 for why a template-side test cannot see an instance's
+routes, and what an instance-side guard asserting this literal path would look
+like. Verify a change here against a deployed instance, not a green
+`terraform plan`.
+
 ## Recovering from a stuck OAC/origin-request-policy delete (#543)
 
 **When this applies:** you removed an `aws_cloudfront_origin_access_control` or

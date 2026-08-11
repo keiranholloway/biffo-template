@@ -68,20 +68,43 @@ resource "aws_cognito_user_pool" "main" {
   # Email verification
   auto_verified_attributes = ["email"]
 
-  # Password-reset / verification code email. Cognito sends these as HTML, so the
-  # code sits on its own labelled line inside <code>/<b> with whitespace around it
-  # — a founder must never have to guess whether an adjacent character (a stray
-  # leading ".", a client's punctuation) is part of the code (issue #350). Only
-  # {####} is supported here (no {username}); the copy names the action instead of
-  # threading a portal URL through, pairing with the self-service reset flow (#338).
+  # The one-time code email. Cognito sends these as HTML, so the code sits on its
+  # own labelled line inside <code>/<b> with whitespace around it — nobody should
+  # have to guess whether an adjacent character (a stray leading ".", a client's
+  # punctuation) is part of the code (issue #350). Only {####} is supported here
+  # (no {username}).
+  #
+  # ## This ONE template serves several different flows, so it must not name one
+  #
+  # Cognito uses `verification_message_template` for sign-up confirmation,
+  # attribute verification AND forgot-password. There is no way to vary the copy
+  # per flow without a `CustomMessage` Lambda trigger switching on
+  # `triggerSource`, and none is configured.
+  #
+  # It previously read "Here is your <project> password-reset code […] open your
+  # <project> admin portal, choose Forgot password?" — written for #338, when the
+  # only flow was a founder resetting their own password. The marketplace has
+  # since added PUBLIC self-service buyer sign-up on this same pool, so a member
+  # of the public registering an account was told to open an admin portal they
+  # have no access to and complete a reset they never started. Reported from a
+  # real registration on 2026-08-11.
+  #
+  # So the copy names the CODE and not the journey. It is deliberately true of
+  # every flow that can send it, which is the only thing one shared template can
+  # be. Per-flow wording needs the CustomMessage trigger — a bigger change, and
+  # the right one if this is ever worth doing properly.
+  #
+  # The closing line is not filler: an unsolicited code email should say what to
+  # do about it, and someone who did not ask for one has been told something.
   verification_message_template {
     default_email_option = "CONFIRM_WITH_CODE"
-    email_subject        = "Your ${var.project_name} password-reset code"
+    email_subject        = "Your ${var.project_name} verification code"
     email_message        = <<-EOT
-      Here is your ${var.project_name} password-reset code.<br><br>
-      Password-reset code:<br>
+      Here is your ${var.project_name} verification code.<br><br>
+      Verification code:<br>
       <b><code>{####}</code></b><br><br>
-      To finish resetting your password, open your ${var.project_name} admin portal, choose <b>Forgot password?</b>, and enter your username together with this code. The code is only the characters shown on the line above, and it expires shortly.
+      Enter this code on the page that asked for it. The code is only the characters shown on the line above, and it expires shortly.<br><br>
+      If you did not request this code, you can safely ignore this email — nothing has changed on your account.
     EOT
   }
 

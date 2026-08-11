@@ -157,6 +157,14 @@ function existingWorkspaceSources(text: string): Set<string> {
  * mutating that plugin's vendored tree wholesale (copying files, running `uv`),
  * so a second concurrent writer to the same path is outside what any locking
  * here could make safe.
+ *
+ * This finding was open as alert #21 with the `// codeql[js/file-system-race]`
+ * comment sitting directly below it and doing nothing — see biffo-template#1491.
+ * A code comment does not change CodeQL's own verdict; nothing here reads it.
+ * Dismissed by hand ("won't fix") with this reasoning recorded as the
+ * dismissal comment instead. If the code changes enough to re-trigger the
+ * finding, it reopens as a new alert and needs dismissing again — that is the
+ * check working, not a regression.
  */
 export function ensureWorkspaceSources(
   pluginPyprojectPath: string,
@@ -185,8 +193,7 @@ export function ensureWorkspaceSources(
       '[tool.uv.sources]\n' +
       `${lines.join('\n')}\n`
   }
-  // codeql[js/file-system-race] — see the block comment above: this is a
-  // read-modify-write, not an overwrite guard, so there is no check to race.
+  // Read-modify-write, not an overwrite guard — see the block comment above.
   writeFileSync(pluginPyprojectPath, updated)
   return toAdd
 }

@@ -226,6 +226,15 @@ jobs:
       - name: Pipe-trap guard
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: sh scripts/biffo.sh check pipe-trap
+      # A `// codeql[query-id]` comment does not suppress anything in this
+      # repo's CodeQL setup — no paths-ignore/query-filter reads it, so alert
+      # #21 stayed open directly under one for a while before anyone noticed
+      # (#1491). Real suppression is a dismissed alert with a recorded reason,
+      # or a config exclusion; a source comment claiming otherwise is worse
+      # than no comment.
+      - name: CodeQL-suppression-comment guard
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: sh scripts/biffo.sh check codeql-suppression
       # A fix this repo made for itself (a hardcoded runner, the paid/broken
       # gitleaks action, an unhardened dependency audit, a hard-coded app
       # title) that never reached the scaffolding trees it hands out —

@@ -191,6 +191,13 @@ export const GUARD_AUTHORITY_INVENTORY: GuardAuthorityRecord[] = [
     note: 'shell-script AST-adjacent pattern check on shell scripts themselves — one document',
   },
   {
+    id: 'codeql-suppression-guard',
+    path: 'cli/src/lib/codeql-suppression-guard.ts',
+    inClass: false,
+    disagreementTest: null,
+    note: 'not a two-document disagreement (#1362) — it is a comment claiming a mechanism (CodeQL suppression) that this repo has no config wiring to implement at all; there is no second document to disagree with, only a claim with nothing behind it (#1491)',
+  },
+  {
     id: 'plugin-collision-guard',
     path: 'cli/src/lib/plugin-collision-guard.ts',
     inClass: false,

@@ -1,6 +1,7 @@
 import { Command } from 'commander'
 import { runAdrNumberingCheck } from '../scripts/check-adr-numbering.js'
 import { runBranchProtectionCheck } from '../scripts/check-branch-protection.js'
+import { runCodeqlSuppressionCheck } from '../scripts/check-codeql-suppression.js'
 import { runCognitoInviteTemplateCheck } from '../scripts/check-cognito-invite-template.js'
 import { runCoreDirectPathsCheck } from '../scripts/check-core-direct-paths.js'
 import { runOwnershipCheck } from '../scripts/check-core-ownership.js'
@@ -38,7 +39,8 @@ import { runTerraformInputCheck } from '../scripts/check-terraform-input.js'
 export const checkCommand = new Command('check').description(
   'Repo guards (ownership, release subject, plugin terraform, plugin collisions, ' +
     'eventbridge-log-permissions, plugin-tool-supply, core-direct-paths, ' +
-    'cognito-invite-template, lambda-output, pipe-trap, skeleton-drift, terraform-input) ' +
+    'cognito-invite-template, lambda-output, pipe-trap, codeql-suppression, skeleton-drift, ' +
+    'terraform-input) ' +
     'run in CI and git hooks, plus out-of-band audits (branch protection)',
 )
 
@@ -163,6 +165,16 @@ checkCommand
   )
   .action(async () => {
     await runPipeTrapCheck()
+  })
+
+checkCommand
+  .command('codeql-suppression')
+  .description(
+    'Refuse a `// codeql[query-id]` comment anywhere in cli/src (#1491) — it does not ' +
+      "suppress anything in this repo's CodeQL setup; alert #21 stayed open under one",
+  )
+  .action(async () => {
+    await runCodeqlSuppressionCheck()
   })
 
 checkCommand

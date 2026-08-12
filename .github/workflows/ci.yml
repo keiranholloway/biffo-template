@@ -255,6 +255,19 @@ jobs:
       - name: Terraform-input guard
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: sh scripts/biffo.sh check terraform-input
+      # The ADR-0009 service-principal allowlist glob no longer matching the
+      # IAM role name modules/cloud/aws/compute + modules/plugins/_template
+      # actually build — terraform validate is silent on this by design (the
+      # allowlist never references either naming module), so a rename in
+      # either would leave every plugin call rejected with no signal before a
+      # real deploy hits it (#266). tabsii-platform#863 is this exact failure
+      # shape already reaching production, via a hand-maintained allowlist
+      # array that simply omitted the plugin host. Shipped with #266,
+      # exercised only by its own .test.ts until #1519's widened guard
+      # enumeration surfaced it as unwired (#1545) and this pass wired it here.
+      - name: Plugin-allowlist convention guard
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: sh scripts/biffo.sh check plugin-allowlist-convention
 
   python:
     name: Python (lint, types, test, security)

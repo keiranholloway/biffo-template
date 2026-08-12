@@ -57,4 +57,31 @@ describe('cdn API error-status restore (viewer-response) — biffo-template#1529
     // replacing the API's real payload.
     expect(source).not.toMatch(/response\.body\s*=/)
   })
+
+  it('never reads event.request — this behaviour is also attached to c/*, and the issue this fixes (biffo-template#1529) names a hard constraint: two different tracked-link tokens must keep producing indistinguishable 404s', () => {
+    // Mirrors the identical assertion in
+    // cdn-error-status-demote-function.test.ts for the other half of the
+    // pair. This function only sees `event.response` in production (a
+    // CloudFront Functions viewer-response event has no `request` key at
+    // all), but assert the source never reaches for one anyway — a future
+    // edit that tries to read the tracked-link token here to "help" would
+    // silently reintroduce the exact hazard this pair was built to avoid.
+    expect(source).not.toMatch(/event\.request\b/)
+  })
+
+  it('produces an identical restoration for two responses that differ only in an (irrelevant) accompanying request', () => {
+    // Belt-and-braces alongside the source-shape assertion above: construct
+    // the handler call with an extra `request` field present — as if a
+    // future CloudFront runtime started passing one — and confirm two
+    // different tracked-link tokens still produce byte-identical output.
+    function runWithRequest(uri: string): CfResponse {
+      return handler!({
+        request: { uri, method: 'GET', headers: {} },
+        response: { statusCode: 200, headers: { 'x-biffo-true-status': { value: '404' } } },
+      } as unknown as { response: CfResponse })
+    }
+    const unknown = runWithRequest('/c/unknown-token-aaaa')
+    const expired = runWithRequest('/c/expired-token-bbbb')
+    expect(unknown).toEqual(expired)
+  })
 })

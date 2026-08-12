@@ -73,4 +73,46 @@ describe('cdn API error-status demote (Lambda@Edge origin-response) — biffo-te
     // whatever the API actually returned).
     expect(source).not.toMatch(/response\.body\s*=/)
   })
+
+  it('never reads event.Records[0].cf.request — this behaviour is also attached to c/*, and the issue this fixes (biffo-template#1529) names a hard constraint: two different tracked-link tokens must keep producing indistinguishable 404s', () => {
+    // The constant-404 property (marketing#1, marketing#52) held before this
+    // fix only because every 403/404 arrived as the same HTML shell. After
+    // this fix it must hold because the API handler returns the same body
+    // for both — not by accident of this function ignoring the URI today. A
+    // future edit that starts branching on the request (token, path, query
+    // string) to "improve" the demotion would quietly break that guarantee,
+    // and nothing else in this repo would catch it: this function has no
+    // origin visibility into what the token means, so it must never look.
+    expect(source).not.toMatch(/\.request\b/)
+  })
+
+  it('produces an identical demotion for two requests that differ only in their tracked-link token', async () => {
+    // Belt-and-braces alongside the source-shape assertion above: even
+    // without inspecting the source, run the actual handler against two
+    // events that differ only in the (irrelevant, and in real Lambda@Edge
+    // origin-response events, present) request URI, and confirm the output
+    // is byte-for-value identical. `run()` above never sets `cf.request` at
+    // all; this constructs the fuller event shape by hand to prove the
+    // handler doesn't need it and doesn't notice its absence or its value.
+    function runWithRequest(uri: string): Promise<CfEdgeResponse> {
+      return new Promise((resolve, reject) => {
+        const event = {
+          Records: [
+            {
+              cf: {
+                request: { uri, method: 'GET', headers: {} },
+                response: { status: '404', headers: {} },
+              },
+            },
+          ],
+        }
+        handler!(event, {}, (err, response) => (err ? reject(err) : resolve(response)))
+      })
+    }
+    const [unknown, expired] = await Promise.all([
+      runWithRequest('/c/unknown-token-aaaa'),
+      runWithRequest('/c/expired-token-bbbb'),
+    ])
+    expect(unknown).toEqual(expired)
+  })
 })

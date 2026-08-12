@@ -43,7 +43,7 @@ import { makeTmpDir } from '../test-utils/tmp.js'
  * specifiers, and ask whether a guard module is reachable from the set of
  * `cli/src/commands/*.ts` entrypoints.
  *
- * ## Baseline: `plugin-allowlist-convention.ts`, since #1519
+ * ## Baseline: empty, since #1545
  *
  * `cognito-invite-template-guard.ts`, `lambda-output-guard.ts`,
  * `pipe-trap-guard.ts`, `skeleton-drift-guard.ts` and
@@ -61,19 +61,21 @@ import { makeTmpDir } from '../test-utils/tmp.js'
  * `cli/src/commands/check.ts` entry and a `.github/workflows/ci.yml` step
  * (biffo-template#1363).
  *
- * `discoverGuardFiles` now enumerates via `guard-candidates.ts` (#1519),
- * which finds guards the old `/-(audit|guard)\.ts$/` regex could not —
- * including `plugin-allowlist-convention.ts`, one of the five files #1518's
- * sweep spotted and never classified. It IS in class here too: nothing
- * reaches it from `cli/src/commands/` and no workflow names it, the same
- * shape as the five above — its own `.test.ts` calls `checkAllowlistConvention`
- * directly against this repo's real root, which is real (if different)
- * wiring, not zero wiring. Per #1519's own instruction not to silence a
- * newly-admitted failure OR redden CI on pre-existing residue, it is
- * baselined here rather than either — visible, printed, and the baseline
- * only shrinks. Wiring it a `cli/src/commands/check.ts` entry and a CI step
- * (the same fix the previous five got, #1363) is real follow-up work, out of
- * #1519's own scope (a discovery fix, not a wiring fix).
+ * `discoverGuardFiles` was widened to enumerate via `guard-candidates.ts`
+ * (#1519), which finds guards the old `/-(audit|guard)\.ts$/` regex could
+ * not — including `plugin-allowlist-convention.ts`, one of the five files
+ * #1518's sweep spotted and never classified. #1519 baselined it into
+ * `PRE_EXISTING_UNWIRED` rather than silencing the newly-admitted failure or
+ * reddening CI on day-one residue: its own `.test.ts` called
+ * `checkAllowlistConvention` directly against this repo's real root, which
+ * was real (if different) wiring, not zero wiring, but it still had no
+ * `cli/src/commands/` entry and no workflow step — the ADR-0009
+ * service-principal allowlist convention (tabsii-platform#863 is this exact
+ * failure shape already reaching production) went unchecked anywhere except
+ * its own unit test. #1545 gave it a `cli/src/commands/check.ts` entry
+ * (`check plugin-allowlist-convention`) and a `.github/workflows/ci.yml`
+ * step, the same fix the previous five got (#1363), so the baseline is empty
+ * again.
  */
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -151,7 +153,7 @@ function workflowStepText(dir: string): string {
   return files.map((f) => readFileSync(join(dir, f), 'utf8')).join('\n')
 }
 
-const PRE_EXISTING_UNWIRED = new Set<string>(['plugin-allowlist-convention.ts'])
+const PRE_EXISTING_UNWIRED = new Set<string>([])
 
 describe('guard wiring sweep (#1413): every discovered guard must have a caller', () => {
   it('discovers at least one real guard file — a sweep that finds none is not sweeping', () => {

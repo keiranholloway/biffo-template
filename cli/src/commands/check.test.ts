@@ -36,6 +36,7 @@ describe('biffo check', () => {
     'lambda-output',
     'ownership',
     'pipe-trap',
+    'plugin-allowlist-convention',
     'plugin-collisions',
     'plugin-terraform',
     'plugin-tool-supply',

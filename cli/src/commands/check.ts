@@ -8,6 +8,7 @@ import { runOwnershipCheck } from '../scripts/check-core-ownership.js'
 import { runEventBridgeLogPermissionCheck } from '../scripts/check-eventbridge-log-permissions.js'
 import { runLambdaOutputCheck } from '../scripts/check-lambda-output.js'
 import { runPipeTrapCheck } from '../scripts/check-pipe-trap.js'
+import { runPluginAllowlistConventionCheck } from '../scripts/check-plugin-allowlist-convention.js'
 import { runPluginCollisionCheck } from '../scripts/check-plugin-collisions.js'
 import { runPluginTerraformCheck } from '../scripts/check-plugin-terraform.js'
 import { runPluginToolSupplyCheck } from '../scripts/check-plugin-tool-supply.js'
@@ -40,7 +41,7 @@ export const checkCommand = new Command('check').description(
   'Repo guards (ownership, release subject, plugin terraform, plugin collisions, ' +
     'eventbridge-log-permissions, plugin-tool-supply, core-direct-paths, ' +
     'cognito-invite-template, lambda-output, pipe-trap, codeql-suppression, skeleton-drift, ' +
-    'terraform-input) ' +
+    'terraform-input, plugin-allowlist-convention) ' +
     'run in CI and git hooks, plus out-of-band audits (branch protection)',
 )
 
@@ -77,6 +78,21 @@ checkCommand
   .description('Verify every template-owned plugin declaring infra ships a Terraform module')
   .action(async () => {
     await runPluginTerraformCheck()
+  })
+
+checkCommand
+  .command('plugin-allowlist-convention')
+  .description(
+    'Refuse the ADR-0009 service-principal allowlist glob drifting from the IAM role name ' +
+      'modules/cloud/aws/compute + modules/plugins/_template actually build (#266) — ' +
+      'terraform validate is silent on this because the allowlist never references either ' +
+      'naming module by design, so a rename would leave every plugin call rejected with no ' +
+      'signal before a real deploy hits it. tabsii-platform#863 is this exact failure shape ' +
+      'already reaching production, via a hand-maintained allowlist that simply omitted the ' +
+      'plugin host.',
+  )
+  .action(async () => {
+    await runPluginAllowlistConventionCheck()
   })
 
 checkCommand

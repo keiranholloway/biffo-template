@@ -59,3 +59,49 @@ describe('portal auth — runtime identity resolution (#403)', () => {
     await expect(signIn('u', 'p')).rejects.toThrow(/identity is unavailable/i)
   })
 })
+
+// biffo-plugin-marketing#55: the plugin skeleton's copy of this module memoised
+// the SETTLED pool value, so concurrent callers before the first resolution
+// each ran an independent resolution. The portal's own copy already memoised
+// the in-flight promise (no concurrency bug here) but shared the other half of
+// the defect: a rejection was cached forever with no retry. Both properties are
+// pinned here so neither regresses.
+describe('pool resolution memoisation (biffo-plugin-marketing#55)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('resolves the pool exactly once when two callers race before it settles', async () => {
+    let resolveIdentity!: (value: { userPoolId: string; clientId: string }) => void
+    resolveCoreIdentity.mockReturnValue(
+      new Promise((resolve) => {
+        resolveIdentity = resolve
+      }),
+    )
+    const { getCurrentSession } = await loadAuth()
+    getCurrentUser.mockReturnValue(null)
+
+    const first = getCurrentSession()
+    const second = getCurrentSession()
+
+    resolveIdentity({ userPoolId: 'doc-pool', clientId: 'doc-client' })
+
+    await Promise.all([first, second])
+
+    expect(poolConstructor).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not cache a rejection — a later call gets a fresh attempt', async () => {
+    resolveCoreIdentity.mockResolvedValue({ userPoolId: 'doc-pool', clientId: 'doc-client' })
+    poolConstructor.mockImplementationOnce(() => {
+      throw new Error('transient pool construction failure')
+    })
+    const { getCurrentSession } = await loadAuth()
+    getCurrentUser.mockReturnValue(null)
+
+    await expect(getCurrentSession()).rejects.toThrow('transient pool construction failure')
+
+    await expect(getCurrentSession()).resolves.toBeNull()
+    expect(poolConstructor).toHaveBeenCalledTimes(2)
+  })
+})

@@ -53,26 +53,37 @@ import { resolveCoreIdentity } from './identity'
 // The pool itself is memoised: resolveCoreIdentity() is memoised too, but the
 // CognitoUserPool wrapper is built here exactly once so repeated session reads
 // reuse one instance (and its localStorage view of the shared session).
-let userPool: CognitoUserPool | null = null
+//
+// Memoises the IN-FLIGHT promise, not the settled value (biffo-plugin-marketing#55).
+// `poolPromise ??=` assigns synchronously, before the first `await` inside the IIFE
+// runs, so every caller that arrives before the first resolution completes shares
+// that SAME promise instead of each re-running resolveCoreIdentity() and
+// pruneForeignCognitoCredentials()'s localStorage scan-and-delete independently.
+// A rejection clears the memo (`.catch` below) so one transient failure does not
+// poison every later call for the rest of the page's life.
+let poolPromise: Promise<CognitoUserPool | null> | null = null
 
-async function getUserPool(): Promise<CognitoUserPool | null> {
-  if (userPool) return userPool
+function getUserPool(): Promise<CognitoUserPool | null> {
+  poolPromise ??= (async () => {
+    const identity = await resolveCoreIdentity()
+    if (!identity) return null
 
-  const identity = await resolveCoreIdentity()
-  if (!identity) return null
+    // Once per page load, and only with a resolved client id: drop credentials
+    // left behind by pools this deployment no longer uses (biffo-template#834).
+    // Cheap, and it keeps the shared origin from accumulating dead tokens for
+    // every pool the portal has ever pointed at.
+    pruneForeignCognitoCredentials(identity.clientId)
 
-  // Once per page load, and only with a resolved client id: drop credentials
-  // left behind by pools this deployment no longer uses (biffo-template#834).
-  // Cheap, and it keeps the shared origin from accumulating dead tokens for
-  // every pool the portal has ever pointed at.
-  pruneForeignCognitoCredentials(identity.clientId)
-
-  const poolData: ICognitoUserPoolData = {
-    UserPoolId: identity.userPoolId,
-    ClientId: identity.clientId,
-  }
-  userPool = new CognitoUserPool(poolData)
-  return userPool
+    const poolData: ICognitoUserPoolData = {
+      UserPoolId: identity.userPoolId,
+      ClientId: identity.clientId,
+    }
+    return new CognitoUserPool(poolData)
+  })().catch((err: unknown) => {
+    poolPromise = null
+    throw err
+  })
+  return poolPromise
 }
 
 /**

@@ -33,6 +33,15 @@ module "plugin_host" {
     BIFFO_COGNITO_REGION       = var.aws_region
     BIFFO_CORE_API_URL         = module.api_gateway.api_endpoint
     BIFFO_PLUGINS_ROOT         = "/var/task/services"
+    # Plugin object storage (ADR-0021, #1437) — a core key, not instance
+    # config, so it lives in this second merge() argument alongside the
+    # others rather than in plugin_host_environment. admin_ingress apps run
+    # ON THIS FUNCTION, not the plugin's own Lambda, so without this the host
+    # has no bucket to sign against no matter what plugin-storage.core.tf
+    # grants its role. Bucket name rather than ARN, matching Core's own copy
+    # of this key in main.tf: every boto3 call takes a name, and deriving one
+    # from the other in code is a second place to get it wrong.
+    BIFFO_PLUGIN_MEDIA_BUCKET = module.storage.plugin_media_bucket_name
   })
 
   tags = local.tags

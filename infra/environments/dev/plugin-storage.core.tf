@@ -52,3 +52,35 @@ resource "aws_iam_role_policy" "core_api_plugin_media" {
     ]
   })
 }
+
+# The SAME capability, on a SECOND role. `api.plugin_storage` (the module the
+# guard test above reads `KEY_ROOT` from) is importable from anywhere Core's
+# code is importable — and a plugin's `admin_ingress` app runs on the shared
+# plugin host (ADR-0021), a different Lambda with its own role, not on Core.
+# Generating and storing media from admin_ingress therefore needs this grant
+# independently of Core's: the two roles are never assumed together, so one
+# holding the permission proves nothing about the other.
+#
+# Same action list and same prefix as core_api_plugin_media above, for the
+# same reasons given there (PutObject for the presigned POST, GetObject for
+# the presigned GET and to cover HeadObject, scoped to plugins/* rather than
+# the bucket) — this grant does not restate them, it just needs them too.
+resource "aws_iam_role_policy" "plugin_host_plugin_media" {
+  name = "plugin-media-access"
+  role = module.plugin_host.role_name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "PluginMediaObjects"
+        Effect = "Allow"
+        Action = [
+          "s3:PutObject",
+          "s3:GetObject",
+        ]
+        Resource = ["${module.storage.plugin_media_bucket_arn}/plugins/*"]
+      },
+    ]
+  })
+}

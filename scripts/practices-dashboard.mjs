@@ -24,6 +24,7 @@
 import { readdirSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { daysSince, readSessions, summariseSessions } from './practices-session.mjs'
+import { RACE_THRESHOLD_MINUTES } from './practices-metrics.mjs'
 
 /** SRE practice caps toil at 50%. Above that, maintenance is eating delivery. */
 export const TOIL_BUDGET = 50
@@ -517,13 +518,30 @@ export function renderDashboard(snapshot, sessions = null, definitionBreak = nul
   // historical comparability, so its own cell cannot show the corrected
   // figure without becoming a different metric — the exclusion counts and
   // `racedShareEligible` go in the tooltip instead of being silently absent.
+  //
+  // A second, separate caveat joins it (also #1419, the follow-up
+  // investigation): the threshold behind `racedShare` is an ABSOLUTE
+  // `RACE_THRESHOLD_MINUTES`, not normalised to this repo's own CI speed. A
+  // repo on slower runner capacity clears that threshold on pipeline latency
+  // alone — measured live 2026-08-12, `tabsii-platform` on self-hosted spot
+  // runners has a median green-to-merge lag (14.7min) that already exceeds
+  // the threshold, and its `racedShare` tracks `repushRate` far more than it
+  // tracks `strict`. So the cell is never read alone: this repo's own
+  // `greenToMergeP50Minutes` says whether the share is inflated by pipeline
+  // speed, and `staleMergeShare` (next column) is the metric that actually
+  // detects contention against a moving `dev` — the two can and do disagree.
   const racedTitle = (c) => {
     if (!c) return ''
     const noGreen = c.racedExcludedNoGreenRun ?? 0
     const beforeGreen = c.racedExcludedMergedBeforeGreen ?? 0
     const eligible = c.racedEligible ?? 0
     const eligibleShare = fmt(c.racedShareEligible, '%')
-    return `racedShare excludes ${noGreen + beforeGreen} of ${c.prsMeasured ?? 0} measured PRs that could never race (no green run: ${noGreen}, merged before any run completed: ${beforeGreen}). Over the ${eligible} eligible PRs, racedShareEligible is ${eligibleShare}.`
+    const p50 = c.greenToMergeP50Minutes
+    const p50Note =
+      p50 === null || p50 === undefined
+        ? 'this repo has no green-to-merge lag measured this window.'
+        : `this repo's own median green-to-merge lag is ${fmt(p50, ' min')} against the fixed ${RACE_THRESHOLD_MINUTES}min threshold${p50 > RACE_THRESHOLD_MINUTES ? ' — already over it before any repush is counted, so CI/runner speed alone can explain part of the share' : ''}. Compare staleMergeShare (next column) for whether dev actually moved underneath — the two can disagree.`
+    return `racedShare excludes ${noGreen + beforeGreen} of ${c.prsMeasured ?? 0} measured PRs that could never race (no green run: ${noGreen}, merged before any run completed: ${beforeGreen}). Over the ${eligible} eligible PRs, racedShareEligible is ${eligibleShare}. Not a portable defect rate across repos: ${p50Note}`
   }
 
   const rows = repos
@@ -632,7 +650,7 @@ export function renderDashboard(snapshot, sessions = null, definitionBreak = nul
       <thead>
         <tr>
           <th>Repository</th><th>24h</th><th>PRs 90d</th><th>CI fail</th>
-          <th>Repush</th><th title="Share of measured PRs green-then-repushed past the wait threshold. Deflated by construction (#1419): PRs with no green run, or merged before any run completed, are structurally excluded from the numerator but stay in the denominator. Hover a value to see this repo's exclusion counts and the corrected racedShareEligible.">Raced</th>
+          <th>Repush</th><th title="Share of measured PRs green-then-repushed past the wait threshold. Deflated by construction (#1419): PRs with no green run, or merged before any run completed, are structurally excluded from the numerator but stay in the denominator. Also NOT a portable cross-repo defect rate (#1419 follow-up): the threshold is absolute, not normalised to this repo's own CI speed, so a repo on slower runner capacity clears it on latency alone. Hover a value for this repo's exclusion counts, racedShareEligible, and its own green-to-merge lag against the threshold.">Raced</th>
           <th title="Merges whose base moved between the last green run and the merge, so the landed combination was never tested. Exposure, not damage — deliberately uncoloured: a high number is the risk window H3 accepted, not an incident count.">Stale</th>
           <th>Green wait</th><th>Toil</th><th>Rework lag</th>
         </tr>

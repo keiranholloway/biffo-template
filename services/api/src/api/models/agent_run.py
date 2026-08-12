@@ -149,6 +149,16 @@ class AgentRun(TenantScopedModel):
     result: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # The `:online` grounding citations the runtime reported (issue #1528) — a
+    # fact about the run, not an inference from `messages`/`result`. Nullable,
+    # and NOT the same as an empty list: `NULL` means "this run predates the
+    # fix and was never asked", `[]` means "asked, and the model's completion
+    # carried no citations" — a genuinely distinguishable outcome only since
+    # this column exists. Never backfilled, same posture as `caller_plugin`:
+    # there is no correct value to invent for a run whose provider response is
+    # long gone.
+    annotations: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)
+
     # A preview run: executed identically, but nothing downstream may react to it
     # (issue #726). The whole side-effect surface hangs off `agent.run.completed`
     # — the orchestrator is its only subscriber, and is what fires write-backs and

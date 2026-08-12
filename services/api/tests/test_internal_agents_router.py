@@ -239,6 +239,67 @@ def test_complete_records_outcome_and_accounting(client):
     assert body["completed_at"] is not None
 
 
+def test_complete_records_online_citations_as_a_fact_about_the_run(client):
+    """Issue #1528: the runtime's `:online` grounding citations, once carried
+    through the loop, must land on the persisted run — not just in `result`,
+    which is unstructured and shaped differently depending on how the run
+    finished."""
+    run_id = _create(client).json()["id"]
+
+    resp = client.post(
+        f"{_RUNS}/{run_id}/complete",
+        json={
+            "status": "completed",
+            "result": {"output": "Based on the sources...", "turns": 1},
+            "annotations": [
+                {"type": "url_citation", "url": "https://a.example/1", "title": "A"},
+                {"type": "url_citation", "url": "https://b.example/2", "title": "B"},
+            ],
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["annotations"] == [
+        {"type": "url_citation", "url": "https://a.example/1", "title": "A"},
+        {"type": "url_citation", "url": "https://b.example/2", "title": "B"},
+    ]
+    # Persisted, not just echoed — a fresh read of the run carries it too.
+    assert client.get(f"{_RUNS}/{run_id}").json()["annotations"] == body["annotations"]
+
+
+def test_a_genuine_zero_citation_online_run_is_recorded_as_an_empty_list(client):
+    """The whole point of the issue: a run that WAS asked `:online` and found
+    nothing must read differently from one that never carried the field at
+    all (see the model column's docstring). `[]` is that fact."""
+    run_id = _create(client).json()["id"]
+
+    resp = client.post(
+        f"{_RUNS}/{run_id}/complete",
+        json={"status": "completed", "result": {"output": "no results found"}, "annotations": []},
+    )
+
+    body = resp.json()
+    assert body["annotations"] == []
+    assert body["annotations"] is not None
+
+
+def test_completing_without_annotations_leaves_it_none(client):
+    """A runtime build that predates this fix (or a run whose model was never
+    `:online`) omits the field entirely — additive, so this must keep working
+    exactly as it did before issue #1528, with `annotations` reading `None`
+    rather than being coerced to `[]`."""
+    run_id = _create(client).json()["id"]
+
+    resp = client.post(
+        f"{_RUNS}/{run_id}/complete",
+        json={"status": "completed", "result": {"output": "done"}},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["annotations"] is None
+
+
 def test_complete_emits_with_status_and_no_result(client, publisher):
     run_id = _create(client).json()["id"]
     publisher.events.clear()

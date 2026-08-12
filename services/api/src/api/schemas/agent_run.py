@@ -97,6 +97,11 @@ class AgentRunResponse(BiffoBaseSchema):
     input_tokens: int | None = None
     output_tokens: int | None = None
     cost_usd: float | None = None
+    #: The runtime's `:online` grounding citations (issue #1528) — `None` for a
+    #: run that predates the column or was never `:online`, `[]` for one that
+    #: was and found nothing to cite. Defaulted so a caller reading an older
+    #: response shape still parses.
+    annotations: list[dict[str, Any]] | None = None
     started_at: datetime | None = None
     completed_at: datetime | None = None
 
@@ -164,3 +169,8 @@ class CompleteAgentRunRequest(BaseModel):
     input_tokens: int | None = Field(default=None, ge=0)
     output_tokens: int | None = Field(default=None, ge=0)
     cost_usd: float | None = Field(default=None, ge=0)
+    #: The `:online` grounding citations the runtime collected across the run's
+    #: turns (issue #1528). Optional and defaulted to `None` so a runtime build
+    #: that predates this field still completes a run exactly as before —
+    #: additive, not required.
+    annotations: list[dict[str, Any]] | None = Field(default=None)

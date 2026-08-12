@@ -628,6 +628,7 @@ async def complete_run(
     input_tokens: int | None = None,
     output_tokens: int | None = None,
     cost_usd: float | None = None,
+    annotations: list[Any] | None = None,
 ) -> AgentRun | None:
     """Move a run to its terminal state, recording transcript, result and cost.
 
@@ -652,6 +653,10 @@ async def complete_run(
     run.input_tokens = input_tokens
     run.output_tokens = output_tokens
     run.cost_usd = cost_usd
+    # `annotations` stays `None` when the runtime omits it (an older build, or a
+    # non-`:online` run) rather than being coerced to `[]` — the model column's
+    # docstring is explicit that the two must read differently (issue #1528).
+    run.annotations = annotations
     run.completed_at = datetime.now(UTC)
     await db.flush()
     # onupdate/server_default columns (updated_at) are expired after the flush;

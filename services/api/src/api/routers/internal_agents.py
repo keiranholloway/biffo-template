@@ -376,6 +376,7 @@ async def complete_agent_run(
             input_tokens=body.input_tokens,
             output_tokens=body.output_tokens,
             cost_usd=body.cost_usd,
+            annotations=body.annotations,
         )
     except RunAlreadyTerminalError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc

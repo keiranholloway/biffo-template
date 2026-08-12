@@ -90,6 +90,35 @@ class ToolCall:
 
 
 @dataclass(frozen=True)
+class Annotation:
+    """One grounding citation OpenRouter attached to a completion (``:online``).
+
+    Carries only ``type`` and the ``url_citation`` object's ``url``/``title`` —
+    deliberately less than the provider sends. OpenRouter's ``url_citation`` also
+    carries ``content``: a raw excerpt of the page it fetched. That is
+    third-party content in exactly the sense a tool result is (see the module
+    docstring of ``messages.py``) — arbitrary, attacker-reachable text, here
+    scraped from the open web on the model's behalf — but unlike a tool result it
+    has no fencing path back to a model, because nothing here re-feeds it into
+    the message array a turn replays. Rather than persist an unbounded, unfenced
+    blob on the run record against the chance some future caller reads it into a
+    prompt unguarded, it is dropped at this boundary. A citation's URL and title
+    are enough to answer "was this run grounded, and in what" — issue #1528's
+    whole ask — and if a full excerpt is ever genuinely needed, it must go
+    through the same fencing and redaction ``messages.py`` already applies to
+    every other third-party string this runtime touches.
+    """
+
+    type: str
+    url: str
+    title: str
+
+    def to_dict(self) -> dict[str, str]:
+        """The shape persisted on the run record and reported per turn."""
+        return {"type": self.type, "url": self.url, "title": self.title}
+
+
+@dataclass(frozen=True)
 class LLMResponse:
     """One completion, normalised away from the provider's wire shape."""
 
@@ -100,6 +129,11 @@ class LLMResponse:
     output_tokens: int | None = None
     cost_usd: float | None = None
     tool_calls: tuple[ToolCall, ...] = ()
+    # The citations OpenRouter attached via `message.annotations` (`:online`
+    # grounding). Empty whenever the provider sent none — including every
+    # non-`:online` model, which never carries this key at all — never `None`,
+    # so a caller can always iterate without a null check (issue #1528).
+    annotations: tuple[Annotation, ...] = ()
 
 
 class LLMClient(Protocol):
@@ -334,6 +368,7 @@ def _parse_completion(data: Any, *, fallback_model: str) -> LLMResponse:
         output_tokens=_as_int(usage.get("completion_tokens")),
         cost_usd=_as_float(usage.get("cost")),
         tool_calls=_parse_tool_calls(message.get("tool_calls")),
+        annotations=_parse_annotations(message.get("annotations")),
     )
 
 
@@ -374,6 +409,38 @@ def _parse_tool_calls(raw: Any) -> tuple[ToolCall, ...]:
             )
         )
     return tuple(calls)
+
+
+def _parse_annotations(raw: Any) -> tuple[Annotation, ...]:
+    """Normalise ``message.annotations`` — the citations an ``:online`` model call
+    returns (fixture: a real OpenRouter ``:online`` completion, captured
+    2026-08-12, in ``tests/fixtures/openrouter_online_completion.json``).
+
+    Mirrors ``_parse_tool_calls``'s posture: a malformed entry is skipped, not
+    fatal — the run's other evidence is still worth keeping over failing the
+    whole completion for one bad citation. Only ``url_citation`` entries carry a
+    usable ``url``/``title``; any other ``type`` (a future annotation kind this
+    runtime does not yet know) or an entry missing a non-empty ``url`` is
+    skipped rather than guessed at.
+    """
+    if not isinstance(raw, list):
+        return ()
+    annotations: list[Annotation] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get("type") or "").strip()
+        if kind != "url_citation":
+            continue
+        citation = item.get("url_citation")
+        if not isinstance(citation, dict):
+            continue
+        url = str(citation.get("url") or "").strip()
+        if not url:
+            continue
+        title = str(citation.get("title") or "").strip()
+        annotations.append(Annotation(type=kind, url=url, title=title))
+    return tuple(annotations)
 
 
 def _as_int(value: Any) -> int | None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -13,6 +14,18 @@ from agent_runtime_fakes import FakeSsm
 
 _PARAMETER = "/myproject/dev/agent-runtime/openrouter-api-key"
 _FAKE_KEY = "not-a-real-openrouter-key"
+
+#: A real OpenRouter `:online` completion, captured 2026-08-12 against
+#: `anthropic/claude-sonnet-4:online` with the estate's own key (issue #1528).
+#: Not authored: an authored fixture is the recorded cause of five separate
+#: defects in `biffo-plugin-marketing` (biffo-template#1514), because what an
+#: author expects the wire shape to be and what the provider actually sends
+#: have drifted apart before and will again.
+_ONLINE_FIXTURE = Path(__file__).parent / "fixtures" / "openrouter_online_completion.json"
+
+
+def _online_completion() -> dict[str, Any]:
+    return json.loads(_ONLINE_FIXTURE.read_text())
 
 
 def _client(handler, **kwargs: Any) -> OpenRouterClient:
@@ -377,3 +390,102 @@ async def test_a_malformed_tool_call_is_skipped_rather_than_failing_the_turn(mon
     # Unparseable arguments survive as an empty object and are then rejected by
     # the tool's own schema, which is where argument validation belongs.
     assert [(c.id, c.arguments) for c in response.tool_calls] == [("c3", {})]
+
+
+# ── `:online` grounding citations (issue #1528) ──────────────────────────────
+
+
+async def test_annotations_from_a_real_online_completion_are_carried(monkeypatch):
+    """The defect, reproduced: `message.annotations` on a real `:online`
+    completion used to be dropped on the floor entirely. This is the fixture
+    that failed before the fix (see the module docstring for why it is captured,
+    not authored)."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", _FAKE_KEY)
+    handler, _ = _ok(_online_completion())
+
+    response = await _client(handler).complete(
+        model="anthropic/claude-sonnet-4:online", messages=[], timeout=5.0
+    )
+
+    assert len(response.annotations) == 5
+    first = response.annotations[0]
+    assert first.type == "url_citation"
+    assert first.url == "https://github.com/kubernetes/kubernetes/releases"
+    assert first.title == "Releases · kubernetes/kubernetes · GitHub"
+    # The provider's `content` field — a raw scraped page excerpt, third-party
+    # content with no fencing path back to a model — is deliberately not
+    # carried onto `Annotation`. See its docstring in openrouter.py.
+    assert not hasattr(first, "content")
+    all_urls = {a.url for a in response.annotations}
+    assert all_urls == {
+        "https://github.com/kubernetes/kubernetes/releases",
+        "https://kubernetes.io/releases/",
+        "https://endoflife.date/kubernetes",
+        "https://kubernetes.io/releases/patch-releases/",
+        "https://versionlog.com/kubernetes/",
+    }
+
+
+async def test_a_completion_with_no_annotations_key_carries_none(monkeypatch):
+    """Every non-`:online` model call, and any provider that omits the key
+    entirely — the overwhelmingly common case — must read as "zero citations",
+    not crash or require special-casing by callers."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", _FAKE_KEY)
+    handler, _ = _ok()  # the module default fixture carries no `annotations` key
+
+    response = await _client(handler).complete(model="m", messages=[], timeout=5.0)
+
+    assert response.annotations == ()
+
+
+async def test_malformed_annotation_entries_are_skipped_not_fatal(monkeypatch):
+    """Mirrors `_parse_tool_calls`'s posture: one bad entry must not cost the
+    whole completion, including its otherwise-valid citations."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", _FAKE_KEY)
+    handler, _ = _ok(
+        {
+            "model": "m",
+            "choices": [
+                {
+                    "message": {
+                        "content": "grounded answer",
+                        "annotations": [
+                            "not-a-dict",
+                            {"type": "url_citation"},  # no url_citation object
+                            {"type": "url_citation", "url_citation": "not-a-dict"},
+                            {"type": "url_citation", "url_citation": {}},  # no url
+                            {"type": "url_citation", "url_citation": {"url": "  "}},  # blank url
+                            {"type": "some_future_annotation_type", "url_citation": {"url": "x"}},
+                            {
+                                "type": "url_citation",
+                                "url_citation": {"url": "https://example.com/real"},
+                            },
+                        ],
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+        }
+    )
+
+    response = await _client(handler).complete(model="m", messages=[], timeout=5.0)
+
+    # Only the one well-formed entry survives; nothing raised over the rest,
+    # and a missing `title` defaults to empty rather than crashing.
+    assert [(a.url, a.title) for a in response.annotations] == [("https://example.com/real", "")]
+
+
+async def test_a_non_list_annotations_value_is_treated_as_none(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", _FAKE_KEY)
+    handler, _ = _ok(
+        {
+            "model": "m",
+            "choices": [
+                {"message": {"content": "x", "annotations": "not-a-list"}, "finish_reason": "stop"}
+            ],
+        }
+    )
+
+    response = await _client(handler).complete(model="m", messages=[], timeout=5.0)
+
+    assert response.annotations == ()

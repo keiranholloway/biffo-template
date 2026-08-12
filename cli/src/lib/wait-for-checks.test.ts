@@ -177,6 +177,30 @@ function checkRun(name: string, conclusion: string, startedAt: string, completed
   }
 }
 
+/**
+ * A check run that is STILL RUNNING, shaped exactly as the GitHub API returns
+ * one (#1552).
+ *
+ * The field that matters is `completedAt`: GitHub does not omit it and does not
+ * send `null` — it sends the **zero-value timestamp** `0001-01-01T00:00:00Z`.
+ * That is a non-null string, so jq's `//` cannot fall through it, and any
+ * recency comparison keyed on `.completedAt` sorts the freshest run as the
+ * oldest thing in the set. Hardcoded rather than parameterised because the exact
+ * literal IS the defect; a test free to pass a plausible timestamp here would
+ * not reproduce it.
+ */
+function runningCheckRun(name: string, startedAt: string) {
+  return {
+    __typename: 'CheckRun',
+    name,
+    workflowName: name,
+    status: 'IN_PROGRESS',
+    conclusion: null,
+    startedAt,
+    completedAt: '0001-01-01T00:00:00Z',
+  }
+}
+
 function run(stubDir: string, args: string[] = []) {
   try {
     const stdout = execFileSync('bash', [script, '123', '--interval', '0', ...args], {
@@ -419,6 +443,44 @@ describe('wait-for-checks', () => {
       expect(code, out).toBe(1)
       expect(out).toContain('Failed:')
       expect(out).toContain('CI')
+    })
+
+    it('a RUNNING re-run outranks a concluded earlier run — a zero completedAt must not sort it oldest (#1552)', () => {
+      // Measured on PR #1548, 2026-08-12: the script printed "All checks
+      // concluded, none failed" and exited 0 while `Release Guards` was still
+      // running, and `gh pr merge` then refused because GitHub had the PR
+      // BLOCKED. The rollup at that moment:
+      //
+      //   Release Guards            0001-01-01T00:00:00Z   <- running
+      //   Release Guards   SUCCESS  2026-08-12T15:03:24Z   <- superseded
+      //
+      // `max_by(.when)` picked the SUCCESS, because the running run's
+      // `completedAt` is the zero timestamp rather than null.
+      //
+      // This must time out at 2 ("cannot tell"), NOT exit 0. Deliberately not
+      // asserted as exit 1 either: nothing has failed, so calling this a
+      // failure would be the opposite lie.
+      const stub = stubGhRaw([
+        checkRun('Release Guards', 'SUCCESS', '2026-08-12T15:02:50Z', '2026-08-12T15:03:24Z'),
+        runningCheckRun('Release Guards', '2026-08-12T15:05:10Z'),
+      ])
+      const { code, out } = run(stub, ['--timeout', '2', '--interval', '1'])
+
+      expect(code, out).not.toBe(0)
+      expect(out).not.toContain('All checks concluded')
+    })
+
+    it('the same shape when the running run is the ONLY entry for its name', () => {
+      // Guards the degenerate case separately: if the zero-timestamp handling
+      // were implemented by discarding such entries rather than ranking them,
+      // this rollup would collapse to nothing and hit the empty-set path for
+      // the wrong reason. A single running check must read as pending because it
+      // IS pending, not because it vanished.
+      const stub = stubGhRaw([runningCheckRun('CI', '2026-08-12T15:05:10Z')])
+      const { code, out } = run(stub, ['--timeout', '2', '--interval', '1'])
+
+      expect(code, out).not.toBe(0)
+      expect(out).not.toContain('All checks concluded')
     })
   })
 })

@@ -181,6 +181,68 @@ describe('runtime core identity resolution', () => {
   })
 })
 
+// biffo-plugin-marketing#55: the pool used to be memoised on the SETTLED value,
+// so callers that started before the first resolution completed each ran an
+// independent resolution. Pipeline.tsx firing several concurrent getArtefact
+// calls on mount is what made this newly load-bearing rather than academic.
+describe('concurrent callers share one pool resolution (biffo-plugin-marketing#55)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    vi.restoreAllMocks()
+  })
+
+  it('resolves the pool exactly once when two callers race before it settles', async () => {
+    // A manually-resolved fetch guarantees BOTH calls are in flight before
+    // resolution, rather than relying on incidental microtask timing.
+    let resolveFetch!: (value: unknown) => void
+    global.fetch = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveFetch = resolve
+        }),
+    ) as unknown as typeof fetch
+    const { getCurrentSession } = await loadAuth()
+    getCurrentUser.mockReturnValue(null)
+
+    const first = getCurrentSession()
+    const second = getCurrentSession()
+
+    resolveFetch({
+      ok: true,
+      json: async () => ({ userPoolId: 'us-east-1_DOCPOOL', clientId: 'docclientid' }),
+    })
+
+    await Promise.all([first, second])
+
+    // The regression this guards: without in-flight memoisation, both callers
+    // independently reach the pool constructor (and the localStorage prune
+    // inside getUserPool) before either could observe the other's result.
+    expect(poolConstructor).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not cache a rejection — a later call gets a fresh attempt', async () => {
+    mockFetchDocument()
+    // Simulate a transient failure building the pool itself (identity
+    // resolution here never rejects — it catches internally — but the pool
+    // construction step must still not be able to poison the memo forever).
+    poolConstructor.mockImplementationOnce(() => {
+      throw new Error('transient pool construction failure')
+    })
+    const { getCurrentSession } = await loadAuth()
+    getCurrentUser.mockReturnValue(null)
+
+    await expect(getCurrentSession()).rejects.toThrow('transient pool construction failure')
+
+    // Retried, not replayed: the second call gets its own attempt and succeeds.
+    await expect(getCurrentSession()).resolves.toBeNull()
+    expect(poolConstructor).toHaveBeenCalledTimes(2)
+  })
+})
+
 // The CognitoUserPool constructor throws ("Both UserPoolId and ClientId are
 // required") when either value is missing, and `next build` prerenders `/` in
 // Node — which imports this module. Building the pool at module scope therefore

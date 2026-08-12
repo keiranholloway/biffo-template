@@ -22,15 +22,22 @@ import { resolveCoreIdentity } from './identity'
 let poolPromise: Promise<CognitoUserPool | null> | null = null
 
 function getUserPool(): Promise<CognitoUserPool | null> {
-  poolPromise ??= resolveCoreIdentity().then((id) => {
-    if (!id.userPoolId || !id.clientId) return null
-    // Once per page load, and only with a resolved client id: drop credentials
-    // left behind by pools this deployment no longer uses (#834). Ordered
-    // before the pool is constructed so nothing can read a stale key in
-    // between, though nothing does today — see cognito-hygiene.ts.
-    pruneForeignCognitoCredentials(id.clientId)
-    return new CognitoUserPool({ UserPoolId: id.userPoolId, ClientId: id.clientId })
-  })
+  poolPromise ??= resolveCoreIdentity()
+    .then((id) => {
+      if (!id.userPoolId || !id.clientId) return null
+      // Once per page load, and only with a resolved client id: drop credentials
+      // left behind by pools this deployment no longer uses (#834). Ordered
+      // before the pool is constructed so nothing can read a stale key in
+      // between, though nothing does today — see cognito-hygiene.ts.
+      pruneForeignCognitoCredentials(id.clientId)
+      return new CognitoUserPool({ UserPoolId: id.userPoolId, ClientId: id.clientId })
+    })
+    // A rejection must not poison the rest of the page's life (biffo-plugin-marketing#55):
+    // clear the memo so the next call retries instead of replaying the same failure.
+    .catch((err: unknown) => {
+      poolPromise = null
+      throw err
+    })
   return poolPromise
 }
 

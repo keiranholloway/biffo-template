@@ -35,6 +35,12 @@ variable "acm_certificate_arn" {
   default     = ""
 }
 
+variable "error_status_restore_lambda_arn" {
+  description = "Qualified ARN (us-east-1, versioned) of the error-status-demote Lambda@Edge function (biffo-template#1529). Output from infra/global. Empty disables the API-error-body fix."
+  type        = string
+  default     = ""
+}
+
 variable "hosted_zone_id" {
   description = "Route 53 hosted zone ID for the domain. Output from infra/global."
   type        = string

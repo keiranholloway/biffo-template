@@ -16,6 +16,63 @@ module "cdn" {
 }
 ```
 
+## API 403/404 bodies (`error_status_restore_lambda_arn`) — biffo-template#1529
+
+`custom_error_response` (in `main.tf`, below the behaviours) exists so a deep
+link to a client-routed portal/sibling path — a real URL, no corresponding
+static file — still renders the SPA shell on a 403/404 from S3, instead of a
+raw origin error. CloudFront gives no way to scope `custom_error_response` to
+one cache behaviour, so left alone it ALSO intercepts a genuine 403/404 JSON
+response from any of the three API behaviours (`api/v1/plugins/*`,
+`api/v1/health`, `c/*`) and replaces the body with that same shell — every
+hand-authored API error message, including a 403's role/permission detail,
+arrives at the client as HTML.
+
+Fixed without touching `custom_error_response` at all, because it is doing
+its job correctly for the portal/sibling case and removing or narrowing it
+would either lose the SPA fallback or (measured against the placeholder+
+query-string pattern `apps/portal` already uses for dynamic routes — see
+e.g. `apps/portal/src/app/admin/plugins/[slug]/page.tsx`) still leave a real
+gap for a genuinely-unmatched deep link. Instead, on the three API
+behaviours only:
+
+1. `error-status-demote.js` — a **Lambda@Edge origin-response** trigger
+   (created in `infra/global`, which is always us-east-1 — see that file's
+   comment) — demotes a real 403/404 to 200 and stashes the true status in an
+   `x-biffo-true-status` response header, before `custom_error_response` ever
+   evaluates the status. This is the documented mechanism for bypassing a
+   distribution's error page for one behaviour: AWS's own example for this
+   trigger type is literally "update the error status code to 200".
+2. `error-status-restore.js` — a **CloudFront Function on viewer-response**
+   — restores the true status from that header and removes it, just before
+   the response reaches the client. This has to be a second, later stage: a
+   CloudFront Function does not run at viewer-response at all when the
+   response status is ≥400, which is exactly why the real 403/404 couldn't
+   be fixed up directly and has to arrive here already demoted.
+
+Neither function ever reads or sets `response.body` (Lambda@Edge
+origin-response and CloudFront Functions viewer-response don't expose the
+origin's body to begin with) — the real JSON survives untouched end to end.
+
+`error_status_restore_lambda_arn` (the Lambda's qualified, versioned ARN) is
+empty by default, matching every other API-behaviour variable in this
+module: an instance with none of `plugin_host_api_domain`,
+`core_api_health_domain` or `tracked_link_api_domain` set has no API
+behaviour for this to protect. `infra/global` creates the function (see the
+comment there for why it can't live in this module) and outputs the ARN for
+each environment to pass in, the same wiring `acm_certificate_arn` already
+uses.
+
+**Live verification is outstanding** — Terraform `plan`/`validate` cannot see
+CloudFront's own error-page substitution, only a real request against a
+deployed distribution can. What would prove it: an API 404 returning its JSON
+`detail` with `content-type: application/json`; an API 403 doing the same,
+including the role/permission detail; an unknown app path still rendering the
+portal/sibling shell; and two different bogus `c/<token>` values still
+returning identical 404s (the constant-404 property — see the tracked-links
+section below — untouched here, since neither function reads the token,
+only the response status and one header).
+
 ## Tracked links (`c/*`) — the API path contract, and why nothing enforces it automatically
 
 Setting `tracked_link_api_domain` claims `baseurl.com/c/*` and routes it to the

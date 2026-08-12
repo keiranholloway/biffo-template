@@ -170,6 +170,12 @@ module "cdn" {
   # separate so each route can be enabled independently.
   tracked_link_api_domain = var.tracked_link_api_domain
 
+  # biffo-template#1529: without this, a real 403/404 JSON response from any
+  # of the three API routes above has its body replaced with the portal's
+  # SPA shell — see the module's own variables.tf for the full mechanism.
+  # Output from infra/global, same wiring as acm_certificate_arn above.
+  error_status_restore_lambda_arn = var.error_status_restore_lambda_arn
+
   tags = local.tags
 }
 

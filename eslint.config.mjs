@@ -34,4 +34,17 @@ export default tseslint.config(
       globals: { module: 'writable', require: 'readonly', __dirname: 'readonly' },
     },
   },
+  {
+    // modules/cloud/aws/cdn/error-status-demote.js is Lambda@Edge source —
+    // real Node.js (CommonJS `exports.handler`), not the restricted
+    // CloudFront Functions runtime rewrite.js/click-rewrite.js/
+    // error-status-restore.js target (which must NOT get this override: they
+    // have no Node globals in production and a future edit accidentally
+    // referencing one should still fail here, not just on a live deploy).
+    files: ['modules/cloud/aws/cdn/error-status-demote.js'],
+    languageOptions: {
+      sourceType: 'commonjs',
+      globals: { exports: 'writable' },
+    },
+  },
 )

@@ -93,10 +93,19 @@ describe('CloudFront routes the Core API health endpoint', () => {
     expect(allowed).toContain('GET')
   })
 
-  it('attaches no rewrite function, which would mangle the API request', () => {
+  it('attaches no viewer-request rewrite function, which would mangle the API request', () => {
     // The viewer-request function rewrites clean URLs to index.html for the
-    // static exports. On an API path it would rewrite the request away.
+    // static exports. On an API path it would rewrite the request away. This
+    // behaviour DOES carry a viewer-RESPONSE function_association since
+    // biffo-template#1529 (error-status-restore.js, gated on
+    // error_status_restore_lambda_arn) — that one only ever reads/writes a
+    // status code and one header, never the request, so it doesn't
+    // reintroduce the hazard this test guards against. Assert on the
+    // specific function rather than the presence of any
+    // function_association/lambda_function_association block, since #1529
+    // legitimately added those.
     const block = behaviourFor('core-api') ?? ''
-    expect(block).not.toContain('function_association')
+    expect(block).not.toContain('aws_cloudfront_function.rewrite.arn')
+    expect(block).not.toContain('event_type   = "viewer-request"')
   })
 })

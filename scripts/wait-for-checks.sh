@@ -218,17 +218,49 @@ while :; do
     exit 2
   fi
 
+  # Two things this filter has to get right, and the second one bit us (#1552).
+  #
+  # 1. `when` must not be keyed on `.completedAt` alone. A check run that is
+  #    STILL RUNNING carries `completedAt: "0001-01-01T00:00:00Z"` — GitHub sends
+  #    the zero-value timestamp rather than omitting the field or sending null.
+  #    `//` only falls through on null/false, so a plain
+  #    `.completedAt // .startedAt` returns that zero date and the FRESHEST run
+  #    sorts as the oldest value there is. `max_by(.when)` then discarded the
+  #    running run in favour of the superseded one, and this script reported
+  #    "All checks concluded, none failed" while `Release Guards` was mid-flight
+  #    on PR #1548 — GitHub had the PR BLOCKED and was right. So the candidate
+  #    timestamps are filtered before the first non-empty one is taken.
+  #
+  # 2. Recency must not be the thing that decides it. Even with the timestamp
+  #    fixed, "newest wins" answers a proxy question; the real one is "is ANY run
+  #    for this context still in flight?". So an unfinished entry outranks every
+  #    concluded one for the same name explicitly, and only a group with nothing
+  #    unfinished falls back to newest-wins (which is what #1333 needs, so a
+  #    re-run's SUCCESS supersedes the earlier FAILURE).
+  #
+  # `seen` carries the pre-collapse count per context so the report can state its
+  # denominator instead of implying one (#1363).
   rollup=$(gh_pr view "$PR" --json statusCheckRollup --jq '
     [ .statusCheckRollup[]?
       | { name:  (.name // .context),
           state: (.conclusion // .state // (if .status == "COMPLETED" then "" else null end)),
-          when:  (.completedAt // .startedAt // .updatedAt // .createdAt // "")
+          when:  ([ .completedAt, .startedAt, .updatedAt, .createdAt ]
+                  | map(select(. != null and . != "" and . != "0001-01-01T00:00:00Z"))
+                  | first // "")
         }
     ]
     | group_by(.name)
-    | map(max_by(.when))
+    | map(
+        ([ .[] | select(.state == null or .state == "" or .state == "PENDING"
+                        or .state == "IN_PROGRESS" or .state == "QUEUED"
+                        or .state == "WAITING") ]) as $unfinished
+        | (if ($unfinished | length) > 0
+           then ($unfinished | max_by(.when))
+           else max_by(.when) end)
+          + { seen: length }
+      )
     | .[]
-    | "\(.name)\t\(.state // "")"') || rollup=""
+    | "\(.name)\t\(.state // "")\t\(.seen)"') || rollup=""
 
   count=0
   [ -n "$rollup" ] && count=$(printf '%s\n' "$rollup" | grep -c .)
@@ -305,5 +337,11 @@ fi
 
 [ -n "$cancelled" ] && exit 1
 
-echo "${GREEN}All checks concluded, none failed.${OFF}"
+# State the denominator rather than implying one (#1363). A green that does not
+# say what it looked at cannot be told apart from a green that looked at less
+# than it should have — and this script spent months collapsing a running run out
+# of its own input without ever mentioning that it had collapsed anything.
+runs_seen=$(printf '%s\n' "$rollup" | awk -F'\t' 'NF { s += ($3 == "" ? 1 : $3) } END { print s + 0 }')
+echo "${GREEN}All checks concluded, none failed.${OFF} ${DIM}($count context(s), $runs_seen run(s)).${OFF}"
+printf '%s\n' "$rollup" | awk -F'\t' 'NF && $3 > 1 { print "  " $1 ": " $3 " runs, newest used" }'
 exit 0

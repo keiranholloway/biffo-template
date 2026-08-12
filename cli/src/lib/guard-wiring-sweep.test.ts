@@ -3,6 +3,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
+import { discoverGuardCandidates, discoverGuardFiles } from './guard-candidates.js'
 import { makeTmpDir } from '../test-utils/tmp.js'
 
 /**
@@ -42,7 +43,7 @@ import { makeTmpDir } from '../test-utils/tmp.js'
  * specifiers, and ask whether a guard module is reachable from the set of
  * `cli/src/commands/*.ts` entrypoints.
  *
- * ## Baseline: empty, since #1363
+ * ## Baseline: `plugin-allowlist-convention.ts`, since #1519
  *
  * `cognito-invite-template-guard.ts`, `lambda-output-guard.ts`,
  * `pipe-trap-guard.ts`, `skeleton-drift-guard.ts` and
@@ -58,12 +59,21 @@ import { makeTmpDir } from '../test-utils/tmp.js'
  * as `mustBeUniform`'s baseline in `AGENTS.md` §9 — pre-existing residue
  * never blocks, but the list only shrinks. All five now have a
  * `cli/src/commands/check.ts` entry and a `.github/workflows/ci.yml` step
- * (biffo-template#1363), so `PRE_EXISTING_UNWIRED` is empty. It stays
- * declared (rather than deleted) so the ratchet mechanism — and the "stale
- * baseline" failure mode below — has somewhere to point if a sixth
- * pre-existing guard is ever found un-enumerated by this sweep (see the
- * "Latent weakness" comment on #1413's issue thread: `*-check.ts` and
- * `*-fidelity.ts` guards are not discovered by the current glob).
+ * (biffo-template#1363).
+ *
+ * `discoverGuardFiles` now enumerates via `guard-candidates.ts` (#1519),
+ * which finds guards the old `/-(audit|guard)\.ts$/` regex could not —
+ * including `plugin-allowlist-convention.ts`, one of the five files #1518's
+ * sweep spotted and never classified. It IS in class here too: nothing
+ * reaches it from `cli/src/commands/` and no workflow names it, the same
+ * shape as the five above — its own `.test.ts` calls `checkAllowlistConvention`
+ * directly against this repo's real root, which is real (if different)
+ * wiring, not zero wiring. Per #1519's own instruction not to silence a
+ * newly-admitted failure OR redden CI on pre-existing residue, it is
+ * baselined here rather than either — visible, printed, and the baseline
+ * only shrinks. Wiring it a `cli/src/commands/check.ts` entry and a CI step
+ * (the same fix the previous five got, #1363) is real follow-up work, out of
+ * #1519's own scope (a discovery fix, not a wiring fix).
  */
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -75,16 +85,6 @@ const libDir = join(cliSrc, 'lib')
 const workflowsDir = join(repoRoot, '.github', 'workflows')
 
 const IN_SCOPE_DIRS = [commandsDir, scriptsDir, libDir]
-
-/** `*-audit.ts` / `*-guard.ts` directly under `cli/src/lib`, discovered from
- * the filesystem. The full filename must match — `.test.ts` always fails
- * the suffix test, so `foo-guard.test.ts` can never be mistaken for a real
- * guard module regardless of what precedes it. */
-export function discoverGuardFiles(dir: string): string[] {
-  return readdirSync(dir)
-    .filter((f) => /-(audit|guard)\.ts$/.test(f) && !f.endsWith('.test.ts'))
-    .sort()
-}
 
 /** Relative import/re-export specifiers a `.ts` file names, read via the
  * TypeScript AST — never a regex over source text (#956). */
@@ -151,11 +151,16 @@ function workflowStepText(dir: string): string {
   return files.map((f) => readFileSync(join(dir, f), 'utf8')).join('\n')
 }
 
-const PRE_EXISTING_UNWIRED = new Set<string>([])
+const PRE_EXISTING_UNWIRED = new Set<string>(['plugin-allowlist-convention.ts'])
 
-describe('guard wiring sweep (#1413): every cli/src/lib/*-audit.ts and *-guard.ts must have a caller', () => {
+describe('guard wiring sweep (#1413): every discovered guard must have a caller', () => {
   it('discovers at least one real guard file — a sweep that finds none is not sweeping', () => {
     const found = discoverGuardFiles(libDir)
+    // #1519's own denominator requirement: state the count, not just a result
+    // over whatever the discovery mechanism happened to admit.
+    console.log(
+      `guard-wiring-sweep: ${found.length} guard(s) discovered, checking each for a caller`,
+    )
     expect(found.length).toBeGreaterThan(0)
     // Pin the three #1413 named — if any is ever renamed this fails loudly
     // rather than silently stop checking it.
@@ -219,8 +224,15 @@ describe('guard wiring sweep (#1413): every cli/src/lib/*-audit.ts and *-guard.t
     writeFileSync(join(lib, 'orphan-guard.ts'), 'export function check() { return [] }\n')
     writeFileSync(join(commands, 'unrelated.ts'), "import { z } from 'zod'\nz\n")
 
-    const guardFiles = discoverGuardFiles(lib)
-    expect(guardFiles).toEqual(['orphan-guard.ts'])
+    // discoverGuardFiles' isGuard:true subset depends on
+    // GUARD_CANDIDATE_CLASSIFICATION, a real, hand-maintained table a
+    // synthetic tmp-dir file can never appear in — that gap is exactly what
+    // guard-candidates.test.ts's own fail-first proof exercises. This control
+    // is about wiring REACHABILITY, not classification, so it uses
+    // discoverGuardCandidates (the pre-classification discovery signal) —
+    // orphan-guard.ts still matches the naming-convention half of it.
+    const candidates = discoverGuardCandidates(lib)
+    expect(candidates).toEqual(['orphan-guard.ts'])
     const reachable = reachableFrom(commandEntryFiles(commands))
     expect(reachable.has(join(lib, 'orphan-guard.ts'))).toBe(false)
   })

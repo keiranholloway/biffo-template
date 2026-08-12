@@ -51,23 +51,29 @@
  * helper, parser or decode step with the actor's, such that a corruption in
  * that shared step would be invisible to both sides at once?
  *
- * `core-upgrade-target-fidelity` is itself added below despite never being
- * discovered by this sweep's own enumeration (`discoverGuardFiles`'s
- * `/-(audit|guard)\.ts$/` pattern does not match `-fidelity.ts`) — the same
- * shape as `route-shadow-ordering`, added by hand for the same reason. This
- * is worth stating plainly: the enumeration test that exists to make sure no
- * guard goes unclassified missed the guard that turned out to be this
- * class's sharpest instance, because its OWN document (a naming-convention
- * regex) disagreed with the actual authority (which files are guards, as
- * their own docstrings declare — this file's docstring names #1362 by
- * number). `guard-wiring-sweep.test.ts`'s own comment already names this as
- * a known, tracked gap ("`*-check.ts` and `*-fidelity.ts` guards are not
- * discovered by the current glob") — recorded here rather than silently
- * re-discovered, and left unfixed in that shared file: widening the
- * discovery regex changes what #1413's wiring sweep also requires (every
- * newly-discovered guard must be wired or explicitly baselined), which is a
- * decision belonging to that sweep's own owner, not a side effect of this
- * one adding a hand-classified entry.
+ * `core-upgrade-target-fidelity` was originally added below despite never
+ * being discovered by this sweep's own enumeration (`discoverGuardFiles`'s
+ * old `/-(audit|guard)\.ts$/` pattern did not match `-fidelity.ts`) — the
+ * same shape as `route-shadow-ordering`, added by hand for the same reason.
+ * That was worth stating plainly at the time: the enumeration test that
+ * exists to make sure no guard goes unclassified missed the guard that
+ * turned out to be this class's sharpest instance, because its OWN document
+ * (a naming-convention regex) disagreed with the actual authority (which
+ * files are guards, as their own docstrings declare — this file's docstring
+ * names #1362 by number).
+ *
+ * **Fixed in #1519.** `discoverGuardFiles` now comes from
+ * `guard-candidates.ts`, shared with `guard-wiring-sweep.test.ts`'s #1413
+ * sweep rather than each maintaining its own copy of the same regex: it
+ * unions the naming convention with an export-name signal (`assert*`/
+ * `verify*`/`check*`/`audit*`) read from the TypeScript AST, and requires
+ * every candidate either signal admits to be explicitly classified in
+ * `GUARD_CANDIDATE_CLASSIFICATION` before it can be silently in or out of
+ * either downstream sweep. `core-upgrade-target-fidelity.ts` is discovered
+ * natively now (see its entry below) and no longer needs manual insertion.
+ * Widening the discovery also changed what #1413's wiring sweep enumerates,
+ * handled explicitly there rather than as a side effect: see
+ * `PRE_EXISTING_UNWIRED` in `guard-wiring-sweep.test.ts`.
  */
 
 export interface GuardAuthorityRecord {
@@ -179,7 +185,8 @@ export const GUARD_AUTHORITY_INVENTORY: GuardAuthorityRecord[] = [
       'possible — there is no second derivation, only the one real structure.',
   },
 
-  // ── In-class, added by hand — NOT discovered by this sweep's own glob ───
+  // ── In-class — discovered via the export-name signal, not the naming ────
+  // ── convention (#1519) ────────────────────────────────────────────────
   {
     id: 'core-upgrade-target-fidelity',
     path: 'cli/src/lib/core-upgrade-target-fidelity.ts',
@@ -191,12 +198,15 @@ export const GUARD_AUTHORITY_INVENTORY: GuardAuthorityRecord[] = [
     disagreementTest: 'cli/src/lib/core-upgrade-target-fidelity.test.ts',
     independence: 'independent',
     note:
-      'INSTANCE 11 — the guard this whole "independence" field exists for. Not discovered by ' +
-      "discoverGuardFiles()'s `/-(audit|guard)\\.ts$/` pattern (the file is named `*-fidelity.ts`), " +
-      'so it sat outside this inventory entirely until now — see the module docstring above. ' +
-      'Found while fixing #1506: the VERBATIM_STATUSES loop hashed `blobId(content)` against the ' +
-      "tag's own raw blob id, genuinely independent — but on a mismatch it fell back to re-reading " +
-      "BOTH sides through the identical lossy `{encoding:'utf8'}` decode (`readFileSync` upstream, " +
+      'INSTANCE 11 — the guard this whole "independence" field exists for. Originally hand-added ' +
+      "because the old discoverGuardFiles()'s `/-(audit|guard)\\.ts$/` pattern never matched " +
+      '`*-fidelity.ts` — see the module docstring above. Fixed properly in #1519: ' +
+      'guard-candidates.ts discovers it natively (it exports assertTargetFidelity), so it no ' +
+      'longer needs manual insertion here — this entry stays because the classification itself ' +
+      'is still required, just no longer hand-triggered. Found while fixing #1506: the ' +
+      "VERBATIM_STATUSES loop hashed `blobId(content)` against the tag's own raw blob id, " +
+      'genuinely independent — but on a mismatch it fell back to re-reading BOTH sides through ' +
+      "the identical lossy `{encoding:'utf8'}` decode (`readFileSync` upstream, " +
       '`git show` here) and comparing the decoded TEXT, so two differently-corrupted binaries that ' +
       'happen to decode to the same mangled string reported `findings: []` — proven empirically: ' +
       '`{ checked: 1, findings: [] }` over a file that had just been written corrupt. Fixed in ' +
@@ -213,6 +223,80 @@ export const GUARD_AUTHORITY_INVENTORY: GuardAuthorityRecord[] = [
       'addition reproduces `findings: []` over genuinely-differing raw bytes ' +
       '(core-upgrade-target-fidelity.test.ts, "catches theirsDir bytes that differ from the tag ' +
       'even when both decode to the same mangled text").',
+  },
+
+  // ── In-class — newly classified via #1519's broadened discovery ─────────
+  {
+    id: 'sibling-identity-check',
+    path: 'cli/src/lib/sibling-identity-check.ts',
+    inClass: true,
+    document:
+      "the core's published /.well-known/biffo-identity.json (#403), and each sibling's baked-in " +
+      'CORE_COGNITO_USER_POOL_ID GitHub environment variable (#496)',
+    actor:
+      "the core's actual live Cognito pool id, read from its Terraform output cognito_user_pool_id",
+    disagreementTest: 'cli/src/lib/sibling-identity-check.test.ts',
+    independence: 'independent',
+    note:
+      "One of the five files #1518 spotted and left unclassified, discovered natively by #1519's " +
+      'export-name signal (exports checkSiblingIdentity). Textbook #1362 shape: a pool replacement ' +
+      "can leave the published document AND a sibling's baked-in variable pointing at a dead pool " +
+      "while the core's own deploy stays green (#400). checkSiblingIdentity itself is pure (no I/O, " +
+      'per its own docstring) — the command layer (commands/sibling-check-identity.ts) fetches the ' +
+      'live pool id via the AWS/Terraform-output adapter, the published document via an HTTP fetch, ' +
+      'and each sibling variable via the GitHub API: three independent mechanisms with no shared ' +
+      'decode step between any pair, so a corruption in one cannot make it silently agree with ' +
+      'another.',
+  },
+  {
+    id: 'plugin-allowlist-convention',
+    path: 'cli/src/lib/plugin-allowlist-convention.ts',
+    inClass: true,
+    document:
+      'the IAM role-name glob symbolically composed from modules/cloud/aws/compute/main.tf and ' +
+      'modules/plugins/_template/main.tf (composeExpectedRoleName)',
+    actor:
+      "modules/cloud/aws/plugin-allowlist's own declared ARN glob (readAllowlistGlob), which IAM " +
+      'actually evaluates against roles Terraform creates',
+    disagreementTest: 'cli/src/lib/plugin-allowlist-convention.test.ts',
+    independence: 'unclear',
+    note:
+      "One of the five files #1518 spotted and left unclassified, discovered natively by #1519's " +
+      'export-name signal (exports checkAllowlistConvention). In class: the allowlist module never ' +
+      "references the two naming modules (that independence is deliberate, per the guard's own " +
+      'docstring), so nothing in Terraform enforces the relationship this guard checks. Independence ' +
+      'left `unclear` rather than guessed: composeExpectedRoleName() and readAllowlistGlob() are both ' +
+      'in this one file and both route through the same read()/resolve() helpers (file read + ' +
+      'placeholder-substitution) to derive their respective strings, which IS a shared mechanism in ' +
+      'the sense instance 11 cares about — but unlike the fidelity guard, no concrete corruption ' +
+      'scenario has been worked through here yet (both sides parse DIFFERENT source files with ' +
+      'DIFFERENT regexes, so a shared resolve() bug would need to corrupt two different derivations ' +
+      'into the same wrong string, not merely decode the same bytes twice). Not run to ground — ' +
+      "honest `unclear` per this sweep's own standard, not a manufactured verdict either way.",
+  },
+  {
+    id: 'doctor',
+    path: 'cli/src/lib/doctor.ts',
+    inClass: true,
+    document:
+      'checkCoreVersionCurrency: biffo.core.json read locally vs at origin/dev; checkFossilCoreVersion: ' +
+      'the legacy core.version fossil file vs biffo.core.json',
+    actor: "the instance's actual current core version state",
+    disagreementTest: 'cli/src/lib/doctor.test.ts',
+    independence: 'shared-path',
+    note:
+      "One of the five files #1518 spotted and left unclassified, discovered natively by #1519's " +
+      'export-name signal (exports five checkX functions; #797). checkFossilCoreVersion is ' +
+      'independent — its two facts (readFossil, readLocalCoreVersion+parseCoreRecord) go through ' +
+      'DIFFERENT parsing code in commands/doctor.ts. checkCoreVersionCurrency is NOT: both ' +
+      'facts.localCoreVersion (readLocalCoreVersion) and facts.remoteCoreVersion (the git-show fetch) ' +
+      'are decoded through the SAME parseCoreRecord() JSON-parse helper before doctor.ts ever compares ' +
+      'them — a real, found-not-guessed instance-11-shaped exposure: a parseCoreRecord bug that ' +
+      'mangled both reads the same way could report core-version-stale as absent over a genuine ' +
+      "divergence. This is the file's overall independence because the record's `independence` field " +
+      'is per-guard, not per-function, and the worst case governs. Recorded here as the honest ' +
+      "remainder per this sweep's own posture (printed, not failed) — NOT fixed in #1519, which is a " +
+      'discovery/classification change, not a guard-hardening one. Worth its own follow-up issue.',
   },
 
   // ── In-class, STILL NO disagreement test — the honest remainder ─────────
@@ -283,6 +367,19 @@ export const GUARD_AUTHORITY_INVENTORY: GuardAuthorityRecord[] = [
   },
 
   // ── NOT in class: single-document guards (why they are excluded) ────────
+  {
+    id: 'build-freshness',
+    path: 'cli/src/lib/build-freshness.ts',
+    inClass: false,
+    disagreementTest: null,
+    note:
+      "One of the five files #1518 spotted and left unclassified, discovered natively by #1519's " +
+      'export-name signal (exports checkBuildFreshness/assertBuildIsFresh; #190). Compares two ' +
+      'mtimes (cli/dist/index.js vs the newest file under cli/src) read directly via statSync in ' +
+      'the SAME function — not two independently-derived documents about a third actor, the same ' +
+      'shape as eventbridge-log-permission-guard below (two facts in one tree, not a document/actor ' +
+      'split).',
+  },
   {
     id: 'adr-numbering-guard',
     path: 'cli/src/lib/adr-numbering-guard.ts',

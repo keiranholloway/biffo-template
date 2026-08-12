@@ -6,7 +6,7 @@ import {
   GUARD_AUTHORITY_INVENTORY,
   type GuardAuthorityRecord,
 } from './guard-authority-inventory.js'
-import { discoverGuardFiles } from './guard-wiring-sweep.test.js'
+import { discoverGuardCandidates, discoverGuardFiles } from './guard-candidates.js'
 import { makeTmpDir } from '../test-utils/tmp.js'
 
 /**
@@ -26,15 +26,18 @@ import { makeTmpDir } from '../test-utils/tmp.js'
  * the dispatch brief names explicitly (the whoami guard/actor pair NEVER
  * disagrees in this repo, only in an instance with a product domain).
  *
- * What IS swept: the ENUMERATION. Every guard file this repo's own
- * conventions call a guard (`*-guard.ts` / `*-audit.ts` under
- * `cli/src/lib`, discovered from the filesystem exactly as
- * `guard-wiring-sweep.test.ts` does for #1413) must be classified in
- * `guard-authority-inventory.ts` — in class or not, with a reason either
- * way. A guard landing with no entry fails this sweep. That is the gap the
- * issue's 2026-08-09 comment names directly: "Nothing enumerates the
+ * What IS swept: the ENUMERATION. Every guard file `guard-candidates.ts`
+ * discovers under `cli/src/lib` — since #1519, the naming convention
+ * (`*-guard.ts` / `*-audit.ts`) UNIONED with an export-name signal, not the
+ * naming convention alone, and shared with `guard-wiring-sweep.test.ts`'s
+ * #1413 sweep rather than each maintaining its own copy — must be classified
+ * in `guard-authority-inventory.ts` below: in class or not, with a reason
+ * either way. A guard landing with no entry fails this sweep. That is the
+ * gap the issue's 2026-08-09 comment names directly: "Nothing enumerates the
  * guards ... guard nine will be written without one exactly as guards one
- * through eight were."
+ * through eight were" — and #1519 sharpened it further: guard nine could be
+ * written with a name the enumeration's own regex never matched, exactly
+ * what happened to `core-upgrade-target-fidelity.ts`.
  *
  * A second, narrower check: when an inventory entry claims a disagreement
  * test exists, the referenced TS file must actually exist and its content
@@ -64,6 +67,13 @@ describe('guard/authority inventory sweep (#1362): every discovered guard is cla
   it('every discovered cli/src/lib guard/audit file has an inventory entry', () => {
     const discovered = discoverGuardFiles(libDir).map((f) => join('cli/src/lib', f))
     const known = new Set(GUARD_AUTHORITY_INVENTORY.map(byPath).filter(Boolean))
+
+    // #1519's own denominator requirement: state the count, not just a result
+    // over whatever discoverGuardFiles happened to admit.
+    console.log(
+      `guard-authority-inventory: ${discovered.length} guard(s) discovered, ${known.size} ` +
+        `entries known in the inventory`,
+    )
 
     const unclassified = discovered.filter((p) => !known.has(p))
     expect(
@@ -185,7 +195,13 @@ describe('guard/authority inventory sweep (#1362): every discovered guard is cla
     mkdirSync(dir, { recursive: true })
     writeFileSync(join(dir, 'new-shape-guard.ts'), 'export function check() { return [] }\n')
 
-    const discovered = discoverGuardFiles(dir)
+    // discoverGuardFiles' isGuard:true subset depends on
+    // GUARD_CANDIDATE_CLASSIFICATION, a real table a synthetic tmp-dir file
+    // can never appear in (see guard-candidates.test.ts's own fail-first
+    // proof for that gap). This control exercises the #1362 INVENTORY layer
+    // specifically, so it uses discoverGuardCandidates — new-shape-guard.ts
+    // still matches the naming-convention discovery signal.
+    const discovered = discoverGuardCandidates(dir)
     expect(discovered).toEqual(['new-shape-guard.ts'])
 
     const known = new Set(GUARD_AUTHORITY_INVENTORY.map(byPath).filter(Boolean))

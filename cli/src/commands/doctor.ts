@@ -98,6 +98,10 @@ export async function runDoctor(
     behind,
     hasUpstream,
     isDirty,
+    // localCoreVersion and remoteCoreVersion are deliberately decoded through
+    // DIFFERENT code (#1544) — see readLocalCoreVersion's doc comment for why
+    // a shared decode step here would make checkCoreVersionCurrency blind to
+    // a fault in it.
     localCoreVersion: readLocalCoreVersion(options.cwd),
     remoteCoreVersion: parseCoreRecord(
       await git.showFileAtRef(options.cwd, `origin/${INTEGRATION_BRANCH}`, INSTANCE_CORE_FILE),
@@ -117,12 +121,29 @@ export async function runDoctor(
  * `core.version` when the record is absent — exactly the conflation `doctor`
  * exists to surface. Using it here would make the fossil check compare a value
  * against itself.
+ *
+ * Decoded via `extractVersionField`, NOT `parseCoreRecord` (#1544). Before
+ * this, `checkCoreVersionCurrency` compared this value against
+ * `remoteCoreVersion` — but both were decoded through the identical
+ * `parseCoreRecord()` JSON.parse helper, so a fault in that one function
+ * would mangle both reads the same way and the comparison would agree over
+ * data it never actually verified (class #1362, instance 11 shape — the same
+ * mechanism that let `core-upgrade-target-fidelity.ts` re-read its own lossy
+ * output and report it clean). Concretely reproducible with today's real
+ * JSON.parse: a `biffo.core.json` corrupted with a duplicate `version` key
+ * resolves, per spec, to whichever occurs LAST — silently discarding a
+ * genuinely different earlier value. Using a structurally different parser
+ * for this side (a regex scan over raw text, matching the FIRST occurrence,
+ * no JSON.parse involved) means a fault specific to either decode step
+ * cannot mangle both reads into false agreement; see
+ * `commands/doctor.test.ts`'s "notices real drift a shared decoder would
+ * paper over" test.
  */
 function readLocalCoreVersion(cwd: string): string | null {
   const path = join(cwd, INSTANCE_CORE_FILE)
   if (!existsSync(path)) return null
   try {
-    return parseCoreRecord(readFileSync(path, 'utf8'))
+    return extractVersionField(readFileSync(path, 'utf8'))
   } catch {
     return null
   }
@@ -136,6 +157,25 @@ function parseCoreRecord(contents: string | null): string | null {
   } catch {
     return null
   }
+}
+
+/**
+ * A second, structurally independent way to read a `version` field: a plain
+ * regex scan over raw text, with no JSON.parse involved at all (#1544).
+ *
+ * Deliberately not "`parseCoreRecord` under another name" — it shares no
+ * helper, no parsing library call, and no error-handling path with it.
+ * Matches the FIRST `"version": "…"` occurrence in the text, which is what
+ * makes it disagree with JSON.parse's spec-mandated LAST-wins resolution of
+ * a duplicate key — the concrete divergence this function exists to catch.
+ * Core versions are plain `major.minor.patch` semver with no pre-release or
+ * build metadata (see `core-version.ts`'s `SEMVER`), so the pattern does not
+ * need to handle either.
+ */
+function extractVersionField(contents: string | null): string | null {
+  if (contents === null) return null
+  const match = /"version"\s*:\s*"(\d+\.\d+\.\d+)"/.exec(contents)
+  return match?.[1] ?? null
 }
 
 function readFossil(cwd: string): string | null {

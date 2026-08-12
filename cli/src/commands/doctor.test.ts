@@ -77,6 +77,35 @@ describe('runDoctor', () => {
     expect(git.showFileAtRef).toHaveBeenCalledWith(cwd, 'origin/dev', 'biffo.core.json')
   })
 
+  it('notices real drift a shared decoder would paper over (#1544, class #1362 instance 11 shape)', async () => {
+    // checkCoreVersionCurrency's two facts used to be decoded through the
+    // SAME parseCoreRecord() JSON.parse helper before ever being compared —
+    // a fault in that one decoder mangles both reads identically, and the
+    // comparison agrees over data it never actually verified.
+    //
+    // This is not a hypothetical: JSON.parse's own spec-mandated behaviour on
+    // a document with a duplicate key is to keep whichever occurs LAST,
+    // silently discarding the first. A biffo.core.json corrupted with two
+    // `version` keys (a bad merge, an interrupted rewrite) is genuinely
+    // ambiguous — the file disagrees with itself — but the shared decoder
+    // resolves it to "0.157.3" here, which happens to equal the remote. A
+    // guard that decodes local and remote through the identical JSON.parse
+    // step cannot distinguish that from a genuinely current checkout: it
+    // reports no finding over a record that was never trustworthy to begin
+    // with. A test that only fed the happy path (one clean version string
+    // through one decoder) could never tell "the versions genuinely match"
+    // from "the decoder mangled two documents into agreement" — this one
+    // does, by giving the decoder something it demonstrably mangles.
+    writeFileSync(join(cwd, 'biffo.core.json'), '{"version": "0.153.2", "version": "0.157.3"}')
+    const git = gitMock({
+      showFileAtRef: vi.fn().mockResolvedValue(JSON.stringify({ version: '0.157.3' })),
+    })
+
+    const found = await runDoctor({ cwd, fetch: true }, { git: git as never })
+
+    expect(checks(found)).toContain('core-version-stale')
+  })
+
   it('reads biffo.core.json directly, so the fossil is not compared against itself', async () => {
     // readInstanceCoreVersion falls back to core.version when the record is
     // absent. Using it here would make the fossil check compare a value to

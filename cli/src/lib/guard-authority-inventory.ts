@@ -282,21 +282,29 @@ export const GUARD_AUTHORITY_INVENTORY: GuardAuthorityRecord[] = [
       'checkCoreVersionCurrency: biffo.core.json read locally vs at origin/dev; checkFossilCoreVersion: ' +
       'the legacy core.version fossil file vs biffo.core.json',
     actor: "the instance's actual current core version state",
-    disagreementTest: 'cli/src/lib/doctor.test.ts',
-    independence: 'shared-path',
+    disagreementTest: 'cli/src/commands/doctor.test.ts',
+    independence: 'independent',
     note:
       "One of the five files #1518 spotted and left unclassified, discovered natively by #1519's " +
-      'export-name signal (exports five checkX functions; #797). checkFossilCoreVersion is ' +
-      'independent — its two facts (readFossil, readLocalCoreVersion+parseCoreRecord) go through ' +
-      'DIFFERENT parsing code in commands/doctor.ts. checkCoreVersionCurrency is NOT: both ' +
-      'facts.localCoreVersion (readLocalCoreVersion) and facts.remoteCoreVersion (the git-show fetch) ' +
-      'are decoded through the SAME parseCoreRecord() JSON-parse helper before doctor.ts ever compares ' +
-      'them — a real, found-not-guessed instance-11-shaped exposure: a parseCoreRecord bug that ' +
-      'mangled both reads the same way could report core-version-stale as absent over a genuine ' +
-      "divergence. This is the file's overall independence because the record's `independence` field " +
-      'is per-guard, not per-function, and the worst case governs. Recorded here as the honest ' +
-      "remainder per this sweep's own posture (printed, not failed) — NOT fixed in #1519, which is a " +
-      'discovery/classification change, not a guard-hardening one. Worth its own follow-up issue.',
+      'export-name signal (exports five checkX functions; #797). checkFossilCoreVersion was ' +
+      'already independent — its two facts (readFossil, readLocalCoreVersion) go through ' +
+      'DIFFERENT parsing code in commands/doctor.ts. checkCoreVersionCurrency was NOT (recorded ' +
+      'shared-path when #1519 discovered it): both facts.localCoreVersion and ' +
+      'facts.remoteCoreVersion were decoded through the SAME parseCoreRecord() JSON-parse helper ' +
+      'before doctor.ts ever compared them — a real, found-not-guessed instance-11-shaped ' +
+      'exposure, proven fail-first in commands/doctor.test.ts ("notices real drift a shared ' +
+      'decoder would paper over"): a biffo.core.json corrupted with a duplicate `version` key is ' +
+      'genuinely ambiguous, but JSON.parse resolves duplicate keys to whichever occurs LAST per ' +
+      "spec, and that happened to equal the remote — the shared decoder's own real, current " +
+      'behaviour reported `core-version-stale` as absent over a record that was never ' +
+      'trustworthy. Fixed in #1544: readLocalCoreVersion now decodes through ' +
+      'extractVersionField(), a plain regex scan matching the FIRST occurrence — structurally ' +
+      'independent of parseCoreRecord (no JSON.parse, no shared helper, and it deliberately ' +
+      "disagrees with JSON.parse's last-wins rule on the corrupted-duplicate-key case, which is " +
+      'exactly what makes the two reads independent rather than a second name for the same code). ' +
+      'remoteCoreVersion still goes through parseCoreRecord, so the comparison now has no shared ' +
+      "decode step on either side. The file's overall independence follows because both in-class " +
+      'functions are independent and the record is per-guard.',
   },
 
   // ── In-class, STILL NO disagreement test — the honest remainder ─────────

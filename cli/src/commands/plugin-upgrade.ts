@@ -232,14 +232,19 @@ export async function runPluginUpgrade(
     }
 
     if (manifest.tables.length > 0) {
-      // A new minor version's manifest may declare new tables (or the same
-      // ones) — generate_migration_for_plugin only ever produces additive
-      // CREATE TABLE migrations, so this either appends a new, separately
-      // chained migration for genuinely new tables, or is a no-op if the
-      // table set is unchanged from what was already committed. It never
-      // rewrites/replaces a previous migration.
+      // A new minor version's manifest may declare new tables, new columns
+      // on already-migrated tables, both, or neither —
+      // generate_migration_for_plugin (services/api/src/api/migrations/
+      // plugin_migrations.py) diffs both levels against what versions_dir
+      // already has: new tables and additive columns are appended as a new,
+      // separately chained migration; an unchanged table+column shape is a
+      // no-op; a column removed, retyped, or nullability-changed on an
+      // already-migrated table makes it refuse outright (a thrown error,
+      // surfaced via the outer catch below) rather than guess — see that
+      // function's docstring (issue #1539). It never rewrites/replaces a
+      // previous migration.
       log.info(
-        `Generating migration for services/${entry.name}/'s ${manifest.tables.length} table(s)...`,
+        `Checking for a migration for services/${entry.name}/'s ${manifest.tables.length} table(s)...`,
       )
       const generatedPaths = await deps.migrations.generate(options.cwd, [entry.name])
       for (const absPath of generatedPaths) {
@@ -247,6 +252,10 @@ export async function runPluginUpgrade(
       }
       if (generatedPaths.length > 0) {
         log.success(`Generated migration: ${relative(options.cwd, generatedPaths[0]!)}`)
+      } else {
+        log.info(
+          `${entry.name}'s tables and columns already match the manifest — no migration needed.`,
+        )
       }
     }
 
@@ -391,13 +400,15 @@ async function runLocalPluginRefresh(
     }
 
     if (manifest.tables.length > 0) {
-      // Same idempotency guarantee the registry path relies on:
-      // generate_migration_for_plugin derives its revision id from the
-      // manifest name plus table *names* (services/api/src/api/migrations/
-      // plugin_migrations.py::_compute_plugin_revision) and skips generating
-      // when a migration for that revision already exists. So a route-only or
-      // column-only edit — the table set unchanged — calls this and gets back
-      // an empty list; only an actual table-set change produces a new file.
+      // Same idempotency guarantee the registry path relies on (see its
+      // comment above): generate_migration_for_plugin diffs both the
+      // manifest's table set AND, for tables already migrated, its column
+      // shape (issue #1539) against what versions_dir already has. A
+      // route-only or otherwise no-op edit calls this and gets back an
+      // empty list; a new table or an added column on an existing table
+      // produces a new, additive migration file; a column removed, retyped,
+      // or nullability-changed on an already-migrated table makes it throw
+      // rather than guess, surfaced via the outer catch below.
       log.info(
         `Checking for a migration for services/${source.name}/'s ${manifest.tables.length} table(s)...`,
       )
@@ -408,7 +419,9 @@ async function runLocalPluginRefresh(
       if (generatedPaths.length > 0) {
         log.success(`Generated migration: ${relative(options.cwd, generatedPaths[0]!)}`)
       } else {
-        log.info(`${source.name}'s table set is unchanged — no migration needed.`)
+        log.info(
+          `${source.name}'s tables and columns already match the manifest — no migration needed.`,
+        )
       }
     } else {
       log.info(`${source.name} declares no tables — nothing to migrate.`)
@@ -515,7 +528,8 @@ function printLocalDryRun(
   if (source.manifest.tables.length > 0) {
     console.log(
       `  Would check for a migration for ${source.manifest.tables.length} table(s) ` +
-        '(only generated if the table set changed)',
+        '(generated for a new table or an added column on an already-migrated table; ' +
+        'a removed/retyped/nullability-changed column stops the refresh instead — #1539)',
     )
   }
   console.log(`  Would commit:  chore(plugins): refresh ${source.name} from local checkout\n`)

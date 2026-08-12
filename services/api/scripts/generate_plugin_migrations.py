@@ -15,7 +15,14 @@ Contract with callers:
   or the plugin declares no tables (both are legitimate no-ops, not errors).
 - Exit code 0 on success (including the "nothing to do" case).
 - Exit code 1, with a message on stderr, if an explicitly-named --plugin
-  isn't discoverable under --services-root.
+  isn't discoverable under --services-root, or if
+  ``generate_migration_for_plugin`` refuses to guess at a column-level
+  change (issue #1539) — an already-migrated table with a column removed,
+  retyped, nullability-changed, or whose existing columns can't be
+  determined. The message is the ``ValueError``'s own text, not a raw
+  traceback: the Node CLI (``cli/src/adapters/plugin-migrations/index.ts``)
+  surfaces stderr verbatim to the operator, and a traceback would bury the
+  actionable "table X, column Y" detail under Python frames.
 """
 
 from __future__ import annotations
@@ -64,11 +71,19 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 1
 
-    generated = sync_plugin_migrations(
-        args.versions_dir,
-        services_root=args.services_root,
-        only=set(args.plugin) if args.plugin else None,
-    )
+    try:
+        generated = sync_plugin_migrations(
+            args.versions_dir,
+            services_root=args.services_root,
+            only=set(args.plugin) if args.plugin else None,
+        )
+    except ValueError as exc:
+        # generate_migration_for_plugin refuses rather than guesses at a
+        # column-level change it can't safely handle (issue #1539) — surface
+        # its own message, not a traceback (see module docstring).
+        print(str(exc), file=sys.stderr)
+        return 1
+
     for path in generated:
         print(path.resolve())
     return 0

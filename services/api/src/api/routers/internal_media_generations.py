@@ -16,12 +16,13 @@ defaults to ``"default"``.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
+from ..media_generations import record_generation
 from ..middleware.service_auth import ServicePrincipal, require_service_principal
-from ..models.media_generation import MEDIA_KINDS, MediaGeneration
+from ..models.media_generation import MEDIA_KINDS
 from ..schemas.media_generation import (
     MediaGenerationCreatedResponse,
     RecordMediaGenerationRequest,
@@ -33,6 +34,7 @@ router = APIRouter(prefix="/internal/media-generations", tags=["internal:media"]
 @router.post("", response_model=MediaGenerationCreatedResponse, status_code=status.HTTP_201_CREATED)
 async def record_media_generation(
     body: RecordMediaGenerationRequest,
+    response: Response,
     principal: ServicePrincipal = Depends(require_service_principal),
     db: AsyncSession = Depends(get_db),
 ) -> MediaGenerationCreatedResponse:
@@ -44,6 +46,17 @@ async def record_media_generation(
     kind silently accepted would sit in the ledger contributing to no rollup and
     visible in no report, which is the same as not recording it while looking
     like success.
+
+    ``client_request_id`` makes this create-or-**get** (issue #1515). A caller
+    that has already paid a provider and then lost this response cannot tell
+    whether its row landed; with a key it can simply post again and get the same
+    row back with **200**, instead of choosing between losing the record and
+    double-recording the charge. Uniqueness is enforced by a unique index rather
+    than by a prior read, so two overlapping retries still produce one row.
+
+    Without a key the behaviour is unchanged, **including the 201** — existing
+    callers send none, and collapsing their posts would silently drop real
+    charges that legitimately look alike.
     """
     if body.media_kind not in MEDIA_KINDS:
         raise HTTPException(
@@ -58,7 +71,8 @@ async def record_media_generation(
     # plugin-shaped answer.
     caller_plugin = next(iter(principal.logical_names), None)
 
-    row = MediaGeneration(
+    row, created = await record_generation(
+        db,
         tenant_id=principal.tenant_id,
         caller_plugin=caller_plugin,
         causation_id=body.causation_id,
@@ -68,9 +82,14 @@ async def record_media_generation(
         units=body.units,
         unit_kind=body.unit_kind,
         cost_usd=body.cost_usd,
+        client_request_id=body.client_request_id,
     )
-    db.add(row)
-    await db.flush()
-    await db.refresh(row)
+
+    if not created:
+        # The key matched a row this caller already recorded. 200 rather than 201
+        # so a caller can tell a retry that found its earlier write from a first
+        # attempt — and rather than 409, because a duplicate here is the caller
+        # doing exactly the right thing and it needs the id, not an error.
+        response.status_code = status.HTTP_200_OK
 
     return MediaGenerationCreatedResponse(id=row.id, created_at=row.created_at)

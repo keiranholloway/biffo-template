@@ -182,6 +182,82 @@ def test_fractional_units_survive(ctx):
     assert ctx["client"].get(_READ).json()["media_generations"][0]["units"] == 3.5
 
 
+# --- idempotency (issue #1515) --------------------------------------------
+#
+# The HTTP contract only. The constraint itself, the retry race and the dialect
+# semantics it depends on are proven against real Postgres in
+# `test_media_generation_idempotency_pg.py` — a uniqueness guarantee asserted
+# only under sqlite says nothing about the database that holds the ledger.
+
+
+def test_a_repeat_post_with_the_same_key_returns_the_existing_row(ctx):
+    """The retry a caller needs after it has already paid a provider.
+
+    200 rather than 201, with the same id, and no second row — otherwise the
+    caller must choose between losing the charge's record and double-recording
+    it, which is issue #1515.
+    """
+    c = ctx["client"]
+    first = c.post(_WRITE, json=_body(client_request_id="render-7"))
+    assert first.status_code == 201, first.text
+
+    second = c.post(_WRITE, json=_body(client_request_id="render-7"))
+    assert second.status_code == 200, second.text
+    assert second.json()["id"] == first.json()["id"]
+
+    assert len(c.get(_READ).json()["media_generations"]) == 1
+
+
+def test_a_repeat_post_does_not_overwrite_the_recorded_charge(ctx):
+    """A retry returns what was recorded, not what the retry happened to say.
+
+    The first write is the one that matches the money that actually moved. A
+    caller retrying with a drifted body (a recomputed estimate, a different unit
+    count) must not be able to rewrite history through the idempotent path.
+    """
+    c = ctx["client"]
+    c.post(_WRITE, json=_body(client_request_id="render-8", cost_usd=0.04))
+    c.post(_WRITE, json=_body(client_request_id="render-8", cost_usd=99.0, units=42))
+
+    rows = c.get(_READ).json()["media_generations"]
+    assert len(rows) == 1
+    assert rows[0]["cost_usd"] == 0.04
+    assert rows[0]["units"] == 1
+
+
+def test_without_a_key_the_behaviour_is_unchanged_including_the_status(ctx):
+    """Backward compatibility, asserted on the status code as well as the rows.
+
+    Every caller today sends no key, and two genuinely separate charges routinely
+    look identical. Collapsing them would silently drop real spend.
+    """
+    c = ctx["client"]
+    first = c.post(_WRITE, json=_body())
+    second = c.post(_WRITE, json=_body())
+
+    assert first.status_code == second.status_code == 201
+    assert first.json()["id"] != second.json()["id"]
+    assert len(c.get(_READ).json()["media_generations"]) == 2
+
+
+def test_the_key_is_visible_on_the_read_side(ctx):
+    """An operator reconciling a suspected double charge needs to know which rows
+    were keyed, and therefore which a retry could not have duplicated."""
+    c = ctx["client"]
+    c.post(_WRITE, json=_body(client_request_id="render-7"))
+    c.post(_WRITE, json=_body())
+
+    keys = {r["client_request_id"] for r in c.get(_READ).json()["media_generations"]}
+    assert keys == {"render-7", None}
+
+
+def test_an_empty_key_is_rejected_rather_than_treated_as_absent(ctx):
+    """`""` is not a key. Accepted, it would collapse every unkeyed-looking
+    caller's charges into one row under `coalesce`-style comparison, which is the
+    one direction of this feature that loses money silently."""
+    assert ctx["client"].post(_WRITE, json=_body(client_request_id="")).status_code == 422
+
+
 # --- cost aggregation -----------------------------------------------------
 
 

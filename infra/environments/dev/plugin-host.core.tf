@@ -23,14 +23,17 @@ module "plugin_host" {
 
   # The founder gate reads the shared-Cognito config from the environment
   # (SDK CognitoConfig.from_env); no DB credentials are injected (ADR-0002).
-  environment_variables = {
+  # `plugin_host_environment` first so a core key can never be silently
+  # overridden by instance config — a plugin shadowing BIFFO_CORE_API_URL
+  # would break every plugin on the host, not just its own.
+  environment_variables = merge(var.plugin_host_environment, {
     BIFFO_COGNITO_JWKS_JSON    = data.http.cognito_jwks.response_body
     BIFFO_COGNITO_USER_POOL_ID = module.auth.user_pool_id
     BIFFO_COGNITO_CLIENT_ID    = module.auth.client_id
     BIFFO_COGNITO_REGION       = var.aws_region
     BIFFO_CORE_API_URL         = module.api_gateway.api_endpoint
     BIFFO_PLUGINS_ROOT         = "/var/task/services"
-  }
+  })
 
   tags = local.tags
 }

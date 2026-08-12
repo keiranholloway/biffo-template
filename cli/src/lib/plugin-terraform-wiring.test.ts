@@ -278,6 +278,37 @@ describe('syncPluginTerraform', () => {
     expect(existsSync(join(cwd, 'infra', 'environments', 'dev', GENERATED_TF_FILE))).toBe(true)
   })
 
+  it('passes the public base URL to a generated module through environment_variables (biffo-template#1456)', () => {
+    makeEnvironment('dev')
+    makePluginModule('widgets', [...STANDARD_VARIABLES, 'environment_variables'])
+
+    syncPluginTerraform(cwd)
+    const tf = generatedTf('dev')
+
+    // Locate THIS plugin's own module block specifically — not just anywhere in
+    // the file — so this cannot false-pass by matching an unrelated module's
+    // argument the way #1538's first guard attempt did. Whitespace around `=`
+    // is not asserted exactly: renderArguments pads it to align with the
+    // block's longest key (terraform fmt's own convention, covered by the
+    // alignment test below), so it varies with the fixture's other keys.
+    const block = tf.slice(tf.indexOf('module "plugin_widgets" {'), tf.indexOf('\noutput "'))
+    expect(block).toMatch(
+      /environment_variables\s+=\s+\{ BIFFO_PUBLIC_BASE_URL = local\.portal_url \}/,
+    )
+  })
+
+  it('omits environment_variables for a module that does not declare it, so it still validates', () => {
+    makeEnvironment('dev')
+    // A module with no Lambda (ADR-0021 frontend-only shape) or one predating
+    // this change — either way it never declared environment_variables.
+    makePluginModule('legacy', STANDARD_VARIABLES)
+
+    syncPluginTerraform(cwd)
+    const tf = generatedTf('dev')
+
+    expect(tf).not.toContain('environment_variables')
+  })
+
   it('aligns the = signs so the generated file survives terraform fmt -check', () => {
     makeEnvironment('dev')
     makePluginModule('widgets')

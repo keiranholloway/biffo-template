@@ -103,6 +103,27 @@ function walkSourceFiles(root: string): string[] {
   return out.sort()
 }
 
+/**
+ * How many source files a sweep of `root` would actually read.
+ *
+ * Exported so the read-back check can assert the sweep had *input* rather than
+ * asserting that some particular file exists. The caller used to read
+ * `cli/src/lib/codeql-suppression-guard.ts` as its canary — a path that exists
+ * only in a `biffo-template` checkout. An instance installs the CLI from npm,
+ * which ships `dist` and not `src` and has no `cli/` at all, so the guard
+ * crashed with ENOENT everywhere it was distributed to and could never pass
+ * (tabsii-platform, core 0.276.9).
+ *
+ * That is the third instance of one class: the CLI resolving a repo-root path
+ * that only survives in a checkout, invisible in CI because the upward walk
+ * still finds it there (#259, #315, and CLAUDE.md's own warning about it).
+ * Counting what the sweep read has no such dependency — it is true wherever
+ * the guard runs.
+ */
+export function countSourceFiles(root: string): number {
+  return walkSourceFiles(root).length
+}
+
 /** Every `codeql[...]`-shaped comment across the repo's source tree. */
 export function sweepCodeqlSuppressionComments(root: string): CodeqlSuppressionHit[] {
   const hits: CodeqlSuppressionHit[] = []

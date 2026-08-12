@@ -103,6 +103,35 @@ function standardArguments(pluginName: string, handler: string): Array<[string, 
     // `terraform plan` for a whole environment. Filtered by declaration below,
     // so a Lambda-backed legacy module that does not declare it is unaffected.
     ['cdn_distribution_arn', 'module.cdn.distribution_arn'],
+    // biffo-template#1456: an installed plugin has no channel for
+    // instance-specific configuration at all, and the first thing that needs
+    // one is the deployment's own public origin — a plugin minting a
+    // user-visible URL (e.g. a tracked link) cannot derive that from
+    // BIFFO_CORE_API_URL, which is the execute-api gateway host, not the
+    // branded domain.
+    //
+    // Routed through the module's existing `environment_variables` map
+    // (declared in modules/plugins/_template/variables.tf, merged over
+    // BIFFO_CORE_API_URL/BIFFO_PLUGIN_NAME in that module's main.tf) rather
+    // than a new bespoke module variable — that hook already exists, already
+    // reaches the Lambda, and plugins.core.tf already uses the identical
+    // shape for orchestrator's email_branding_env. Adding a dedicated
+    // `public_base_url` variable would be a second channel doing the same
+    // job.
+    //
+    // `local.portal_url` is defined once in the *user-owned* main.tf
+    // (custom_domain when set, else the CloudFront distribution domain) and
+    // is reachable here because Terraform loads every *.tf file in a
+    // directory as one module — no argument is being added to a module block
+    // declared in another file (the #1538 trap), only a local referenced
+    // across files in the same directory, which Terraform has always allowed.
+    // It is safe to assume present in every environment this generator writes
+    // into: `listEnvironments` already requires `enabled_plugins` to be
+    // declared, and `portal_url` was extracted as a local two days before
+    // `enabled_plugins` existed at all (8dd54065, predating 64677295) — so
+    // any environment old enough to lack it predates the plugin system
+    // entirely and is already excluded by that check.
+    ['environment_variables', '{ BIFFO_PUBLIC_BASE_URL = local.portal_url }'],
     ['tags', 'local.tags'],
   ]
 }

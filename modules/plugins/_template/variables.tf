@@ -110,7 +110,7 @@ variable "subscribe_all" {
 }
 
 variable "environment_variables" {
-  description = "Additional environment variables for the plugin's Lambda, merged over BIFFO_CORE_API_URL / BIFFO_PLUGIN_NAME. Do not put database connection details here — plugins never receive them (ADR-0002)."
+  description = "Additional environment variables for the plugin's Lambda, merged over BIFFO_CORE_API_URL / BIFFO_PLUGIN_NAME. For a THIRD-PARTY plugin, `biffo plugin install`'s generator (cli/src/lib/plugin-terraform-wiring.ts) always supplies BIFFO_PUBLIC_BASE_URL here (biffo-template#1456) — the deployment's own public origin (custom domain, or the CloudFront distribution domain), the value a plugin needs to mint a user-visible URL rather than one pointed at the execute-api gateway host. A first-party plugin wired by hand in plugins.core.tf does not get it automatically; that file supplies its own map (e.g. orchestrator's email_branding_env). Do not put database connection details here — plugins never receive them (ADR-0002)."
   type        = map(string)
   default     = {}
 }

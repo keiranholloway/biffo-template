@@ -46,10 +46,24 @@ through hand-written routers, not the generic-CRUD layer (ADR-0004).
 
 from __future__ import annotations
 
-from sqlalchemy import Float, Index, String
+from sqlalchemy import Float, Index, String, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .base import TenantScopedModel
+
+#: The caller half of the idempotency constraint, as a SQL expression.
+#:
+#: ``caller_plugin`` is nullable, and neither Postgres nor SQLite constrains a
+#: row whose unique-index tuple contains a NULL — so naming the column directly
+#: would exempt every row written by a caller that resolves to no plugin, which
+#: is a state this column is deliberately nullable to represent. Folding NULL to
+#: ``''`` puts every caller inside the constraint and leaves
+#: ``client_request_id``'s own NULL as the only thing that exempts a row. See
+#: migration 0019 for the measurement on both dialects.
+#:
+#: Defined once and imported by the create-or-get lookup so the index and the
+#: query that depends on it cannot drift apart.
+CALLER_KEY_SQL = "coalesce(caller_plugin, '')"
 
 #: Media kinds this ledger knows how to price. Deliberately coarse: the unit
 #: differs per kind (see ``units``), and a finer taxonomy would multiply the
@@ -70,6 +84,17 @@ class MediaGeneration(TenantScopedModel):
         # agent chain that produced it, not through a foreign key — see
         # ``causation_id`` below.
         Index("ix_media_generation_causation", "tenant_id", "causation_id"),
+        # The idempotency constraint (issue #1515). Unique so the *database*
+        # decides who wins a retry race rather than a prior read — a
+        # check-then-act would pass every sequential test and still write two
+        # rows when two retries overlap, which is the case that costs money.
+        Index(
+            "uq_media_generation_client_request",
+            "tenant_id",
+            text(CALLER_KEY_SQL),
+            "client_request_id",
+            unique=True,
+        ),
     )
 
     #: Which plugin requested this generation, as ``system:<plugin>``.
@@ -80,6 +105,23 @@ class MediaGeneration(TenantScopedModel):
     #: belongs to. Nullable for the same reason — there is no correct value to
     #: invent for a caller that is not a plugin.
     caller_plugin: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
+    #: Caller-supplied idempotency key, so a failed ledger write can be retried
+    #: safely (issue #1515).
+    #:
+    #: A plugin that charges a provider and then loses the response to this
+    #: ledger cannot tell whether its row landed. Retrying blind either loses the
+    #: charge's record or writes a second row — and the second looks exactly like
+    #: success while inflating every per-plugin total read from this table.
+    #: A caller that can name the write deterministically passes a key and gets
+    #: create-or-**get** instead.
+    #:
+    #: Nullable, and that null is load-bearing: existing callers send no key and
+    #: must keep writing one row per post. The unique index deliberately does not
+    #: constrain NULLs, so only opt-in callers get the guarantee — see
+    #: ``CALLER_KEY_SQL`` above for why the *caller* half cannot be left nullable
+    #: the same way.
+    client_request_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     #: Ties this asset to the agent chain that produced it, so campaign-level
     #: spend can be assembled across text and media without a foreign key

@@ -41,12 +41,28 @@ class RecordMediaGenerationRequest(BaseModel):
     #: spend can be assembled across text and media.
     causation_id: str | None = Field(default=None, max_length=255)
 
+    #: Optional idempotency key, so a caller that has already paid a provider can
+    #: retry a failed ledger write without risking a duplicate row (issue #1515).
+    #:
+    #: A repeat POST carrying a key already recorded for this caller returns the
+    #: existing row with **200** instead of creating a second one with 201. Omit
+    #: it and nothing changes — every post writes a row, exactly as before.
+    #:
+    #: Scoped per caller as well as per tenant, so two plugins deriving the same
+    #: natural key do not collide; unlike ``causation_id`` this is opaque to the
+    #: ledger and is never interpreted, only compared.
+    client_request_id: str | None = Field(default=None, min_length=1, max_length=255)
+
 
 class MediaGenerationResponse(BiffoBaseSchema):
     """A recorded generation, as admin spend views show it."""
 
     caller_plugin: str | None = None
     causation_id: str | None = None
+    #: Surfaced on the read side so an operator reconciling a suspected double
+    #: charge can see which rows were keyed, and therefore which a retry could
+    #: not have duplicated.
+    client_request_id: str | None = None
     media_kind: str
     provider: str
     model: str

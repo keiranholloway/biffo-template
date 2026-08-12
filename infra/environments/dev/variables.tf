@@ -213,32 +213,3 @@ variable "tracked_link_api_domain" {
   type        = string
   default     = ""
 }
-
-variable "plugin_host_environment" {
-  description = <<-EOT
-    Extra environment variables for the shared plugin host (ADR-0021).
-
-    The host runs every installed plugin's `user_ingress`/`admin_ingress` app,
-    and a plugin that needs configuration — a provider credential, an endpoint,
-    a feature switch — has nowhere else to be told about it. Its own Terraform
-    module configures the plugin's OWN Lambda, which is a DIFFERENT function
-    that those apps do not run on. Without this, a plugin can declare that it
-    needs a value and no instance can supply one.
-
-    Secrets belong here by PARAMETER NAME, never by value: pass
-    `<PLUGIN>_..._PARAMETER = "/project/env/plugin/thing"` and grant the host's
-    role `ssm:GetParameter` on that exact path. Putting a secret's value in a
-    Lambda environment variable puts it in every `get-function-configuration`
-    response and in Terraform state.
-
-    Two limits worth knowing. This map is FLAT and the host is SHARED, so names
-    are first-come-first-served across plugins and any plugin's code can read
-    any other's values — prefix per plugin, and do not put one tenant's secret
-    here expecting isolation. And nothing checks that a plugin's declared needs
-    were actually supplied; an unconfigured plugin still mounts and fails at
-    request time. Making the declaration machine-checked at install, and scoping
-    resolution per plugin, is tracked in #1517.
-  EOT
-  type        = map(string)
-  default     = {}
-}

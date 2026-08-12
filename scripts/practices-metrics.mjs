@@ -997,6 +997,52 @@ export const RACE_THRESHOLD_MINUTES = 10
  *   just before the window opened is not in `prs` to be counted. The bias is
  *   one-directional and toward zero, so a rise is always real.
  *
+ * ## `racedShare` is not portable across repos with different CI speed (#1419)
+ *
+ * `RACE_THRESHOLD_MINUTES` is an **absolute** 10 minutes, the same number for
+ * every repo regardless of how long that repo's own CI takes to reach green.
+ * That makes the threshold a function of pipeline latency as much as of
+ * contention: a repo whose median time-to-green already exceeds 10 minutes
+ * crosses `racedShare`'s numerator condition on wait time alone, before any
+ * question of whether `dev` moved underneath it.
+ *
+ * Measured live 2026-08-12, four repos, 7-day window, `strict: false` on
+ * three of the four (the fourth, `biffo-plugin-idea-scout`, `true`):
+ *
+ * | repo | runner | `greenToMergeP50Minutes` | `repushRate` | `racedShare` | `staleMergeShare` |
+ * | --- | --- | ---: | ---: | ---: | ---: |
+ * | `biffo-template` | hosted | 4.1 | 15.0% | 12.6% | 18.1% |
+ * | `biffo-platform` | hosted | 4.4 | 12.5% | 12.5% | 0% |
+ * | `biffo-plugin-idea-scout` | hosted | 7.3 | 46.2% | 23.1% | 0% |
+ * | `tabsii-platform` | **self-hosted, spot** | **14.7** | **42.7%** | **41.3%** | 7.3% |
+ *
+ * `tabsii-platform` is the only repo of the four on self-hosted (spot) runner
+ * capacity, and its median green-to-merge lag (14.7min) already clears the
+ * fixed 10-minute threshold by itself — consistent with the runner-queueing
+ * cost recorded elsewhere in this estate for that fleet. `racedShare` tracks
+ * `repushRate` far more tightly across this table than it tracks `strict`
+ * (three of the four rows are `strict: false` and still span 12.5%–41.3%),
+ * which reconfirms H4's amendment to H3: *"`racedShare` counts PRs that sat
+ * green over ten minutes and were repushed. It is arithmetically a function of
+ * how many times you push."*
+ *
+ * The clincher against reading `racedShare` as *this repo has more genuine
+ * integration contention*: `staleMergeShare` — the metric that actually
+ * detects whether `dev` moved between a PR's last green run and its merge —
+ * is **lower** at `tabsii-platform` (7.3%) than at `biffo-template` (18.1%).
+ * If `tabsii-platform`'s elevated `racedShare` reflected more real racing
+ * against a moving `dev`, `staleMergeShare` should read higher there too, not
+ * lower. It does not, so the elevated reading is better read as this repo's
+ * own CI/runner latency and repush volume crossing an absolute threshold, not
+ * as more contention.
+ *
+ * **Practical consequence: never read `racedShare` as a bare cross-repo
+ * defect rate.** Read it beside `greenToMergeP50Minutes` (this repo's own
+ * pipeline speed relative to the fixed threshold) and `repushRate` (the
+ * arithmetic driver), and treat `staleMergeShare` as the tie-breaker when the
+ * two disagree about whether a high `racedShare` is genuine contention. The
+ * dashboard's tooltip on this cell carries the same note.
+ *
  * @param {Array<{createdAt: string, mergedAt: string | null, headRefName: string, baseRefName?: string}>} prs
  * @param {Map<string, Array<Record<string, unknown>>>} runsByBranch
  */

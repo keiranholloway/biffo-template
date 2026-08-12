@@ -196,11 +196,39 @@ Baseline: **163 hours across 453 PRs** in biffo-template over 90 days.
 
 ### `contention.racedShare` / `repushRate`
 
-`racedShare` — the share of PRs that were green for more than 10 minutes **and**
-were repushed. Both conditions matter: a long wait alone is a PR nobody got to,
-and a repush alone is ordinary iteration. Together they are the up-to-date race.
+`racedShare` — the share of **measured** PRs (merged, with known churn) that
+were green for more than 10 minutes **and** were repushed. Both conditions
+matter: a long wait alone is a PR nobody got to, and a repush alone is
+ordinary iteration. Together they are the up-to-date race.
 
 `repushRate` — share of PRs needing at least one repush.
+
+**Not every measured PR could have raced (#1419).** A PR with no successful
+run, or one merged before any run completed, is structurally incapable of
+ever satisfying the numerator, but both stay in the `measured` denominator.
+`racedExcludedNoGreenRun`, `racedExcludedMergedBeforeGreen`, `racedEligible`
+and `racedShareEligible` (the share recomputed over the population that
+survived both exclusions) make the gap visible rather than silently folding
+it into a smaller number. `racedShare` itself is kept computing exactly what
+it always has, so historical figures stay comparable — read the exclusion
+fields beside it, never it alone. The dashboard puts them in the cell's
+tooltip.
+
+**`racedShare` is also not a portable cross-repo defect rate (#1419).** Its
+10-minute threshold is absolute, not scaled to a repo's own CI speed, so a
+repo whose pipeline is simply slower crosses the numerator's wait condition
+on latency alone. Measured live 2026-08-12: `tabsii-platform`, the only one
+of four sampled repos on self-hosted (spot) runner capacity, had a median
+green-to-merge lag of 14.7 minutes — already past the threshold — against
+4.1–7.3 minutes for three GitHub-hosted repos, and its `racedShare` (41.3%)
+tracked `repushRate` (42.7%) far more tightly than it tracked `strict`
+(three of the four sampled repos were `strict: false` and still spanned
+12.5%–41.3%). `staleMergeShare`, the metric that actually detects whether
+`dev` moved underneath a PR, read *lower* at `tabsii-platform` (7.3%) than at
+`biffo-template` (18.1%) — the opposite of what more genuine contention would
+predict. Read `racedShare` beside `greenToMergeP50Minutes` and `repushRate`
+for the same repo, and treat `staleMergeShare` as the tie-breaker, rather
+than comparing the bare share across repos.
 
 ### `greenToMergeP90Minutes` / `MaxMinutes` — and why no median
 

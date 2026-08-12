@@ -118,18 +118,19 @@ module "storage" {
 }
 
 module "cdn" {
-  source                        = "../../../modules/cloud/aws/cdn"
-  project_name                  = var.project_name
-  environment                   = local.environment
-  portal_bucket_regional_domain = module.storage.portal_bucket_regional_domain
-  portal_bucket_name            = module.storage.portal_bucket_name
-  portal_bucket_id              = module.storage.portal_bucket_name
-  portal_bucket_arn             = module.storage.portal_bucket_arn
-  custom_domain                 = var.custom_domain
-  acm_certificate_arn           = var.acm_certificate_arn
-  hosted_zone_id                = var.hosted_zone_id
-  sibling_origins               = var.sibling_origins
-  tags                          = local.tags
+  source                          = "../../../modules/cloud/aws/cdn"
+  project_name                    = var.project_name
+  environment                     = local.environment
+  portal_bucket_regional_domain   = module.storage.portal_bucket_regional_domain
+  portal_bucket_name              = module.storage.portal_bucket_name
+  portal_bucket_id                = module.storage.portal_bucket_name
+  portal_bucket_arn               = module.storage.portal_bucket_arn
+  custom_domain                   = var.custom_domain
+  acm_certificate_arn             = var.acm_certificate_arn
+  hosted_zone_id                  = var.hosted_zone_id
+  sibling_origins                 = var.sibling_origins
+  error_status_restore_lambda_arn = var.error_status_restore_lambda_arn
+  tags                            = local.tags
 }
 
 module "auth" {
@@ -257,6 +258,21 @@ variable "custom_domain" {
   default = ""
 }
 variable "acm_certificate_arn" {
+  type    = string
+  default = ""
+}
+
+# biffo-template#1529: qualified ARN of the error-status-demote Lambda@Edge
+# function (output from infra/global). Empty disables the fix for the CDN
+# replacing API 403/404 JSON bodies with the portal's SPA shell — see
+# modules/cloud/aws/cdn/variables.tf for the full mechanism. Wired here for
+# parity with dev even though this environment doesn't yet route any API
+# behaviour through the CDN itself (no plugin_host_api_domain/
+# core_api_health_domain/tracked_link_api_domain wiring below) — so it is a
+# no-op today, not dead: the module gates every lambda_function_association
+# on this same variable, so it activates automatically once staging grows
+# those routes rather than needing a second change to remember.
+variable "error_status_restore_lambda_arn" {
   type    = string
   default = ""
 }

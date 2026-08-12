@@ -197,3 +197,39 @@ variable "tracked_link_api_domain" {
     error_message = "tracked_link_api_domain must be a bare domain — no scheme, no path, no trailing slash."
   }
 }
+
+# Fixes biffo-template#1529: the distribution-wide `custom_error_response`
+# below (search main.tf for that name) exists to serve the portal/sibling SPA
+# shell on a 403/404 from a missing static file, and CloudFront gives no way
+# to scope it away from the API behaviours — so it was also rewriting every
+# genuine 403/404 JSON body the API origins return into that same HTML shell.
+#
+# error_status_restore_lambda_arn is the QUALIFIED ARN (including a numeric
+# version — Lambda@Edge requires a published version, never $LATEST) of a
+# Lambda@Edge function that, on the three API behaviours only, demotes a real
+# 403/404 to 200 before CloudFront's error-page logic ever sees it, then
+# restores the true status just before the response reaches the viewer. See
+# error-status-demote.js and error-status-restore.js for the full mechanism.
+#
+# A qualified ARN, not a bare one: Lambda@Edge associations are pinned to one
+# immutable version, so an instance updating this function must publish a new
+# version and pass its ARN in again — CloudFront will not follow $LATEST.
+#
+# Lambda@Edge functions must be created in us-east-1 regardless of this
+# distribution's own region (the same constraint acm_certificate_arn already
+# documents), so this module does not create the function itself — it is
+# created in infra/global (already us-east-1, alongside the wildcard ACM
+# cert) and its qualified ARN is threaded in here, the same pattern
+# acm_certificate_arn already uses.
+#
+# Empty by default: an instance with none of plugin_host_api_domain,
+# core_api_health_domain or tracked_link_api_domain set has no API behaviour
+# for this to protect, and the three `lambda_function_association` /
+# `function_association` (viewer-response) blocks below are gated on this
+# being non-empty, exactly as the API behaviours themselves are gated on
+# their own domain variables.
+variable "error_status_restore_lambda_arn" {
+  description = "Qualified ARN (us-east-1, versioned) of the error-status-demote Lambda@Edge function. Output from infra/global. Empty disables the API-error-body fix — see module README."
+  type        = string
+  default     = ""
+}

@@ -655,6 +655,267 @@ class TestPluginUpgradeEmitsOnlyTheDelta:
             generate_migration_for_plugin(manifest, self.versions_dir)
 
 
+class TestPluginUpgradeColumnDiff:
+    """Issue #1539: the delta was computed by table NAME only, so a column
+    added/removed/retyped on an *already-migrated* table produced no
+    migration and no error — reported as "table set unchanged", a
+    conclusion the table-only comparison never earned. Real case: refreshing
+    `biffo-plugin-marketing` into `tabsii-platform` after it added
+    `marketing_channel.publish_url` (tabsii-platform#900).
+    """
+
+    def setup_method(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.versions_dir = Path(self.tmpdir) / "versions"
+        self.versions_dir.mkdir()
+
+    def teardown_method(self):
+        shutil.rmtree(self.tmpdir)
+
+    def test_column_added_to_existing_table_generates_add_column_migration(self):
+        # This is the exact real-world case: marketing_channel gains
+        # publish_url. The table SET is unchanged; the column set is not.
+        v1 = {
+            "name": "marketing",
+            "version": "1.0.0",
+            "tables": [
+                {"name": "marketing_channel", "columns": [{"name": "key", "type": "String(64)"}]}
+            ],
+        }
+        first = generate_migration_for_plugin(v1, self.versions_dir)
+        assert first is not None
+
+        v2 = {
+            "name": "marketing",
+            "version": "1.1.0",
+            "tables": [
+                {
+                    "name": "marketing_channel",
+                    "columns": [
+                        {"name": "key", "type": "String(64)"},
+                        {"name": "publish_url", "type": "String(512)", "nullable": True},
+                    ],
+                }
+            ],
+        }
+        second = generate_migration_for_plugin(v2, self.versions_dir)
+
+        # This is the failing assertion before the fix: it was None.
+        assert second is not None
+        content = second.read_text()
+        assert "op.add_column('marketing_channel', sa.Column('publish_url', sa.String(512)))" in (
+            content
+        )
+        assert "op.create_table(" not in content
+        compile(content, str(second), "exec")
+
+        # Downgrade is the exact inverse.
+        assert "op.drop_column('marketing_channel', 'publish_url')" in content
+
+        # Chains onto the first migration.
+        first_revision = first.stem.split("_")[0]
+        assert f"down_revision = '{first_revision}'" in content
+
+        # Idempotent: calling again for the identical manifest is a no-op.
+        third = generate_migration_for_plugin(dict(v2), self.versions_dir)
+        assert third is None
+
+    def test_added_column_with_index_generates_index_statements(self):
+        v1 = {
+            "name": "marketing",
+            "version": "1.0.0",
+            "tables": [{"name": "marketing_channel", "columns": []}],
+        }
+        generate_migration_for_plugin(v1, self.versions_dir)
+
+        v2 = {
+            "name": "marketing",
+            "version": "1.1.0",
+            "tables": [
+                {
+                    "name": "marketing_channel",
+                    "columns": [{"name": "slug", "type": "String(64)", "index": True}],
+                }
+            ],
+        }
+        second = generate_migration_for_plugin(v2, self.versions_dir)
+        assert second is not None
+        content = second.read_text()
+        assert "op.create_index('ix_marketing_channel_slug', 'marketing_channel', ['slug']" in (
+            content
+        )
+        assert "op.drop_index('ix_marketing_channel_slug', 'marketing_channel')" in content
+        compile(content, str(second), "exec")
+
+    def test_new_table_and_column_addition_in_one_call_both_land(self):
+        v1 = {
+            "name": "marketing",
+            "version": "1.0.0",
+            "tables": [{"name": "marketing_channel", "columns": []}],
+        }
+        generate_migration_for_plugin(v1, self.versions_dir)
+
+        v2 = {
+            "name": "marketing",
+            "version": "1.1.0",
+            "tables": [
+                {
+                    "name": "marketing_channel",
+                    "columns": [{"name": "publish_url", "type": "String(512)"}],
+                },
+                {"name": "marketing_link", "columns": []},
+            ],
+        }
+        second = generate_migration_for_plugin(v2, self.versions_dir)
+        assert second is not None
+        content = second.read_text()
+        assert "op.create_table(" in content
+        assert "'marketing_link'" in content
+        assert "op.add_column('marketing_channel', sa.Column('publish_url'" in content
+        compile(content, str(second), "exec")
+
+    def test_column_removed_from_existing_table_refuses_rather_than_guesses(self):
+        v1 = {
+            "name": "marketing",
+            "version": "1.0.0",
+            "tables": [
+                {
+                    "name": "marketing_channel",
+                    "columns": [{"name": "key", "type": "String(64)"}],
+                }
+            ],
+        }
+        generate_migration_for_plugin(v1, self.versions_dir)
+
+        v2 = {
+            "name": "marketing",
+            "version": "1.1.0",
+            "tables": [{"name": "marketing_channel", "columns": []}],
+        }
+        with pytest.raises(ValueError, match="column\\(s\\) removed.*key") as exc_info:
+            generate_migration_for_plugin(v2, self.versions_dir)
+        assert "marketing_channel" in str(exc_info.value)
+        # Nothing was written.
+        assert len(list(self.versions_dir.glob("*.py"))) == 1
+
+    def test_column_retyped_on_existing_table_refuses_rather_than_guesses(self):
+        v1 = {
+            "name": "marketing",
+            "version": "1.0.0",
+            "tables": [
+                {
+                    "name": "marketing_channel",
+                    "columns": [{"name": "key", "type": "String(64)"}],
+                }
+            ],
+        }
+        generate_migration_for_plugin(v1, self.versions_dir)
+
+        v2 = {
+            "name": "marketing",
+            "version": "1.1.0",
+            "tables": [
+                {
+                    "name": "marketing_channel",
+                    "columns": [{"name": "key", "type": "String(128)"}],
+                }
+            ],
+        }
+        with pytest.raises(ValueError, match="retyped.*key") as exc_info:
+            generate_migration_for_plugin(v2, self.versions_dir)
+        assert "marketing_channel" in str(exc_info.value)
+
+    def test_column_nullability_changed_refuses_rather_than_guesses(self):
+        v1 = {
+            "name": "marketing",
+            "version": "1.0.0",
+            "tables": [
+                {
+                    "name": "marketing_channel",
+                    "columns": [{"name": "key", "type": "String(64)", "nullable": False}],
+                }
+            ],
+        }
+        generate_migration_for_plugin(v1, self.versions_dir)
+
+        v2 = {
+            "name": "marketing",
+            "version": "1.1.0",
+            "tables": [
+                {
+                    "name": "marketing_channel",
+                    "columns": [{"name": "key", "type": "String(64)", "nullable": True}],
+                }
+            ],
+        }
+        with pytest.raises(ValueError, match="nullability"):
+            generate_migration_for_plugin(v2, self.versions_dir)
+
+    def test_added_primary_key_column_refuses_rather_than_guesses(self):
+        v1 = {
+            "name": "marketing",
+            "version": "1.0.0",
+            "tables": [{"name": "marketing_channel", "columns": []}],
+        }
+        generate_migration_for_plugin(v1, self.versions_dir)
+
+        v2 = {
+            "name": "marketing",
+            "version": "1.1.0",
+            "tables": [
+                {
+                    "name": "marketing_channel",
+                    "columns": [{"name": "slug", "type": "String(64)", "primary_key": True}],
+                }
+            ],
+        }
+        with pytest.raises(ValueError, match="primary_key=True"):
+            generate_migration_for_plugin(v2, self.versions_dir)
+
+    def test_unreadable_existing_columns_refuse_rather_than_guess(self):
+        # A hand-written migration that creates the table in a shape this
+        # scanner can't read the columns of (a computed sa.Column argument).
+        # already_created_tables still finds the table name (positional
+        # literal), so this table is treated as "existing" — but its columns
+        # are unknowable, so any manifest column on it must block, not be
+        # silently treated as newly added.
+        (self.versions_dir / "0001_handwritten.py").write_text(
+            "from alembic import op\n"
+            "import sqlalchemy as sa\n"
+            "COL_TYPE = sa.String(64)\n"
+            "def upgrade():\n"
+            "    op.create_table('marketing_channel', sa.Column('key', COL_TYPE))\n"
+            "def downgrade():\n"
+            "    pass\n"
+        )
+
+        manifest = {
+            "name": "marketing",
+            "version": "1.0.0",
+            "tables": [
+                {"name": "marketing_channel", "columns": [{"name": "key", "type": "String(64)"}]}
+            ],
+        }
+        with pytest.raises(ValueError, match="could not be determined"):
+            generate_migration_for_plugin(manifest, self.versions_dir)
+
+    def test_code_only_change_with_no_column_changes_is_still_a_no_op(self):
+        # Confirms the fix doesn't make the generator over-eager: a manifest
+        # re-submitted with the exact same table/column shape (e.g. after a
+        # route-only edit) must still be a no-op.
+        manifest = {
+            "name": "marketing",
+            "version": "1.0.0",
+            "tables": [
+                {"name": "marketing_channel", "columns": [{"name": "key", "type": "String(64)"}]}
+            ],
+        }
+        generate_migration_for_plugin(manifest, self.versions_dir)
+        result = generate_migration_for_plugin(dict(manifest), self.versions_dir)
+        assert result is None
+        assert len(list(self.versions_dir.glob("*.py"))) == 1
+
+
 class TestAlreadyCreatedTables:
     """Direct tests of the scan `generate_migration_for_plugin` relies on to
     compute the delta."""

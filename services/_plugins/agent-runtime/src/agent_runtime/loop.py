@@ -34,6 +34,22 @@ able to tell a finished run from a curtailed one (§5), and the transcript
 collected so far still travels with it. Tools make this live rather than
 theoretical: a model that keeps calling tools is exactly the unbounded loop §8
 says must be impossible by construction.
+
+**Empty ``:online`` grounding does not fail the run here (issue #1528).** Now
+that citations are carried faithfully (``RunOutcome.annotations``), a run whose
+model was asked for ``:online`` and returned none is finally distinguishable
+from one whose model simply declined to transcribe its sources — which was the
+issue's whole point. It does not follow that the loop should fail such a run:
+this module is shared by every worker on every model, it cannot tell an
+``:online`` suffix was *requested for grounding* from one that was merely
+inherited, and a genuine no-results retrieval is a legitimate outcome for an
+obscure query, not necessarily a defect. Deciding "zero citations on an
+``:online`` run is fatal" is exactly the domain-specific policy a caller like
+`biffo-plugin-marketing` already enforces on its own guard (marketing#65) — and
+after this fix it can enforce it *correctly*, reading `annotations` instead of
+inferring from the model's prose. Making that the runtime's decision instead
+would be a behaviour change for every existing ``:online`` caller in the estate,
+imposed by the shared loop rather than chosen by each one.
 """
 
 from __future__ import annotations
@@ -153,6 +169,14 @@ class RunOutcome:
     elapsed_seconds: float | None = None
     timeout_seconds: float | None = None
     wall_clock_share: float | None = None
+    # The `:online` grounding citations OpenRouter returned, across every turn
+    # (issue #1528). Accumulated rather than taken only from the last turn: a
+    # multi-turn run can retrieve on more than one turn, and the whole point is
+    # that this is a fact about the *run*, not an inference from its final
+    # message. Always a list — empty when nothing was cited, never `None` — so
+    # "we checked and found zero" reads differently from "this run predates the
+    # fix" (which stays `None` on the persisted record; see `models/agent_run.py`).
+    annotations: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def near_wall_clock_limit(self) -> bool:
@@ -194,6 +218,7 @@ class RunOutcome:
             "input_tokens": self.input_tokens,
             "output_tokens": self.output_tokens,
             "cost_usd": self.cost_usd,
+            "annotations": list(self.annotations),
         }
 
 
@@ -323,6 +348,12 @@ class AgentLoop:
                     "output_tokens": response.output_tokens,
                     "cost_usd": response.cost_usd,
                     "tool_calls": [call.name for call in response.tool_calls],
+                    # This turn's `:online` citations, plain dicts (never the
+                    # dataclass) so a downstream fold never needs the type. They
+                    # travel no further than this event and `RunOutcome` below —
+                    # never back into `messages`, so they never re-enter a prompt
+                    # (see `Annotation`'s docstring in openrouter.py).
+                    "annotations": [a.to_dict() for a in response.annotations],
                 },
             )
 
@@ -449,6 +480,11 @@ async def collect(events: AsyncIterator[TurnEvent]) -> RunOutcome:
     input_tokens: float | None = None
     output_tokens: float | None = None
     cost_usd: float | None = None
+    # Every turn's citations, concatenated in order (issue #1528). Not
+    # deduplicated by URL: a URL cited again on a later turn is itself evidence
+    # the run kept finding it, and a consumer that only wants unique URLs can
+    # dedupe on its own side without this fold guessing at that policy for it.
+    annotations: list[dict[str, Any]] = []
 
     async for event in events:
         if event.kind == MESSAGE:
@@ -457,6 +493,7 @@ async def collect(events: AsyncIterator[TurnEvent]) -> RunOutcome:
             input_tokens = _add(input_tokens, event.data.get("input_tokens"))
             output_tokens = _add(output_tokens, event.data.get("output_tokens"))
             cost_usd = _add(cost_usd, event.data.get("cost_usd"))
+            annotations.extend(event.data.get("annotations") or [])
         elif event.kind == RUN_FINISHED:
             outcome.status = str(event.data.get("status"))
             outcome.result = event.data.get("result")
@@ -469,6 +506,7 @@ async def collect(events: AsyncIterator[TurnEvent]) -> RunOutcome:
     outcome.input_tokens = _as_optional_int(input_tokens)
     outcome.output_tokens = _as_optional_int(output_tokens)
     outcome.cost_usd = cost_usd
+    outcome.annotations = annotations
     return outcome
 
 

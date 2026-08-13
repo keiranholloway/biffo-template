@@ -74,6 +74,20 @@ function makeMigrationsMock(generatedPaths: string[] = []) {
   return { generate: vi.fn().mockResolvedValue(generatedPaths) }
 }
 
+// biffo-template#1554 — a new version declaring a baseline-row seed.
+const SEEDED_NEW_MANIFEST = {
+  ...NEW_MANIFEST,
+  seed: { dir: 'db/seed', baseline_tables: ['widgets_items'] },
+}
+
+function writeSeedFiles(pluginDir: string, seedDirRel: string, files: Record<string, string>) {
+  const seedDir = join(pluginDir, seedDirRel)
+  mkdirSync(seedDir, { recursive: true })
+  for (const [name, content] of Object.entries(files)) {
+    writeFileSync(join(seedDir, name), content)
+  }
+}
+
 describe('runPluginUpgrade', () => {
   let projectRoot: string
 
@@ -151,6 +165,73 @@ describe('runPluginUpgrade', () => {
 
     expect(git.cloneToTemp).not.toHaveBeenCalled()
     expect(git.commit).not.toHaveBeenCalled()
+  })
+
+  describe('seed vendoring (biffo-template#1554)', () => {
+    it('vendors seed.dir into db/imports/_plugin-<name>/ and stages it in the commit', async () => {
+      const clonedDir = makeClonedPluginDir(SEEDED_NEW_MANIFEST)
+      writeSeedFiles(clonedDir, 'db/seed', { '000_default.sql': 'SELECT 1;\n' })
+      const registry = makeRegistryMock()
+      const git = makeGitMock(clonedDir)
+      const migrations = makeMigrationsMock()
+
+      await runPluginUpgrade(
+        'widgets@1.1',
+        { dryRun: false, force: true, cwd: projectRoot },
+        { registry: registry as never, git: git as never, migrations: migrations as never },
+      )
+
+      const vendored = join(projectRoot, 'db', 'imports', '_plugin-widgets', '000_default.sql')
+      expect(existsSync(vendored)).toBe(true)
+      expect(git.add).toHaveBeenCalledWith(
+        projectRoot,
+        expect.arrayContaining(['db/imports/_plugin-widgets']),
+      )
+    })
+
+    it('fully replaces the vendored directory rather than merging old and new files', async () => {
+      // Simulates a previous install having vendored a now-superseded file —
+      // upgrade must not leave it behind alongside the new one (mirrors the
+      // Terraform-module replace test above).
+      mkdirSync(join(projectRoot, 'db', 'imports', '_plugin-widgets'), { recursive: true })
+      writeFileSync(
+        join(projectRoot, 'db', 'imports', '_plugin-widgets', 'old_stale.sql'),
+        '-- stale, should be gone after upgrade\n',
+      )
+      const clonedDir = makeClonedPluginDir(SEEDED_NEW_MANIFEST)
+      writeSeedFiles(clonedDir, 'db/seed', { '001_new.sql': 'SELECT 1;\n' })
+
+      await runPluginUpgrade(
+        'widgets@1.1',
+        { dryRun: false, force: true, cwd: projectRoot },
+        {
+          registry: makeRegistryMock() as never,
+          git: makeGitMock(clonedDir) as never,
+          migrations: makeMigrationsMock() as never,
+        },
+      )
+
+      expect(
+        existsSync(join(projectRoot, 'db', 'imports', '_plugin-widgets', 'old_stale.sql')),
+      ).toBe(false)
+      expect(existsSync(join(projectRoot, 'db', 'imports', '_plugin-widgets', '001_new.sql'))).toBe(
+        true,
+      )
+    })
+
+    it('a plugin with no seed leaves db/imports/ completely untouched', async () => {
+      const registry = makeRegistryMock()
+      const git = makeGitMock(makeClonedPluginDir(NEW_MANIFEST))
+      const migrations = makeMigrationsMock()
+
+      await runPluginUpgrade(
+        'widgets@1.1',
+        { dryRun: false, force: true, cwd: projectRoot },
+        { registry: registry as never, git: git as never, migrations: migrations as never },
+      )
+
+      expect(existsSync(join(projectRoot, 'db', 'imports'))).toBe(false)
+    })
   })
 
   it('replaces a previously-copied Terraform module with the new version', async () => {
@@ -690,6 +771,43 @@ describe('runPluginUpgrade --local', () => {
       'services/widgets',
       'modules/plugins/widgets',
     ])
+  })
+
+  describe('seed vendoring (biffo-template#1554)', () => {
+    it('vendors seed.dir into db/imports/_plugin-<name>/ and stages it in the commit', async () => {
+      const localDir = makeLocalPluginDir(SEEDED_NEW_MANIFEST, {
+        extraFiles: { 'db/seed/000_default.sql': 'SELECT 1;\n' },
+      })
+
+      await runPluginUpgrade(
+        undefined,
+        { local: localDir, dryRun: false, force: true, cwd: projectRoot },
+        {
+          registry: makeRegistryMock() as never,
+          git: makeGitMock(makeClonedPluginDir()) as never,
+          migrations: makeMigrationsMock() as never,
+        },
+      )
+
+      const vendored = join(projectRoot, 'db', 'imports', '_plugin-widgets', '000_default.sql')
+      expect(existsSync(vendored)).toBe(true)
+    })
+
+    it('a plugin with no seed leaves db/imports/ completely untouched', async () => {
+      const localDir = makeLocalPluginDir(NEW_MANIFEST)
+
+      await runPluginUpgrade(
+        undefined,
+        { local: localDir, dryRun: false, force: true, cwd: projectRoot },
+        {
+          registry: makeRegistryMock() as never,
+          git: makeGitMock(makeClonedPluginDir()) as never,
+          migrations: makeMigrationsMock() as never,
+        },
+      )
+
+      expect(existsSync(join(projectRoot, 'db', 'imports'))).toBe(false)
+    })
   })
 
   it('prompts for confirmation when --force is not set, and honours "no"', async () => {

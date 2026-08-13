@@ -124,7 +124,7 @@ The starting point to copy is **`_skeletons/plugin-template/biffo.plugin.json`**
 }
 ```
 
-**Fields that are actually validated and used:** `name` (kebab-case), `version` (full semver), `description`, `author`, `tags`, `tables`, `api_routes`, `required_core_version`, and — as of #1555 — a `ui_components` entry of type `nav-link`: its `label` is rendered as a link in the portal's admin nav (its `path` is validated but never trusted; see "Partial UI install" below). Anything else you may see in older examples — `event_subscriptions`, `infra_modules`, `dependencies`, and `ui_components` entries of type `page`, `dashboard-widget`, `modal` or `dialog` — is **still ignored by manifest validation and route synthesis today** (event subscriptions run in a plugin's own Lambda via the SDK, not the Core API). Don't rely on those being wired.
+**Fields that are actually validated and used:** `name` (kebab-case), `version` (full semver), `description`, `author`, `tags`, `tables`, `api_routes`, `required_core_version`, `seed` (baseline-row declaration — see below), and — as of #1555 — a `ui_components` entry of type `nav-link`: its `label` is rendered as a link in the portal's admin nav (its `path` is validated but never trusted; see "Partial UI install" below). Anything else you may see in older examples — `event_subscriptions`, `infra_modules`, `dependencies`, and `ui_components` entries of type `page`, `dashboard-widget`, `modal` or `dialog` — is **still ignored by manifest validation and route synthesis today** (event subscriptions run in a plugin's own Lambda via the SDK, not the Core API). Don't rely on those being wired.
 
 ### Tables
 
@@ -146,6 +146,26 @@ Each `api_routes` entry is `{ method, path, table, operation, description }`:
 ### Permissions
 
 Each table's `permissions` block gates its routes (ADR-0004). Default-deny: an operation with no `allowed: true` returns **404** (as if it didn't exist); an allowed operation whose `required_role` doesn't match the caller's Cognito groups returns **403**. `required_role: []` means any authenticated caller. A route declared in `api_routes` but not allowed in `permissions` is 404 — so remember to set both.
+
+### Seeding baseline rows (biffo-template#1554)
+
+A plugin that needs baseline data — a reference taxonomy, a default lookup row, anything a fresh install needs before the feature works at all — declares it, rather than relying on someone remembering to run a script:
+
+```json
+"seed": {
+  "dir": "db/seed",
+  "baseline_tables": ["your_table"]
+}
+```
+
+- **`dir`** — a plugin-relative directory of `.sql` files. `biffo plugin install`/`upgrade` vendor every `*.sql` file directly under it (non-recursive, filename-sorted apply order — same convention as `biffo data import`) into the installing instance's `db/imports/_plugin-<name>/`, where that instance's existing "Apply DDL imports" deploy step (ADR-0005, see [the DDL import guide](data-import.md)) applies it on every deploy. No token, no per-tenant API call, no new deploy machinery — it reuses the mechanism `db/imports/` already was.
+- **`baseline_tables`** — names of this same manifest's own `tables` that the seed guarantees populated for every tenant the deployment already knows about. Checked post-deploy (`biffo:plugin-baseline-check`, dispatched from the deploy workflow right after DDL imports): a table listed here with no rows for a known tenant fails the deploy loudly and by name, instead of the feature silently rendering nothing — the exact failure #1554 records happening for real.
+
+**Idempotency is a contract, not a suggestion, and it is checksum-enforced.** Once a seed file has been applied anywhere, editing it makes the next deploy fail loudly (ADR-0005 §4) rather than silently re-applying or silently skipping. Write every seed file as `INSERT ... SELECT ... FROM (SELECT DISTINCT tenant_id FROM users) ... WHERE NOT EXISTS (...)` against a stable natural key, and ship a later change as a new, additively-numbered file — never an edit to one already released. `_skeletons/plugin-template/db/seed/000_default_widget.sql` is a worked example.
+
+`biffo plugin uninstall` deliberately leaves the vendored seed directory in place, the same way it leaves your generated migration in place — dropping rows a seed created is a genuinely destructive, ambiguous operation, and ADR-0005 already declined to build a `biffo data uninstall` for the same reason.
+
+`on_install()` is not invoked — nothing calls it, ever. See [ADR-0003 §9a](../ADR/0003-plugin-system-and-marketplace.md#9a-the-lifecycle-hooks-are-not-invoked) and the SDK's `BiffoPluginBase` docstring for why, and use `seed` above instead.
 
 ## Getting your plugin live
 

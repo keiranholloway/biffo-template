@@ -40,6 +40,14 @@ const RegistryPluginEntrySchema = z.object({
   description: z.string().optional(),
   author: z.string().optional(),
   tags: z.array(z.string()).optional(),
+  // Summary-form mirror of the manifest's `seed.baseline_tables` (see
+  // ../../lib/plugin-manifest.ts's SeedDeclarationSchema and
+  // _skeletons/registry/registry-schema.json's `seed`, biffo-template#1554).
+  // The registry entry only ever needs to know WHICH tables a plugin promises
+  // baseline rows for, never the seed `dir` itself — that only matters to the
+  // install/upgrade vendoring step, which reads it from the plugin's own
+  // biffo.plugin.json after cloning, not from this summary.
+  baseline_tables: z.array(z.string()).optional(),
   required_core_version: z.string().optional(),
   infra_modules: z.array(z.string()).optional(),
   api_routes: z.array(z.string()).optional(),

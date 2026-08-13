@@ -306,6 +306,78 @@ honest in both directions: it fails if any document claims the hooks run, and it
 also fails if something starts invoking them — at which point this section, the
 SDK docstrings and the skeleton get rewritten to match the new truth.
 
+### 9b. Tenant-scoped baseline-row seeding is a declared manifest interface
+
+> **Amendment, 2026-08-13 (issue [#1554](https://github.com/keiranholloway/biffo-template/issues/1554)).**
+
+§9a names "out-of-band seeding" as one of the two paths that actually run, but
+left it a convention rather than an interface: nothing told an instance a
+plugin's `db/imports/` module existed, what to call it, or that it was
+supposed to be idempotent. The gap this left is not hypothetical —
+`biffo-plugin-marketing`'s `marketing_channel` taxonomy went through a full
+green pipeline (migration applied, CI green, deploy succeeded) with **0 of 32
+rows populated**, because the seed script was a convention nobody was told to
+run. Nothing failed; the feature simply rendered nothing.
+
+The fix formalises that path rather than replacing it. A plugin declares:
+
+```json
+"seed": {
+  "dir": "db/seed",
+  "baseline_tables": ["your_table"]
+}
+```
+
+- **`dir`** — a plugin-relative directory of `.sql` files, vendored by `biffo
+  plugin install`/`upgrade` (all four paths: registry install, `--local`
+  install, registry upgrade, `--local` refresh) into the installing
+  instance's `db/imports/_plugin-<name>/` — a naming convention `biffo data
+  import`'s own `NAME_PATTERN` (`^[a-z][a-z0-9-]*$`) can never produce,
+  because it cannot start with `_`. From there, ADR-0005's existing "Apply
+  DDL imports" deploy step applies it exactly as it would any other
+  hand-authored import — no new deploy machinery, no admin token, no
+  per-tenant API call, because a seed file can `INSERT ... SELECT` against
+  every tenant `db/imports/<name>/` was already reaching, in one statement.
+- **`baseline_tables`** — names of the same manifest's own `tables` the seed
+  promises are populated. Checked post-deploy by a new Lambda-event branch in
+  `lambda_handler` (`biffo:plugin-baseline-check`, mirroring the existing
+  `biffo:db-init`/`biffo:ddl-import` dispatch pattern), invoked from the
+  deploy workflow immediately after DDL imports: it reads every bundled
+  manifest's `seed.baseline_tables`, and for each one queries whether every
+  tenant already known to the deployment (a distinct `tenant_id` in Core's
+  own `users` table — see `plugin_baseline_check.py`'s module docstring for
+  why that, not a generic `tenants` table, is the definition available here)
+  has at least one row. An empty table for a known tenant fails the deploy
+  loudly, by plugin, table and tenant — the loud, specific failure the issue
+  asked for in place of a feature that silently does nothing.
+
+**The idempotency contract, written down.** §9's SQL-module convention never
+stated one. It is now explicit and enforced structurally, not by trust:
+`ddl_import_history`'s checksum tracking (ADR-0005 §4) means a file that
+changes after being applied halts the whole batch on the next deploy rather
+than silently re-applying or silently skipping — so a seed file MUST be
+`INSERT ... SELECT ... WHERE NOT EXISTS` against a stable natural key, and a
+later change to baseline data ships as a new, additively-numbered file, never
+an edit to one already released. `biffo plugin install`/`upgrade` do a full
+replacement of the vendored directory's contents on every run (mirroring how
+they already replace `services/<name>/` and `modules/plugins/<name>/`), so
+this contract is enforced by the mechanism that already enforces it for every
+other DDL import, not by new CLI validation.
+
+**`biffo plugin uninstall` leaves the vendored seed in place.** Mirrors the
+existing policy for a plugin's generated migration (§9: "no cleanup/drop
+migration is generated") and ADR-0005's own declined `biffo data uninstall` —
+dropping rows a seed created is destructive and ambiguous (a reinstalled
+plugin, or a tenant onboarded later, may depend on the same reference data),
+and leaving the vendored `.sql` files in place is also what keeps a
+reinstall idempotent for free.
+
+**This does not touch `on_install()`/`on_uninstall()`/`on_upgrade()`.** They
+stay exactly as §9a describes — declared, uncalled, documented as such. #709
+and #924 track whether they are ever removed or wired up; this amendment is
+the other of the two "minimum useful steps" the issue named, deliberately
+scoped away from the lifecycle-hook question.
+
 ---
 
 ## Options Considered

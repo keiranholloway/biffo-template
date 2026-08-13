@@ -16,6 +16,7 @@ import {
   resolveRegistryProvenance,
   writePluginProvenance,
 } from '../lib/plugin-provenance.js'
+import { pluginSeedImportDir, vendorPluginSeed } from '../lib/plugin-seed-vendor.js'
 import { copyPluginSource } from '../lib/plugin-source-copy.js'
 import { syncPluginTerraform } from '../lib/plugin-terraform-wiring.js'
 import { applyWorkspaceSources } from '../lib/plugin-workspace-sources.js'
@@ -409,6 +410,13 @@ export async function runPluginInstall(
       log.info(`${pluginName} declares no tables — nothing to migrate.`)
     }
 
+    // Vendor the plugin's declared tenant-scoped baseline-row seed, if any
+    // (biffo-template#1554) — a no-op when the manifest declares no `seed`.
+    const seedResult = vendorPluginSeed(targetDir, manifest, options.cwd)
+    if (seedResult.vendored) {
+      stagePaths.push(seedResult.stagedPath!)
+    }
+
     const commitMessage = `feat(plugins): install ${pluginName}@${source!.version}`
     await deps.git.add(options.cwd, stagePaths)
     await deps.git.commit(options.cwd, commitMessage)
@@ -466,6 +474,12 @@ function printDryRun(
   if (source && source.manifest.tables.length > 0) {
     console.log(
       `  Would generate a migration for ${source.manifest.tables.length} table(s) into services/api/migrations/versions/`,
+    )
+  }
+  if (source && source.manifest.seed) {
+    console.log(
+      `  Would vendor seed DDL into: ${pluginSeedImportDir(name)}/ ` +
+        `(baseline_tables: ${source.manifest.seed.baseline_tables.join(', ') || 'none declared'})`,
     )
   }
   console.log(`  Would commit:  feat(plugins): install ${name}@${version}\n`)

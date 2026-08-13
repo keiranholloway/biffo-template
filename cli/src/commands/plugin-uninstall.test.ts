@@ -162,6 +162,52 @@ describe('runPluginUninstall', () => {
     ])
   })
 
+  describe('vendored seed DDL (biffo-template#1554)', () => {
+    it('leaves db/imports/_plugin-<name>/ in place and warns why, rather than removing it', async () => {
+      mkdirSync(join(projectRoot, 'db', 'imports', '_plugin-widgets'), { recursive: true })
+      writeFileSync(
+        join(projectRoot, 'db', 'imports', '_plugin-widgets', '000_default.sql'),
+        'SELECT 1;\n',
+      )
+      const git = makeGitMock()
+      const { log } = await import('../lib/logger.js')
+
+      await runPluginUninstall(
+        'widgets',
+        { dryRun: false, force: true, keepData: false, cwd: projectRoot },
+        { git: git as never },
+      )
+
+      expect(
+        existsSync(join(projectRoot, 'db', 'imports', '_plugin-widgets', '000_default.sql')),
+      ).toBe(true)
+      // Not staged/committed either — untouched entirely, not just left on disk.
+      expect(git.add).toHaveBeenCalledWith(projectRoot, ['services/widgets'])
+      expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('db/imports/_plugin-widgets'))
+    })
+
+    it('says nothing about a seed when the plugin never vendored one', async () => {
+      const git = makeGitMock()
+      const { log } = await import('../lib/logger.js')
+      // The mocked logger is a module-level singleton shared across every
+      // test in this file and is never reset between them (see the other
+      // tests here, which only ever assert a call WAS made — immune to
+      // this) — clear it so this negative assertion checks THIS run only.
+      ;(log.warn as ReturnType<typeof vi.fn>).mockClear()
+
+      await runPluginUninstall(
+        'widgets',
+        { dryRun: false, force: true, keepData: false, cwd: projectRoot },
+        { git: git as never },
+      )
+
+      const seedWarning = (log.warn as ReturnType<typeof vi.fn>).mock.calls.find((call) =>
+        String(call[0]).includes('db/imports/_plugin-widgets'),
+      )
+      expect(seedWarning).toBeUndefined()
+    })
+  })
+
   it('prompts for confirmation when --force is not set, and honours "no"', async () => {
     promptMock.mockResolvedValue({ confirmed: false })
     const git = makeGitMock()

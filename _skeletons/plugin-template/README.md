@@ -69,8 +69,42 @@ plugin deploying clean with empty tables and the symptom surfacing wherever
 those rows were read
 ([#709](https://github.com/keiranholloway/biffo-template/issues/709)).
 
-Baseline data goes in one of two places instead, and `seed_default_widget()` in
-`plugin.py` documents both at the call site:
+**Baseline data — the rows a feature needs before it works at all, not a
+single plugin's own config — has a declared mechanism now
+([#1554](https://github.com/keiranholloway/biffo-template/issues/1554)):**
+`biffo.plugin.json`'s `seed` block. This skeleton demonstrates it:
+
+```json
+"seed": {
+  "dir": "db/seed",
+  "baseline_tables": ["example_widgets"]
+}
+```
+
+`dir` names a directory of idempotent `.sql` files (`db/seed/000_default_widget.sql`
+here) — `biffo plugin install`/`upgrade` vendor them into the installing
+instance's `db/imports/_plugin-example-plugin/`, where that instance's
+existing "Apply DDL imports" deploy step (ADR-0005) applies them on every
+deploy. No token, no per-tenant API call, no new deploy machinery — it is the
+same mechanism `db/imports/<name>/` always was, just declared in the manifest
+instead of a step nobody was told to perform. `baseline_tables` names which of
+this manifest's own `tables` the seed populates; the instance's deploy then
+fails loudly, by table and by tenant, if one ends up empty
+(`biffo:plugin-baseline-check`) — instead of the feature silently rendering
+nothing, which is what actually happened and is the incident #1554 records.
+
+**The idempotency contract is not optional and is checksum-enforced.** Once a
+seed file has been applied anywhere, editing it makes the next deploy fail
+loudly (ADR-0005 §4) rather than silently re-applying or silently skipping. A
+later change to your baseline data ships as a new, additively-numbered file —
+see `db/seed/000_default_widget.sql`'s own header comment for the full
+contract and the `INSERT ... SELECT ... WHERE NOT EXISTS` shape every file
+here must follow.
+
+This is a second, complementary mechanism to the one below — not a
+replacement for it. `seed_default_widget()` in `plugin.py` still demonstrates
+**self-seeding at startup**, which is the right tool for a plugin's own
+runtime config rather than tenant-scoped table rows:
 
 - **If your plugin declares an `api_ingress` ASGI app** (ADR-0021), seed from
   that app's lifespan. The shared plugin host runs each mounted app's lifespan
@@ -82,8 +116,11 @@ Baseline data goes in one of two places instead, and `seed_default_widget()` in
   [#1000](https://github.com/keiranholloway/biffo-template/pull/1000), so treat
   this route as new and check your own.
 - **If it doesn't** — like `example_plugin`, which is event-only — there is no
-  startup to hang anything on. Put the rows in a SQL module in the instance's
-  `db/imports/<name>/`, applied by `biffo data apply` on every deploy.
+  startup to hang anything on. The `seed` manifest block above is its only
+  option, and is now the recommended default for baseline table rows even for
+  a plugin that does have an ASGI app: it reaches every tenant in one
+  statement, needs no running plugin process, and fails the deploy loudly
+  instead of only whenever a request happens to hit the lifespan hook.
 
 > Earlier revisions of this README pointed at an RBAC reference plugin at
 > `services/rbac/`. That plugin was removed by

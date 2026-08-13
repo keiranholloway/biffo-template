@@ -90,9 +90,13 @@ confident, wrong "table X has no rows" one.
 
 The manifest-injection and Postgres-only-engine plumbing below live in
 `plugin_deploy_checks.py`, not here — see that module's docstring for why:
-#1556 (declared columns exist, not declared rows are populated) is filed to
-reuse this same harness rather than re-derive it, dispatched from the same
-`lambda_handler` one step apart. `_distinct_tenant_ids` and everything in
+#1556 (declared columns exist, not declared rows are populated) reuses this
+same harness rather than re-deriving it, dispatched from the same
+`lambda_handler` one step apart. It runs *before* this check in all three
+deploy jobs, deliberately: a table missing `tenant_id` entirely would
+otherwise surface here as a `TenantQueryFailedError` on an
+`UndefinedColumn` — a true failure with a much worse message than "plugin X,
+table Y is missing column tenant_id". `_distinct_tenant_ids` and everything in
 `assert_plugin_baselines_populated_async` past the manifest/engine setup is
 specific to *this* check (rows, tenants) and is not meant to be shared.
 """

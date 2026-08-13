@@ -158,13 +158,21 @@ def resolve_search_schemas() -> list[str] | None:
     return from_search_path or None
 
 
-async def _actual_columns(
+async def actual_columns(
     conn: Any, tables: set[str], schemas: list[str] | None
 ) -> dict[str, set[str]]:
     """Real column names per table, from ``information_schema``.
 
     ``schemas`` is an explicit list (see ``resolve_search_schemas``) or ``None``
     to use the connection's own ``search_path``.
+
+    Public (it was ``_actual_columns``) because ``plugin_column_check`` asks
+    the same question of the same catalog for plugin-manifest tables
+    (biffo-template#1556) and reuses this rather than issuing its own
+    ``information_schema`` query. There is exactly one place in this service
+    that knows how to read real column names, so a correction to the schema
+    resolution (see ``resolve_search_schemas``'s docstring for the false
+    positive that already cost one deploy) lands for both callers at once.
     """
     from sqlalchemy import text
 
@@ -223,7 +231,7 @@ async def assert_crud_schema_matches_async() -> dict:
     engine = create_async_engine(master_url, hide_parameters=True)
     try:
         async with engine.connect() as conn:
-            actual = await _actual_columns(conn, set(declared), resolve_search_schemas())
+            actual = await actual_columns(conn, set(declared), resolve_search_schemas())
     finally:
         await engine.dispose()
 

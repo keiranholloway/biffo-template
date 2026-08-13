@@ -202,7 +202,7 @@ async def _distinct_tenant_ids(conn: Any, table: str) -> set[str]:
     assert SAFE_IDENTIFIER.match(table)  # noqa: S101 -- narrows for pyright; callers already checked
     try:
         result = await conn.execute(
-            text(f'SELECT DISTINCT tenant_id FROM "{table}"')  # noqa: S608 -- identifier is pre-validated
+            text(f'SELECT DISTINCT tenant_id FROM "{table}"')  # noqa: S608  # nosec B608 -- identifier is pre-validated
         )
         return {row[0] for row in result}
     except DBAPIError as exc:

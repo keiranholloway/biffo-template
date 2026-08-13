@@ -98,14 +98,14 @@ def pg_env(monkeypatch: pytest.MonkeyPatch):
             db_module.resolve_app_database_url.cache_clear()
 
 
-async def _exec(database_url: str, sql: str, *params: object) -> None:
+async def _exec(database_url: str, sql: str, params: dict[str, object] | None = None) -> None:
     from sqlalchemy import text
     from sqlalchemy.ext.asyncio import create_async_engine
 
     engine = create_async_engine(database_url, hide_parameters=True)
     try:
         async with engine.begin() as conn:
-            await conn.execute(text(sql), params[0] if params else {})
+            await conn.execute(text(sql), params or {})
     finally:
         await engine.dispose()
 
@@ -130,12 +130,12 @@ class _Fixture:
     async def create_tenant_source(self, tenant_ids: list[str]) -> None:
         await _exec(
             self.database_url,
-            f'CREATE TABLE "{self.tenant_source}" (id serial primary key, tenant_id text)',  # noqa: S608
+            f'CREATE TABLE "{self.tenant_source}" (id serial primary key, tenant_id text)',  # noqa: S608  # nosec B608
         )
         for tid in tenant_ids:
             await _exec(
                 self.database_url,
-                f'INSERT INTO "{self.tenant_source}" (tenant_id) VALUES (:tid)',  # noqa: S608
+                f'INSERT INTO "{self.tenant_source}" (tenant_id) VALUES (:tid)',  # noqa: S608  # nosec B608
                 {"tid": tid},
             )
 
@@ -146,18 +146,18 @@ class _Fixture:
         self._tables.append(name)
         await _exec(
             self.database_url,
-            f'CREATE TABLE "{name}" (id serial primary key, tenant_id text)',  # noqa: S608
+            f'CREATE TABLE "{name}" (id serial primary key, tenant_id text)',  # noqa: S608  # nosec B608
         )
         for tid in rows:
             await _exec(
                 self.database_url,
-                f'INSERT INTO "{name}" (tenant_id) VALUES (:tid)',  # noqa: S608
+                f'INSERT INTO "{name}" (tenant_id) VALUES (:tid)',  # noqa: S608  # nosec B608
                 {"tid": tid},
             )
 
     async def drop_all(self) -> None:
         for name in self._tables:
-            await _exec(self.database_url, f'DROP TABLE IF EXISTS "{name}"')  # noqa: S608
+            await _exec(self.database_url, f'DROP TABLE IF EXISTS "{name}"')  # noqa: S608  # nosec B608
 
 
 @pytest.fixture

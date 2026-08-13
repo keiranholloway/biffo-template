@@ -6,11 +6,49 @@ lane in test_plugin_baseline_check_pg.py)."""
 
 from __future__ import annotations
 
+from typing import Any
+
+import pytest
 from api.plugin_baseline_check import (
     BaselineFailure,
+    TenantQueryFailedError,
+    _distinct_tenant_ids,
+    _is_undefined_table,
     collect_baseline_declarations,
     format_baseline_error,
 )
+from sqlalchemy.exc import DBAPIError
+
+
+class _FakeOrigError(Exception):
+    """Stands in for the real driver exception `DBAPIError.orig` wraps —
+    only `.sqlstate` matters to `_is_undefined_table`, so nothing else needs
+    to be real (see plugin_baseline_check.py's `_UNDEFINED_TABLE_SQLSTATE`
+    docstring for why sqlstate, not exception class, is the check)."""
+
+    def __init__(self, sqlstate: str | None = None) -> None:
+        super().__init__("simulated driver error")
+        self.sqlstate = sqlstate
+
+
+def _dbapi_error(sqlstate: str | None) -> DBAPIError:
+    return DBAPIError("SELECT 1", {}, _FakeOrigError(sqlstate))
+
+
+class _RaisingConn:
+    """A fake connection whose `.execute()` always raises the given
+    exception — enough to drive `_distinct_tenant_ids`'s except branch
+    without a real database, which is what makes it possible for CI's
+    Postgres-less Python job to actually exercise this code
+    (biffo-template#1560 review: the error-branch coverage gate flagged this
+    line as unexecuted, because it had previously only ever been reachable
+    via the real-Postgres lane, which CI's Python job does not run)."""
+
+    def __init__(self, exc: Exception) -> None:
+        self._exc = exc
+
+    async def execute(self, *args: Any, **kwargs: Any) -> Any:
+        raise self._exc
 
 
 def _manifest(name: str, tables: list[str], seed: dict | None) -> dict:
@@ -110,3 +148,97 @@ class TestFormatBaselineError:
             "widgets: table 'widgets_categories' has no rows for tenant(s): acme, globex" in message
         )
         assert "#1554" in message
+
+
+class TestIsUndefinedTable:
+    """Pure classification: only Postgres's own undefined_table SQLSTATE
+    (42P01) counts. Everything else -- a different SQLSTATE, no SQLSTATE at
+    all, not even a DBAPIError -- must not (biffo-template#1560 review)."""
+
+    def test_true_for_the_undefined_table_sqlstate(self):
+        assert _is_undefined_table(_dbapi_error(sqlstate="42P01"))
+
+    def test_false_for_a_different_sqlstate(self):
+        # 53300 = too_many_connections -- a real transient condition, not a
+        # missing table.
+        assert not _is_undefined_table(_dbapi_error(sqlstate="53300"))
+
+    def test_false_when_orig_has_no_sqlstate_at_all(self):
+        assert not _is_undefined_table(_dbapi_error(sqlstate=None))
+
+    def test_false_for_something_that_is_not_even_a_dbapi_error(self):
+        assert not _is_undefined_table(RuntimeError("unrelated"))
+
+
+class TestDistinctTenantIdsErrorClassification:
+    """`_distinct_tenant_ids`'s three-way split, exercised without a real
+    database (biffo-template#1560 review) -- a fake connection whose
+    `.execute()` raises is enough to drive both branches of `except
+    DBAPIError`, which is what makes this reachable from CI's Postgres-less
+    Python job rather than only the real-Postgres lane."""
+
+    async def test_undefined_table_is_treated_as_zero_rows(self):
+        conn = _RaisingConn(_dbapi_error(sqlstate="42P01"))
+        result = await _distinct_tenant_ids(conn, "widgets_items")
+        assert result == set()
+
+    async def test_a_different_sqlstate_raises_tenant_query_failed_not_empty(self):
+        conn = _RaisingConn(_dbapi_error(sqlstate="53300"))
+        with pytest.raises(TenantQueryFailedError, match="widgets_items"):
+            await _distinct_tenant_ids(conn, "widgets_items")
+
+    async def test_no_sqlstate_at_all_also_raises_tenant_query_failed(self):
+        conn = _RaisingConn(_dbapi_error(sqlstate=None))
+        with pytest.raises(TenantQueryFailedError):
+            await _distinct_tenant_ids(conn, "widgets_items")
+
+
+class TestTransientFailureIsNeverSwallowedIntoAPass:
+    """End-to-end proof of the design decision the coverage-gate review
+    raised: a transient failure reading the KNOWN-TENANTS table (not just a
+    baseline table) must propagate, not silently reduce known_tenants to
+    nothing and report success. That silent-pass shape is exactly what
+    #1517/marketing#25 and #1558 both guard against, and it is the one this
+    module's original `except DBAPIError: return set()` would have produced
+    for `assert_plugin_baselines_populated_async` itself -- not just for one
+    table's read, but for the whole check, because an empty known_tenants
+    set short-circuits the per-table loop entirely."""
+
+    async def test_propagates_rather_than_reporting_a_false_pass(self, monkeypatch):
+        import api.plugin_baseline_check as mod
+
+        class _FakeConnCtx:
+            async def __aenter__(self) -> object:
+                return object()
+
+            async def __aexit__(self, *exc_info: object) -> bool:
+                return False
+
+        class _FakeEngine:
+            def connect(self) -> _FakeConnCtx:
+                return _FakeConnCtx()
+
+            async def dispose(self) -> None:
+                return None
+
+        async def fake_open_master_engine() -> tuple[_FakeEngine, None]:
+            return _FakeEngine(), None
+
+        async def fake_distinct_tenant_ids(conn: object, table: str) -> set[str]:
+            if table == mod.DEFAULT_TENANT_SOURCE_TABLE:
+                raise mod.TenantQueryFailedError("simulated transient failure reading users")
+            return {"acme"}  # never reached if the propagation works
+
+        monkeypatch.setattr(mod, "open_master_engine", fake_open_master_engine)
+        monkeypatch.setattr(mod, "_distinct_tenant_ids", fake_distinct_tenant_ids)
+
+        manifests = [
+            {
+                "name": "widgets",
+                "tables": [{"name": "widgets_items"}],
+                "seed": {"dir": "db/seed", "baseline_tables": ["widgets_items"]},
+            }
+        ]
+
+        with pytest.raises(mod.TenantQueryFailedError, match="simulated transient failure"):
+            await mod.assert_plugin_baselines_populated_async(manifests=manifests)

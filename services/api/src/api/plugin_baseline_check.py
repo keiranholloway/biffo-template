@@ -55,11 +55,36 @@ already does. That also makes the query dialect-plain — no
 against SQLite in tests, unlike `_run_ddl_import`'s raw-asyncpg apply path
 (see `tests/test_ddl_import.py`'s docstring for why that one cannot be).
 
-A table that does not exist at all (never migrated, wrong `dir`, nothing
-ever applied) is indistinguishable here from a table that exists but has no
-rows for a tenant — both surface as "no rows for this tenant", which is
-exactly the right failure to report; the *reason* is a matter for the
-plugin author to dig into, not this check to classify.
+A table that **genuinely does not exist** (never migrated, wrong `dir`,
+nothing ever applied) is deliberately folded into "no rows for this tenant" —
+detected by Postgres's own `undefined_table` SQLSTATE (`42P01`), not by
+exception class (SQLAlchemy's asyncpg dialect wraps the driver error in its
+own adapter class, not `asyncpg`'s, so `sqlstate` is the portable signal —
+verified empirically against a real database, not assumed). Both cases are
+equally "this check found no evidence the seed ran," and the plugin author's
+next step is the same either way.
+
+**A three-way answer, and why only two of the three collapse
+(biffo-template#1560 review).** Reading rows from Postgres has three possible
+outcomes, not two: populated, confirmed-empty (including "table does not
+exist" — see above), and *the query itself failed* — a connection blip, a
+timeout, a permissions error, anything that is not Postgres authoritatively
+saying "no such table". Only the first two are safe to collapse into this
+check's pass/fail verdict. Conflating a query failure with "confirmed empty"
+would fail a deploy that may have been perfectly fine, blaming a phantom
+empty table for what was actually a transient database problem. Conflating it
+with "pass" — the `except DBAPIError: return set()` this module originally
+shipped with — is worse: it makes the check go silent in exactly the
+circumstances it exists to catch, the fail-open shape #1517 records from
+`marketing#25` (a transient SSM error cached as "unconfigured", silently
+disabling a feature that was never actually misconfigured) and the posture
+#1558 already established for staleness detection (`up-to-date` /`behind` /
+`cannot-tell`, where `cannot-tell` is never reported as a pass). So a query
+failure that is not a confirmed `undefined_table` **propagates** as
+`TenantQueryFailedError`, distinct from `format_baseline_error`'s `RuntimeError` —
+the deploy still fails (this check's job is never to wave a real problem
+through), but with an honest "could not determine this" message rather than a
+confident, wrong "table X has no rows" one.
 
 ## Shared harness (biffo-template#1556)
 
@@ -89,6 +114,33 @@ logger = Logger()
 #: purely for test isolation (see that function's docstring) — production
 #: code never passes anything else.
 DEFAULT_TENANT_SOURCE_TABLE = "users"
+
+#: PostgreSQL's standard SQLSTATE for `undefined_table` (the ANSI-assigned
+#: class 42, "syntax error or access rule violation", code P01) — see
+#: https://www.postgresql.org/docs/current/errcodes-appendix.html. Checked
+#: via `exc.orig.sqlstate` rather than an exception *class* because
+#: SQLAlchemy's asyncpg dialect wraps the driver error in its own adapter
+#: class (`sqlalchemy.dialects.postgresql.asyncpg.AsyncAdapt_asyncpg_dbapi.
+#: ProgrammingError`), not `asyncpg.exceptions.UndefinedTableError` itself —
+#: confirmed empirically against a real database (a naive `isinstance` check
+#: against the asyncpg exception type would silently never match). SQLSTATE
+#: is also the portable, standard signal a DBAPI-level check should prefer.
+_UNDEFINED_TABLE_SQLSTATE = "42P01"
+
+
+class TenantQueryFailedError(RuntimeError):
+    """A tenant_id read failed for a reason that is NOT Postgres confirming
+    the table doesn't exist — a connection blip, a timeout, a permissions
+    problem, anything else. See the module docstring's "three-way answer"
+    section (biffo-template#1560 review): this must never be reported as
+    "confirmed empty" (a wrong, misleading failure) or silently swallowed
+    into a pass (the fail-open #1517/marketing#25 and #1558 both guard
+    against). Raising a distinct type — rather than reusing
+    `format_baseline_error`'s bare `RuntimeError` — means a deploy failure
+    here reads in the log as "could not determine this", not "confirmed
+    empty", even though both currently fail the same Lambda invocation the
+    same way.
+    """
 
 
 @dataclass(frozen=True)
@@ -181,9 +233,28 @@ def collect_baseline_declarations(manifests: list[dict[str, Any]]) -> list[tuple
     return declarations
 
 
+def _is_undefined_table(exc: Any) -> bool:
+    """True when `exc` is Postgres confirming, authoritatively, that the
+    table does not exist — never true for anything else (a connection
+    failure, a timeout, a permissions error have different SQLSTATEs, or
+    none at all). See `_UNDEFINED_TABLE_SQLSTATE`'s docstring for why this
+    reads `.orig.sqlstate` rather than checking an exception class.
+    """
+    return getattr(getattr(exc, "orig", None), "sqlstate", None) == _UNDEFINED_TABLE_SQLSTATE
+
+
 async def _distinct_tenant_ids(conn: Any, table: str) -> set[str]:
-    """`DISTINCT tenant_id` from `table`, or empty if the table can't be read
-    (does not exist, wrong schema on this connection's search_path, etc).
+    """`DISTINCT tenant_id` from `table`.
+
+    Three outcomes, per the module docstring's "three-way answer" section:
+
+    - Reads cleanly -> the real set of tenant_ids present (possibly empty).
+    - Postgres confirms the table does not exist (SQLSTATE 42P01) -> treated
+      as zero rows, same as an existing-but-empty table (module docstring).
+    - Any OTHER `DBAPIError` (connection failure, timeout, permissions,
+      anything that is not Postgres authoritatively saying "no such table")
+      -> raises `TenantQueryFailedError`. This is NOT "empty" and must not be
+      reported as if it were — see `TenantQueryFailedError`'s own docstring.
 
     `table` must already have passed `SAFE_IDENTIFIER` — see that constant's
     docstring (`plugin_deploy_checks.py`) for why interpolating it here is
@@ -206,8 +277,14 @@ async def _distinct_tenant_ids(conn: Any, table: str) -> set[str]:
         )
         return {row[0] for row in result}
     except DBAPIError as exc:
-        logger.warning(f"Could not read tenant_id from table {table!r} — treating as empty: {exc}")
-        return set()
+        if _is_undefined_table(exc):
+            logger.info(f"Table {table!r} does not exist — treating as zero rows")
+            return set()
+        raise TenantQueryFailedError(
+            f"Could not determine tenant_id rows for table {table!r} — the query "
+            f"failed for a reason other than the table not existing, so this is NOT "
+            f"the same as confirming it has no rows: {exc}"
+        ) from exc
 
 
 async def assert_plugin_baselines_populated_async(
@@ -232,6 +309,14 @@ async def assert_plugin_baselines_populated_async(
     concurrent tests/sessions may also be reading). Production code — the
     sync `assert_plugin_baselines_populated()` below, which is what
     `main.py`'s dispatcher actually calls — never passes anything else.
+
+    Raises `TenantQueryFailedError` (deliberately, not caught here) if a read
+    fails for any reason other than Postgres confirming a table does not
+    exist — for either the tenant-source query or a baseline table's own
+    query. This still fails the deploy (the Lambda invoke still raises), but
+    with a message that reads as "could not determine this" rather than
+    `format_baseline_error`'s "confirmed empty" — see the module docstring's
+    "three-way answer" section.
     """
     resolved_manifests = plugin_manifests(manifests)
 

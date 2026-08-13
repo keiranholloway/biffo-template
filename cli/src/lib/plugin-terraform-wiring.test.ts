@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   declaredVariables,
+  findPluginModuleReferences,
   GENERATED_TF_FILE,
   GENERATED_TFVARS_FILE,
   listEnvironments,
@@ -420,5 +421,100 @@ describe('first-party plugins are owned by plugins.core.tf, not the generated fi
       'utf8',
     )
     expect(generated).toContain('tags')
+  })
+})
+
+describe('findPluginModuleReferences (biffo-template#1563)', () => {
+  let cwd: string
+  beforeEach(() => {
+    cwd = makeTmpDir('biffo-plugin-refs')
+  })
+  afterEach(() => rmSync(cwd, { recursive: true, force: true }))
+
+  it('returns nothing when infra/ does not exist', () => {
+    expect(findPluginModuleReferences(cwd, 'ideation')).toEqual([])
+  })
+
+  it('finds a module "source" reference and names the file and line', () => {
+    const dir = join(cwd, 'infra', 'environments', 'dev')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(
+      join(dir, GENERATED_TF_FILE),
+      [
+        '# generated',
+        '',
+        'module "plugin_ideation" {',
+        '  source   = "../../../modules/plugins/ideation"',
+        '  for_each = contains(var.enabled_plugins, "ideation") ? { "ideation" = true } : {}',
+        '}',
+      ].join('\n'),
+    )
+
+    const refs = findPluginModuleReferences(cwd, 'ideation')
+    expect(refs).toHaveLength(1)
+    expect(refs[0]).toEqual({
+      file: 'infra/environments/dev/plugins.generated.tf',
+      line: 4,
+      text: 'source   = "../../../modules/plugins/ideation"',
+    })
+  })
+
+  it('finds a module.plugin_<name> expression reference outside the module block itself', () => {
+    const dir = join(cwd, 'infra', 'environments', 'dev')
+    mkdirSync(dir, { recursive: true })
+    // A hand-authored main.tf pulling a plugin's frontend bucket into the CDN
+    // — no "source =" line here at all, only an attribute reference.
+    writeFileSync(
+      join(dir, 'main.tf'),
+      [
+        'locals {',
+        '  ideation_bucket = module.plugin_ideation["ideation"].frontend_bucket_name',
+        '}',
+      ].join('\n'),
+    )
+
+    const refs = findPluginModuleReferences(cwd, 'ideation')
+    expect(refs).toHaveLength(1)
+    expect(refs[0]!.file).toBe('infra/environments/dev/main.tf')
+    expect(refs[0]!.text).toContain('module.plugin_ideation')
+  })
+
+  it('does not false-positive a sibling module whose name is a prefix of the target', () => {
+    const dir = join(cwd, 'infra', 'environments', 'dev')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(
+      join(dir, GENERATED_TF_FILE),
+      [
+        'module "plugin_idea-scout" {',
+        '  source = "../../../modules/plugins/idea-scout"',
+        '}',
+      ].join('\n'),
+    )
+
+    // Looking for "idea" must not match the "idea-scout" module.
+    expect(findPluginModuleReferences(cwd, 'idea')).toEqual([])
+  })
+
+  it('returns nothing when the plugin is not mentioned anywhere under infra/', () => {
+    const dir = join(cwd, 'infra', 'environments', 'dev')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'main.tf'), 'variable "enabled_plugins" {}\n')
+
+    expect(findPluginModuleReferences(cwd, 'ideation')).toEqual([])
+  })
+
+  it('scans every environment, not just the first', () => {
+    for (const env of ['dev', 'staging']) {
+      const dir = join(cwd, 'infra', 'environments', env)
+      mkdirSync(dir, { recursive: true })
+    }
+    writeFileSync(
+      join(cwd, 'infra', 'environments', 'staging', GENERATED_TF_FILE),
+      'source = "../../../modules/plugins/ideation"\n',
+    )
+
+    const refs = findPluginModuleReferences(cwd, 'ideation')
+    expect(refs).toHaveLength(1)
+    expect(refs[0]!.file).toBe('infra/environments/staging/plugins.generated.tf')
   })
 })

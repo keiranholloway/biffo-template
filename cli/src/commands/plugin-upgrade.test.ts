@@ -273,6 +273,73 @@ describe('runPluginUpgrade', () => {
     expect(existsSync(join(projectRoot, 'modules', 'plugins', 'widgets'))).toBe(false)
   })
 
+  describe('module-removal guard (biffo-template#1563)', () => {
+    function writeGeneratedTf(pluginName: string): void {
+      const dir = join(projectRoot, 'infra', 'environments', 'dev')
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(
+        join(dir, 'plugins.generated.tf'),
+        [
+          '# generated',
+          '',
+          `module "plugin_${pluginName}" {`,
+          `  source   = "../../../modules/plugins/${pluginName}"`,
+          `  for_each = contains(var.enabled_plugins, "${pluginName}") ? { "${pluginName}" = true } : {}`,
+          '}',
+        ].join('\n'),
+      )
+    }
+
+    it('refuses to remove a Terraform module still referenced by infra/, naming the file and line, and leaves the checkout untouched', async () => {
+      mkdirSync(join(projectRoot, 'modules', 'plugins', 'widgets'), { recursive: true })
+      writeFileSync(join(projectRoot, 'modules', 'plugins', 'widgets', 'old.tf'), '# old\n')
+      writeGeneratedTf('widgets')
+
+      const registry = makeRegistryMock()
+      const git = makeGitMock(makeClonedPluginDir(NEW_MANIFEST, false))
+      const migrations = makeMigrationsMock()
+
+      await expect(
+        runPluginUpgrade(
+          'widgets@1.1',
+          { dryRun: false, force: true, cwd: projectRoot },
+          { registry: registry as never, git: git as never, migrations: migrations as never },
+        ),
+      ).rejects.toThrow(
+        /Refusing to remove modules\/plugins\/widgets\/.*infra\/environments\/dev\/plugins\.generated\.tf:4/s,
+      )
+
+      // Nothing was mutated — the refusal happened before any destructive step.
+      expect(existsSync(join(projectRoot, 'modules', 'plugins', 'widgets', 'old.tf'))).toBe(true)
+      expect(
+        JSON.parse(
+          readFileSync(join(projectRoot, 'services', 'widgets', 'biffo.plugin.json'), 'utf8'),
+        ),
+      ).toMatchObject({ version: '1.0.0' })
+      expect(git.add).not.toHaveBeenCalled()
+      expect(git.commit).not.toHaveBeenCalled()
+    })
+
+    it('still replaces the module in place when the new version keeps shipping terraform/, even if referenced', async () => {
+      mkdirSync(join(projectRoot, 'modules', 'plugins', 'widgets'), { recursive: true })
+      writeFileSync(join(projectRoot, 'modules', 'plugins', 'widgets', 'old.tf'), '# old\n')
+      writeGeneratedTf('widgets')
+
+      const registry = makeRegistryMock()
+      const git = makeGitMock(makeClonedPluginDir(NEW_MANIFEST, true))
+      const migrations = makeMigrationsMock()
+
+      await runPluginUpgrade(
+        'widgets@1.1',
+        { dryRun: false, force: true, cwd: projectRoot },
+        { registry: registry as never, git: git as never, migrations: migrations as never },
+      )
+
+      expect(existsSync(join(projectRoot, 'modules', 'plugins', 'widgets', 'main.tf'))).toBe(true)
+      expect(git.commit).toHaveBeenCalled()
+    })
+  })
+
   it('prompts for confirmation when --force is not set, and honours "no"', async () => {
     promptMock.mockResolvedValue({ confirmed: false })
     const registry = makeRegistryMock()
@@ -771,6 +838,67 @@ describe('runPluginUpgrade --local', () => {
       'services/widgets',
       'modules/plugins/widgets',
     ])
+  })
+
+  it('removes a stale Terraform module when the local checkout no longer ships one and nothing references it', async () => {
+    mkdirSync(join(projectRoot, 'modules', 'plugins', 'widgets'), { recursive: true })
+    writeFileSync(join(projectRoot, 'modules', 'plugins', 'widgets', 'old.tf'), '# old\n')
+
+    const localDir = makeLocalPluginDir(NEW_MANIFEST, { withTerraform: false })
+    const registry = makeRegistryMock()
+    const git = makeGitMock(makeClonedPluginDir())
+    const migrations = makeMigrationsMock()
+
+    await runPluginUpgrade(
+      undefined,
+      { local: localDir, dryRun: false, force: true, cwd: projectRoot },
+      { registry: registry as never, git: git as never, migrations: migrations as never },
+    )
+
+    expect(existsSync(join(projectRoot, 'modules', 'plugins', 'widgets'))).toBe(false)
+  })
+
+  describe('module-removal guard (biffo-template#1563)', () => {
+    function writeGeneratedTf(pluginName: string): void {
+      const dir = join(projectRoot, 'infra', 'environments', 'dev')
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(
+        join(dir, 'plugins.generated.tf'),
+        [
+          '# generated',
+          '',
+          `module "plugin_${pluginName}" {`,
+          `  source   = "../../../modules/plugins/${pluginName}"`,
+          `  for_each = contains(var.enabled_plugins, "${pluginName}") ? { "${pluginName}" = true } : {}`,
+          '}',
+        ].join('\n'),
+      )
+    }
+
+    it('refuses a local refresh that would remove a still-referenced Terraform module, naming the file and line', async () => {
+      mkdirSync(join(projectRoot, 'modules', 'plugins', 'widgets'), { recursive: true })
+      writeFileSync(join(projectRoot, 'modules', 'plugins', 'widgets', 'old.tf'), '# old\n')
+      writeGeneratedTf('widgets')
+
+      const localDir = makeLocalPluginDir(NEW_MANIFEST, { withTerraform: false })
+      const registry = makeRegistryMock()
+      const git = makeGitMock(makeClonedPluginDir())
+      const migrations = makeMigrationsMock()
+
+      await expect(
+        runPluginUpgrade(
+          undefined,
+          { local: localDir, dryRun: false, force: true, cwd: projectRoot },
+          { registry: registry as never, git: git as never, migrations: migrations as never },
+        ),
+      ).rejects.toThrow(
+        /Refusing to remove modules\/plugins\/widgets\/.*infra\/environments\/dev\/plugins\.generated\.tf:4/s,
+      )
+
+      expect(existsSync(join(projectRoot, 'modules', 'plugins', 'widgets', 'old.tf'))).toBe(true)
+      expect(git.add).not.toHaveBeenCalled()
+      expect(git.commit).not.toHaveBeenCalled()
+    })
   })
 
   describe('seed vendoring (biffo-template#1554)', () => {

@@ -320,3 +320,88 @@ describe('runPluginUninstall — Terraform wiring (#201)', () => {
     expect(tf).not.toContain('module "plugin_widgets"')
   })
 })
+
+describe('runPluginUninstall — module-removal guard (biffo-template#1563)', () => {
+  let projectRoot: string
+
+  beforeEach(() => {
+    projectRoot = makeProjectRoot()
+    promptMock.mockReset()
+    promptMock.mockResolvedValue({ confirmed: true })
+  })
+
+  afterEach(() => {
+    rmSync(projectRoot, { recursive: true, force: true })
+  })
+
+  it('proceeds when the ONLY reference is the CLI-owned plugins.generated.tf — uninstall regenerates it in the same operation', async () => {
+    makeEnvironment(projectRoot, 'dev')
+    mkdirSync(join(projectRoot, 'modules', 'plugins', 'widgets'), { recursive: true })
+    writeFileSync(
+      join(projectRoot, 'modules', 'plugins', 'widgets', 'variables.tf'),
+      'variable "project_name" { type = string }\n',
+    )
+    // A REAL generated file, with a genuine source= line — not the placeholder
+    // "# stale generated content" the other describe block uses. This must
+    // NOT trigger the guard: uninstall's own syncPluginTerraform call rewrites
+    // this exact file to drop the reference, in the same operation.
+    writeFileSync(
+      join(projectRoot, 'infra', 'environments', 'dev', 'plugins.generated.tf'),
+      [
+        'module "plugin_widgets" {',
+        '  source   = "../../../modules/plugins/widgets"',
+        '  for_each = contains(var.enabled_plugins, "widgets") ? { "widgets" = true } : {}',
+        '}',
+      ].join('\n'),
+    )
+
+    const git = makeGitMock()
+    await runPluginUninstall(
+      'widgets',
+      { dryRun: false, force: true, keepData: false, cwd: projectRoot },
+      { git: git as never },
+    )
+
+    expect(existsSync(join(projectRoot, 'modules', 'plugins', 'widgets'))).toBe(false)
+    expect(git.commit).toHaveBeenCalled()
+  })
+
+  it('refuses to uninstall when a hand-authored file references the module outside the generated wiring, naming the file and line', async () => {
+    makeEnvironment(projectRoot, 'dev')
+    mkdirSync(join(projectRoot, 'modules', 'plugins', 'widgets'), { recursive: true })
+    writeFileSync(
+      join(projectRoot, 'modules', 'plugins', 'widgets', 'variables.tf'),
+      'variable "project_name" { type = string }\n',
+    )
+    // A hand-authored main.tf pulling a plugin output into the CDN, e.g. —
+    // uninstall's own regeneration of plugins.generated.tf cannot fix this,
+    // because it does not own main.tf.
+    writeFileSync(
+      join(projectRoot, 'infra', 'environments', 'dev', 'main.tf'),
+      [
+        '# hand-authored root config',
+        'variable "enabled_plugins" {',
+        '  type = list(string)',
+        '}',
+        'locals {',
+        '  widgets_bucket = module.plugin_widgets["widgets"].frontend_bucket_name',
+        '}',
+      ].join('\n'),
+    )
+
+    const git = makeGitMock()
+    await expect(
+      runPluginUninstall(
+        'widgets',
+        { dryRun: false, force: true, keepData: false, cwd: projectRoot },
+        { git: git as never },
+      ),
+    ).rejects.toThrow(/Refusing to uninstall 'widgets'.*infra\/environments\/dev\/main\.tf:6/s)
+
+    // Nothing was mutated — the refusal happened before any destructive step.
+    expect(existsSync(join(projectRoot, 'services', 'widgets'))).toBe(true)
+    expect(existsSync(join(projectRoot, 'modules', 'plugins', 'widgets'))).toBe(true)
+    expect(git.add).not.toHaveBeenCalled()
+    expect(git.commit).not.toHaveBeenCalled()
+  })
+})

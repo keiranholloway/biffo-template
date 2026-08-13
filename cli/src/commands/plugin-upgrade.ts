@@ -18,6 +18,7 @@ import {
 } from '../lib/plugin-provenance.js'
 import { pluginSeedImportDir, vendorPluginSeed } from '../lib/plugin-seed-vendor.js'
 import { copyPluginSource } from '../lib/plugin-source-copy.js'
+import { findPluginModuleReferences } from '../lib/plugin-terraform-wiring.js'
 import { applyWorkspaceSources } from '../lib/plugin-workspace-sources.js'
 import {
   cloneAndValidatePlugin,
@@ -218,6 +219,15 @@ export async function runPluginUpgrade(
       `Manifest valid — ${manifest.tables.length} table(s), ${manifest.api_routes.length} route(s)`,
     )
 
+    // Checked against the freshly-cloned source, before anything is mutated,
+    // so a refusal leaves the checkout untouched (biffo-template#1563). Only
+    // matters when the new version ships no terraform/ of its own — if it
+    // does, the module below is replaced in place, not removed, so nothing
+    // can go dangling.
+    if (!existsSync(join(tmpDir, 'terraform'))) {
+      refuseIfModuleStillReferenced(options.cwd, modulesDir, entry.name)
+    }
+
     // Read before the wholesale replace below destroys it — see
     // reconcileProvenance's docstring for why this can't be read afterward.
     const previousProvenance = readProvenance(targetDir)
@@ -240,7 +250,9 @@ export async function runPluginUpgrade(
 
     // Full replace of any previously-copied Terraform module: re-copy if the
     // new version ships one, remove if it no longer does, rather than
-    // leaving a stale mix of old and new files.
+    // leaving a stale mix of old and new files. Safe unconditionally at this
+    // point — the guard above has already refused if removal-without-a-
+    // replacement would orphan a reference.
     if (existsSync(modulesDir)) {
       rmSync(modulesDir, { recursive: true, force: true })
     }
@@ -399,6 +411,15 @@ async function runLocalPluginRefresh(
       `Manifest valid — ${manifest.tables.length} table(s), ${manifest.api_routes.length} route(s)`,
     )
 
+    // Checked against the checkout on disk, before anything is mutated, so a
+    // refusal leaves the checkout untouched (biffo-template#1563) — same
+    // guard and same reasoning as the registry path above. `source.sourceDir`
+    // is correct whether or not this is an in-tree refresh: inTreeSource means
+    // it already equals targetDir, so nothing about the check changes.
+    if (!existsSync(join(source.sourceDir, 'terraform'))) {
+      refuseIfModuleStillReferenced(options.cwd, modulesDir, source.name)
+    }
+
     // Read before the wholesale replace below destroys it — see
     // reconcileProvenance's docstring for why this can't be read afterward.
     // (The in-tree branch never deletes targetDir, so this is a no-op read
@@ -435,7 +456,8 @@ async function runLocalPluginRefresh(
 
     // Full replace of any previously-copied Terraform module, same as the
     // registry path: re-copy if the checkout ships one, remove if it no
-    // longer does.
+    // longer does. Safe unconditionally here — the guard above has already
+    // refused if removal-without-a-replacement would orphan a reference.
     if (existsSync(modulesDir)) {
       rmSync(modulesDir, { recursive: true, force: true })
     }
@@ -511,6 +533,37 @@ async function runLocalPluginRefresh(
   } finally {
     source.cleanup()
   }
+}
+
+/**
+ * Refuses a refresh that would delete `modules/plugins/<name>/` while
+ * anything under `infra/**` still points at it (biffo-template#1563).
+ *
+ * A plugin repo shipping no `terraform/` is **missing a file**, not
+ * declaring that the module should be removed — indistinguishable from a
+ * repo that never adopted the skeleton (skeleton-adoption tracking measures
+ * `terraform/*.tf` at 1/2 across plugin repos right now). The same refresh
+ * against a copy that still ships `terraform/` preserves the module; that
+ * asymmetry alone must not be what deletes live infrastructure.
+ *
+ * Only meaningful when the *new* source ships no `terraform/` of its own —
+ * every call site below checks that first. When it does ship one, the module
+ * is about to be replaced in place, not removed, so nothing can go dangling
+ * and this is not called.
+ */
+function refuseIfModuleStillReferenced(cwd: string, modulesDir: string, name: string): void {
+  if (!existsSync(modulesDir)) return // nothing to remove
+  const refs = findPluginModuleReferences(cwd, name)
+  if (refs.length === 0) return // genuinely unreferenced — removing it is fine
+  const refList = refs.map((r) => `  ${r.file}:${r.line}  ${r.text}`).join('\n')
+  throw new Error(
+    `Refusing to remove modules/plugins/${name}/ — '${name}' ships no terraform/ directory in ` +
+      `this version, but the module is still referenced:\n${refList}\n` +
+      `A plugin repo without terraform/ is missing the directory, not declaring that the module ` +
+      `should go, and a wrong destructive action here is worse than no action. Either remove the ` +
+      `reference(s) above yourself, or run 'biffo plugin uninstall ${name}', which removes the ` +
+      `module and unwires the reference together.`,
+  )
 }
 
 function readInstalledVersion(targetDir: string): string | undefined {

@@ -3,8 +3,10 @@
 from .client import BiffoAPIClient, BiffoAPIError
 from .events import BiffoEvent, EventSubscriber, create_event_handler
 from .plugin import (
+    AdminIngress,
     BiffoPluginBase,
     ColumnDefinition,
+    EventSubscription,
     IndexDefinition,
     PermissionRule,
     PluginManifest,
@@ -13,6 +15,9 @@ from .plugin import (
     TableDefinition,
     TablePermissions,
     ToolDeclaration,
+    UIComponent,
+    UserFrontend,
+    UserIngress,
     load_manifest,
     register_plugin,
 )
@@ -36,6 +41,7 @@ from .user_serving import (
 )
 
 __all__ = [
+    "AdminIngress",
     "BiffoAPIClient",
     "BiffoAPIError",
     "BiffoEvent",
@@ -43,6 +49,7 @@ __all__ = [
     "CognitoConfig",
     "ColumnDefinition",
     "EventSubscriber",
+    "EventSubscription",
     "ForbiddenError",
     "ForwardedUser",
     "IndexDefinition",
@@ -55,8 +62,11 @@ __all__ = [
     "TableDefinition",
     "TablePermissions",
     "ToolDeclaration",
+    "UIComponent",
     "UnauthorizedError",
     "UserAuthError",
+    "UserFrontend",
+    "UserIngress",
     "authorize",
     "create_core_client",
     "create_event_handler",

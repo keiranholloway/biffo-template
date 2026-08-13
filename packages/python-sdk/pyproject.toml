@@ -20,7 +20,28 @@ name = "biffo-plugin-sdk"
 # CLI *is* the template. The SDK is not: it is consumed by repos the template
 # does not own, so it keeps its own independent semver and its own release tag
 # (`sdk-v*`, see .github/workflows/publish-sdk.yml).
-version = "1.3.0"
+#
+# 1.4.0 (biffo-template#1517) is the version gate for `PluginManifest` gaining
+# `model_config = ConfigDict(extra="forbid")`. Before this, an unknown top-level
+# manifest key — a typo, or a field this SDK version predates — validated with
+# no error and was silently dropped; that is the exact fail-open shape the
+# shared plugin host was built to avoid one layer up (ADR-0021). A consumer
+# (the shared host, a plugin's own build) that pins `>=1.4` gets the new hard
+# failure on an unrecognised key; one still pinned below it keeps the old
+# permissive behaviour until it explicitly upgrades — that pin is the gate, not
+# a runtime flag. This is deliberately a MINOR bump, not a major one:
+# test_version_is_independent_semver_at_or_above_1_0 (test_packaging.py) pins
+# this package's major version at 1 precisely because every existing plugin
+# manifest and the skeleton's pyproject.toml already declare `^1.0`/`^1.1`/
+# `>=1.0,<2.0` — publishing 2.0.0 now would silently stop satisfying every one
+# of them without this same change also landing in each of those repos, which
+# is out of scope here. `PluginManifest` also gains `user_ingress`/
+# `admin_ingress`/`user_frontend` (previously invisible to this model
+# entirely — the shared host was reading them by hand with no validation, see
+# `discover.py`) plus `event_subscriptions`, `ui_components`, `dependencies`,
+# `core_capabilities` and `chat_agents_dynamic`, all of which real manifests
+# already declare and none of which validated against a typo before now.
+version = "1.4.0"
 description = "Biffo Plugin SDK — manifest validation, Core API client, and event system for Biffo plugins"
 readme = "README.md"
 license = "MIT"

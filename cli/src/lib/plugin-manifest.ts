@@ -13,7 +13,7 @@
  *     `TablePermissions` / `PluginTableDefinition`
  *   - `services/api/src/api/models/plugin_route.py`'s `RouteDefinition`
  *   - `services/api/src/api/models/plugin_user_surface.py`'s
- *     `UserIngress` / `UserFrontend` (ADR-0018)
+ *     `UserIngress` / `AdminIngress` / `UserFrontend` (ADR-0018/0021)
  *
  * NOT the older `_skeletons/registry/registry-schema.json` shape, which
  * (as of writing) still requires an `api_routes[].handler` free-form
@@ -219,6 +219,21 @@ const UserIngressSchema = z
   })
   .strict()
 
+// Mirrors plugin_user_surface.py's AdminIngress (same schema as UserIngress; `app`
+// mounts at /api/v1/plugins/<name>/admin/* instead). Until biffo-template#1517 this
+// field was invisible to the CLI entirely (`grep -rn "admin_ingress" cli/src`
+// returned zero non-test hits) — the top-level schema below had no `.strict()`, so
+// an unknown `admin_ingress` key parsed fine and was silently stripped, and
+// `biffo plugin install` had no way to see the surface it was vendoring.
+const AdminIngressSchema = z
+  .object({
+    required_group: z.string().min(1, NON_EMPTY_GROUP),
+    app: z
+      .string()
+      .regex(APP_REF, "must be an ASGI app reference '<module>:<attr>', e.g. 'ideation.admin:app'"),
+  })
+  .strict()
+
 const UserFrontendSchema = z
   .object({
     dir: z
@@ -303,9 +318,10 @@ export const PluginManifestSchema = z
       .array(z.object({ source: z.string(), detail_type: z.string() }).passthrough())
       .default([]),
     required_core_version: z.string().default('>=0.0.0'),
-    // ADR-0018 user-facing surfaces. Optional: a plugin without them is an
-    // ordinary (data/event/CRUD) plugin.
+    // ADR-0018/0021 user-facing and admin-facing surfaces. Optional: a plugin
+    // without them is an ordinary (data/event/CRUD) plugin.
     user_ingress: UserIngressSchema.optional(),
+    admin_ingress: AdminIngressSchema.optional(),
     user_frontend: UserFrontendSchema.optional(),
     // Tools the plugin's runtime exposes to an agentic worker (ADR-0014 §7,
     // #569). Default empty — an ordinary plugin declares none. Parsing this

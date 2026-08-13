@@ -6,7 +6,13 @@ requires-python = ">=3.13"
 dependencies = [
   "starlette>=0.37.0",
   "mangum>=0.19.0",
-  "biffo-plugin-sdk[user-serving]>=1.2,<2.0",
+  # >=1.4 (biffo-template#1517): discover.py now parses every manifest through
+  # biffo_plugin_sdk.plugin.PluginManifest instead of raw json.loads()+.get(),
+  # so the host needs the SDK version where that model knows about
+  # user_ingress/admin_ingress at all, and where extra="forbid" is the version
+  # gate for a typo failing loudly instead of being silently ignored (see
+  # packages/python-sdk/pyproject.toml's version comment).
+  "biffo-plugin-sdk[user-serving]>=1.4,<2.0",
 ]
 
 [dependency-groups]

@@ -18,7 +18,7 @@ from starlette.testclient import TestClient
 def _write_plugin(root, name, *, ingress):
     d = root / name
     d.mkdir()
-    manifest = {"name": name}
+    manifest = {"name": name, "version": "1.0.0"}
     if ingress is not None:
         manifest["user_ingress"] = ingress
     (d / "biffo.plugin.json").write_text(json.dumps(manifest))
@@ -44,6 +44,7 @@ def test_discover_populates_admin_ingress_when_present(tmp_path):
     d.mkdir()
     manifest = {
         "name": "ideation",
+        "version": "1.0.0",
         "user_ingress": {"app": "ideation.app:app", "required_group": "founder"},
         "admin_ingress": {"app": "ideation.admin:app", "required_group": "admin"},
     }
@@ -134,6 +135,7 @@ def test_an_admin_only_plugin_is_discovered(tmp_path) -> None:
         json.dumps(
             {
                 "name": "marketing",
+                "version": "1.0.0",
                 "admin_ingress": {"app": "marketing.admin_app:app", "required_group": "admin"},
             }
         )
@@ -159,7 +161,101 @@ def test_a_declared_but_incomplete_user_ingress_is_still_skipped(tmp_path) -> No
     root = tmp_path / "services" / "broken"
     root.mkdir(parents=True)
     (root / "biffo.plugin.json").write_text(
-        json.dumps({"name": "broken", "user_ingress": {"app": "broken:app"}})
+        json.dumps({"name": "broken", "version": "1.0.0", "user_ingress": {"app": "broken:app"}})
     )
 
     assert discover_plugins(tmp_path / "services") == []
+
+
+def test_an_incomplete_user_ingress_does_not_discard_a_valid_admin_ingress(tmp_path) -> None:
+    """The latent bug this module's docstring documents (biffo-template#1517).
+
+    A ``user_ingress`` present but missing ``required_group`` used to fail the
+    whole manifest's validation and discard it wholesale — including a
+    perfectly valid, unrelated ``admin_ingress`` declared on the very same
+    plugin. The malformed ``user_ingress`` is dropped (and logged), the plugin
+    is still discovered, and its valid ``admin_ingress`` survives.
+    """
+    root = tmp_path / "services" / "half-broken"
+    root.mkdir(parents=True)
+    (root / "biffo.plugin.json").write_text(
+        json.dumps(
+            {
+                "name": "half-broken",
+                "version": "1.0.0",
+                "user_ingress": {"app": "half_broken:app"},  # missing required_group
+                "admin_ingress": {
+                    "app": "half_broken.admin:app",
+                    "required_group": "admin",
+                },
+            }
+        )
+    )
+
+    found = discover_plugins(tmp_path / "services")
+
+    assert [p.name for p in found] == ["half-broken"]
+    assert found[0].admin_app_ref == "half_broken.admin:app"
+    assert found[0].admin_required_group == "admin"
+    # The malformed user_ingress was dropped, not invented.
+    assert found[0].app_ref is None
+    assert found[0].required_group is None
+
+
+def test_a_manifest_broken_outside_the_ingress_fields_is_skipped_entirely(tmp_path) -> None:
+    """A validation failure that is NOT confined to user_ingress/admin_ingress
+    (here: a route referencing a table the manifest never declares) is a
+    genuinely broken manifest, not a salvageable one — the whole plugin is
+    skipped, including its otherwise-valid admin_ingress. Distinguishes the
+    surgical salvage above from a blanket "always keep trying" policy.
+    """
+    root = tmp_path / "services" / "broken-routes"
+    root.mkdir(parents=True)
+    (root / "biffo.plugin.json").write_text(
+        json.dumps(
+            {
+                "name": "broken-routes",
+                "version": "1.0.0",
+                "admin_ingress": {"app": "broken_routes.admin:app", "required_group": "admin"},
+                "api_routes": [
+                    {
+                        "method": "GET",
+                        "path": "/widgets",
+                        "table": "widgets",  # never declared in `tables`
+                        "operation": "list",
+                    }
+                ],
+            }
+        )
+    )
+
+    assert discover_plugins(tmp_path / "services") == []
+
+
+def test_a_typo_d_admin_ingress_key_is_rejected_and_logged_loudly(tmp_path, caplog) -> None:
+    """``admin_ingres`` (one 's') used to validate silently, per no
+    ``model_config`` on ``PluginManifest`` at all — that is the exact typo the
+    issue's second comment reproduced against the real marketing manifest.
+    ``extra="forbid"`` now rejects it; discovery must skip the plugin rather
+    than raise (a malformed manifest must not take every other installed
+    plugin on the shared host down with it), but the skip must be loud —
+    logged, not the silent ``continue`` this replaces.
+    """
+    root = tmp_path / "services" / "typo"
+    root.mkdir(parents=True)
+    (root / "biffo.plugin.json").write_text(
+        json.dumps(
+            {
+                "name": "typo",
+                "version": "1.0.0",
+                "admin_ingres": {"app": "typo.admin:app", "required_group": "admin"},
+            }
+        )
+    )
+
+    with caplog.at_level("ERROR"):
+        found = discover_plugins(tmp_path / "services")
+
+    assert found == []
+    assert any("typo" in record.message for record in caplog.records)
+    assert any(record.levelname == "ERROR" for record in caplog.records)

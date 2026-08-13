@@ -5,10 +5,12 @@ from pathlib import Path
 
 import pytest
 from biffo_plugin_sdk import (
+    AdminIngress,
     BiffoAPIClient,
     BiffoEvent,
     BiffoPluginBase,
     ColumnDefinition,
+    EventSubscription,
     IndexDefinition,
     PermissionRule,
     PluginManifest,
@@ -17,6 +19,9 @@ from biffo_plugin_sdk import (
     TableDefinition,
     TablePermissions,
     ToolDeclaration,
+    UIComponent,
+    UserFrontend,
+    UserIngress,
     load_manifest,
     register_plugin,
 )
@@ -199,6 +204,187 @@ class TestPluginManifestModel:
     def test_seed_declaration_requires_dir(self):
         with pytest.raises(ValidationError):
             SeedDeclaration(baseline_tables=["roles"])  # type: ignore[call-arg]  # missing dir
+
+
+class TestPluginManifestStrictness:
+    """``extra="forbid"`` and the fields the shared host actually reads
+    (biffo-template#1517). Before this, PluginManifest had no ``model_config``
+    at all, so an unknown top-level key — a typo, or a field this version of
+    the SDK predates — validated with no error and was silently dropped.
+    """
+
+    def test_typo_d_admin_ingress_key_fails_the_gate(self):
+        """The exact typo the issue's second comment reproduced against the
+        real marketing manifest: ``admin_ingres`` (one 's'). Before this
+        change it PASSED validation, silently — that is how this whole issue
+        survived undetected. It must now fail.
+        """
+        with pytest.raises(ValidationError):
+            PluginManifest.model_validate(
+                {
+                    "name": "marketing",
+                    "version": "1.0.0",
+                    "admin_ingres": {"app": "marketing.admin_app:app", "required_group": "admin"},
+                }
+            )
+
+    def test_unknown_top_level_key_fails_the_gate(self):
+        with pytest.raises(ValidationError):
+            PluginManifest.model_validate(
+                {"name": "x", "version": "1.0.0", "this_field_does_not_exist": True}
+            )
+
+    def test_user_ingress_and_admin_ingress_are_parsed_and_typed(self):
+        """PluginManifest previously did not know these fields existed at
+        all — they validated as unknown keys and were silently dropped
+        (extra="ignore" is Pydantic's default with no model_config). The
+        shared host is the one reader that actually acts on them
+        (services/_plugin-host/src/plugin_host/discover.py); this proves the
+        model it now validates through actually carries them.
+        """
+        manifest = PluginManifest.model_validate(
+            {
+                "name": "marketing",
+                "version": "1.0.0",
+                "user_ingress": {"app": "marketing.user_app:app", "required_group": "founder"},
+                "admin_ingress": {"app": "marketing.admin_app:app", "required_group": "admin"},
+                "user_frontend": {"dir": "web/dist", "required_group": "founder"},
+            }
+        )
+        assert isinstance(manifest.user_ingress, UserIngress)
+        assert manifest.user_ingress.app == "marketing.user_app:app"
+        assert isinstance(manifest.admin_ingress, AdminIngress)
+        assert manifest.admin_ingress.required_group == "admin"
+        assert isinstance(manifest.user_frontend, UserFrontend)
+        assert manifest.user_frontend.dir == "web/dist"
+
+    def test_user_ingress_and_admin_ingress_default_to_none(self):
+        manifest = PluginManifest(name="data-only", version="1.0.0")
+        assert manifest.user_ingress is None
+        assert manifest.admin_ingress is None
+        assert manifest.user_frontend is None
+
+    def test_malformed_admin_ingress_app_ref_rejected(self):
+        with pytest.raises(ValidationError):
+            PluginManifest.model_validate(
+                {
+                    "name": "x",
+                    "version": "1.0.0",
+                    "admin_ingress": {"app": "not-a-valid-ref", "required_group": "admin"},
+                }
+            )
+
+    def test_the_three_live_plugins_shapes_validate(self):
+        """A reconstruction of the fields biffo-plugin-marketing,
+        biffo-plugin-idea-scout and biffo-plugin-ideation actually declare at
+        the top level of their real biffo.plugin.json (checked 2026-08-13).
+        Every one of them must still validate now that the model is strict —
+        the point of Phase 0 is to catch a typo, not to break every live
+        plugin the moment it ships.
+        """
+        PluginManifest.model_validate(
+            {
+                "name": "marketing",
+                "version": "0.1.0",
+                "required_core_version": ">=0.272.0",
+                "user_ingress": {"app": "marketing.user_app:app", "required_group": "founder"},
+                "admin_ingress": {"app": "marketing.admin_app:app", "required_group": "admin"},
+                "core_capabilities": {
+                    "agent-run-request": "^1",
+                    "owner-scoped-tables": "^1",
+                    "object-storage": "^1",
+                },
+                "dependencies": {"biffo-plugin-sdk": "^1.0"},
+                "ui_components": [
+                    {"type": "nav-link", "label": "Marketing", "path": "/admin/marketing"}
+                ],
+                "event_subscriptions": [{"source": "biffo.core", "detail_type": "UserCreated"}],
+            }
+        )
+        PluginManifest.model_validate(
+            {
+                "name": "idea-scout",
+                "version": "0.1.0",
+                "user_ingress": {"app": "idea_scout.app:app", "required_group": "founder"},
+                "admin_ingress": {"app": "idea_scout.admin_app:app", "required_group": "admin"},
+                "user_frontend": {"dir": "web/dist", "required_group": "founder"},
+                "core_capabilities": {"agent-run-request": "^1", "user-profile-read": "^1"},
+                "dependencies": {"biffo-plugin-sdk": "^1.1"},
+                "ui_components": [],
+                "event_subscriptions": [],
+            }
+        )
+        PluginManifest.model_validate(
+            {
+                "name": "ideation",
+                "version": "0.1.0",
+                "user_ingress": {"app": "ideation.app:app", "required_group": "founder"},
+                "admin_ingress": {"app": "ideation.admin_app:app", "required_group": "admin"},
+                "user_frontend": {"dir": "web/dist", "required_group": "founder"},
+                "chat_agents_dynamic": True,
+                "core_capabilities": {"chat-turn": "^1", "agent-run-request": "^1"},
+                "dependencies": {"biffo-plugin-sdk": "^1.1"},
+                "ui_components": [],
+            }
+        )
+
+    def test_event_subscriptions_parsed_but_deliberately_loose(self):
+        """Mirrors cli/src/lib/plugin-manifest.ts's event_subscriptions
+        handling: the authoritative shape is the registry's, so this only
+        needs detail_type (source defaults) and tolerates extra keys like a
+        human-readable description or the legacy `handler` some manifests
+        still carry — unlike UserIngress/AdminIngress, this isn't a security
+        surface, so a typo'd extra key here has nothing to silently weaken.
+        """
+        manifest = PluginManifest.model_validate(
+            {
+                "name": "x",
+                "version": "1.0.0",
+                "event_subscriptions": [
+                    {"source": "biffo.core", "detail_type": "UserCreated", "description": "..."},
+                    {"detail_type": "widget.updated"},
+                ],
+            }
+        )
+        assert len(manifest.event_subscriptions) == 2
+        assert isinstance(manifest.event_subscriptions[0], EventSubscription)
+        assert manifest.event_subscriptions[1].source == "biffo.core"  # default
+
+    def test_ui_components_rejects_unknown_type(self):
+        with pytest.raises(ValidationError):
+            PluginManifest.model_validate(
+                {
+                    "name": "x",
+                    "version": "1.0.0",
+                    "ui_components": [{"type": "not-a-real-type", "label": "L", "path": "/p"}],
+                }
+            )
+
+    def test_ui_components_parsed(self):
+        manifest = PluginManifest.model_validate(
+            {
+                "name": "x",
+                "version": "1.0.0",
+                "ui_components": [{"type": "nav-link", "label": "Widgets", "path": "/admin/x"}],
+            }
+        )
+        assert isinstance(manifest.ui_components[0], UIComponent)
+        assert manifest.ui_components[0].label == "Widgets"
+
+    def test_chat_agents_dynamic_defaults_false(self):
+        assert PluginManifest(name="x", version="1.0.0").chat_agents_dynamic is False
+
+    def test_core_capabilities_and_dependencies_are_free_form_string_maps(self):
+        manifest = PluginManifest.model_validate(
+            {
+                "name": "x",
+                "version": "1.0.0",
+                "core_capabilities": {"owner-scoped-tables": "^1"},
+                "dependencies": {"biffo-plugin-sdk": "^1.1"},
+            }
+        )
+        assert manifest.core_capabilities == {"owner-scoped-tables": "^1"}
+        assert manifest.dependencies == {"biffo-plugin-sdk": "^1.1"}
 
 
 # --- RouteDef tests ---

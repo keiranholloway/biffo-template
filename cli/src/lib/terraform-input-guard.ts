@@ -31,7 +31,7 @@
  * nothing.
  */
 
-import { readdirSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 
 /** Subcommands that evaluate configuration, and so can prompt for variables. */
@@ -70,9 +70,53 @@ export function stripComments(source: string): string {
     .join('\n')
 }
 
-/** Recursively collects workflow YAML files, skipping vendored trees. */
+/**
+ * Names of the immediate children of `services/` that are vendored plugin
+ * checkouts, identified the same way an instance's own tooling identifies a
+ * plugin: a `biffo.plugin.json` sitting directly inside the directory.
+ *
+ * Scoped to `services/` deliberately, not "any directory with a manifest
+ * anywhere in the tree" — `_skeletons/plugin-template/` also carries a
+ * `biffo.plugin.json` (beside its own `.github/workflows/`) and MUST stay
+ * scanned: that skeleton's workflow is what every new plugin repo is born
+ * with, and a missing `TF_INPUT` there propagates to every plugin created
+ * afterwards (issue #322, one level upstream). Only `services/<name>/` is a
+ * copy of a plugin repo's own checkout, authored and CI'd elsewhere.
+ */
+function vendoredPluginServiceDirs(repoRoot: string): ReadonlySet<string> {
+  const servicesDir = join(repoRoot, 'services')
+  const result = new Set<string>()
+  let entries: string[]
+  try {
+    entries = readdirSync(servicesDir)
+  } catch {
+    return result
+  }
+  for (const entry of entries) {
+    const full = join(servicesDir, entry)
+    if (!existsSync(full) || !statSync(full).isDirectory()) continue
+    if (existsSync(join(full, 'biffo.plugin.json'))) {
+      result.add(entry)
+    }
+  }
+  return result
+}
+
+/**
+ * Recursively collects workflow YAML files, skipping vendored trees.
+ *
+ * "Vendored" means a `.github/` sitting directly inside `services/<name>/`
+ * where `<name>` carries a `biffo.plugin.json` — a plugin repo's own checkout,
+ * copied whole by `biffo plugin install`/`upgrade` (issue #1565). That
+ * `.github/workflows/` is the plugin repo's own CI, authored and run there; it
+ * never runs in the instance and is not the instance's to fix, so a violation
+ * inside it is not actionable here. `_skeletons/**` is NOT covered by this
+ * skip even though `_skeletons/plugin-template/` also carries a manifest — see
+ * `vendoredPluginServiceDirs` for why that boundary matters.
+ */
 export function findWorkflowFiles(repoRoot: string): string[] {
   const found: string[] = []
+  const vendoredPluginDirs = vendoredPluginServiceDirs(repoRoot)
 
   const walk = (dir: string, relative: string): void => {
     let entries: string[]
@@ -83,6 +127,13 @@ export function findWorkflowFiles(repoRoot: string): string[] {
     }
     for (const entry of entries) {
       if (entry === 'node_modules' || entry === '.git' || entry === '.worktrees') continue
+      if (
+        entry === '.github' &&
+        relative.startsWith('services/') &&
+        vendoredPluginDirs.has(relative.slice('services/'.length))
+      ) {
+        continue
+      }
       const full = join(dir, entry)
       const rel = relative ? `${relative}/${entry}` : entry
       if (statSync(full).isDirectory()) {

@@ -1,3 +1,4 @@
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { isTemplateOwned, readCoreManifest } from './core-manifest.js'
@@ -7,6 +8,9 @@ import {
   findWorkflowFiles,
   stripComments,
 } from './terraform-input-guard.js'
+// Not mkdtempSync: `no-raw-mkdtemp.test.ts` walks the AST of every test file and
+// fails a direct call. makeTmpDir registers the directory for an automatic sweep.
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 const repoRoot = join(__dirname, '..', '..', '..')
 
@@ -167,5 +171,88 @@ describe('scan scope stays inside the template-owned boundary (#325)', () => {
     expect(isTemplateOwned('_skeletons/plugin-template/.github/workflows/ci.yml', manifest)).toBe(
       true,
     )
+  })
+})
+
+/**
+ * Issue #1565. `findWorkflowFiles`'s docstring already claimed it "skips
+ * vendored trees", but the walk only ever excluded `node_modules`, `.git` and
+ * `.worktrees` — so a plugin vendored whole into `services/<name>/` (by
+ * `biffo plugin install`/`upgrade`) had its own `.github/workflows/ci.yml`
+ * collected and flagged, even though that workflow never runs in the instance
+ * and is not the instance's to fix (measured on biffo-platform#164, against
+ * `services/idea-scout/.github/workflows/ci.yml`).
+ *
+ * These fixtures build a throwaway repo tree rather than asserting against
+ * this repo's real `services/`, because the template carries no vendored
+ * plugin with its own `.github/` — `services/_plugins/{orchestrator,
+ * agent-runtime}` have a `biffo.plugin.json` each but no workflow directory of
+ * their own to prove the skip against.
+ */
+describe('vendored plugin .github/ is skipped, but only there (#1565)', () => {
+  const buildFixture = (): string => {
+    const root = makeTmpDir('tf-input-guard-vendor')
+
+    // A vendored plugin with its own CI workflow AND a manifest beside it —
+    // the discriminator the skip must key on.
+    const vendoredCi = join(root, 'services', 'idea-scout', '.github', 'workflows')
+    mkdirSync(vendoredCi, { recursive: true })
+    writeFileSync(join(root, 'services', 'idea-scout', 'biffo.plugin.json'), '{}')
+    writeFileSync(join(vendoredCi, 'ci.yml'), BROKEN)
+
+    // Same shape, one directory over `services/`, with NO manifest beside it.
+    // Proves the discriminator is the manifest, not "lives under services/".
+    const unmanifestedCi = join(root, 'services', 'plain-service', '.github', 'workflows')
+    mkdirSync(unmanifestedCi, { recursive: true })
+    writeFileSync(join(unmanifestedCi, 'ci.yml'), BROKEN)
+
+    // The plugin-repo birth skeleton: carries a `biffo.plugin.json` too, but
+    // MUST stay scanned — see the module docstring on `vendoredPluginServiceDirs`.
+    const skeletonCi = join(root, '_skeletons', 'plugin-template', '.github', 'workflows')
+    mkdirSync(skeletonCi, { recursive: true })
+    writeFileSync(join(root, '_skeletons', 'plugin-template', 'biffo.plugin.json'), '{}')
+    writeFileSync(join(skeletonCi, 'ci.yml'), BROKEN)
+
+    // The repo's own root workflow — always scanned, regardless of the above.
+    const rootCi = join(root, '.github', 'workflows')
+    mkdirSync(rootCi, { recursive: true })
+    writeFileSync(join(rootCi, 'ci.yml'), BROKEN)
+
+    return root
+  }
+
+  it('does not collect a vendored plugin workflow (services/<name>/ with a manifest beside it)', () => {
+    const files = findWorkflowFiles(buildFixture())
+    expect(files).not.toContain('services/idea-scout/.github/workflows/ci.yml')
+  })
+
+  it('DOES collect the same file shape when no manifest sits beside it — the discriminator is the manifest, not the path', () => {
+    const files = findWorkflowFiles(buildFixture())
+    expect(files).toContain('services/plain-service/.github/workflows/ci.yml')
+  })
+
+  it('still collects _skeletons/plugin-template/.github/workflows/ even though it too carries a manifest', () => {
+    // This is the test that fails if the skip is later broadened from
+    // "services/<name>/" to "any directory with a biffo.plugin.json" — that
+    // broadening would silently stop guarding the workflow every new plugin
+    // repo is born with, reintroducing #322 at the source.
+    const files = findWorkflowFiles(buildFixture())
+    expect(files).toContain('_skeletons/plugin-template/.github/workflows/ci.yml')
+  })
+
+  it("still collects the repo's own root .github/workflows/", () => {
+    const files = findWorkflowFiles(buildFixture())
+    expect(files).toContain('.github/workflows/ci.yml')
+  })
+
+  it('still reports a real violation in a file that stays in scope, while the vendored one is silent', () => {
+    const root = buildFixture()
+    const violations = checkTerraformInput(root)
+    const files = violations.map((v) => v.file)
+
+    expect(files).toContain('.github/workflows/ci.yml')
+    expect(files).toContain('services/plain-service/.github/workflows/ci.yml')
+    expect(files).toContain('_skeletons/plugin-template/.github/workflows/ci.yml')
+    expect(files).not.toContain('services/idea-scout/.github/workflows/ci.yml')
   })
 })

@@ -40,6 +40,29 @@ requires_skeleton = pytest.mark.skipif(
     reason="needs a biffo-template checkout (SDK sdist ships this test but not _skeletons/)",
 )
 
+# Directories that hold copies of other trees rather than this repo's own
+# source. Walking them would validate a vendored/installed manifest that this
+# repo does not own and cannot fix.
+_NOT_OUR_SOURCE = frozenset(
+    {".worktrees", ".git", "node_modules", ".venv", "site-packages", "dist", "build"}
+)
+
+
+def _manifests_shipped_by_this_repo() -> list[Path]:
+    """Every ``biffo.plugin.json`` this repo ships, found on disk.
+
+    Enumerated rather than listed, for the reason this whole class of bug
+    exists: a hand-written list is a second copy of the truth and stops
+    covering the file somebody adds next. See
+    ``test_every_manifest_this_repo_ships_still_validates``.
+    """
+    return sorted(
+        path
+        for path in _REPO_ROOT.rglob("biffo.plugin.json")
+        if not _NOT_OUR_SOURCE & set(path.relative_to(_REPO_ROOT).parts)
+    )
+
+
 # Kept textually identical to services/api/tests/test_plugin_migrations.py's
 # manifest fixture — if the two ever need to diverge, that's a sign the SDK's
 # TableDefinition and the Core API's PluginTableDefinition have drifted apart.
@@ -423,6 +446,82 @@ class TestPluginManifestStrictness:
         assert manifest.seed.baseline_tables == ["example_widgets"]
         assert len(manifest.ui_components) == 2
         assert len(manifest.event_subscriptions) == 1
+
+    @requires_skeleton
+    def test_every_manifest_this_repo_ships_still_validates(self):
+        """``extra="forbid"`` means tightening this model can now BREAK a
+        plugin rather than silently ignore the difference — and the failure
+        surfaces at the shared host's cold start, as "the surface is
+        unreachable", with nothing pointing at the manifest.
+
+        Nothing asserted that the manifests this repo actually ships still
+        load. The skeleton had a test (above, by name); the first-party
+        plugins under ``services/_plugins/`` had none, so a future required
+        field or tightened validator would have gone green here and been
+        discovered in a deploy. Enumerated from disk rather than listed, so a
+        plugin added later is covered without anyone remembering to add it.
+
+        This does not, and cannot, cover the three out-of-repo plugin repos
+        (``biffo-plugin-marketing``/``-idea-scout``/``-ideation``) — they are
+        separate checkouts. All three were verified by hand against this model
+        on 2026-08-13 (all load); keeping them green is the plugin-registry
+        conformance job's problem, not this test's.
+        """
+        shipped = _manifests_shipped_by_this_repo()
+
+        # Denominator check: an rglob that matched nothing would make every
+        # assertion below vacuously true, which is the failure mode this
+        # whole issue class is about.
+        assert shipped, (
+            f"found no biffo.plugin.json under {_REPO_ROOT} — the walk is "
+            "broken, not the repo, so this test is proving nothing"
+        )
+        assert _SKELETON_MANIFEST in shipped, (
+            f"the plugin skeleton's own manifest is missing from the walk "
+            f"({[str(p.relative_to(_REPO_ROOT)) for p in shipped]}) — the "
+            "exclusion list has grown too broad to trust"
+        )
+
+        failures: dict[str, str] = {}
+        for path in shipped:
+            try:
+                load_manifest(path)
+            except (ValidationError, ValueError) as exc:
+                failures[str(path.relative_to(_REPO_ROOT))] = str(exc)
+
+        assert not failures, (
+            "manifests this repo ships no longer validate against "
+            f"PluginManifest: {failures}. Since #1561 this model is "
+            'extra="forbid", so a new required field or a tightened validator '
+            "breaks every plugin declaring the old shape — declare the field "
+            "as optional, or update these manifests in the same PR."
+        )
+
+    @requires_skeleton
+    def test_every_first_party_plugin_directory_carries_a_manifest(self):
+        """The other half of the denominator: a plugin whose manifest is
+        *missing* would pass the test above by simply not being found. Every
+        directory under ``services/_plugins/`` is a plugin, so every one of
+        them must carry a manifest the walk can then validate.
+        """
+        plugins_root = _REPO_ROOT / "services" / "_plugins"
+        plugin_dirs = sorted(p for p in plugins_root.iterdir() if p.is_dir())
+
+        assert plugin_dirs, (
+            f"no first-party plugin directories under {plugins_root} — either "
+            "they moved, or this guard is now checking an empty set"
+        )
+
+        missing = [
+            str(d.relative_to(_REPO_ROOT))
+            for d in plugin_dirs
+            if not (d / "biffo.plugin.json").is_file()
+        ]
+        assert not missing, (
+            f"first-party plugin directories with no biffo.plugin.json: "
+            f"{missing}. A plugin with no manifest is invisible to the shared "
+            "host's discovery and to every manifest guard in this repo."
+        )
 
 
 # --- RouteDef tests ---

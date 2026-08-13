@@ -59,10 +59,17 @@ Several agents often run concurrently in this repo. A worktree isolates your
 **Before starting work on an issue, run:**
 
 ```bash
-sh scripts/biffo.sh claim <issue-number> [-R owner/repo]   # 0 free · 1 taken · 2 cannot tell
-sh scripts/biffo.sh claim <issue-number> --as <token>      # a claim carrying <token> is YOURS, not a collision
-sh scripts/biffo.sh claim <issue-number> --release <token> # only the holder may clear it
+sh scripts/biffo.sh claim <issue-number> --as <token> [-R owner/repo]  # 0 free · 1 taken · 2 cannot tell
+sh scripts/biffo.sh claim <issue-number> --release <token>             # only the holder may clear it
 ```
+
+**`--as <token>` is required, and there is no untokened form** (#1562). The
+token is opaque, identifies a **session** rather than a person, and is not a
+secret — it appears in a public comment. Shape it `<what>-<MMDD>-<unique>`, e.g.
+`tpl-groom-0813-9f2a`; anything with two `-`-separated parts and 6+ characters
+is accepted, and a role word every session would share (`agent`, `bot`, `me`) is
+refused. Omit the flag and the refusal prints a ready-made token derived from
+your branch, so the fix is one line to copy.
 
 It asks four questions, because the answer lives in more than one place: does
 the issue carry the `in-progress` label, is there an **open PR** referencing it,
@@ -87,19 +94,24 @@ nobody had labelled. The fourth was the reverse: a label with no work, while
 another session built the thing and opened a PR. Checking only the label would
 have caught one of four.
 
-**Dispatching agents onto issues you have claimed? Pass `--as <token>`.**
-A claim records when and who, and every session on a workstation claims under
-the same GitHub actor — so without a token a delegated agent cannot tell your
-reservation from a stranger's, and the rule it correctly follows is _never steal
-a fresh claim_. On 2026-08-04 four agents were dispatched onto pre-claimed
-issues; the one that checked before starting refused and produced nothing, while
-the three that had not yet checked worked normally. Whether a delegate works or
-stalls should not depend on when it happens to look.
+**Why the token is not optional.** A claim records when and who, and every
+session on a workstation claims under the same GitHub actor — so without a token
+a delegated agent cannot tell your reservation from a stranger's, and the rule it
+correctly follows is _never steal a fresh claim_. On 2026-08-04 four agents were
+dispatched onto pre-claimed issues; the one that checked before starting refused
+and produced nothing, while the three that had not yet checked worked normally.
+Whether a delegate works or stalls should not depend on when it happens to look.
 
-Generate any opaque token per session, claim with `--as`, and give the same
-token to every agent you dispatch. `--release <token>` then refuses to clear
-anybody else's claim, which is what makes a stale label distinguishable from a
-live one.
+`--as` shipped for that in #1279 and was **optional**, so the default went on
+losing the deciding information silently. On 2026-08-13 it appeared zero times in
+the `AGENTS.md` of every satellite in the estate, and two concurrent sessions in
+one repo produced four claims that could not be told apart — ownership had to be
+reconstructed from a local command log, and for one pair could not be established
+at all. That is why it is now required rather than recommended (#1562).
+
+Claim with `--as`, give the same token to every agent you dispatch, and release
+with `--release <token>` — which refuses to clear anybody else's claim, and is
+what makes a stale label distinguishable from a live one.
 
 **Push your branch as soon as it exists.** The claim is a reservation; the
 branch is the evidence, and it is the only signal other machines can see — a
@@ -107,8 +119,9 @@ local worktree is invisible estate-wide. The window between starting and pushing
 is where collisions actually happen: one of that morning's issues went from
 branch to **merged in three minutes**, which no protocol could have caught.
 
-**Release what you claim.** Remove the label when the PR merges, when you close
-the issue, or when you stop — including when you stop because someone else got
+**Release what you claim** — `claim <issue-number> --release <token>`, which
+refuses to clear anybody else's. Release when the PR merges, when you close the
+issue, or when you stop — including when you stop because someone else got
 there first. A claim you never release is worse than no claim, because the next
 session believes it. If you are skipping something because it is claimed, check
 how old the claim is: an `in-progress` issue with no activity for over an hour is

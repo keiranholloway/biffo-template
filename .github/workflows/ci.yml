@@ -245,6 +245,16 @@ jobs:
       - name: Skeleton drift guard
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: sh scripts/biffo.sh check skeleton-drift
+      # The same drift, in the ruleset rather than the scaffolding: `--as
+      # <token>` shipped in #1279, reached this repo's own AGENTS.md and
+      # neither skeleton, and since the skeletons are what satellites receive
+      # it was documented in ZERO of them while working perfectly. Every
+      # delegated session in the estate therefore claimed anonymously, which
+      # is the one thing the flag exists to prevent (#1562). Compares every
+      # distributed AGENTS.md -- discovered, not listed -- against the others.
+      - name: Claim-invocation parity guard
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: sh scripts/biffo.sh check claim-invocation
       # A Terraform subcommand that can prompt for an unresolved variable
       # without -input=false, or a workflow running Terraform at all without
       # TF_INPUT set as a backstop — a GitHub Actions runner has no stdin to

@@ -39,19 +39,51 @@
 #
 # ## Usage
 #
-#   sh scripts/claim.sh 1234                 # check, and claim if free
-#   sh scripts/claim.sh 1234 --check         # report only, change nothing
-#   sh scripts/claim.sh 1234 -R owner/repo
-#   sh scripts/claim.sh --guard <branch>     # pre-push gate — see below
+#   sh scripts/claim.sh 1234 --as <token>            # check, and claim if free
+#   sh scripts/claim.sh 1234 --as <token> --check    # report only, change nothing
+#   sh scripts/claim.sh 1234 --as <token> -R owner/repo
+#   sh scripts/claim.sh 1234 --release <token>       # only the holder may clear it
+#   sh scripts/claim.sh --guard <branch>             # pre-push gate — see below
 #
 #   0  free — and claimed, unless --check
 #   1  taken, or already closed — the reason is printed
-#   2  cannot tell — issue unreadable, gh unauthenticated
+#   2  cannot tell — issue unreadable, gh unauthenticated, or no --as token
 #
 # 2 is deliberately not 0, matching `wait-for-checks.sh` and `branch-health.sh`.
 # A check that cannot see its input must not report "free".
 #
 # Requires `gh`, authenticated. Uses gh's embedded jq, so no jq binary needed.
+#
+# ## `--as <token>` is REQUIRED on the claim and `--check` paths (#1562)
+#
+# It used to be optional, and `${HOLDER:+ …}` in the claim comment simply
+# omitted the slug when it was absent — no flag, no slug, no warning, exit 0.
+# So the safe form existed and nothing steered anyone to it: measured on
+# 2026-08-13, `--as` appeared **zero** times in the AGENTS.md of every satellite
+# in the estate, because the flag shipped in #1279 reached the template's own
+# ruleset and neither skeleton. Two concurrent sessions in one plugin repo then
+# produced four claims that read `Claimed at … by \`Keiran Holloway\`` and could
+# not be told apart — ownership had to be reconstructed from a local command log,
+# and for one pair could not be established at all.
+#
+# An optional flag that records the deciding information is a fail-open: the
+# default loses exactly what the mechanism exists to keep. So a claim that
+# cannot be proved to be yours is now refused rather than made.
+#
+# **`--guard` and `--release` are deliberately exempt.** `--guard` is invoked by
+# `.githooks/pre-push` on EVERY push in every repo, with no token and no issue
+# argument, and it never compares identity by design (see below) — requiring one
+# there would break `git push` estate-wide to enforce a rule that path does not
+# use. `--release` carries the token in its own value, so it already cannot run
+# untokened.
+#
+# **The token must identify a session, not a role.** A mandatory field that
+# everybody satisfies with `--as agent` is worse than an optional one, because it
+# manufactures a column that looks authoritative and distinguishes nobody — the
+# 2026-08-13 measurement above is what that looks like. So the shape is checked
+# (at least two `-`-separated parts, 6+ characters), and the refusal prints a
+# ready-made suggestion derived from the branch — which is already unique per
+# unit of work — so the cheapest thing to type is also a good token.
 #
 # ## `--guard <branch>` — the pre-push gate (#1231 instance 2)
 #
@@ -98,7 +130,12 @@ CHECK_ONLY=""
 GUARD_BRANCH=""
 
 usage() {
-  sed -n '2,84p' "$0" | sed 's/^# \{0,1\}//'
+  # The whole header comment, found rather than hardcoded: the previous fixed
+  # `2,84p` was already truncating the last five lines of the `--guard` section
+  # mid-sentence, and any edit to the header silently moves where the real end
+  # is. Derived from `set -u`, which is always the first line of code.
+  _usage_end=$(grep -n '^set -u' "$0" | head -1 | cut -d: -f1)
+  sed -n "2,$((_usage_end - 2))p" "$0" | sed 's/^# \{0,1\}//'
   exit 2
 }
 
@@ -429,10 +466,76 @@ fi
 
 case "$ISSUE" in
   '' | *[!0-9]*)
-    echo "claim: give an issue number, e.g. sh scripts/claim.sh 1234" >&2
+    echo "claim: give an issue number, e.g. sh scripts/claim.sh 1234 --as <token>" >&2
     exit 2
     ;;
 esac
+
+# --- --as <token> is required from here on (#1562) ---------------------------
+#
+# Placed AFTER the `--guard` and `--release` short-circuits above, which is the
+# whole exemption: those two paths exit before reaching this line. Everything
+# below is the four-signal check and the claim it writes — the two things that
+# need to know whose session is asking.
+#
+# A suggestion, not a lecture. An agent that hits this must be able to fix it by
+# copying one line, so the refusal derives a token instead of describing one:
+#
+#   <slug>-<MMDD>-<pid>
+#
+# `<slug>` comes from the current branch when it names the work, because a
+# branch is already unique per unit of work (AGENTS.md: one worktree per unit).
+# Claiming usually happens BEFORE the worktree exists, though — you claim from
+# the primary checkout, on `dev` — so on an integration branch the slug falls
+# back to the issue, and the pid keeps two sessions that both did that apart.
+suggest_token() {
+  _b=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '')
+  case "$_b" in
+    '' | HEAD | dev | main | master | staging) _slug="issue$ISSUE" ;;
+    */*) _slug=$(printf '%s' "${_b#*/}" | tr 'A-Z' 'a-z' | tr -c 'a-z0-9-' '-' | cut -c1-24) ;;
+    *) _slug=$(printf '%s' "$_b" | tr 'A-Z' 'a-z' | tr -c 'a-z0-9-' '-' | cut -c1-24) ;;
+  esac
+  _slug=$(printf '%s' "$_slug" | sed 's/-*$//')
+  printf '%s-%s-%04x' "$_slug" "$(date -u +%m%d)" "$$"
+}
+
+# Two `-`-separated parts, 6+ characters. Deliberately shape-only: the token is
+# opaque by design, so there is nothing else to validate — but `agent`, `me`,
+# `bot`, `session` and every other role word a whole estate would share fail it,
+# and that is the failure this rule is for. See the header.
+token_is_identifying() {
+  case "$1" in
+    *[!A-Za-z0-9._-]*) return 1 ;; # opaque-token characters only
+    -* | *-) return 1 ;;           # no leading or trailing separator
+    *-*) [ "${#1}" -ge 6 ] ;;      # two parts, long enough to be a session
+    *) return 1 ;;                 # a single word: 'agent', 'bot', 'me'
+  esac
+}
+
+if [ -z "$HOLDER" ]; then
+  _s=$(suggest_token)
+  echo "${RED}claim: --as <token> is required.${OFF}" >&2
+  echo "${DIM}  A claim with no token cannot be proved to be yours: every session on this${OFF}" >&2
+  echo "${DIM}  workstation claims under the same GitHub actor, so --release has nothing to${OFF}" >&2
+  echo "${DIM}  check and a delegated agent cannot tell your reservation from a stranger's.${OFF}" >&2
+  echo >&2
+  echo "  sh scripts/biffo.sh claim $ISSUE --as $_s" >&2
+  echo >&2
+  echo "${DIM}  Give that same token to every agent you dispatch onto #$ISSUE, and release it${OFF}" >&2
+  echo "${DIM}  with:  sh scripts/biffo.sh claim $ISSUE --release $_s${OFF}" >&2
+  exit 2
+fi
+
+if ! token_is_identifying "$HOLDER"; then
+  _s=$(suggest_token)
+  echo "${RED}claim: --as '$HOLDER' does not identify a session.${OFF}" >&2
+  echo "${DIM}  Needs two '-'-separated parts and 6+ characters, e.g. <what>-<MMDD>-<unique>.${OFF}" >&2
+  echo "${DIM}  A token every session shares — 'agent', 'bot', 'me' — is worse than none:${OFF}" >&2
+  echo "${DIM}  it fills the field that decides ownership with a value that decides nothing.${OFF}" >&2
+  echo >&2
+  echo "  sh scripts/biffo.sh claim $ISSUE --as $_s" >&2
+  exit 2
+fi
 
 # --- 0. Does the issue exist, and is it still open? --------------------------
 
@@ -578,14 +681,21 @@ gh_label create "$LABEL" \
   >/dev/null 2>&1 || true
 
 # Claim it. Label AND comment together: the label is what other sessions filter
-# on, the comment is what dates it so a stale claim can be recognised later.
+# on, the comment is what dates it so a stale claim can be recognised later, and
+# the holder token is what makes it answerable.
+#
+# The token is interpolated unconditionally (#1562). It used to be
+# `${HOLDER:+ ${HOLDER_MARK}${HOLDER}}` — present only when `--as` was passed —
+# which is why a claim could be written with nothing to identify it. That branch
+# is now unreachable (the requirement above exits 2 first), so the conditional
+# would only be a place for the old behaviour to come back.
 gh_issue edit "$ISSUE" --add-label "$LABEL" >/dev/null 2>&1 || {
   echo "${RED}claim: could not apply the '$LABEL' label.${OFF}" >&2
   echo "${DIM}  Not claimed. Do not start work on the assumption that it worked.${OFF}" >&2
   exit 2
 }
 gh_issue comment "$ISSUE" \
-  --body "Claimed at $(date -u +%FT%TZ) by \`$(git config user.name 2>/dev/null || echo agent)\`.${HOLDER:+ ${HOLDER_MARK}${HOLDER}} Release it — remove the label — on merge, or if you stop." \
+  --body "Claimed at $(date -u +%FT%TZ) by \`$(git config user.name 2>/dev/null || echo agent)\`. ${HOLDER_MARK}${HOLDER} Release it — remove the label — on merge, or if you stop." \
   >/dev/null 2>&1
 
 echo "${GREEN}Claimed.${OFF}"

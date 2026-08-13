@@ -119,7 +119,9 @@ function stub(openPrs: Pr[]): string {
 
 function claim(binDir: string, issue: number) {
   try {
-    const out = execFileSync('sh', [script, String(issue), '--check'], {
+    // `--as` is mandatory since #1562; this file is about the four signals,
+    // not about ownership, so it passes a fixed token and says so.
+    const out = execFileSync('sh', [script, String(issue), '--as', 'refs-test-0813', '--check'], {
       encoding: 'utf8',
       env: { ...process.env, PATH: `${binDir}:${process.env.PATH}` },
     })

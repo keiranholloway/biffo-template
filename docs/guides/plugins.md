@@ -124,7 +124,7 @@ The starting point to copy is **`_skeletons/plugin-template/biffo.plugin.json`**
 }
 ```
 
-**Fields that are actually validated and used:** `name` (kebab-case), `version` (full semver), `description`, `author`, `tags`, `tables`, `api_routes`, `required_core_version`. Anything else you may see in older examples — `event_subscriptions`, `ui_components`, `infra_modules`, `dependencies` — is **ignored by manifest validation and route synthesis today** (event subscriptions run in a plugin's own Lambda via the SDK, not the Core API). Don't rely on them being wired.
+**Fields that are actually validated and used:** `name` (kebab-case), `version` (full semver), `description`, `author`, `tags`, `tables`, `api_routes`, `required_core_version`, and — as of #1555 — a `ui_components` entry of type `nav-link`: its `label` is rendered as a link in the portal's admin nav (its `path` is validated but never trusted; see "Partial UI install" below). Anything else you may see in older examples — `event_subscriptions`, `infra_modules`, `dependencies`, and `ui_components` entries of type `page`, `dashboard-widget`, `modal` or `dialog` — is **still ignored by manifest validation and route synthesis today** (event subscriptions run in a plugin's own Lambda via the SDK, not the Core API). Don't rely on those being wired.
 
 ### Tables
 
@@ -206,4 +206,4 @@ These are deliberate — the CLI never acts on your live deployment, and never e
 - **No `git push` and no deploy.** `install`/`upgrade`/`uninstall` commit locally only; you push and `biffo deploy` when ready.
 - **Uninstall never drops tables.** Per ADR-0002 the CLI has no database client; `uninstall` removes code and commits, but the plugin's tables (and its migration file) remain. Dropping data is a manual Alembic migration. (`--keep-data` is a no-op today.)
 - **`required_core_version` is not enforced** — it's printed as a warning for you to judge, since the Core API exposes no version to check against yet.
-- **No UI install.** `ui_components` in a manifest are not wired into the portal.
+- **Partial UI install (#1555).** A `ui_components` entry of type `nav-link` renders as a link in the portal's admin nav — but only when the plugin also declares `admin_ingress`, and only to callers whose Cognito groups include its `required_group`. The link's href is always derived as `/api/v1/plugins/<name>/admin`; the manifest's own `path` string is validated but never trusted (a hand-written path can point at nothing — that was the bug #1555 fixed). `page`, `dashboard-widget`, `modal` and `dialog` entries still do nothing: declaring one validates cleanly and is otherwise ignored.

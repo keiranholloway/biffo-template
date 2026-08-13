@@ -42,13 +42,13 @@ The motivating cases are commodity capabilities that many deployments want and n
 
 ### Why the current contract cannot express any of them
 
-Both motivating examples are **inexpressible today**. The manifest schema is `name`, `version`, `description`, `author`, `tags`, `required_core_version`, `tables`, `api_routes`, `event_subscriptions`, `infra_modules`, `ui_components`, `dependencies`. Of those, `event_subscriptions`, `infra_modules` and `ui_components` are declared but wired to nothing.
+Both motivating examples are **inexpressible today**. The manifest schema is `name`, `version`, `description`, `author`, `tags`, `required_core_version`, `tables`, `api_routes`, `event_subscriptions`, `infra_modules`, `ui_components`, `dependencies`. Of those, `event_subscriptions` and `infra_modules` are declared but wired to nothing. `ui_components` used to be a third — as of #1555 its `nav-link` entries render in the portal's admin nav, gated by `admin_ingress`'s required group — but `page`, `dashboard-widget`, `modal` and `dialog` entries remain declared and unread, so the field as a whole is still not the general UI mechanism this section is about (see point 3 below).
 
 Concretely missing:
 
 1. **No configuration mechanism.** Nowhere to put a GA tracking ID or a Stripe publishable key. No schema, no storage, no admin form.
 2. **No secrets path.** `modules/plugins/_template` deliberately injects no secret (its ADR-0009 note reads "no shared secret, nothing to rotate" — true of plugin→core auth, silent on plugin→third-party). A Stripe secret key has nowhere to live.
-3. **No UI mechanism.** `ui_components` is read by `plugin info` for display and by nothing else. The portal is `output: 'export'`; a page must exist at build time, so a plugin installed afterwards cannot add a route without rebuilding the portal.
+3. **No UI mechanism for a bespoke page.** `ui_components` is read by `plugin info` for display, and — since #1555 — its `nav-link` entries populate one link in the portal's admin nav (a pointer to the plugin's own admin-hosted surface, never a portal-rendered page). That does not touch the gap this point is about: the portal is `output: 'export'`; a page must exist at build time, so a plugin installed afterwards still cannot add a portal-hosted settings screen without rebuilding the portal. `page`, `dashboard-widget`, `modal` and `dialog` remain declared and unread.
 4. **No HTTP ingress.** The plugin module provisions a Lambda and an EventBridge rule. A Stripe webhook needs a public endpoint; there is no Function URL and no API Gateway route.
 5. **No schema evolution.** `biffo plugin install` generates a create-table migration. An upgrade that adds a column is a different problem and is unhandled — in an area where ADR-0003's own implementation note records a production incident caused by migration-graph corruption.
 
@@ -174,7 +174,7 @@ Give each plugin its own datastore and let it integrate over HTTP only.
 - **Core gates plugin capability.** A plugin needing something the schema cannot express must wait for a core release. This is the deliberate cost of the DMZ boundary, and it will chafe.
 - **Generic UI is worse than bespoke UI.** A declaratively-rendered admin page will never be as good as one written by hand. Accepted: plugin config screens are not where product differentiation lives.
 - **`http_ingress` adds public attack surface** on behalf of third-party code. Mitigated by explicit declaration and prominent review, not eliminated.
-- **More manifest surface to validate**, and each capability needs a corresponding enforcement path. Declared-but-unwired fields are how `ui_components` became misleading; every field added here must be wired or absent.
+- **More manifest surface to validate**, and each capability needs a corresponding enforcement path. Declared-but-unwired fields are how `ui_components` became misleading; every field added here must be wired or absent. (`ui_components`'s `nav-link` type was reconciled in #1555; its `page`/`dashboard-widget`/`modal`/`dialog` types are exactly the residue this bullet warns about, and remain so.)
 
 ### Neutral
 

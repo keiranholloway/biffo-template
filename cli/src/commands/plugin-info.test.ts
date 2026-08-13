@@ -75,6 +75,24 @@ describe('runPluginInfo', () => {
     expect(output).toContain('disabled')
   })
 
+  it('prints ui_components as label (type) pairs, not [object Object] (#1555)', async () => {
+    const registry = makeRegistry([
+      {
+        ...RBAC_ENTRY,
+        ui_components: [
+          { type: 'nav-link', label: 'RBAC', path: '/admin/rbac' },
+          { type: 'page', label: 'Roles', path: '/admin/rbac/roles' },
+        ],
+      },
+    ])
+
+    await runPluginInfo('rbac', { registry: registry as never })
+
+    const output = capturedOutput(logSpy)
+    expect(output).toContain('RBAC (nav-link), Roles (page)')
+    expect(output).not.toContain('[object Object]')
+  })
+
   it('prints every matching entry when the registry has more than one for a name', async () => {
     const registry = makeRegistry([
       RBAC_ENTRY,

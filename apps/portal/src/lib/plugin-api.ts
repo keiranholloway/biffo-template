@@ -55,6 +55,19 @@ export interface InstalledPlugin {
   tables: PluginTableDefinition[]
   routes: PluginRouteDefinition[]
   has_admin_ingress: boolean
+  /**
+   * The Cognito group `admin_ingress.required_group` names, or `null` when
+   * `has_admin_ingress` is false. `plugin-nav-contract.ts` uses this to hide
+   * a nav entry the caller cannot reach (issue #1555) — it is a UI
+   * courtesy, never a substitute for the shared plugin host's own gate.
+   */
+  admin_required_group: string | null
+  /**
+   * The manifest's first `ui_components` `nav-link` entry's `label`, or
+   * `null` if it declares none / it's malformed. Its `path` is never sent
+   * here — see `plugin-nav-contract.ts`'s `derivePluginAdminHref` for why.
+   */
+  admin_nav_label: string | null
 }
 
 /** Fetch all installed plugins from the real Core API endpoint. */
@@ -86,6 +99,25 @@ export function fetchInstalledPlugins(
 export const REGISTRY_URL =
   'https://raw.githubusercontent.com/keiranholloway/biffo-plugins-registry/main/plugins.json'
 
+/**
+ * One `ui_components` entry, matching `_skeletons/registry/registry-schema.json`
+ * (and the identical `_skeletons/plugin-template/registry-schema.json`) —
+ * an array of objects, not the `string[]` this field used to be typed as
+ * (issue #1555). `type` is deliberately left as `string` rather than the
+ * schema's five-member enum: this interface describes the registry's own
+ * `plugins.json` entries, a hand-maintained external file this client only
+ * lightly validates (see `isRegistryShape` below), so over-narrowing the
+ * type would make a real but unanticipated value a compile-time lie rather
+ * than a runtime one.
+ */
+export interface UiComponentEntry {
+  type: string
+  label: string
+  path: string
+  icon?: string
+  requires_auth?: boolean
+}
+
 export interface RegistryPlugin {
   name: string
   version: string
@@ -97,7 +129,7 @@ export interface RegistryPlugin {
   required_core_version?: string
   infra_modules?: string[]
   api_routes?: string[]
-  ui_components?: string[]
+  ui_components?: UiComponentEntry[]
   status: 'active' | 'disabled'
 }
 

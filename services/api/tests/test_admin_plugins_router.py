@@ -113,3 +113,78 @@ class TestListAvailablePlugins:
 
         assert len(result) == 1
         assert result[0].has_admin_ingress is False
+
+    async def test_admin_required_group_populated_from_admin_ingress(self, monkeypatch):
+        manifest = {
+            "name": "ideation",
+            "version": "1.0.0",
+            "admin_ingress": {"app": "ideation.admin:app", "required_group": "admin"},
+            "tables": [],
+        }
+        monkeypatch.setattr(
+            "api.routers.admin.plugins.discover_plugin_manifests",
+            lambda: [manifest],
+        )
+
+        result = await list_available_plugins(_caller=_CALLER)
+
+        assert result[0].admin_required_group == "admin"
+
+    async def test_admin_required_group_none_when_admin_ingress_absent(self, monkeypatch):
+        manifest = {"name": "rbac", "version": "1.0.0", "tables": []}
+        monkeypatch.setattr(
+            "api.routers.admin.plugins.discover_plugin_manifests",
+            lambda: [manifest],
+        )
+
+        result = await list_available_plugins(_caller=_CALLER)
+
+        assert result[0].admin_required_group is None
+
+    async def test_admin_nav_label_populated_from_nav_link_ui_component(self, monkeypatch):
+        manifest = {
+            "name": "marketing",
+            "version": "1.0.0",
+            "admin_ingress": {"app": "marketing.admin:app", "required_group": "admin"},
+            "ui_components": [
+                {"type": "nav-link", "label": "Marketing", "path": "/admin/marketing"}
+            ],
+            "tables": [],
+        }
+        monkeypatch.setattr(
+            "api.routers.admin.plugins.discover_plugin_manifests",
+            lambda: [manifest],
+        )
+
+        result = await list_available_plugins(_caller=_CALLER)
+
+        assert result[0].admin_nav_label == "Marketing"
+
+    async def test_admin_nav_label_none_when_no_ui_components(self, monkeypatch):
+        manifest = {"name": "rbac", "version": "1.0.0", "tables": []}
+        monkeypatch.setattr(
+            "api.routers.admin.plugins.discover_plugin_manifests",
+            lambda: [manifest],
+        )
+
+        result = await list_available_plugins(_caller=_CALLER)
+
+        assert result[0].admin_nav_label is None
+
+    async def test_malformed_ui_components_omits_label_without_failing_listing(self, monkeypatch):
+        manifest = {
+            "name": "marketing",
+            "version": "1.0.0",
+            # Missing the required 'path' — malformed, must not 500 the listing.
+            "ui_components": [{"type": "nav-link", "label": "Marketing"}],
+            "tables": [],
+        }
+        monkeypatch.setattr(
+            "api.routers.admin.plugins.discover_plugin_manifests",
+            lambda: [manifest],
+        )
+
+        result = await list_available_plugins(_caller=_CALLER)
+
+        assert len(result) == 1
+        assert result[0].admin_nav_label is None

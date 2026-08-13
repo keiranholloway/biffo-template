@@ -20,6 +20,16 @@
  */
 import { z } from 'zod'
 
+// A `ui_components` entry, matching registry-schema.json's shape — an array
+// of objects, not the `string[]` this field used to be typed as (#1555).
+const UiComponentEntrySchema = z.object({
+  type: z.enum(['nav-link', 'page', 'dashboard-widget', 'modal', 'dialog']),
+  label: z.string(),
+  path: z.string(),
+  icon: z.string().optional(),
+  requires_auth: z.boolean().optional(),
+})
+
 // Mirrors registry-schema.json's `plugins[]` entry shape in the real
 // keiranholloway/biffo-plugins-registry repo (fetched 2026-07-02).
 const RegistryPluginEntrySchema = z.object({
@@ -33,7 +43,7 @@ const RegistryPluginEntrySchema = z.object({
   required_core_version: z.string().optional(),
   infra_modules: z.array(z.string()).optional(),
   api_routes: z.array(z.string()).optional(),
-  ui_components: z.array(z.string()).optional(),
+  ui_components: z.array(UiComponentEntrySchema).optional(),
   status: z.enum(['active', 'disabled']),
 })
 

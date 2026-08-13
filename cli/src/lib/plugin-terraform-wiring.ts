@@ -64,8 +64,16 @@
  * cycle-free in the same unconditional sense (`plugin -> api_gateway`, never
  * the reverse).
  */
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
+import { join, relative, sep } from 'node:path'
 
 /** Never a real plugin — the copy-me skeleton shipped by the template. */
 const TEMPLATE_MODULE_DIR = '_template'
@@ -267,6 +275,114 @@ export function firstPartyPluginNames(cwd: string): string[] {
 export function staleFirstPartyCopies(cwd: string): string[] {
   const copied = new Set(listPluginModules(cwd))
   return firstPartyPluginNames(cwd).filter((name) => copied.has(name))
+}
+
+/** A single place under `infra/` that still points at a plugin's Terraform
+ * module — repo-relative so a refusal can name exactly what it found. */
+export interface PluginModuleReference {
+  /** Repo-relative path, POSIX-separated regardless of platform. */
+  file: string
+  /** 1-based line number within `file`. */
+  line: number
+  /** The matching line, trimmed. */
+  text: string
+}
+
+function walkTfFiles(root: string): string[] {
+  const out: string[] = []
+  const walk = (dir: string): void => {
+    let entries: string[]
+    try {
+      entries = readdirSync(dir)
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      const p = join(dir, entry)
+      let st: ReturnType<typeof statSync>
+      try {
+        st = statSync(p)
+      } catch {
+        continue
+      }
+      if (st.isDirectory()) {
+        walk(p)
+        continue
+      }
+      if (entry.endsWith('.tf')) out.push(p)
+    }
+  }
+  walk(root)
+  return out.sort()
+}
+
+/** Escapes a string for literal use inside a `RegExp`. */
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/**
+ * Every place under `infra/**\/*.tf` that still points at
+ * `modules/plugins/<name>/` — the check biffo-template#1563 is for: a refresh
+ * that deletes the module without asking whether anything still references it.
+ *
+ * Two things count as a reference, both found with a per-line regex rather
+ * than an HCL parse — same tradeoff `declaredVariables`/`declaredOutputs`
+ * already make in this file: no HCL parser dependency, a false negative
+ * degrades to "did not detect a reference that exists" (the caller must still
+ * treat "found nothing" as "nothing detected", not "provably safe"), and a
+ * false positive only ever over-refuses a delete, which is the safe direction
+ * for a destructive action:
+ *
+ * 1. **`source = "…/modules/plugins/<name>"`** — a module block's source, the
+ *    line that fails `terraform validate` with a dangling path once the
+ *    directory is gone. This is what `plugins.generated.tf` emits for every
+ *    wired plugin (`renderModuleBlock` above), and it is also what a
+ *    hand-authored `main.tf` would use if a user wired the module in by hand.
+ * 2. **`module.plugin_<name>` used as an expression** — an output or another
+ *    resource reading the module's attributes (e.g. a hand-authored `main.tf`
+ *    pulling a plugin's frontend bucket into the CDN). The generated file's
+ *    own re-exported outputs match this too, which is fine: they are real
+ *    uses of the module and a reason not to delete it out from under them.
+ *
+ * Deliberately **not** detected, stated here so a clean result is never read
+ * as a proof of safety: a reference reached only through a `local` or
+ * variable that itself derives from one of the two forms above (only the
+ * literal identifiers are scanned), and anything outside `infra/` — a
+ * plugin's own module has no legitimate referrer in `services/` or `apps/`,
+ * so that is out of scope rather than a gap.
+ */
+export function findPluginModuleReferences(cwd: string, name: string): PluginModuleReference[] {
+  const infraDir = join(cwd, 'infra')
+  // The path a `source = "…"` value must resolve to, as trailing path
+  // segments — deliberately not a raw string suffix, so `modules/plugins/idea`
+  // does not false-positive against a sibling module `modules/plugins/idea-scout`.
+  const sourceSegments = ['modules', 'plugins', name]
+  const sourceLinePattern = /^\s*source\s*=\s*"([^"]+)"/
+  const moduleRefPattern = new RegExp(`module\\.plugin_${escapeRegExp(name)}(?![A-Za-z0-9_-])`)
+  const refs: PluginModuleReference[] = []
+
+  for (const absPath of walkTfFiles(infraDir)) {
+    let contents: string
+    try {
+      contents = readFileSync(absPath, 'utf8')
+    } catch {
+      continue
+    }
+    const relPath = relative(cwd, absPath).split(sep).join('/')
+    contents.split('\n').forEach((rawLine, idx) => {
+      const sourceValue = sourceLinePattern.exec(rawLine)?.[1]
+      const sourceValueSegments = sourceValue?.split('/').filter((s) => s.length > 0 && s !== '.')
+      const isSourceRef =
+        sourceValueSegments !== undefined &&
+        sourceValueSegments.slice(-sourceSegments.length).join('/') === sourceSegments.join('/')
+      const isExprRef = moduleRefPattern.test(rawLine)
+      if (isSourceRef || isExprRef) {
+        refs.push({ file: relPath, line: idx + 1, text: rawLine.trim() })
+      }
+    })
+  }
+  return refs
 }
 
 /**

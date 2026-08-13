@@ -8,7 +8,11 @@ import { log } from '../lib/logger.js'
 import { FIRST_PARTY_PLUGINS_DIR, pluginDir } from '../lib/plugin-locations.js'
 import { validateManifest } from '../lib/plugin-manifest.js'
 import { pluginSeedImportDir } from '../lib/plugin-seed-vendor.js'
-import { syncPluginTerraform } from '../lib/plugin-terraform-wiring.js'
+import {
+  findPluginModuleReferences,
+  GENERATED_TF_FILE,
+  syncPluginTerraform,
+} from '../lib/plugin-terraform-wiring.js'
 
 const NAME_PATTERN = /^[a-z][a-z0-9-]*$/
 
@@ -158,6 +162,29 @@ export async function runPluginUninstall(
     throw new Error(
       `${options.cwd} is not a git repository — biffo plugin uninstall must be run from a Biffo project checkout.`,
     )
+  }
+
+  if (existsSync(modulesDir)) {
+    // Unlike a refresh (biffo-template#1563), uninstall regenerates
+    // plugins.generated.tf in the same operation (below), so a reference
+    // living only in that CLI-owned file is not left dangling — it is about
+    // to be rewritten to not mention this plugin at all. What uninstall
+    // cannot fix for you is a *hand-authored* reference: a main.tf reading
+    // `module.plugin_<name>.<output>` directly (e.g. wiring a frontend
+    // bucket into the CDN) breaks the moment the module is gone, and nothing
+    // here regenerates a file it does not own. That is the one shape worth
+    // refusing for — everything else is uninstall doing exactly what it says.
+    const refs = findPluginModuleReferences(options.cwd, name).filter(
+      (r) => !r.file.endsWith(`/${GENERATED_TF_FILE}`) && r.file !== GENERATED_TF_FILE,
+    )
+    if (refs.length > 0) {
+      const refList = refs.map((r) => `  ${r.file}:${r.line}  ${r.text}`).join('\n')
+      throw new Error(
+        `Refusing to uninstall '${name}' — its Terraform module is referenced outside the ` +
+          `generated wiring, so removing it would break these hand-authored file(s):\n${refList}\n` +
+          `Remove the reference(s) above first, then re-run uninstall.`,
+      )
+    }
   }
 
   rmSync(targetDir, { recursive: true, force: true })

@@ -167,6 +167,27 @@ A plugin that needs baseline data — a reference taxonomy, a default lookup row
 
 `on_install()` is not invoked — nothing calls it, ever. See [ADR-0003 §9a](../ADR/0003-plugin-system-and-marketplace.md#9a-the-lifecycle-hooks-are-not-invoked) and the SDK's `BiffoPluginBase` docstring for why, and use `seed` above instead.
 
+### Your declared columns are checked against the real database (biffo-template#1556)
+
+Core builds your plugin's SQLAlchemy model from the manifest, so the manifest and the database are two documents that can disagree — and when they do, every query touching the column 500s with `UndefinedColumn` long after a green deploy. `biffo:plugin-column-check` runs in **every** deploy job (dev, staging and prod), straight after DDL imports and just before the baseline-row check above, and reads `information_schema.columns` for every table your manifest declares. You do not wire anything up; declaring a table is what opts you in.
+
+What that means for you when it fails:
+
+```
+[prod] 1 plugin table(s) are missing column(s) their manifest declares (biffo-template#1556).
+
+  - [prod] plugin 'marketing', table 'marketing_placements': missing column(s): channel (declared String(64))
+```
+
+Usually you added a column to `biffo.plugin.json` and did not ship the migration for it — `biffo plugin sync-migrations` (or a hand-written revision) and re-deploy. If the manifest looks right, the instance's vendored `services/<plugin>/` copy may be stale; `biffo plugin upgrade` refreshes it.
+
+Two limits worth knowing, so you do not read more into a pass than it earned:
+
+- It compares column **names only**. A column that exists with the wrong type, the wrong nullability, no `default`, or a missing index **passes** — comparing types across manifest → SQLAlchemy → Postgres is easy to get wrong, and a deploy guard that fails falsely is one that gets switched off. The check says so in its own output.
+- It is **one-directional**. A column in the database that your manifest does not declare is fine and never fails a deploy — your tables share a database with Core and with the instance's own DDL imports.
+
+A plugin that declares no tables passes, and that is not a warning: an all-frontend or all-compute plugin promises nothing about the schema.
+
 ## Getting your plugin live
 
 1. **Place it at `services/<name>/`** in your project (with the manifest at `services/<name>/biffo.plugin.json`). `biffo plugin create <name>` does this for you. If your plugin lives in its own git repo, `biffo plugin install --local <path>` copies it in; `biffo plugin install <name>@<minor>` would clone it from the registry, once that's populated.

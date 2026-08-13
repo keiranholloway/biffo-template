@@ -378,6 +378,56 @@ and #924 track whether they are ever removed or wired up; this amendment is
 the other of the two "minimum useful steps" the issue named, deliberately
 scoped away from the lifecycle-hook question.
 
+### 9c. The manifest's declared columns are asserted against the real database at deploy time
+
+> **Amendment, 2026-08-13 (issue [#1556](https://github.com/keiranholloway/biffo-template/issues/1556)).**
+
+§4 makes the manifest the source of truth for a plugin's tables, and Core
+builds each plugin's SQLAlchemy model from it
+(`PluginTableDefinition.to_sqlalchemy_model`). That makes the model and the
+database **two independent documents**, and nothing compared them. When they
+disagree, every query touching the column fails at runtime with
+`UndefinedColumn` — after a wholly green deploy.
+
+#1551 made `biffo plugin install --local`/`upgrade` diff manifest *columns*
+rather than only table names, which closed the one route then known to
+produce that disagreement. It fixed the tool, not the class: a hand-written
+migration (how #1539 was actually resolved instance-side), a stale vendored
+`services/<name>/` copy (#1547), a migration generated correctly and never
+applied to *this* environment, and the cases #1551's own docstring defers
+(index changes, `ColumnDefinition.default`, composite indexes) all still
+produce it, and all are invisible to a check that reads migration files.
+
+So a second post-deploy assertion joins §9b's, on the same rail:
+`biffo:plugin-column-check`, dispatched from `lambda_handler` and invoked by
+`deploy-app.yml` in **all three** deploy jobs immediately after DDL imports
+and immediately before §9b's row check — structure before content. It reads
+every bundled manifest through the same `parse_plugin_tables_from_manifest`
+the permissions registry and the plugin routers use (so the four auto-columns
+`PluginTableDefinition` injects, `tenant_id` among them, are asserted too),
+then reads `information_schema.columns` and fails the deploy naming the
+environment, the plugin, the table and the column.
+
+Two properties are load-bearing and deliberate:
+
+- **One-directional.** A declared column the table lacks fails; a column the
+  table has and the manifest does not is fine. The manifest is the contract
+  for what must exist, not for what may not — plugins share a database with
+  Core and with an instance's own DDL imports (ADR-0005), so extra columns
+  are ordinary.
+- **Names only, not types.** Absence is unambiguous; a type disagreement
+  across manifest → SQLAlchemy → Postgres is easy to report falsely, and a
+  guard that cries wolf gets switched off. A column present with the wrong
+  type, wrong nullability, a missing `default` or a missing index therefore
+  **passes**. The check states what it compared in its own response and in
+  its failure message, so its silence is interpretable rather than merely
+  quiet — the failure #1539 records is precisely a check asserting a
+  conclusion its comparison never earned.
+
+A plugin that declares no tables passes: ADR-0003 plugins may be pure
+frontend or pure compute, and a manifest promising nothing about the schema
+has nothing here to break.
+
 ---
 
 ## Options Considered

@@ -3,14 +3,17 @@
 `main.py`'s `lambda_handler` dispatches a small family of checks that all run
 the same way: after DDL imports, against the real deployed database, reading
 one or more bundled plugin manifests and failing the deploy loudly if what
-the manifest promises isn't actually true. `plugin_baseline_check.py`
-(`biffo:plugin-baseline-check`, biffo-template#1554 — "does a declared
-baseline table have rows?") is the first. biffo-template#1556 is filed as the
-second and deliberately scoped to reuse this harness rather than re-derive
-it: "does a declared table have the columns the manifest promises?", same
-dispatch point in `lambda_handler`, one step apart in the deploy workflow.
-Do not build #1556 here — this module only exists so it does not have to
-reinvent what #1554 already needed.
+the manifest promises isn't actually true. There are two, both dispatched
+from `lambda_handler` and adjacent in the deploy workflow:
+
+- `plugin_column_check.py` (`biffo:plugin-column-check`, biffo-template#1556)
+  — "does a declared table have the columns the manifest promises?" Runs
+  first: structure before content.
+- `plugin_baseline_check.py` (`biffo:plugin-baseline-check`,
+  biffo-template#1554) — "does a declared baseline table have rows?" Built
+  first, and this module was factored out of it precisely so #1556 would
+  reuse the plumbing rather than re-derive it. It did (see that module's
+  "Reuse, not a second harness" section); a third check should too.
 
 What's shared, and why each piece is worth sharing rather than re-deriving:
 

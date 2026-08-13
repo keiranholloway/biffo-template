@@ -661,6 +661,38 @@ jobs:
             fi
             cat ddl-import-response.json
           done
+      # Fail loudly if a plugin manifest declares a column the real schema does
+      # not have (biffo-template#1556). Core builds each plugin's SQLAlchemy
+      # model from the manifest, so model and database are two independent
+      # documents that can disagree — a hand-written migration, a stale
+      # vendored copy (#1547), or a migration generated but never applied here.
+      # When they disagree, every query touching the column 500s at runtime
+      # with UndefinedColumn, long after a green deploy.
+      #
+      # Placed after "Apply DDL imports" (every writer of schema has had its
+      # turn, so a complaint is about the finished state, not a race), BEFORE
+      # the baseline-row check below (structure before content — a table
+      # missing tenant_id would otherwise surface there as an unreadable table
+      # rather than a named missing column), and before the plugin
+      # Lambda/host/frontend steps further down, so a failure stops the
+      # plugin's user-visible surface being switched to a build this database
+      # cannot serve.
+      #
+      # Compares column NAMES only — not type, nullability, default or
+      # indexes. The response echoes that ("compared"/"not_compared"), so the
+      # check's silence is interpretable rather than merely quiet.
+      - name: Check plugin manifest columns exist
+        run: |
+          RESULT=$(aws lambda invoke \
+            --function-name ${{ vars.CORE_API_LAMBDA_NAME }} \
+            --payload '{"source":"biffo:plugin-column-check"}' \
+            --cli-binary-format raw-in-base64-out \
+            plugin-column-response.json)
+          if echo "$RESULT" | grep -q FunctionError; then
+            echo "::error::[dev] Plugin manifest column check failed: a plugin declares a column the dev database does not have. The response below names the environment, plugin, table and column."
+            cat plugin-column-response.json && exit 1
+          fi
+          cat plugin-column-response.json
       # Fail loudly if a plugin's declared seed.baseline_tables (biffo-template
       # #1554) has no rows for a tenant this deployment already knows about —
       # the "feature deploys green and does nothing" case the DDL import step
@@ -1521,6 +1553,38 @@ jobs:
             fi
             cat ddl-import-response.json
           done
+      # Fail loudly if a plugin manifest declares a column the real schema does
+      # not have (biffo-template#1556). Core builds each plugin's SQLAlchemy
+      # model from the manifest, so model and database are two independent
+      # documents that can disagree — a hand-written migration, a stale
+      # vendored copy (#1547), or a migration generated but never applied here.
+      # When they disagree, every query touching the column 500s at runtime
+      # with UndefinedColumn, long after a green deploy.
+      #
+      # Placed after "Apply DDL imports" (every writer of schema has had its
+      # turn, so a complaint is about the finished state, not a race), BEFORE
+      # the baseline-row check below (structure before content — a table
+      # missing tenant_id would otherwise surface there as an unreadable table
+      # rather than a named missing column), and before the plugin
+      # Lambda/host/frontend steps further down, so a failure stops the
+      # plugin's user-visible surface being switched to a build this database
+      # cannot serve.
+      #
+      # Compares column NAMES only — not type, nullability, default or
+      # indexes. The response echoes that ("compared"/"not_compared"), so the
+      # check's silence is interpretable rather than merely quiet.
+      - name: Check plugin manifest columns exist
+        run: |
+          RESULT=$(aws lambda invoke \
+            --function-name ${{ vars.CORE_API_LAMBDA_NAME }} \
+            --payload '{"source":"biffo:plugin-column-check"}' \
+            --cli-binary-format raw-in-base64-out \
+            plugin-column-response.json)
+          if echo "$RESULT" | grep -q FunctionError; then
+            echo "::error::[staging] Plugin manifest column check failed: a plugin declares a column the staging database does not have. The response below names the environment, plugin, table and column."
+            cat plugin-column-response.json && exit 1
+          fi
+          cat plugin-column-response.json
       # Fail loudly if a plugin's declared seed.baseline_tables (biffo-template
       # #1554) has no rows for a tenant this deployment already knows about —
       # the "feature deploys green and does nothing" case the DDL import step
@@ -2393,6 +2457,38 @@ jobs:
             fi
             cat ddl-import-response.json
           done
+      # Fail loudly if a plugin manifest declares a column the real schema does
+      # not have (biffo-template#1556). Core builds each plugin's SQLAlchemy
+      # model from the manifest, so model and database are two independent
+      # documents that can disagree — a hand-written migration, a stale
+      # vendored copy (#1547), or a migration generated but never applied here.
+      # When they disagree, every query touching the column 500s at runtime
+      # with UndefinedColumn, long after a green deploy.
+      #
+      # Placed after "Apply DDL imports" (every writer of schema has had its
+      # turn, so a complaint is about the finished state, not a race), BEFORE
+      # the baseline-row check below (structure before content — a table
+      # missing tenant_id would otherwise surface there as an unreadable table
+      # rather than a named missing column), and before the plugin
+      # Lambda/host/frontend steps further down, so a failure stops the
+      # plugin's user-visible surface being switched to a build this database
+      # cannot serve.
+      #
+      # Compares column NAMES only — not type, nullability, default or
+      # indexes. The response echoes that ("compared"/"not_compared"), so the
+      # check's silence is interpretable rather than merely quiet.
+      - name: Check plugin manifest columns exist
+        run: |
+          RESULT=$(aws lambda invoke \
+            --function-name ${{ vars.CORE_API_LAMBDA_NAME }} \
+            --payload '{"source":"biffo:plugin-column-check"}' \
+            --cli-binary-format raw-in-base64-out \
+            plugin-column-response.json)
+          if echo "$RESULT" | grep -q FunctionError; then
+            echo "::error::[prod] Plugin manifest column check failed: a plugin declares a column the prod database does not have. The response below names the environment, plugin, table and column."
+            cat plugin-column-response.json && exit 1
+          fi
+          cat plugin-column-response.json
       # Fail loudly if a plugin's declared seed.baseline_tables (biffo-template
       # #1554) has no rows for a tenant this deployment already knows about —
       # the "feature deploys green and does nothing" case the DDL import step

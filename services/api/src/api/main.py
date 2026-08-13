@@ -215,6 +215,20 @@ def lambda_handler(event: dict, context: LambdaContext) -> dict:
         return _run_db_init()
     if event.get("source") == "biffo:ddl-import":
         return _run_ddl_import(event.get("directory"))
+    if event.get("source") == "biffo:plugin-column-check":
+        # Fail the deploy loudly if a plugin's manifest declares a column the
+        # database does not have (biffo-template#1556). Core builds each
+        # plugin's SQLAlchemy model from the manifest, so the two can disagree
+        # and every query touching the column then 500s at runtime.
+        #
+        # Dispatched from the deploy workflow after DDL imports (every writer
+        # of schema has had its turn) and BEFORE the baseline-row check below:
+        # structure before content. A missing tenant_id would otherwise
+        # surface first as the row check failing to read the table at all,
+        # which is a true failure with a far worse message.
+        from .plugin_column_check import assert_plugin_columns_exist
+
+        return assert_plugin_columns_exist()
     if event.get("source") == "biffo:plugin-baseline-check":
         # Fail the deploy loudly if a plugin's declared baseline table has no
         # rows for a tenant this deployment already knows about
@@ -222,11 +236,10 @@ def lambda_handler(event: dict, context: LambdaContext) -> dict:
         # imports, so any plugin-vendored seed has already had its chance to
         # apply. See plugin_baseline_check's module docstring.
         #
-        # biffo-template#1556 (planned): a sibling "declared columns actually
-        # exist" check belongs here too, as its own `biffo:plugin-column-check`
-        # branch calling its own module — reusing plugin_deploy_checks.py's
-        # manifest-injection/Postgres-engine harness rather than this one's
-        # row/tenant-specific logic. Not built yet; this comment is the hook.
+        # These two are siblings, deliberately: #1556 above asks "are the
+        # declared columns there?", this one "are the declared rows there?".
+        # Both reuse plugin_deploy_checks.py's manifest-injection/Postgres-
+        # engine harness rather than each carrying its own.
         from .plugin_baseline_check import assert_plugin_baselines_populated
 
         return assert_plugin_baselines_populated()

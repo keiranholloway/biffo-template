@@ -21,13 +21,14 @@ import between "the manifest" and "the class that registers a manifest".
 from __future__ import annotations
 
 import json
+import re
 from abc import ABC, abstractmethod
 from collections import Counter
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .client import BiffoAPIClient
 from .events import EventHandler, EventSubscriber
@@ -360,12 +361,190 @@ class SeedDeclaration(BaseModel):
     )
 
 
+# An ASGI app reference "<module>:<attr>" (ADR-0021) — the shared plugin host mounts
+# it. Textually identical to services/api/src/api/models/plugin_user_surface.py's
+# `_APP_REF` / `_REL_DIR` / `_require_group` — see UserIngress's docstring below for
+# why this SDK carries its own copy rather than importing that module.
+_APP_REF = re.compile(r"^[a-zA-Z_][\w]*(\.[a-zA-Z_][\w]*)*:[a-zA-Z_][\w]*$")
+_REL_DIR = re.compile(r"^[\w][\w./-]*$")
+
+
+def _require_group(value: str) -> str:
+    if not value.strip():
+        raise ValueError("required_group must be a non-empty Cognito group name.")
+    return value
+
+
+class UserIngress(BaseModel):
+    """The plugin's authenticated, group-gated API ingress (ADR-0021).
+
+    ``app`` names the ASGI app the **shared plugin host** mounts at
+    ``/api/v1/plugins/<name>/*``; the host provides the Lambda entry and enforces
+    ``required_group`` (ADR-0011), so a plugin ships no Lambda handler and no
+    infrastructure.
+
+    Field-for-field identical to ``services/api/src/api/models/plugin_user_surface
+    .py``'s ``UserIngress`` — same duplication rationale as ``TableDefinition``/
+    ``RouteDef`` above: this SDK is installed by plugin authors' separate
+    repositories, outside the Core API's own deployment, so it can't import that
+    module directly. Unlike those two, this shape previously had **no** copy here
+    at all — ``PluginManifest`` didn't know ``user_ingress``/``admin_ingress``
+    existed (biffo-template#1517) — so the shared plugin host, the one reader that
+    actually acts on these fields, was parsing them by hand with no validation.
+    If either copy changes, update the other.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    required_group: str = Field(
+        description="The Cognito group a caller must be in. The shared plugin host "
+        "enforces it before dispatching to the plugin (ADR-0011/0021)."
+    )
+    app: str = Field(
+        description="ASGI app reference '<module>:<attr>' (e.g. 'ideation.app:app') "
+        "the shared plugin host mounts (ADR-0021)."
+    )
+
+    @field_validator("required_group")
+    @classmethod
+    def _validate_required_group(cls, value: str) -> str:
+        return _require_group(value)
+
+    @field_validator("app")
+    @classmethod
+    def _validate_app(cls, value: str) -> str:
+        if not _APP_REF.match(value):
+            raise ValueError(
+                f"user_ingress.app {value!r} must be an ASGI app reference "
+                "'<module>:<attr>', e.g. 'ideation.app:app'."
+            )
+        return value
+
+
+class AdminIngress(BaseModel):
+    """The plugin's admin-gated API and optional static UI bundle.
+
+    ``app`` names the ASGI app the **shared plugin host** mounts at
+    ``/api/v1/plugins/<name>/admin/*``; the host provides the Lambda entry and
+    enforces ``required_group`` (ADR-0011). Mirrors ``plugin_user_surface.py``'s
+    ``AdminIngress`` — see ``UserIngress`` above for the duplication rationale.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    required_group: str = Field(
+        description="The Cognito group a caller must be in. The shared plugin host "
+        "enforces it before dispatching to the plugin (ADR-0011)."
+    )
+    app: str = Field(
+        description="ASGI app reference '<module>:<attr>' (e.g. 'ideation.admin:app') "
+        "the shared plugin host mounts at /api/v1/plugins/<name>/admin/*."
+    )
+
+    @field_validator("required_group")
+    @classmethod
+    def _validate_required_group(cls, value: str) -> str:
+        return _require_group(value)
+
+    @field_validator("app")
+    @classmethod
+    def _validate_app(cls, value: str) -> str:
+        if not _APP_REF.match(value):
+            raise ValueError(
+                f"admin_ingress.app {value!r} must be an ASGI app reference "
+                "'<module>:<attr>', e.g. 'ideation.admin:app'."
+            )
+        return value
+
+
+class UserFrontend(BaseModel):
+    """The plugin's path-routed static frontend under shared-Cognito SSO (ADR-0018
+    §2). Mirrors ``plugin_user_surface.py``'s ``UserFrontend`` — see
+    ``UserIngress`` above for the duplication rationale.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    dir: str = Field(
+        description="Repo-relative directory of the built static export "
+        "(e.g. 'web/dist'), deployed to a new S3 origin behind <plugin>/* on the "
+        "shared CloudFront."
+    )
+    required_group: str = Field(
+        description="The Cognito group gated client-side (the real enforcement is the "
+        "ingress and Core, never the client)."
+    )
+
+    @field_validator("dir")
+    @classmethod
+    def _validate_dir(cls, value: str) -> str:
+        if value.startswith("/") or ".." in value.split("/") or not _REL_DIR.match(value):
+            raise ValueError(
+                f"user_frontend.dir {value!r} must be a repo-relative path with no "
+                "leading '/' and no '..' traversal."
+            )
+        return value
+
+    @field_validator("required_group")
+    @classmethod
+    def _validate_required_group(cls, value: str) -> str:
+        return _require_group(value)
+
+
+class EventSubscription(BaseModel):
+    """An EventBridge event the plugin reacts to (ADR-0003).
+
+    Kept deliberately loose — ``extra="allow"``, matching
+    ``cli/src/lib/plugin-manifest.ts``'s ``event_subscriptions`` handling: the
+    authoritative shape is the plugin registry's, and both this model and the CLI
+    only need ``detail_type`` (and, by default, ``source``) to let the host/CLI
+    recognise and count subscriptions. A human-readable ``description``, or the
+    legacy ``handler`` key some manifests still carry, is accepted rather than
+    rejected — unlike ``UserIngress``/``AdminIngress`` above, this is not a
+    security surface, so there is nothing a silently-ignored typo here could
+    weaken.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    source: str = "biffo.core"
+    detail_type: str
+
+
+class UIComponent(BaseModel):
+    """A portal UI element the plugin adds (ADR-0003), e.g. an admin nav link.
+
+    Mirrors ``_skeletons/plugin-template/registry-schema.json``'s
+    ``ui_components`` item shape (``additionalProperties: false`` there too).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["nav-link", "page", "dashboard-widget", "modal", "dialog"]
+    label: str
+    path: str
+    icon: str | None = None
+    requires_auth: bool = True
+
+
 class PluginManifest(BaseModel):
     """Validated manifest for a Biffo plugin.
 
     Required fields: ``name``, ``version``.
     Optional fields carry sensible defaults so plugins can be minimal.
+
+    ``extra="forbid"`` (biffo-template#1517): before this, an unknown top-level
+    key — a typo like ``admin_ingres``, or a field this SDK version predates —
+    validated with no error and was silently dropped. That is the estate's
+    dominant fail-open shape one layer up from the security surfaces above: a
+    consumer that has upgraded past the SDK's 1.4 version gate now fails the
+    install/CI gate loudly instead of mounting the plugin with that surface
+    quietly absent, on a manifest that would previously have validated by
+    accident. See ``pyproject.toml``'s version comment for why this is the
+    gate rather than an unconditional behaviour change.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     name: str
     version: str
@@ -378,6 +557,40 @@ class PluginManifest(BaseModel):
     tools: list[ToolDeclaration] = []
     chat_agents: list[ChatAgentDeclaration] = []
     seed: SeedDeclaration | None = None
+    # A plugin declaring `chat_agents_dynamic: true` registers its chat agents
+    # itself, at runtime, instead of statically via `chat_agents` above (see
+    # services/api/src/api/routing/chat_agent_registration.py, ADR-0017 seam #1
+    # extension). The two are alternatives, not required to agree — a dynamic
+    # plugin's static `chat_agents` list is typically empty.
+    chat_agents_dynamic: bool = False
+    event_subscriptions: list[EventSubscription] = []
+    ui_components: list[UIComponent] = []
+    # Python package dependencies (including biffo-plugin-sdk's own pin) —
+    # documentation for a human/tool reading the manifest, e.g.
+    # `_skeletons/plugin-template/registry-schema.json`'s equivalent field.
+    # Not read by the host or the CLI's install flow; Python dependencies are
+    # resolved from the plugin repo's own pyproject.toml, not from this
+    # manifest.
+    dependencies: dict[str, str] = {}
+    # Capability version requirements the plugin declares it needs from Core
+    # (e.g. `"owner-scoped-tables": "^1"`). Declared by every live plugin as of
+    # biffo-template#1517 and validated here so a typo'd capability name still
+    # round-trips — but, like `tools` above, parsing is NOT the same as reading:
+    # no code anywhere in the estate (CLI, host, or Core) currently checks a
+    # plugin's `core_capabilities` against what Core actually offers. Making
+    # this field `extra="forbid"`-reachable without declaring it would have
+    # broken all three live plugins' manifests the moment this model went
+    # strict; accepting-and-documenting it here is the deliberate choice over
+    # rejecting it, since rejecting would require editing every plugin
+    # repository in the same change. Wiring an actual reader is separate,
+    # unstarted work.
+    core_capabilities: dict[str, str] = {}
+    # ADR-0021/0018 user-facing and admin-facing surfaces. All three optional: a
+    # plugin without them is an ordinary (data/event/CRUD) plugin the shared host
+    # never mounts.
+    user_ingress: UserIngress | None = None
+    admin_ingress: AdminIngress | None = None
+    user_frontend: UserFrontend | None = None
 
     @model_validator(mode="after")
     def _validate_routes_reference_declared_tables(self) -> PluginManifest:

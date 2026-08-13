@@ -96,6 +96,64 @@ describe('validateManifest — user-facing surfaces (ADR-0021 / frontend)', () =
       }),
     ).toThrow()
   })
+
+  // admin_ingress (biffo-template#1517): before this, `grep -rn "admin_ingress"
+  // cli/src` returned zero non-test hits — the field wasn't in this schema at
+  // all, so it validated fine as an unrecognised top-level key and was silently
+  // stripped. `biffo plugin install` had no way to see the surface it was
+  // vendoring. These mirror the user_ingress tests above.
+  it('accepts an admin_ingress alongside a user_ingress', () => {
+    const manifest = validateManifest({
+      name: 'marketing',
+      version: '1.0.0',
+      user_ingress: { required_group: 'founder', app: 'marketing.user_app:app' },
+      admin_ingress: { required_group: 'admin', app: 'marketing.admin_app:app' },
+    })
+    expect(manifest.admin_ingress?.app).toBe('marketing.admin_app:app')
+    expect(manifest.admin_ingress?.required_group).toBe('admin')
+  })
+
+  it('accepts an admin_ingress with no user_ingress (admin-only plugin)', () => {
+    const manifest = validateManifest({
+      name: 'marketing',
+      version: '1.0.0',
+      admin_ingress: { required_group: 'admin', app: 'marketing.admin_app:app' },
+    })
+    expect(manifest.user_ingress).toBeUndefined()
+    expect(manifest.admin_ingress?.app).toBe('marketing.admin_app:app')
+  })
+
+  it('rejects an admin_ingress with no app, and a malformed app-ref', () => {
+    expect(() =>
+      validateManifest({
+        name: 'x',
+        version: '1.0.0',
+        admin_ingress: { required_group: 'admin' },
+      }),
+    ).toThrow()
+    expect(() =>
+      validateManifest({
+        name: 'x',
+        version: '1.0.0',
+        admin_ingress: { required_group: 'admin', app: 'nocolon' },
+      }),
+    ).toThrow(/app reference/)
+  })
+
+  it('rejects an unknown key on admin_ingress', () => {
+    expect(() =>
+      validateManifest({
+        name: 'x',
+        version: '1.0.0',
+        admin_ingress: { required_group: 'admin', app: 'm:a', extra: true },
+      }),
+    ).toThrow()
+  })
+
+  it('is absent on an ordinary plugin', () => {
+    const manifest = validateManifest({ name: 'rbac', version: '1.0.0' })
+    expect(manifest.admin_ingress).toBeUndefined()
+  })
 })
 
 describe('validateManifest — seed (baseline-row declaration, biffo-template#1554)', () => {

@@ -126,6 +126,30 @@ export function makeTemplateCheckout(root: string, opts: TemplateCheckoutOptions
     chmodSync(join(dir, 'scripts', name), 0o755)
   }
 
+  // The TEMPLATE-side bridge. `stage_repo` reaches through it for the #1577
+  // reduction guard (`sh scripts/biffo.sh check shared-file-reduction`) before
+  // it writes anything, and a fixture with no bridge would make that call fail
+  // — which the guard treats as "cannot tell" and therefore refuses, aborting
+  // every fixture's stage for a reason unrelated to what it tests.
+  //
+  // A stub, for the same reason `verify.sh` and `gate-coverage.sh` above are
+  // stubs: what the guard reports is another test's subject
+  // (`shared-file-reduction-guard.test.ts` drives it directly), and wiring the
+  // real one in would drag this fixture's outcome back onto this repo's own
+  // contents. `shared-sync-reduction-guard.test.ts` asserts the invocation
+  // exists in the real script, which is the part a stub cannot fake.
+  //
+  // Overridable through `opts.files` so a test can supply a bridge that
+  // actually refuses.
+  const templateBridge = join(dir, 'scripts', 'biffo.sh')
+  writeFileSync(
+    templateBridge,
+    ['#!/bin/sh', '# fixture template bridge — see makeTemplateCheckout()', 'exit 0', ''].join(
+      '\n',
+    ),
+  )
+  chmodSync(templateBridge, 0o755)
+
   writeFileSync(
     join(dir, 'shared-files.json'),
     `${JSON.stringify(

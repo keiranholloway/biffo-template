@@ -171,6 +171,10 @@ export const GUARD_CANDIDATE_CLASSIFICATION: Record<string, GuardCandidateVerdic
   'plugin-terraform-guard.ts': { isGuard: true, reason: 'matches the *-guard.ts convention' },
   'plugin-tool-supply-audit.ts': { isGuard: true, reason: 'matches the *-audit.ts convention' },
   'release-subject-guard.ts': { isGuard: true, reason: 'matches the *-guard.ts convention' },
+  'shared-file-reduction-guard.ts': {
+    isGuard: true,
+    reason: 'matches the *-guard.ts convention',
+  },
   'skeleton-drift-guard.ts': { isGuard: true, reason: 'matches the *-guard.ts convention' },
   'terraform-input-guard.ts': { isGuard: true, reason: 'matches the *-guard.ts convention' },
 

@@ -53,11 +53,16 @@ describe('biffo check', () => {
    * check plugin-staleness` (#1547) is advisory for a different reason: an
    * instance may legitimately pin a plugin version, so drift moving is not a
    * defect the way an ownership violation is, and it must never fail a build
-   * over that. Listing both here keeps that a stated choice — a new
-   * subcommand that is neither a CI guard nor listed here fails the
-   * exhaustiveness assertion below.
+   * over that. `biffo check shared-file-reduction` (#1577) is here for a
+   * third reason: it compares the canonical copy of a shared file against the
+   * SATELLITE copy it is about to overwrite, and those two only exist
+   * together inside a `scripts/shared-sync.sh` run — there is nothing in this
+   * repo's own tree for a per-PR job to compare, so the sync invokes it at
+   * the moment of the write. Listing all three here keeps that a stated
+   * choice — a new subcommand that is neither a CI guard nor listed here
+   * fails the exhaustiveness assertion below.
    */
-  const auditOnly = ['branch-protection', 'plugin-staleness']
+  const auditOnly = ['branch-protection', 'plugin-staleness', 'shared-file-reduction']
 
   it('exposes exactly the guards CI invokes, plus the audits that run out of band', () => {
     expect(names).toEqual([...ciGuards, ...auditOnly].sort())

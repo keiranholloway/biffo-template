@@ -17,6 +17,7 @@ import { runPluginCollisionCheck } from '../scripts/check-plugin-collisions.js'
 import { runPluginTerraformCheck } from '../scripts/check-plugin-terraform.js'
 import { runPluginToolSupplyCheck } from '../scripts/check-plugin-tool-supply.js'
 import { runReleaseSubjectCheck } from '../scripts/check-release-subject.js'
+import { runSharedFileReductionCheck } from '../scripts/check-shared-file-reduction.js'
 import { runSkeletonDriftCheck } from '../scripts/check-skeleton-drift.js'
 import { runTerraformInputCheck } from '../scripts/check-terraform-input.js'
 
@@ -227,6 +228,32 @@ checkCommand
   .action(async () => {
     await runTerraformInputCheck()
   })
+
+checkCommand
+  .command('shared-file-reduction')
+  .description(
+    'Refuse a shared-files.json overwrite that would DELETE tests from the satellite it lands ' +
+      'in (#1577) — filesIfPresent is a one-way cp and nothing ever compared the two copies. ' +
+      'Invoked by scripts/shared-sync.sh at the moment of the write, not by per-PR CI: both ' +
+      'sides of the comparison only exist together inside a sync run. Compares TEST TITLES in ' +
+      'TS/JS test files and nothing else — see the guard module for what it does not catch.',
+  )
+  .option('--pairs <tsv>', 'TSV of target<TAB>existing<TAB>incoming lines, or - for stdin')
+  .option('--target <path>', 'Single pair: path inside the satellite')
+  .option('--existing <path>', "Single pair: the satellite's current copy")
+  .option('--incoming <path>', 'Single pair: the canonical copy that would replace it')
+  .option('--manifest <path>', 'shared-files.json, read for acceptedReductions')
+  .action(
+    async (opts: {
+      pairs?: string
+      target?: string
+      existing?: string
+      incoming?: string
+      manifest?: string
+    }) => {
+      await runSharedFileReductionCheck(opts)
+    },
+  )
 
 checkCommand
   .command('branch-protection')

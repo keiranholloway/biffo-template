@@ -502,6 +502,31 @@ export const GUARD_AUTHORITY_INVENTORY: GuardAuthorityRecord[] = [
     note: "validates a commit subject against commitlint.config.js's own type list — one document",
   },
   {
+    id: 'shared-file-reduction-guard',
+    path: 'cli/src/lib/shared-file-reduction-guard.ts',
+    inClass: true,
+    document: 'the pair list stage_repo builds from \\$FILES / \\$CONDITIONAL / \\$FROM_SKELETON',
+    actor: "stage_repo's own `cp` loops, which are what actually overwrite the satellite's files",
+    disagreementTest: 'cli/src/lib/shared-sync-reduction-guard.test.ts',
+    independence: 'shared-path',
+    note:
+      'instance of #1577. In-class because the guard certifies an overwrite it does not itself ' +
+      'perform: the DOCUMENT is the list of pairs handed to it, the ACTOR is the `cp` loop that ' +
+      'writes, and a guard checking a different set of pairs than the loop copies would pass ' +
+      'cleanly over the very deletion it exists to stop. `shared-path` is DELIBERATE here and ' +
+      'is the safe direction, unlike instance 11: the pair list is built from the same three ' +
+      'shell lists, in the same order, with the same `[ -f "$wt/..." ]` presence test and the ' +
+      'same `$TEMPLATE_ROOT/...` source resolution the `cp`s use, so the guard reads exactly ' +
+      'the bytes that are about to be destroyed. Deriving them independently is what would be ' +
+      'unsafe. The residual exposure is real and named rather than argued away: ' +
+      '`skeleton_for "$wt"` is evaluated TWICE, once to build the pairs and once in the write ' +
+      'loop, so a `filesFromSkeleton` entry could in principle be checked against one ' +
+      "skeleton's copy and overwritten from another's. Same input both times today. The " +
+      'disagreement test is a source-level one: it asserts the check runs BEFORE the first ' +
+      '`cp`, and that every write list is represented in the pair list — i.e. it constructs ' +
+      'the divergent state as "a list the actor writes that the document omits" and fails on it.',
+  },
+  {
     id: 'skeleton-drift-guard',
     path: 'cli/src/lib/skeleton-drift-guard.ts',
     inClass: false,

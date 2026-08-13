@@ -1725,6 +1725,83 @@ stage_repo() {
   }
   wt_log add "$label" "$wt"
 
+  # #1577: refuse to overwrite a satellite file with a canonical copy that is
+  # NOT a superset of it -- BEFORE a single byte is written.
+  #
+  # Every write list below is a one-way `cp`. Nothing has ever compared the two
+  # copies, so registering a file for distribution can silently DELETE content
+  # only the satellite had. That is not hypothetical: #1546 added the
+  # `filesIfPresent` mapping for `web/src/lib/auth.test.ts` in the same commit
+  # that created the canonical file, without diffing the one repo already
+  # holding the path. The two were disjoint -- 5 upstream tests for
+  # `getCurrentSession`, 4 in ideation for `getFreshIdToken` including the
+  # regression guard for a stale-JWT bug -- so this loop would have stripped
+  # four assertions from the estate's weakest-covered repo. A human reading the
+  # diff is what stopped it; it was then fixed by folding upstream (#1575).
+  #
+  # Three properties made it silent, and all three are still true:
+  #   1. the copy overwrites, never merges, and never warns on content loss;
+  #   2. the dangerous moment is REGISTRATION, and by the time a sync runs the
+  #      mapping is old and nobody re-reads it;
+  #   3. a sync PR's diff is generated, so deletions inside one read as tidying.
+  #
+  # This is the one place in the estate where BOTH copies exist at once: the
+  # satellite has just been checked out at `origin/$base`, and the canonical
+  # copy is here. The pairs handed to the guard are built from the same lists,
+  # and point at the same paths, that the `cp`s below use -- deliberately not a
+  # second, independently resolved read, or the guard could certify a file the
+  # copy never touched.
+  #
+  # Scoped honestly: the guard compares TEST TITLES in TS/JS test files and
+  # reports every other mapping as `not analysable`. See
+  # cli/src/lib/shared-file-reduction-guard.ts for why that is the level built
+  # and the full list of what it does not catch.
+  #
+  # Refusal aborts the WHOLE repo's stage, not just the offending file. A
+  # partial stage would open a PR whose diff no longer matches what was
+  # checked, and the fix (fold upstream, then re-run) is the same either way.
+  #
+  # The pair list lives OUTSIDE the staged worktree: anything written inside it
+  # is picked up by the `git add -A` below and would ship in the sync PR.
+  _red_pairs=$(mktemp)
+  for f in $FILES; do
+    [ -f "$wt/$f" ] || continue
+    printf '%s\t%s\t%s\n' "$f" "$wt/$f" "$TEMPLATE_ROOT/$f" >> "$_red_pairs"
+  done
+  if [ -n "$CONDITIONAL" ]; then
+    printf '%s\n' "$CONDITIONAL" | while IFS="$TAB" read -r _rt _rs; do
+      [ -n "$_rt" ] || continue
+      [ -f "$wt/$_rt" ] || continue
+      printf '%s\t%s\t%s\n' "$_rt" "$wt/$_rt" "$TEMPLATE_ROOT/$_rs" >> "$_red_pairs"
+    done
+  fi
+  if [ -n "$FROM_SKELETON" ]; then
+    _red_skel=$(skeleton_for "$wt")
+    for _entry in $FROM_SKELETON; do
+      _rt=${_entry%%=*}
+      _rrest=${_entry#*=}
+      # `seed` never overwrites an existing copy, so it cannot delete anything.
+      [ "${_rrest%%=*}" = sync ] || continue
+      in_marker_scope "$wt" "${_rrest#*=}" || continue
+      [ -f "$wt/$_rt" ] || continue
+      printf '%s\t%s\t%s\n' "$_rt" "$wt/$_rt" \
+        "$TEMPLATE_ROOT/_skeletons/$_red_skel/$_rt" >> "$_red_pairs"
+    done
+  fi
+  # Exit 1 is a reduction, exit 2 is "cannot tell" -- and 2 is never a pass,
+  # because the operation being gated is irreversible content deletion. Both
+  # refuse, so one branch is enough.
+  if ! (cd "$TEMPLATE_ROOT" && sh scripts/biffo.sh check shared-file-reduction \
+    --pairs "$_red_pairs" --manifest "$MANIFEST"); then
+    rm -f "$_red_pairs"
+    wt_log remove-would-delete-content "$label" "$wt"
+    git -C "$d" worktree remove --force "$wt" 2>/dev/null
+    git -C "$d" branch -D chore/sync-shared >/dev/null 2>&1
+    release_stage_lock "$d" "$label"
+    return 3
+  fi
+  rm -f "$_red_pairs"
+
   for f in $FILES; do
     mkdir -p "$wt/$(dirname "$f")"
     cp "$TEMPLATE_ROOT/$f" "$wt/$f"
@@ -2581,6 +2658,20 @@ else
       printf '%s%s%s%s%s\n' "$label" "$TAB" SKIP "$TAB" 'nothing to sync' >> "$VERDICTS"
       continue
     fi
+    # 3 is its own outcome, not a staging failure (#1577): the repo staged
+    # fine, and the guard refused because a candidate file would DELETE tests
+    # this satellite has and the canonical copy does not. Reporting it as
+    # "fetch or worktree failed" would send whoever reads this table looking
+    # at git rather than at the two files -- and the fix is upstream in the
+    # template (fold the satellite's tests into the canonical copy, #1575 is
+    # the worked example), not in the satellite.
+    if [ "$stage_rc" -eq 3 ]; then
+      printf '%-26s \033[31mWOULD DELETE CONTENT\033[0m - see the refusal above\n' "$label"
+      printf '%s%s%s%s%s\n' "$label" "$TAB" FAIL "$TAB" \
+        'canonical copy is not a superset -- would delete satellite tests' >> "$VERDICTS"
+      rehearsal_failures=$((rehearsal_failures + 1))
+      continue
+    fi
     if [ "$stage_rc" -ne 0 ]; then
       printf '%-26s \033[31mCANNOT STAGE\033[0m - fetch or worktree failed\n' "$label"
       printf '%s%s%s%s%s\n' "$label" "$TAB" FAIL "$TAB" 'could not stage' >> "$VERDICTS"
@@ -2647,6 +2738,8 @@ while IFS="$TAB" read -r label d slug base; do
     stage_repo "$d" "$label" "$base"
     case $? in
       2) printf '%-26s \033[32mnothing to sync\033[0m\n' "$label"; continue ;;
+      3) printf '%-26s \033[31mWOULD DELETE CONTENT\033[0m - refused (#1577)\n' "$label"
+         failed=$((failed + 1)); continue ;;
       1) printf '%-26s \033[31mCANNOT STAGE\033[0m\n' "$label"; failed=$((failed + 1)); continue ;;
     esac
   fi

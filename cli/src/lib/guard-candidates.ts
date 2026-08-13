@@ -202,6 +202,18 @@ export const GUARD_CANDIDATE_CLASSIFICATION: Record<string, GuardCandidateVerdic
       'naming modules build and compares it to the allowlist glob. One of the five #1518 ' +
       'spotted and left unclassified.',
   },
+  'plugin-staleness.ts': {
+    isGuard: true,
+    reason:
+      'exports checkPluginStaleness (#1547): a genuine document/actor comparison — a vendored ' +
+      "services/<name>/'s recorded provenance (the document, plugin-provenance.ts) against the " +
+      "plugin repo's live default-branch HEAD (the actor) — same shape as doctor.ts's document/" +
+      'actor checks. Reachable from two commands/ entrypoints: `plugin-staleness.ts` (a real ' +
+      'gate, `biffo plugin staleness`, with the estate 0/1/2 exit contract) and `check.ts` ' +
+      "(`biffo check plugin-staleness`, deliberately advisory-only — see check.test.ts's " +
+      'auditOnly list). Advisory at ONE call site does not make the module itself not a guard; ' +
+      'the same distinction already applies to branch-protection-audit.ts.',
+  },
   'sibling-identity-check.ts': {
     isGuard: true,
     reason:

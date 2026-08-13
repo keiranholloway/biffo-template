@@ -1,4 +1,7 @@
 import { Command } from 'commander'
+import { GitAdapter } from '../adapters/git/index.js'
+import { RegistryAdapter } from '../adapters/registry/index.js'
+import { checkPluginStaleness, formatStalenessReport } from '../lib/plugin-staleness.js'
 import { runAdrNumberingCheck } from '../scripts/check-adr-numbering.js'
 import { runBranchProtectionCheck } from '../scripts/check-branch-protection.js'
 import { runCodeqlSuppressionCheck } from '../scripts/check-codeql-suppression.js'
@@ -42,7 +45,7 @@ export const checkCommand = new Command('check').description(
     'eventbridge-log-permissions, plugin-tool-supply, core-direct-paths, ' +
     'cognito-invite-template, lambda-output, pipe-trap, codeql-suppression, skeleton-drift, ' +
     'terraform-input, plugin-allowlist-convention) ' +
-    'run in CI and git hooks, plus out-of-band audits (branch protection)',
+    'run in CI and git hooks, plus out-of-band audits (branch protection, plugin-staleness)',
 )
 
 checkCommand
@@ -226,6 +229,26 @@ checkCommand
   )
   .action(async (opts: { repo?: string; fix?: boolean }) => {
     await runBranchProtectionCheck(opts.repo, { fix: opts.fix })
+  })
+
+checkCommand
+  .command('plugin-staleness')
+  .description(
+    'Advisory: report how far each services/<name>/ vendored plugin has drifted from its ' +
+      'source (#1547) — an instance can drift arbitrarily far behind a plugin repo while both ' +
+      "sides' CI stays green, because neither has an opinion about the gap between them. " +
+      'Deliberately NEVER fails this check, unlike every other one in this group: an instance ' +
+      'may legitimately pin a plugin version, and staleness moving is not a defect the way an ' +
+      'ownership violation or a namespace collision is. Run `biffo plugin staleness` directly ' +
+      'for the same measurement with a real 0/1/2 exit code, if you want to gate on it.',
+  )
+  .action(async () => {
+    const cwd = process.env['BIFFO_ORIGINAL_CWD'] || process.cwd()
+    const results = await checkPluginStaleness(cwd, {
+      registry: new RegistryAdapter(),
+      git: new GitAdapter(),
+    })
+    console.log(formatStalenessReport(results))
   })
 
 /**

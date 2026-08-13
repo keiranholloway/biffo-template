@@ -63,6 +63,10 @@ function makeGitMock(clonedDir: string) {
     // keeps committing; --local's no-op-refresh tests override this to false.
     hasUncommittedChanges: vi.fn().mockResolvedValue(true),
     commit: vi.fn().mockResolvedValue(undefined),
+    // Provenance (#1547): a real GitAdapter would `git ls-remote` the
+    // registry repo. Mocked to `null` ("unknown") so no test in this file
+    // depends on real network access; provenance-specific tests override it.
+    resolveDefaultBranchSha: vi.fn().mockResolvedValue(null),
   }
 }
 

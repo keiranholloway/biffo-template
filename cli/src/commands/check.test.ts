@@ -48,11 +48,15 @@ describe('biffo check', () => {
   /**
    * Subcommands that are deliberately NOT wired into per-PR CI. `biffo check
    * branch-protection` audits GitHub repo settings over the API rather than the
-   * diff, so it belongs in a scheduled job, not a merge gate (#715). Listing it
-   * here keeps that a stated choice — a new subcommand that is neither a CI
-   * guard nor listed here fails the exhaustiveness assertion below.
+   * diff, so it belongs in a scheduled job, not a merge gate (#715). `biffo
+   * check plugin-staleness` (#1547) is advisory for a different reason: an
+   * instance may legitimately pin a plugin version, so drift moving is not a
+   * defect the way an ownership violation is, and it must never fail a build
+   * over that. Listing both here keeps that a stated choice — a new
+   * subcommand that is neither a CI guard nor listed here fails the
+   * exhaustiveness assertion below.
    */
-  const auditOnly = ['branch-protection']
+  const auditOnly = ['branch-protection', 'plugin-staleness']
 
   it('exposes exactly the guards CI invokes, plus the audits that run out of band', () => {
     expect(names).toEqual([...ciGuards, ...auditOnly].sort())

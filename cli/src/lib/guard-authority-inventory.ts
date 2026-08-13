@@ -452,6 +452,24 @@ export const GUARD_AUTHORITY_INVENTORY: GuardAuthorityRecord[] = [
     note: 'checks a plugin manifest against its own directory listing — one filesystem, one read',
   },
   {
+    id: 'plugin-staleness',
+    path: 'cli/src/lib/plugin-staleness.ts',
+    inClass: true,
+    document:
+      'the provenance recorded at the last install/upgrade (plugin-provenance.ts: origin, ref, SHA)',
+    actor: "the plugin repo's live default-branch HEAD (#1547 — nothing compared these before)",
+    disagreementTest: 'cli/src/lib/plugin-staleness.test.ts',
+    independence: 'independent',
+    note:
+      '#1547: the document is a value WRITTEN IN THE PAST (provenance, recorded at install/' +
+      "upgrade time) and the guard's own read of the actor is a live query against the real " +
+      'repo right now (GitAdapter.resolveDefaultBranchSha via `git ls-remote`, then ' +
+      'GitAdapter.countBehind against a fresh `git clone` when the SHAs differ) — not a second ' +
+      'decode of the same recorded value, so a corruption in how provenance was written cannot ' +
+      'make the live check agree with it wrongly; they are independent measurements (a stored ' +
+      'past value vs. a live query) by construction, not by absence of a bug found yet.',
+  },
+  {
     id: 'plugin-tool-supply-audit',
     path: 'cli/src/lib/plugin-tool-supply-audit.ts',
     inClass: false,

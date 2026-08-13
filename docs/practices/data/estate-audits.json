@@ -1,5 +1,5 @@
 {
-  "collectedAt": "2026-08-12T03:42:48Z",
+  "collectedAt": "2026-08-13T03:43:05Z",
   "audits": [
     {
       "name": "coverage",
@@ -15,15 +15,15 @@
     },
     {
       "name": "drift",
-      "ok": true,
-      "exit": 0,
-      "summary": "14 current, 0 drifted"
+      "ok": false,
+      "exit": 1,
+      "summary": "11 current, 3 drifted"
     },
     {
       "name": "protection",
       "ok": true,
       "exit": 0,
-      "summary": "36 branches checked, all protected and binding"
+      "summary": "33 branches checked, all protected and binding"
     },
     {
       "name": "wiring",
@@ -35,13 +35,13 @@
       "name": "classification",
       "ok": false,
       "exit": 1,
-      "summary": "BLIND  2026-08-12.json: 54 of 58 failing steps unclassified (93.1%) — add patterns to STEP_KINDS for: Report the result (47), Report the denominator, and open/update a tracking issue on any failure (3), Apply core migrations (Alembic) (1), Closing keywords (1), Export outputs to GitHub Actions variables (1), Run uv sync --all-groups --locked (1)"
+      "summary": "BLIND  2026-08-13.json: 53 of 61 failing steps unclassified (86.9%) — add patterns to STEP_KINDS for: Report the result (47), CodeQL-suppression-comment guard (2), Report the denominator, and open/update a tracking issue on any failure (2), Run astral-sh/setup-uv@v6 (1), Validate every environment (1)"
     },
     {
       "name": "checkout",
       "ok": false,
       "exit": 1,
-      "summary": "19 primary checkouts — $13 clean$, $4 unsafe to read$, 1 behind only, 1 not evaluated"
+      "summary": "18 primary checkouts — $12 clean$, $4 unsafe to read$, 1 behind only, 1 not evaluated"
     },
     {
       "name": "deploy",
@@ -53,7 +53,7 @@
       "name": "deadsurface",
       "ok": false,
       "exit": 1,
-      "summary": "33 uncalled route(s), baseline 23 — something new was exposed with no caller."
+      "summary": "34 uncalled route(s), baseline 23 — something new was exposed with no caller."
     },
     {
       "name": "failopen",

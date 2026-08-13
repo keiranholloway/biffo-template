@@ -83,6 +83,10 @@
     { "type": "nav-link", "label": "Example Plugin", "path": "/admin/example-plugin" },
     { "type": "page", "label": "Widgets", "path": "/admin/example-plugin/widgets" }
   ],
+  "seed": {
+    "dir": "db/seed",
+    "baseline_tables": ["example_widgets"]
+  },
   "dependencies": {
     "biffo-plugin-sdk": "^1.0"
   }

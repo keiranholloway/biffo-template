@@ -7,6 +7,7 @@ import { GitAdapter } from '../adapters/git/index.js'
 import { log } from '../lib/logger.js'
 import { FIRST_PARTY_PLUGINS_DIR, pluginDir } from '../lib/plugin-locations.js'
 import { validateManifest } from '../lib/plugin-manifest.js'
+import { pluginSeedImportDir } from '../lib/plugin-seed-vendor.js'
 import { syncPluginTerraform } from '../lib/plugin-terraform-wiring.js'
 
 const NAME_PATTERN = /^[a-z][a-z0-9-]*$/
@@ -85,6 +86,18 @@ export interface PluginUninstallOptions {
  * wanted to. So a plugin's tables always survive an uninstall from the
  * CLI's perspective, regardless of this flag — seeing it explains that
  * rather than performs it.
+ *
+ * A vendored baseline-row seed (`db/imports/_plugin-<name>/`,
+ * `plugin-seed-vendor.ts`, biffo-template#1554) is left in place for the
+ * same reason migrations are: it is the twin of "tables always survive an
+ * uninstall" — dropping the rows a seed created is a genuinely destructive,
+ * ambiguous operation (a reinstalled plugin, or another tenant onboarded
+ * later, may depend on that same reference data), and ADR-0005 already
+ * declined to build a `biffo data uninstall` for exactly this reason. Since
+ * the seed's `.sql` files are checksum-tracked once applied
+ * (`ddl_import_history`), leaving them vendored is also what keeps a later
+ * reinstall idempotent for free, the same way an un-deleted migration file
+ * does — the DDL import step re-applies nothing, because it already has.
  */
 export async function runPluginUninstall(
   name: string,
@@ -193,6 +206,16 @@ export async function runPluginUninstall(
         'services/api/migrations/versions/ is NOT removed (it is a permanent historical ' +
         'record — see notes). Dropping tables, if desired, requires a manual Alembic ' +
         'migration written against the Core API.',
+    )
+  }
+
+  if (existsSync(join(options.cwd, pluginSeedImportDir(name)))) {
+    log.warn(
+      `${pluginSeedImportDir(name)}/ (this plugin's vendored baseline-row seed, ` +
+        'biffo-template#1554) was NOT removed either, for the same reason — see notes. ' +
+        'Delete it by hand if you are certain the rows it applied should go too, but note ' +
+        'nothing drops rows already applied to the database; that still needs a manual ' +
+        'migration.',
     )
   }
 }

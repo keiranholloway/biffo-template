@@ -98,6 +98,68 @@ describe('validateManifest — user-facing surfaces (ADR-0021 / frontend)', () =
   })
 })
 
+describe('validateManifest — seed (baseline-row declaration, biffo-template#1554)', () => {
+  it('accepts a well-formed seed declaring dir and baseline_tables', () => {
+    const manifest = validateManifest({
+      ...validManifest(),
+      seed: { dir: 'db/seed', baseline_tables: ['rbac_roles'] },
+    })
+    expect(manifest.seed?.dir).toBe('db/seed')
+    expect(manifest.seed?.baseline_tables).toEqual(['rbac_roles'])
+  })
+
+  it('defaults baseline_tables to empty when only dir is declared', () => {
+    const manifest = validateManifest({
+      ...validManifest(),
+      seed: { dir: 'db/seed' },
+    })
+    expect(manifest.seed?.baseline_tables).toEqual([])
+  })
+
+  it('is absent on a plugin that declares no seed — no default object materialises', () => {
+    const manifest = validateManifest(validManifest())
+    expect(manifest.seed).toBeUndefined()
+  })
+
+  it('rejects seed.baseline_tables referencing a table not in this manifest', () => {
+    expect(() =>
+      validateManifest({
+        ...validManifest(),
+        seed: { dir: 'db/seed', baseline_tables: ['no_such_table'] },
+      }),
+    ).toThrow(/baseline_tables references table 'no_such_table'/)
+  })
+
+  it('rejects a seed with no dir', () => {
+    expect(() =>
+      validateManifest({
+        ...validManifest(),
+        seed: { baseline_tables: ['rbac_roles'] },
+      }),
+    ).toThrow()
+  })
+
+  it('rejects a seed.dir with a leading slash or path traversal', () => {
+    for (const dir of ['/etc/seed', '../escape']) {
+      expect(() =>
+        validateManifest({
+          ...validManifest(),
+          seed: { dir, baseline_tables: [] },
+        }),
+      ).toThrow()
+    }
+  })
+
+  it('rejects an unknown key on seed (strict schema)', () => {
+    expect(() =>
+      validateManifest({
+        ...validManifest(),
+        seed: { dir: 'db/seed', baseline_tables: [], extra: true },
+      }),
+    ).toThrow()
+  })
+})
+
 describe('validateManifest — happy path', () => {
   it('accepts a well-formed manifest', () => {
     const manifest = validateManifest(validManifest())

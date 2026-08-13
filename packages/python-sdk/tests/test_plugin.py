@@ -13,6 +13,7 @@ from biffo_plugin_sdk import (
     PermissionRule,
     PluginManifest,
     RouteDef,
+    SeedDeclaration,
     TableDefinition,
     TablePermissions,
     ToolDeclaration,
@@ -149,6 +150,55 @@ class TestPluginManifestModel:
                     )
                 ],
             )
+
+    def test_seed_defaults_to_none(self):
+        manifest = PluginManifest(name="minimal", version="0.1.0")
+        assert manifest.seed is None
+
+    def test_seed_is_parsed_and_preserved(self):
+        manifest = PluginManifest(
+            name="rbac",
+            version="1.0.0",
+            tables=[TableDefinition(name="roles")],
+            seed=SeedDeclaration(dir="db/seed", baseline_tables=["roles"]),
+        )
+        assert manifest.seed is not None
+        assert manifest.seed.dir == "db/seed"
+        assert manifest.seed.baseline_tables == ["roles"]
+        # And it round-trips through the serialisable dump Core reads
+        # (services/api/src/api/plugin_baseline_check.py's
+        # collect_baseline_declarations reads exactly this shape).
+        dumped = manifest.model_dump_serializable()
+        assert dumped["seed"] == {"dir": "db/seed", "baseline_tables": ["roles"]}
+
+    def test_seed_baseline_tables_defaults_to_empty(self):
+        manifest = PluginManifest(
+            name="rbac",
+            version="1.0.0",
+            tables=[TableDefinition(name="roles")],
+            seed=SeedDeclaration(dir="db/seed"),
+        )
+        assert manifest.seed is not None
+        assert manifest.seed.baseline_tables == []
+
+    def test_seed_baseline_table_not_in_declared_tables_rejected(self):
+        """Mirrors the api_routes cross-check just above: a plugin's baseline
+        seed can only promise rows for its OWN tables (biffo-template#1554)."""
+        with pytest.raises(ValidationError):
+            PluginManifest(
+                name="rbac",
+                version="1.0.0",
+                tables=[TableDefinition(name="roles")],
+                seed=SeedDeclaration(dir="db/seed", baseline_tables=["not_a_declared_table"]),
+            )
+
+    def test_seed_declaration_rejects_unknown_key(self):
+        with pytest.raises(ValidationError):
+            SeedDeclaration(dir="db/seed", baseline_tables=[], extra_field=True)  # type: ignore[call-arg]
+
+    def test_seed_declaration_requires_dir(self):
+        with pytest.raises(ValidationError):
+            SeedDeclaration(baseline_tables=["roles"])  # type: ignore[call-arg]  # missing dir
 
 
 # --- RouteDef tests ---
@@ -380,6 +430,20 @@ class TestRegisterPlugin:
         assert registration["name"] == "rbac"
         assert registration["tables"][0]["name"] == "roles"
         assert registration["api_routes"][0]["method"] == "GET"
+        assert registration["seed"] is None
+
+    def test_includes_seed_when_declared(self):
+        manifest = PluginManifest(
+            name="rbac",
+            version="1.0.0",
+            tables=[TableDefinition(name="roles")],
+            seed=SeedDeclaration(dir="db/seed", baseline_tables=["roles"]),
+        )
+
+        registration = register_plugin(manifest)
+
+        json.dumps(registration)  # must not raise
+        assert registration["seed"] == {"dir": "db/seed", "baseline_tables": ["roles"]}
 
 
 # --- BiffoPluginBase tests ---

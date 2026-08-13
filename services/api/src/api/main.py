@@ -215,6 +215,21 @@ def lambda_handler(event: dict, context: LambdaContext) -> dict:
         return _run_db_init()
     if event.get("source") == "biffo:ddl-import":
         return _run_ddl_import(event.get("directory"))
+    if event.get("source") == "biffo:plugin-baseline-check":
+        # Fail the deploy loudly if a plugin's declared baseline table has no
+        # rows for a tenant this deployment already knows about
+        # (biffo-template#1554) — run from the deploy workflow after DDL
+        # imports, so any plugin-vendored seed has already had its chance to
+        # apply. See plugin_baseline_check's module docstring.
+        #
+        # biffo-template#1556 (planned): a sibling "declared columns actually
+        # exist" check belongs here too, as its own `biffo:plugin-column-check`
+        # branch calling its own module — reusing plugin_deploy_checks.py's
+        # manifest-injection/Postgres-engine harness rather than this one's
+        # row/tenant-specific logic. Not built yet; this comment is the hook.
+        from .plugin_baseline_check import assert_plugin_baselines_populated
+
+        return assert_plugin_baselines_populated()
     _ensure_event_loop()
     return handler(event, context)  # type: ignore[reportArgumentType]
 

@@ -73,6 +73,20 @@ function makeMigrationsMock(generatedPaths: string[] = []) {
   return { generate: vi.fn().mockResolvedValue(generatedPaths) }
 }
 
+// biffo-template#1554 — a plugin declaring a baseline-row seed.
+const SEEDED_MANIFEST = {
+  ...VALID_MANIFEST,
+  seed: { dir: 'db/seed', baseline_tables: ['widgets_items'] },
+}
+
+function writeSeedFiles(pluginDir: string, seedDirRel: string, files: Record<string, string>) {
+  const seedDir = join(pluginDir, seedDirRel)
+  mkdirSync(seedDir, { recursive: true })
+  for (const [name, content] of Object.entries(files)) {
+    writeFileSync(join(seedDir, name), content)
+  }
+}
+
 describe('runPluginInstall', () => {
   let projectRoot: string
 
@@ -167,6 +181,81 @@ describe('runPluginInstall', () => {
     // No environment root config in this fixture, so there is nothing to wire
     // into — and the CLI must not invent an infra/ tree.
     expect(existsSync(join(projectRoot, 'infra'))).toBe(false)
+  })
+
+  describe('seed vendoring (biffo-template#1554)', () => {
+    it('vendors seed.dir into db/imports/_plugin-<name>/ and stages it in the commit', async () => {
+      const clonedDir = makeClonedPluginDir(SEEDED_MANIFEST)
+      writeSeedFiles(clonedDir, 'db/seed', { '000_default.sql': 'SELECT 1;\n' })
+      const registry = makeRegistryMock()
+      const git = makeGitMock(clonedDir)
+      const migrations = makeMigrationsMock()
+
+      await runPluginInstall(
+        'widgets@1.0',
+        { dryRun: false, cwd: projectRoot },
+        { registry: registry as never, git: git as never, migrations: migrations as never },
+      )
+
+      const vendored = join(projectRoot, 'db', 'imports', '_plugin-widgets', '000_default.sql')
+      expect(existsSync(vendored)).toBe(true)
+      expect(readFileSync(vendored, 'utf8')).toBe('SELECT 1;\n')
+      expect(git.add).toHaveBeenCalledWith(
+        projectRoot,
+        expect.arrayContaining(['db/imports/_plugin-widgets']),
+      )
+    })
+
+    it('a plugin with no seed leaves db/imports/ completely untouched', async () => {
+      const registry = makeRegistryMock()
+      const git = makeGitMock(makeClonedPluginDir(VALID_MANIFEST))
+      const migrations = makeMigrationsMock()
+
+      await runPluginInstall(
+        'widgets@1.0',
+        { dryRun: false, cwd: projectRoot },
+        { registry: registry as never, git: git as never, migrations: migrations as never },
+      )
+
+      expect(existsSync(join(projectRoot, 'db', 'imports'))).toBe(false)
+      const [, stagedPaths] = git.add.mock.calls[0]!
+      expect(stagedPaths).not.toContain('db/imports/_plugin-widgets')
+    })
+
+    it('rejects when seed.dir does not exist in the plugin source', async () => {
+      const clonedDir = makeClonedPluginDir(SEEDED_MANIFEST) // seed.dir declared, never written
+      const registry = makeRegistryMock()
+      const git = makeGitMock(clonedDir)
+      const migrations = makeMigrationsMock()
+
+      await expect(
+        runPluginInstall(
+          'widgets@1.0',
+          { dryRun: false, cwd: projectRoot },
+          { registry: registry as never, git: git as never, migrations: migrations as never },
+        ),
+      ).rejects.toThrow(/seed\.dir/)
+    })
+
+    it('--local install vendors seed.dir the same way as the registry path', async () => {
+      const local = makeClonedPluginDir(SEEDED_MANIFEST)
+      writeSeedFiles(local, 'db/seed', { '000_default.sql': 'SELECT 1;\n' })
+
+      await runPluginInstall(
+        undefined,
+        { local, dryRun: false, cwd: projectRoot },
+        {
+          registry: makeRegistryMock() as never,
+          git: makeGitMock('') as never,
+          migrations: makeMigrationsMock() as never,
+        },
+      )
+
+      expect(
+        existsSync(join(projectRoot, 'db', 'imports', '_plugin-widgets', '000_default.sql')),
+      ).toBe(true)
+      rmSync(local, { recursive: true, force: true })
+    })
   })
 
   it('wires the copied module into every environment root config (#201)', async () => {

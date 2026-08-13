@@ -16,6 +16,7 @@ import {
   resolveRegistryProvenance,
   writePluginProvenance,
 } from '../lib/plugin-provenance.js'
+import { pluginSeedImportDir, vendorPluginSeed } from '../lib/plugin-seed-vendor.js'
 import { copyPluginSource } from '../lib/plugin-source-copy.js'
 import { applyWorkspaceSources } from '../lib/plugin-workspace-sources.js'
 import {
@@ -279,6 +280,14 @@ export async function runPluginUpgrade(
       }
     }
 
+    // Vendor the plugin's declared tenant-scoped baseline-row seed, if any
+    // (biffo-template#1554) — full replace, same as the Terraform module
+    // above; a no-op when the new manifest declares no `seed`.
+    const seedResult = vendorPluginSeed(targetDir, manifest, options.cwd)
+    if (seedResult.vendored) {
+      stagePaths.push(seedResult.stagedPath!)
+    }
+
     const label = currentVersion
       ? `${entry.name} ${currentVersion} -> ${entry.version}`
       : `${entry.name} to ${entry.version}`
@@ -466,6 +475,14 @@ async function runLocalPluginRefresh(
       log.info(`${source.name} declares no tables — nothing to migrate.`)
     }
 
+    // Vendor the plugin's declared tenant-scoped baseline-row seed, if any
+    // (biffo-template#1554) — full replace, same as the Terraform module
+    // above; a no-op when the manifest declares no `seed`.
+    const seedResult = vendorPluginSeed(targetDir, manifest, options.cwd)
+    if (seedResult.vendored) {
+      stagePaths.push(seedResult.stagedPath!)
+    }
+
     await deps.git.add(options.cwd, stagePaths)
 
     // A --local refresh legitimately has nothing to commit — an in-place
@@ -544,6 +561,12 @@ function printDryRun(entry: RegistryPluginEntry, currentVersion: string | undefi
       `  Would replace Terraform module at: modules/plugins/${entry.name}/ (if the repo has one)`,
     )
   }
+  if (entry.baseline_tables && entry.baseline_tables.length > 0) {
+    console.log(
+      `  Would re-vendor seed DDL into: ${pluginSeedImportDir(entry.name)}/ ` +
+        `(baseline_tables: ${entry.baseline_tables.join(', ')})`,
+    )
+  }
   console.log(`  Would commit:  feat(plugins): upgrade ${entry.name} to ${entry.version}\n`)
 }
 
@@ -569,6 +592,12 @@ function printLocalDryRun(
       `  Would check for a migration for ${source.manifest.tables.length} table(s) ` +
         '(generated for a new table or an added column on an already-migrated table; ' +
         'a removed/retyped/nullability-changed column stops the refresh instead — #1539)',
+    )
+  }
+  if (source.manifest.seed) {
+    console.log(
+      `  Would re-vendor seed DDL into: ${pluginSeedImportDir(source.name)}/ ` +
+        `(baseline_tables: ${source.manifest.seed.baseline_tables.join(', ') || 'none declared'})`,
     )
   }
   console.log(`  Would commit:  chore(plugins): refresh ${source.name} from local checkout\n`)

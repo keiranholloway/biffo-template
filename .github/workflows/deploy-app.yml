@@ -661,6 +661,23 @@ jobs:
             fi
             cat ddl-import-response.json
           done
+      # Fail loudly if a plugin's declared seed.baseline_tables (biffo-template
+      # #1554) has no rows for a tenant this deployment already knows about —
+      # the "feature deploys green and does nothing" case the DDL import step
+      # above cannot catch on its own (applying a seed file without error is
+      # not proof it inserted anything). Runs after DDL imports so a plugin's
+      # vendored seed (db/imports/_plugin-<name>/) has already had its chance.
+      - name: Check plugin baseline seed rows
+        run: |
+          RESULT=$(aws lambda invoke \
+            --function-name ${{ vars.CORE_API_LAMBDA_NAME }} \
+            --payload '{"source":"biffo:plugin-baseline-check"}' \
+            --cli-binary-format raw-in-base64-out \
+            plugin-baseline-response.json)
+          if echo "$RESULT" | grep -q FunctionError; then
+            echo "Plugin baseline check failed:" && cat plugin-baseline-response.json && exit 1
+          fi
+          cat plugin-baseline-response.json
       # Package and deploy the isolated PR-signer Lambda (ADR-0008), only when
       # the instance has provisioned one (enable_pr_signer surfaces its function
       # name as PR_SIGNER_LAMBDA_NAME). Unlike the Core API above, this packages
@@ -1504,6 +1521,23 @@ jobs:
             fi
             cat ddl-import-response.json
           done
+      # Fail loudly if a plugin's declared seed.baseline_tables (biffo-template
+      # #1554) has no rows for a tenant this deployment already knows about —
+      # the "feature deploys green and does nothing" case the DDL import step
+      # above cannot catch on its own (applying a seed file without error is
+      # not proof it inserted anything). Runs after DDL imports so a plugin's
+      # vendored seed (db/imports/_plugin-<name>/) has already had its chance.
+      - name: Check plugin baseline seed rows
+        run: |
+          RESULT=$(aws lambda invoke \
+            --function-name ${{ vars.CORE_API_LAMBDA_NAME }} \
+            --payload '{"source":"biffo:plugin-baseline-check"}' \
+            --cli-binary-format raw-in-base64-out \
+            plugin-baseline-response.json)
+          if echo "$RESULT" | grep -q FunctionError; then
+            echo "Plugin baseline check failed:" && cat plugin-baseline-response.json && exit 1
+          fi
+          cat plugin-baseline-response.json
       # Package and deploy the isolated PR-signer Lambda (ADR-0008), only when
       # the instance has provisioned one (enable_pr_signer surfaces its function
       # name as PR_SIGNER_LAMBDA_NAME). Unlike the Core API above, this packages
@@ -2359,6 +2393,23 @@ jobs:
             fi
             cat ddl-import-response.json
           done
+      # Fail loudly if a plugin's declared seed.baseline_tables (biffo-template
+      # #1554) has no rows for a tenant this deployment already knows about —
+      # the "feature deploys green and does nothing" case the DDL import step
+      # above cannot catch on its own (applying a seed file without error is
+      # not proof it inserted anything). Runs after DDL imports so a plugin's
+      # vendored seed (db/imports/_plugin-<name>/) has already had its chance.
+      - name: Check plugin baseline seed rows
+        run: |
+          RESULT=$(aws lambda invoke \
+            --function-name ${{ vars.CORE_API_LAMBDA_NAME }} \
+            --payload '{"source":"biffo:plugin-baseline-check"}' \
+            --cli-binary-format raw-in-base64-out \
+            plugin-baseline-response.json)
+          if echo "$RESULT" | grep -q FunctionError; then
+            echo "Plugin baseline check failed:" && cat plugin-baseline-response.json && exit 1
+          fi
+          cat plugin-baseline-response.json
       # Package and deploy the isolated PR-signer Lambda (ADR-0008), only when
       # the instance has provisioned one (enable_pr_signer surfaces its function
       # name as PR_SIGNER_LAMBDA_NAME). Unlike the Core API above, this packages

@@ -284,6 +284,25 @@
       },
       "description": "Portal UI elements the plugin adds."
     },
+    "seed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dir"],
+      "properties": {
+        "dir": {
+          "type": "string",
+          "pattern": "^[\\w][\\w./-]*$",
+          "description": "Plugin-relative directory of baseline-seed .sql files (ADR-0005 DDL import). `biffo plugin install`/`upgrade` vendor every *.sql file directly under this directory (non-recursive) into the instance's db/imports/_plugin-<name>/, where the instance's existing deploy step applies it idempotently on every deploy via ddl_import_history checksum tracking. IDEMPOTENCY CONTRACT: files here must be safe to re-run — an INSERT ... SELECT ... WHERE NOT EXISTS pattern against a stable natural key, never a bare INSERT. They are checksum-locked once applied: editing an already-shipped file makes the next deploy fail loudly (ADR-0005 section 4) rather than silently re-applying or silently skipping. Ship a new, additively-numbered file for a later change instead of editing one already released."
+        },
+        "baseline_tables": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Names of this manifest's own `tables` that the seed DDL in `dir` guarantees are populated for every known tenant. Checked post-deploy (the `biffo:plugin-baseline-check` Lambda event, run from the deploy workflow after DDL imports are applied) — a table listed here with no rows for a tenant this deployment already knows about is a loud, specific deploy failure instead of a silently-empty feature (biffo-template#1554)."
+        }
+      },
+      "description": "Declares this plugin's tenant-scoped baseline-row seed. Optional — a plugin with no baseline data omits this key entirely, and nothing is vendored or checked for it."
+    },
     "tools": {
       "type": "array",
       "items": {

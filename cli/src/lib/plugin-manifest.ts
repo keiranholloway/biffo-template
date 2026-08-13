@@ -251,6 +251,24 @@ const ToolDeclarationSchema = z.object({
   parameters: z.record(z.string(), z.unknown()).default({}),
 })
 
+// A plugin's tenant-scoped baseline-row seed (ADR-0005 DDL import,
+// biffo-template#1554). `dir` reuses UserFrontendSchema's REL_DIR pattern — a
+// repo-relative path, no leading slash or traversal. Mirrors
+// packages/python-sdk/src/biffo_plugin_sdk/plugin.py's `SeedDeclaration` and
+// _skeletons/registry/registry-schema.json's `seed` (both copies — see that
+// file's own note on why the two skeleton copies must stay identical).
+const SeedDeclarationSchema = z
+  .object({
+    dir: z
+      .string()
+      .regex(
+        REL_DIR,
+        'must be a plugin-relative path with no leading slash or traversal, e.g. db/seed',
+      ),
+    baseline_tables: z.array(z.string()).default([]),
+  })
+  .strict()
+
 // A buffered chat agent the plugin registers with Core (ADR-0017 seam #1). The
 // system_prompt is the install-vetted instruction channel (ADR-0016 §1) — never
 // request-supplied. `.strict()` mirrors the SDK/Core models' extra="forbid".
@@ -299,6 +317,10 @@ export const PluginManifestSchema = z
     // Chat agents the plugin registers with Core (ADR-0017). Default empty — an
     // ordinary plugin declares none.
     chat_agents: z.array(ChatAgentDeclarationSchema).default([]),
+    // The plugin's tenant-scoped baseline-row seed (ADR-0005, biffo-template#1554).
+    // Optional — a plugin with no baseline data omits this entirely, and
+    // `biffo plugin install`/`upgrade` vendor nothing for it.
+    seed: SeedDeclarationSchema.optional(),
   })
   .superRefine((manifest, ctx) => {
     const tableNames = new Set(manifest.tables.map((t) => t.name))
@@ -310,6 +332,23 @@ export const PluginManifestSchema = z
             `Route ${route.method} ${route.path} references table '${route.table}', ` +
             `which is not declared in this manifest's 'tables' (${[...tableNames].sort().join(', ') || 'none'})`,
         })
+      }
+    }
+
+    // A plugin's baseline seed can only promise rows for its OWN tables — it
+    // has no business declaring another plugin's or Core's table populated,
+    // and the post-deploy check (services/api/src/api/plugin_baseline_check.py)
+    // only ever reads a table this same manifest declares.
+    if (manifest.seed) {
+      for (const table of manifest.seed.baseline_tables) {
+        if (!tableNames.has(table)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message:
+              `seed.baseline_tables references table '${table}', which is not declared ` +
+              `in this manifest's 'tables' (${[...tableNames].sort().join(', ') || 'none'})`,
+          })
+        }
       }
     }
   })

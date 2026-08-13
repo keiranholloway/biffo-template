@@ -64,6 +64,18 @@ class ExamplePlugin(BiffoPluginBase):
     async def seed_default_widget(self) -> None:
         """Create this plugin's baseline row, idempotently.
 
+        **This is the ASGI-lifespan self-seeding path — for tenant-scoped
+        BASELINE TABLE rows (what a fresh install needs before the feature
+        works at all), prefer the declared `seed` manifest block instead
+        (biffo-template#1554): see `biffo.plugin.json`'s `seed` key and
+        `db/seed/000_default_widget.sql`, which seeds this same table for
+        every known tenant in one statement via the instance's existing
+        DDL-import deploy step, with no running plugin process and no
+        per-tenant request needed to trigger it.** This method stays as the
+        worked example of the *other* legitimate path — a plugin's own
+        runtime config, or anything that genuinely needs to run as this
+        plugin's own code rather than as SQL.
+
         Nothing in this skeleton calls this — deliberately. **Where you call
         it from depends on what kind of plugin you are building**, and
         neither answer is `on_install()`:
@@ -88,10 +100,9 @@ class ExamplePlugin(BiffoPluginBase):
           idempotent until #1000. Verify your seed; do not assume it.
 
         - **An event-only plugin like this one** declares no `api_ingress`,
-          so it has no startup at all. Its baseline rows belong in a SQL
-          module in the *instance's* `db/imports/<name>/`, applied by
-          `biffo data apply` on every deploy — the mechanism the first-party
-          plugins use.
+          so it has no startup at all. Its baseline rows belong in the `seed`
+          manifest block described above — the mechanism the first-party
+          plugins use, now declared rather than a hand-run script.
 
         Idempotency: generic CRUD (issue #19) has no upsert — every POST
         creates a new row — so this lists existing widgets first and only

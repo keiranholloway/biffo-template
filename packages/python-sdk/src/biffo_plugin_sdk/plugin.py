@@ -312,6 +312,54 @@ class ChatAgentDeclaration(BaseModel):
     timeout_seconds: float = Field(default=20.0, gt=0)
 
 
+class SeedDeclaration(BaseModel):
+    """A plugin's tenant-scoped baseline-row seed (ADR-0005 DDL import,
+    biffo-template#1554).
+
+    ``dir`` names a plugin-relative directory of ``.sql`` files —
+    ``biffo plugin install``/``upgrade`` vendor every ``*.sql`` file directly
+    under it (non-recursive, matching ``biffo data import``'s own convention)
+    into the instance's ``db/imports/_plugin-<name>/``, where the instance's
+    already-existing "Apply DDL imports" deploy step applies it idempotently
+    on every deploy via ``ddl_import_history`` checksum tracking — no token,
+    no per-tenant API call, no new deploy machinery.
+
+    **The idempotency contract, written down** (the issue's own point: this
+    was a gap nobody had stated): every file here MUST be safe to re-run —
+    ``INSERT ... SELECT ... WHERE NOT EXISTS`` against a stable natural key,
+    never a bare ``INSERT``. Files are checksum-locked once applied
+    (ADR-0005 section 4): a file that changes after it has been applied halts
+    the whole DDL-import batch on the next deploy rather than silently
+    re-applying or silently skipping. A later plugin version that needs to
+    change its baseline data ships a new, additively-numbered file — it must
+    NOT edit one already released. `biffo plugin install`/`upgrade` vendor a
+    full replacement of the target directory's contents from whatever the
+    plugin ships (mirroring how they already replace ``services/<name>/``
+    and ``modules/plugins/<name>/``), so this contract is enforced by
+    ADR-0005's existing checksum mechanism, not by new CLI machinery.
+
+    ``baseline_tables`` names which of this manifest's own ``tables`` the
+    seed guarantees populated for every tenant this deployment already knows
+    about. Checked post-deploy by the Core API's ``biffo:plugin-baseline-check``
+    Lambda event (invoked from the deploy workflow, after DDL imports are
+    applied) — an empty table here is a loud, specific deploy failure instead
+    of a silently-empty feature. Optional: a plugin may vendor seed DDL with
+    nothing to assert (e.g. pure reference data it doesn't consider load-bearing).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    dir: str = Field(
+        description="Plugin-relative directory of baseline-seed .sql files, "
+        "e.g. 'db/seed'. No leading slash or traversal."
+    )
+    baseline_tables: list[str] = Field(
+        default_factory=list,
+        description="Names of this manifest's own `tables` that `dir`'s seed "
+        "guarantees are populated for every known tenant.",
+    )
+
+
 class PluginManifest(BaseModel):
     """Validated manifest for a Biffo plugin.
 
@@ -329,6 +377,7 @@ class PluginManifest(BaseModel):
     required_core_version: str = ">=0.0.0"
     tools: list[ToolDeclaration] = []
     chat_agents: list[ChatAgentDeclaration] = []
+    seed: SeedDeclaration | None = None
 
     @model_validator(mode="after")
     def _validate_routes_reference_declared_tables(self) -> PluginManifest:
@@ -343,6 +392,15 @@ class PluginManifest(BaseModel):
                     f"{route.table!r}, which is not declared in this "
                     f"manifest's 'tables' ({sorted(table_names)})."
                 )
+
+        if self.seed:
+            for table in self.seed.baseline_tables:
+                if table not in table_names:
+                    raise ValueError(
+                        f"seed.baseline_tables references table {table!r}, "
+                        f"which is not declared in this manifest's 'tables' "
+                        f"({sorted(table_names)})."
+                    )
         return self
 
     def model_dump_serializable(self) -> dict[str, Any]:
@@ -391,6 +449,7 @@ def register_plugin(manifest: PluginManifest) -> dict[str, Any]:
         "required_core_version": manifest.required_core_version,
         "tables": [t.model_dump(mode="json") for t in manifest.tables],
         "api_routes": [r.model_dump(mode="json") for r in manifest.api_routes],
+        "seed": manifest.seed.model_dump(mode="json") if manifest.seed else None,
     }
 
 
@@ -439,12 +498,22 @@ class BiffoPluginBase(ABC):
       built for that path; it was itself not idempotent until
       biffo-template#1000, so treat this route as young and verify your own
       seed rather than assuming it is a finished story.
-    - **Out-of-band seeding.** A SQL module in the instance's
-      ``db/imports/<name>/``, applied by ``biffo data apply`` on every deploy.
+    - **Out-of-band seeding, now a declared interface (biffo-template#1554).**
       This is what the first-party plugins use, and it needs no credentials
-      and no running plugin. An event-only plugin — one with no ASGI app, such
-      as the skeleton's ``example_plugin`` — has no startup to hang seeding on
-      at all, so this is its only option.
+      and no running plugin — it is also the only option for an event-only
+      plugin (one with no ASGI app, such as the skeleton's ``example_plugin``),
+      which has no startup to hang anything on. Declare ``seed`` on this
+      manifest (:class:`SeedDeclaration`): ``dir`` names a plugin-relative
+      directory of idempotent ``.sql`` files, and ``baseline_tables`` names
+      which of this manifest's own ``tables`` they populate. ``biffo plugin
+      install``/``upgrade`` vendor ``dir`` into the instance's
+      ``db/imports/_plugin-<name>/``, where the instance's already-existing
+      DDL-import deploy step (ADR-0005) applies it — the same mechanism a
+      hand-written module in ``db/imports/<name>/`` always used, just
+      declared in the manifest instead of a step nobody was told to perform.
+      A table named in ``baseline_tables`` with no rows for a tenant this
+      deployment already knows about fails the deploy loudly instead of
+      shipping a feature that silently does nothing.
     - **Teardown: nothing.** ADR-0003 section 9 is explicit that
       ``biffo plugin uninstall`` leaves the plugin's tables in place and
       generates no drop migration. There is no teardown hook to miss.

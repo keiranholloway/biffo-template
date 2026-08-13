@@ -232,4 +232,47 @@ variable "error_status_restore_lambda_arn" {
   description = "Qualified ARN (us-east-1, versioned) of the error-status-demote Lambda@Edge function. Output from infra/global. Empty disables the API-error-body fix — see module README."
   type        = string
   default     = ""
+
+  # biffo-template#1574. THIS is where the demote/restore pair is made
+  # impossible to half-configure, and the layer is a deliberate choice.
+  #
+  # The pair is coupled: demote (origin-response) turns a real 403/404 into a
+  # 200 so custom_error_response cannot swallow the body, and restore
+  # (viewer-response) puts the true status back. Demote WITHOUT restore ships
+  # HTTP 200 on genuine API errors — strictly worse than the bug #1529 fixes,
+  # because a 200 carrying an error body defeats every client that checks
+  # status, including retry logic and monitoring.
+  #
+  # Two properties keep the half-configured state out of reach, both in this
+  # module rather than in a workflow:
+  #
+  #   1. ONE variable gates BOTH associations, on all three API behaviours
+  #      (see main.tf). There is no second switch to forget, so "demote on,
+  #      restore off" is not a state this module can express. The invariant is
+  #      guarded against a later refactor by
+  #      cli/src/lib/cdn-error-status-coupling.test.ts, which fails if any
+  #      behaviour ever gains one association without the other.
+  #
+  #   2. This validation, which makes a SET-BUT-WRONG value loud at plan time
+  #      instead of obscure at apply time. Lambda@Edge requires a qualified
+  #      ARN (trailing numeric version — never $LATEST) in us-east-1; anything
+  #      else is rejected by CloudFront with an error that names neither this
+  #      variable nor the reason.
+  #
+  # Why the module and not the workflow: #1574 exists precisely because a
+  # workflow silently did not set this, so "the workflow always sets it" is
+  # the assumption that failed. A workflow guard also only covers the CI path
+  # — `terraform apply` run by hand, `biffo deploy` run locally, and a fork of
+  # deploy-infra.yml all bypass it. More decisively, `.github/` and `modules/`
+  # are template-owned but `infra/` is NOT (core-manifest.json), so an
+  # instance authors its own environment stacks: the module is the only layer
+  # every route to a CloudFront distribution must pass through, and the only
+  # one that reaches every instance automatically via `biffo core upgrade`.
+  validation {
+    condition = (
+      var.error_status_restore_lambda_arn == "" ||
+      can(regex("^arn:aws:lambda:us-east-1:[0-9]{12}:function:[0-9A-Za-z_-]+:[0-9]+$", var.error_status_restore_lambda_arn))
+    )
+    error_message = "error_status_restore_lambda_arn must be empty (fix disabled) or a QUALIFIED us-east-1 Lambda@Edge ARN ending in a numeric version, e.g. arn:aws:lambda:us-east-1:123456789012:function:my-project-error-status-demote:7. An unqualified ARN, $LATEST, or another region cannot be associated with a CloudFront behaviour. Use infra/global's error_status_restore_lambda_arn output (biffo-template#1529, #1574)."
+  }
 }

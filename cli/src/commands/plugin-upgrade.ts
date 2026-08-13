@@ -2,10 +2,18 @@ import { cpSync, existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
 import { join, relative, resolve } from 'node:path'
 import chalk from 'chalk'
 import { Command } from 'commander'
+import { execa } from 'execa'
 import inquirer from 'inquirer'
 import { GitAdapter } from '../adapters/git/index.js'
 import { PluginMigrationsAdapter } from '../adapters/plugin-migrations/index.js'
 import { RegistryAdapter, type RegistryPluginEntry } from '../adapters/registry/index.js'
+import {
+  type LockfileRefreshOutcome,
+  type RunCommandFn,
+  describeFailures,
+  lockfilesNeedingRefresh,
+  refreshLockfiles,
+} from '../lib/lockfile-refresh.js'
 import { log } from '../lib/logger.js'
 import { validateManifest } from '../lib/plugin-manifest.js'
 import {
@@ -19,7 +27,7 @@ import {
 import { pluginSeedImportDir, vendorPluginSeed } from '../lib/plugin-seed-vendor.js'
 import { copyPluginSource } from '../lib/plugin-source-copy.js'
 import { findPluginModuleReferences } from '../lib/plugin-terraform-wiring.js'
-import { applyWorkspaceSources } from '../lib/plugin-workspace-sources.js'
+import { applyWorkspaceSources, readTomlStringArray } from '../lib/plugin-workspace-sources.js'
 import {
   cloneAndValidatePlugin,
   parsePluginTarget,
@@ -75,6 +83,15 @@ export interface PluginUpgradeDeps {
   registry: RegistryAdapter
   git: GitAdapter
   migrations: PluginMigrationsAdapter
+  /**
+   * Runs a lockfile-regeneration command (`uv lock`) in the instance when a
+   * plugin refresh changes a dependency it locks. Optional and defaulted to
+   * `execa` at each call site (`defaultRunCommand` below) — injectable so the
+   * relock is testable without a real `uv` on the machine, same shape and
+   * same injection point as `core-upgrade.ts`'s `CoreUpgradeDeps.runCommand`
+   * (issue #1569).
+   */
+  runCommand?: RunCommandFn
 }
 
 export interface PluginUpgradeOptions {
@@ -232,6 +249,11 @@ export async function runPluginUpgrade(
     // reconcileProvenance's docstring for why this can't be read afterward.
     const previousProvenance = readProvenance(targetDir)
 
+    // Read before the same replace destroys it too — compared against the
+    // post-copy version below to decide whether `uv.lock` needs regenerating
+    // (issue #1569). See `relockIfDependenciesChanged`'s docstring.
+    const previousPyproject = readPyprojectIfPresent(targetDir)
+
     rmSync(targetDir, { recursive: true, force: true })
     mkdirSync(targetDir, { recursive: true })
     cpSync(tmpDir, targetDir, { recursive: true })
@@ -245,6 +267,11 @@ export async function runPluginUpgrade(
     writePluginProvenance(targetDir, reconcileProvenance(previousProvenance, nextProvenance))
 
     applyWorkspaceSources(targetDir, options.cwd, `services/${entry.name}`)
+
+    // Read after `applyWorkspaceSources`, the same version that lands in the
+    // commit — see `relockIfDependenciesChanged`'s docstring for why that
+    // ordering matters.
+    const newPyproject = readPyprojectIfPresent(targetDir)
 
     const stagePaths = [`services/${entry.name}`]
 
@@ -300,6 +327,20 @@ export async function runPluginUpgrade(
       stagePaths.push(seedResult.stagedPath!)
     }
 
+    // Re-lock the instance if this version changed a dependency (#1569) —
+    // before staging, so a regenerated uv.lock lands in the same commit as
+    // the manifest that invalidated it, matching core-upgrade's #393 fix.
+    const lockOutcomes = await relockIfDependenciesChanged(
+      options.cwd,
+      `services/${entry.name}/pyproject.toml`,
+      previousPyproject,
+      newPyproject,
+      deps,
+    )
+    for (const outcome of lockOutcomes) {
+      if (outcome.ok) stagePaths.push(outcome.trigger.lockfile)
+    }
+
     const label = currentVersion
       ? `${entry.name} ${currentVersion} -> ${entry.version}`
       : `${entry.name} to ${entry.version}`
@@ -308,7 +349,17 @@ export async function runPluginUpgrade(
     await deps.git.commit(options.cwd, commitMessage)
     log.success(`Committed: ${commitMessage}`)
 
-    console.log(chalk.bold('\n  Plugin upgraded!\n'))
+    // A lock failure must not read as an unqualified success (#1539's same
+    // reasoning) — the commit still happened, but CI will fail on the
+    // mismatch until the printed command is run by hand.
+    const lockFailures = describeFailures(lockOutcomes)
+    if (lockFailures.length > 0) {
+      console.log(chalk.yellow.bold('\n  ⚠ Plugin upgraded, but uv.lock needs attention\n'))
+      for (const failure of lockFailures) console.log(chalk.yellow(`  ${failure}`))
+      console.log()
+    } else {
+      console.log(chalk.bold('\n  Plugin upgraded!\n'))
+    }
     console.log(`  ${entry.name}@${entry.version} is committed at services/${entry.name}/`)
     console.log('  Push and redeploy to apply its updated tables and routes:')
     console.log(chalk.dim(`    git push`))
@@ -428,6 +479,13 @@ async function runLocalPluginRefresh(
     // instead of two near-identical ones either side of the if/else.)
     const previousProvenance = readProvenance(targetDir)
 
+    // Read before the same replace destroys it (a no-op read in the
+    // inTreeSource branch, since nothing is deleted there) — compared against
+    // the post-copy version below to decide whether `uv.lock` needs
+    // regenerating (issue #1569). See `relockIfDependenciesChanged`'s
+    // docstring.
+    const previousPyproject = readPyprojectIfPresent(targetDir)
+
     if (inTreeSource) {
       log.info(
         `services/${source.name}/ is already the local checkout — nothing to copy; ` +
@@ -451,6 +509,11 @@ async function runLocalPluginRefresh(
     writePluginProvenance(targetDir, reconcileProvenance(previousProvenance, nextProvenance))
 
     applyWorkspaceSources(targetDir, options.cwd, `services/${source.name}`)
+
+    // Read after `applyWorkspaceSources`, the same version that lands in the
+    // commit — see `relockIfDependenciesChanged`'s docstring for why that
+    // ordering matters.
+    const newPyproject = readPyprojectIfPresent(targetDir)
 
     const stagePaths = [`services/${source.name}`]
 
@@ -505,6 +568,23 @@ async function runLocalPluginRefresh(
       stagePaths.push(seedResult.stagedPath!)
     }
 
+    // Re-lock the instance if this refresh changed a dependency (#1569) —
+    // before staging, so a regenerated uv.lock lands in the same commit as
+    // the manifest that invalidated it, matching core-upgrade's #393 fix.
+    // The in-tree-source, byte-identical, and "version unchanged" no-op cases
+    // all correctly produce no dependency change (previousPyproject equals
+    // newPyproject) and so trigger nothing here.
+    const lockOutcomes = await relockIfDependenciesChanged(
+      options.cwd,
+      `services/${source.name}/pyproject.toml`,
+      previousPyproject,
+      newPyproject,
+      deps,
+    )
+    for (const outcome of lockOutcomes) {
+      if (outcome.ok) stagePaths.push(outcome.trigger.lockfile)
+    }
+
     await deps.git.add(options.cwd, stagePaths)
 
     // A --local refresh legitimately has nothing to commit — an in-place
@@ -515,7 +595,9 @@ async function runLocalPluginRefresh(
     // for "nothing to commit", which would otherwise surface as a raw git
     // failure for what is not an error — the registry path is protected from
     // this by its `currentVersion === entry.version` short-circuit, which
-    // this path deliberately does not have.
+    // this path deliberately does not have. A dependency change that
+    // regenerated uv.lock (above) always leaves something staged, so this
+    // short-circuit cannot fire on a refresh that genuinely needs a lock.
     if (!(await deps.git.hasUncommittedChanges(options.cwd))) {
       log.warn(`services/${source.name}/ already matches ${source.origin} — nothing to commit.`)
       return
@@ -525,7 +607,17 @@ async function runLocalPluginRefresh(
     await deps.git.commit(options.cwd, commitMessage)
     log.success(`Committed: ${commitMessage}`)
 
-    console.log(chalk.bold('\n  Plugin refreshed!\n'))
+    // A lock failure must not read as an unqualified success (#1539's same
+    // reasoning) — the commit still happened, but CI will fail on the
+    // mismatch until the printed command is run by hand.
+    const lockFailures = describeFailures(lockOutcomes)
+    if (lockFailures.length > 0) {
+      console.log(chalk.yellow.bold('\n  ⚠ Plugin refreshed, but uv.lock needs attention\n'))
+      for (const failure of lockFailures) console.log(chalk.yellow(`  ${failure}`))
+      console.log()
+    } else {
+      console.log(chalk.bold('\n  Plugin refreshed!\n'))
+    }
     console.log(`  services/${source.name}/ now matches ${source.origin}`)
     console.log('  Push and redeploy to apply any updated tables and routes:')
     console.log(chalk.dim(`    git push`))
@@ -564,6 +656,176 @@ function refuseIfModuleStillReferenced(cwd: string, modulesDir: string, name: st
       `reference(s) above yourself, or run 'biffo plugin uninstall ${name}', which removes the ` +
       `module and unwires the reference together.`,
   )
+}
+
+/**
+ * Re-lock the instance's `uv.lock` when a plugin refresh changed a dependency
+ * it locks (issue #1569).
+ *
+ * ## What broke
+ *
+ * A plugin's `pyproject.toml` is copied wholesale into `services/<name>/` by
+ * both refresh paths above, but nothing regenerated `uv.lock` afterward —
+ * `services/<name>/` is a `[tool.uv.workspace]` member (root `pyproject.toml`),
+ * so a dependency change there invalidates the root lockfile the same way a
+ * core-upgrade-rewritten manifest does (#393, `lib/lockfile-refresh.ts`). The
+ * refresh committed fine locally and failed in CI on `uv sync --all-groups
+ * --locked`, naming `uv.lock` rather than the plugin — a confusing detour from
+ * a commit that looked like it only touched plugin source.
+ *
+ * ## Chosen fix: auto-lock, not just warn
+ *
+ * The issue offered two options — auto-run `uv lock`, or at minimum print a
+ * warning. This takes the auto-lock option, reusing the exact machinery
+ * `core-upgrade.ts` already built and ships for the structurally identical
+ * problem (`lockfilesNeedingRefresh` / `refreshLockfiles` / `describeFailures`
+ * in `lib/lockfile-refresh.ts`) rather than re-deriving a second, divergent
+ * implementation of the same fix:
+ *
+ * - It is the smaller behavioural surface for a user to learn — `core upgrade`
+ *   and `plugin upgrade` already share the "manifest changed → lockfile
+ *   regenerated in this repo, committed alongside" contract, and a plugin
+ *   dependency change is not different in kind.
+ * - A warn-only fix still leaves every dependency-changing refresh red on its
+ *   own CI run, just with a better error message — the exact failure the
+ *   issue reports still happens, only explained rather than avoided. The
+ *   auto-lock keeps `biffo plugin upgrade --local` usable as advertised: "push
+ *   and redeploy" (the command's own closing instructions) with green CI.
+ *
+ * ## Failure mode: soft, and stated at the point of success
+ *
+ * `uv lock` can fail — no network, no `uv` on PATH, a real resolution
+ * conflict a plugin's new pin introduces. A failure here must not discard an
+ * otherwise-good plugin refresh (the source copy, migration, Terraform sync
+ * all already succeeded) by throwing and aborting the whole command, nor
+ * silently commit a stale `uv.lock` and let CI discover the mismatch with no
+ * connection back to "this plugin refresh needs `uv lock`" — the exact "do
+ * not report a conclusion the operation did not earn" reasoning #1539 already
+ * established for a sibling case. So: the refresh still commits (with
+ * whatever `uv.lock` state resulted — unchanged on failure, since a failed
+ * `uv lock` does not write a partial file), and the two call sites below
+ * downgrade "Plugin upgraded!" / "Plugin refreshed!" to a yellow warning
+ * banner naming the exact command to run by hand, rather than printing an
+ * unqualified success next to a lockfile CI will reject.
+ *
+ * ## Detecting "a dependency actually changed", not "the file changed"
+ *
+ * Re-locking on every refresh would be slow and produce a lockfile diff on
+ * every routine, dependency-free refresh — most of which touch no manifest at
+ * all. So this compares the *parsed dependency surface* of
+ * `services/<name>/pyproject.toml` before the copy and after it (post
+ * `applyWorkspaceSources`, since that is the version that lands in the
+ * commit), not the raw file text: `applyWorkspaceSources` unconditionally
+ * rewrites the `[tool.uv.sources]` section, which would make every refresh
+ * of a workspace-sourced plugin look like a dependency change under a naive
+ * text diff even when the actual dependency list is untouched.
+ * `dependencySurface` extracts, comment- and whitespace-blind (reusing
+ * `readTomlStringArray`'s bracket-aware scanner from
+ * `lib/plugin-workspace-sources.ts`):
+ *
+ * - `[project] dependencies` (full version-spec strings, so a bump like
+ *   `httpx>=0.28.1` -> `httpx>=0.29.0` counts as a change, not just an
+ *   add/remove);
+ * - every named array under `[dependency-groups]` (`dev`, or whatever a
+ *   plugin calls it — the exact shape biffo-plugin-marketing#138 added
+ *   `pyyaml>=6.0` to, which is what prompted this issue);
+ * - every named array under `[project.optional-dependencies]`.
+ *
+ * Known gap: a `requires-python` change alone (no dependency list edited) is
+ * not covered — rare in practice for a minor plugin refresh, and `uv lock`
+ * would still fail loudly in that instance's own CI with a readable error if
+ * it ever does, rather than silently mis-resolving.
+ *
+ * ## JS: checked, not assumed
+ *
+ * The issue asked whether a plugin's `web`/`web-admin` `package.json` can
+ * likewise reach the instance's root lockfile. It cannot: `pnpm-workspace.yaml`
+ * at the repo root lists only `apps/*`, `packages/*` and `cli` as workspace
+ * packages — `services/*` is not a member, so `services/<name>/web-admin/`
+ * (which ships its own `pnpm-lock.yaml` in the plugin skeleton) is never
+ * resolved by the instance's root `pnpm-lock.yaml`. Only `uv.lock` is wired
+ * here; there is nothing for pnpm to do.
+ */
+async function relockIfDependenciesChanged(
+  cwd: string,
+  relPyprojectPath: string,
+  previousPyproject: string | null,
+  newPyproject: string | null,
+  deps: PluginUpgradeDeps,
+): Promise<LockfileRefreshOutcome[]> {
+  if (!dependenciesChanged(previousPyproject, newPyproject)) return []
+
+  const triggers = lockfilesNeedingRefresh([relPyprojectPath], cwd)
+  if (triggers.length === 0) return []
+
+  const run = deps.runCommand ?? defaultRunCommand
+  const outcomes = await refreshLockfiles(cwd, triggers, run)
+
+  const refreshed = outcomes.filter((o) => o.ok)
+  if (refreshed.length > 0) {
+    log.success(
+      `Refreshed ${refreshed.map((o) => o.trigger.lockfile).join(', ')} — this refresh changed ` +
+        'a dependency it locks.',
+    )
+  }
+  for (const message of describeFailures(outcomes)) log.warn(message)
+  return outcomes
+}
+
+const defaultRunCommand: RunCommandFn = async (command, cwd) => {
+  const [bin, ...args] = command
+  if (!bin) return { ok: false, error: 'empty command' }
+  try {
+    await execa(bin, args, { cwd })
+    return { ok: true }
+  } catch (err) {
+    const cause = err as { shortMessage?: string; stderr?: string; message?: string }
+    const detail = cause.stderr?.trim() || cause.shortMessage || cause.message || 'failed'
+    return { ok: false, error: detail.split('\n')[0] ?? 'failed' }
+  }
+}
+
+/** `services/<name>/pyproject.toml`'s content, or null if it does not exist —
+ * a plugin with no Python dependencies (tables/routes only) legitimately has
+ * none. */
+function readPyprojectIfPresent(targetDir: string): string | null {
+  const path = join(targetDir, 'pyproject.toml')
+  return existsSync(path) ? readFileSync(path, 'utf8') : null
+}
+
+/** True when the two `pyproject.toml` texts' dependency surfaces differ — see
+ * `relockIfDependenciesChanged`'s docstring for what "surface" means and why. */
+function dependenciesChanged(before: string | null, after: string | null): boolean {
+  if (before === after) return false // includes both null
+  const beforeItems = before ? dependencySurface(before) : []
+  const afterItems = after ? dependencySurface(after) : []
+  return JSON.stringify(beforeItems) !== JSON.stringify(afterItems)
+}
+
+/** The sorted, comment-blind dependency strings a pyproject.toml declares —
+ * `[project] dependencies` plus every array under `[dependency-groups]` and
+ * `[project.optional-dependencies]`. */
+function dependencySurface(text: string): string[] {
+  const items = [...readTomlStringArray(text, 'dependencies')]
+  for (const header of ['dependency-groups', 'project.optional-dependencies']) {
+    const body = tomlTableBody(text, header)
+    if (!body) continue
+    for (const m of body.matchAll(/^([A-Za-z0-9_.-]+)\s*=\s*\[/gm)) {
+      items.push(...readTomlStringArray(body, m[1]!))
+    }
+  }
+  return items.sort()
+}
+
+/** The text of a TOML table between `[header]` and the next top-level `[...]`
+ * header (or EOF), or null if `header` is absent. */
+function tomlTableBody(text: string, header: string): string | null {
+  const escaped = header.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const headerMatch = new RegExp(`^\\[${escaped}\\]\\s*$`, 'm').exec(text)
+  if (!headerMatch) return null
+  const rest = text.slice(headerMatch.index + headerMatch[0].length)
+  const nextHeader = /^\[/m.exec(rest)
+  return nextHeader ? rest.slice(0, nextHeader.index) : rest
 }
 
 function readInstalledVersion(targetDir: string): string | undefined {

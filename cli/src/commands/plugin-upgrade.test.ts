@@ -996,3 +996,173 @@ describe('runPluginUpgrade --local', () => {
     })
   })
 })
+
+/**
+ * biffo-template#1569 — a plugin dependency change must re-lock the
+ * instance's `uv.lock`, or the refresh commits fine locally and fails in the
+ * instance's own CI on `uv sync --all-groups --locked`. `runCommand` stands
+ * in for a real `uv` on the machine (same injection point as
+ * `core-upgrade.ts`'s `CoreUpgradeDeps.runCommand`).
+ */
+describe('lockfile refresh on dependency change (biffo-template#1569)', () => {
+  let projectRoot: string
+
+  beforeEach(() => {
+    projectRoot = makeProjectRoot()
+    promptMock.mockReset()
+    promptMock.mockResolvedValue({ confirmed: true })
+    // Instance root uv.lock — lockfilesNeedingRefresh only fires for a
+    // lockfile the instance actually has (lib/lockfile-refresh.ts).
+    writeFileSync(join(projectRoot, 'uv.lock'), 'version = 1\n')
+  })
+
+  afterEach(() => {
+    rmSync(projectRoot, { recursive: true, force: true })
+  })
+
+  const OLD_PYPROJECT =
+    '[project]\nname = "widgets"\ndependencies = ["httpx>=0.28.1"]\n\n' +
+    '[dependency-groups]\ndev = ["pytest>=8.3.4"]\n'
+
+  // The exact shape biffo-plugin-marketing#138 added: a new dev-group entry,
+  // not a [project] dependencies change — proving detection covers
+  // [dependency-groups], not just the top-level array.
+  const NEW_PYPROJECT_ADDS_DEV_DEP =
+    '[project]\nname = "widgets"\ndependencies = ["httpx>=0.28.1"]\n\n' +
+    '[dependency-groups]\ndev = ["pytest>=8.3.4", "pyyaml>=6.0"]\n'
+
+  describe('registry upgrade path', () => {
+    it('runs `uv lock` in the instance and stages uv.lock when the new version adds a dependency', async () => {
+      writeFileSync(join(projectRoot, 'services', 'widgets', 'pyproject.toml'), OLD_PYPROJECT)
+      const clonedDir = makeClonedPluginDir()
+      writeFileSync(join(clonedDir, 'pyproject.toml'), NEW_PYPROJECT_ADDS_DEV_DEP)
+
+      const registry = makeRegistryMock()
+      const git = makeGitMock(clonedDir)
+      const migrations = makeMigrationsMock()
+      const runCommand = vi.fn().mockResolvedValue({ ok: true })
+
+      await runPluginUpgrade(
+        'widgets@1.1',
+        { dryRun: false, force: true, cwd: projectRoot },
+        {
+          registry: registry as never,
+          git: git as never,
+          migrations: migrations as never,
+          runCommand,
+        },
+      )
+
+      expect(runCommand).toHaveBeenCalledWith(['uv', 'lock'], projectRoot)
+      expect(git.add).toHaveBeenCalledWith(projectRoot, ['services/widgets', 'uv.lock'])
+      expect(git.commit).toHaveBeenCalled()
+    })
+
+    it('does not run `uv lock` when the refreshed pyproject.toml has no dependency change', async () => {
+      writeFileSync(join(projectRoot, 'services', 'widgets', 'pyproject.toml'), OLD_PYPROJECT)
+      const clonedDir = makeClonedPluginDir()
+      // Same dependency surface, different unrelated field — must not be
+      // mistaken for a dependency change.
+      writeFileSync(
+        join(clonedDir, 'pyproject.toml'),
+        OLD_PYPROJECT.replace('name = "widgets"', 'name = "widgets"\nversion = "1.1.0"'),
+      )
+
+      const registry = makeRegistryMock()
+      const git = makeGitMock(clonedDir)
+      const migrations = makeMigrationsMock()
+      const runCommand = vi.fn().mockResolvedValue({ ok: true })
+
+      await runPluginUpgrade(
+        'widgets@1.1',
+        { dryRun: false, force: true, cwd: projectRoot },
+        {
+          registry: registry as never,
+          git: git as never,
+          migrations: migrations as never,
+          runCommand,
+        },
+      )
+
+      expect(runCommand).not.toHaveBeenCalled()
+      expect(git.add).toHaveBeenCalledWith(projectRoot, ['services/widgets'])
+    })
+
+    it('still commits the plugin refresh when `uv lock` fails, warning rather than discarding it', async () => {
+      writeFileSync(join(projectRoot, 'services', 'widgets', 'pyproject.toml'), OLD_PYPROJECT)
+      const clonedDir = makeClonedPluginDir()
+      writeFileSync(join(clonedDir, 'pyproject.toml'), NEW_PYPROJECT_ADDS_DEV_DEP)
+
+      const registry = makeRegistryMock()
+      const git = makeGitMock(clonedDir)
+      const migrations = makeMigrationsMock()
+      const runCommand = vi.fn().mockResolvedValue({ ok: false, error: 'uv: not found' })
+
+      await runPluginUpgrade(
+        'widgets@1.1',
+        { dryRun: false, force: true, cwd: projectRoot },
+        {
+          registry: registry as never,
+          git: git as never,
+          migrations: migrations as never,
+          runCommand,
+        },
+      )
+
+      // uv.lock could not be regenerated, so it is not staged — but the
+      // otherwise-good plugin source refresh still commits.
+      expect(git.add).toHaveBeenCalledWith(projectRoot, ['services/widgets'])
+      expect(git.commit).toHaveBeenCalled()
+    })
+  })
+
+  describe('--local refresh path', () => {
+    it('runs `uv lock` in the instance and stages uv.lock when the local checkout adds a dependency', async () => {
+      writeFileSync(join(projectRoot, 'services', 'widgets', 'pyproject.toml'), OLD_PYPROJECT)
+      const localDir = makeLocalPluginDir(NEW_MANIFEST, { pyproject: NEW_PYPROJECT_ADDS_DEV_DEP })
+
+      const registry = makeRegistryMock()
+      const git = makeGitMock(makeClonedPluginDir())
+      const migrations = makeMigrationsMock()
+      const runCommand = vi.fn().mockResolvedValue({ ok: true })
+
+      await runPluginUpgrade(
+        undefined,
+        { local: localDir, dryRun: false, force: true, cwd: projectRoot },
+        {
+          registry: registry as never,
+          git: git as never,
+          migrations: migrations as never,
+          runCommand,
+        },
+      )
+
+      expect(runCommand).toHaveBeenCalledWith(['uv', 'lock'], projectRoot)
+      expect(git.add).toHaveBeenCalledWith(projectRoot, ['services/widgets', 'uv.lock'])
+    })
+
+    it('does not run `uv lock` on a routine refresh that does not touch dependencies', async () => {
+      writeFileSync(join(projectRoot, 'services', 'widgets', 'pyproject.toml'), OLD_PYPROJECT)
+      const localDir = makeLocalPluginDir(NEW_MANIFEST, { pyproject: OLD_PYPROJECT })
+
+      const registry = makeRegistryMock()
+      const git = makeGitMock(makeClonedPluginDir())
+      const migrations = makeMigrationsMock()
+      const runCommand = vi.fn().mockResolvedValue({ ok: true })
+
+      await runPluginUpgrade(
+        undefined,
+        { local: localDir, dryRun: false, force: true, cwd: projectRoot },
+        {
+          registry: registry as never,
+          git: git as never,
+          migrations: migrations as never,
+          runCommand,
+        },
+      )
+
+      expect(runCommand).not.toHaveBeenCalled()
+      expect(git.add).toHaveBeenCalledWith(projectRoot, ['services/widgets'])
+    })
+  })
+})

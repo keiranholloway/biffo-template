@@ -60,7 +60,10 @@ function printEntry(entry: RegistryPluginEntry): void {
     console.log(`  API routes:             ${entry.api_routes.join(', ')}`)
   }
   if (entry.ui_components?.length) {
-    console.log(`  UI components:          ${entry.ui_components.join(', ')}`)
+    // Each entry is an object ({type, label, path, ...}), not a bare string
+    // (#1555) — print the two fields that identify it at a glance.
+    const summary = entry.ui_components.map((c) => `${c.label} (${c.type})`).join(', ')
+    console.log(`  UI components:          ${summary}`)
   }
   console.log('')
 }

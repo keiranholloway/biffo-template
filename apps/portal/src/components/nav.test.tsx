@@ -1,10 +1,54 @@
-import { cleanup, render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { InstanceNavLink } from '@/lib/instance-nav-contract'
+import type { InstalledPlugin } from '@/lib/plugin-api'
 import { Nav } from './nav'
 
+/**
+ * A stand-in for the CognitoUserSession the real context yields, carrying
+ * only what this file's tests read off it: the ID token's decoded claims.
+ * Mirrors `auth-guard.test.tsx`'s `sessionWithGroups` — `groups` of
+ * `undefined` models a token with no `cognito:groups` claim at all.
+ */
+function sessionWithGroups(groups: string[] | undefined) {
+  return {
+    getIdToken: () => ({
+      decodePayload: () => (groups === undefined ? {} : { 'cognito:groups': groups }),
+    }),
+  }
+}
+
+/**
+ * A single stable "signed out" value, reused (never recreated) across every
+ * render `useAuth()` mock calls make while a test hasn't overridden it. The
+ * real `useAuth()` memoises `getIdToken` via `useCallback([session])`, so its
+ * identity is stable across renders as long as `session` hasn't changed —
+ * mirroring that here matters, not just for realism: `nav.tsx`'s plugin-fetch
+ * effect depends on `[session, getIdToken]`, and a mock that hands back a
+ * *fresh* object (and fresh `getIdToken` closure) on every call defeats that
+ * dependency array, so the effect re-fires every render, calls
+ * `setPluginLinks` with a brand-new array every time (React can't bail out on
+ * reference equality it never had), and the component render-loops forever.
+ * Caught the hard way: an earlier version of this file used a fresh-object
+ * default and ran the suite out of memory.
+ */
+const SIGNED_OUT_AUTH = { session: null, logout: (): void => {}, getIdToken: (): null => null }
+
+const { useAuthMock, fetchInstalledPluginsMock } = vi.hoisted(() => ({
+  useAuthMock: vi.fn(),
+  fetchInstalledPluginsMock: vi.fn(),
+}))
+
 vi.mock('@/context/auth-context', () => ({
-  useAuth: () => ({ session: null, logout: vi.fn() }),
+  useAuth: () => useAuthMock() as unknown,
+}))
+
+vi.mock('@/lib/api-client', () => ({
+  createApiClient: () => ({ get: vi.fn() }),
+}))
+
+vi.mock('@/lib/plugin-api', () => ({
+  fetchInstalledPlugins: fetchInstalledPluginsMock,
 }))
 
 /**
@@ -14,6 +58,15 @@ vi.mock('@/context/auth-context', () => ({
  */
 const instanceLinks = vi.hoisted(() => [] as { href: string; label: string }[])
 vi.mock('@/instance-nav', () => ({ INSTANCE_NAV_LINKS: instanceLinks }))
+
+beforeEach(() => {
+  // mockReturnValue fixes ONE object, returned by reference on every call —
+  // unlike a default implementation closure, which would build a fresh one
+  // per call. See SIGNED_OUT_AUTH's comment for why that distinction matters.
+  useAuthMock.mockReturnValue(SIGNED_OUT_AUTH)
+  fetchInstalledPluginsMock.mockReset()
+  fetchInstalledPluginsMock.mockResolvedValue([])
+})
 
 afterEach(() => {
   instanceLinks.length = 0
@@ -111,5 +164,89 @@ describe('Nav — instance-owned entries (ADR-0028)', () => {
     expect(withNone).not.toContain('Instance probe')
     // Guards the guard: an empty nav would satisfy the diff vacuously.
     expect(withNone.length).toBeGreaterThan(3)
+  })
+})
+
+/**
+ * The #1555 seam: a plugin declares a nav entry, and until now nothing ever
+ * rendered it. These prove `nav.tsx` actually calls through to
+ * `fetchInstalledPlugins` / `resolvePluginNavLinks` and gates on the
+ * caller's Cognito groups, not just that the contract module works in
+ * isolation (that's `plugin-nav-contract.test.ts`'s job).
+ */
+describe('Nav — plugin-declared entries (#1555)', () => {
+  function marketingPlugin(overrides: Partial<InstalledPlugin> = {}): InstalledPlugin {
+    return {
+      name: 'marketing',
+      version: '1.0.0',
+      description: '',
+      tables: [],
+      routes: [],
+      has_admin_ingress: true,
+      admin_required_group: 'admin',
+      admin_nav_label: 'Marketing',
+      ...overrides,
+    }
+  }
+
+  it('renders a plugin with an admin surface the caller can reach', async () => {
+    useAuthMock.mockReturnValue({
+      session: sessionWithGroups(['admin']),
+      logout: vi.fn(),
+      getIdToken: () => 'token',
+    })
+    fetchInstalledPluginsMock.mockResolvedValue([marketingPlugin()])
+
+    render(<Nav />)
+
+    await waitFor(() => {
+      expect(screen.getByRole('link', { name: 'Marketing' })).toBeInTheDocument()
+    })
+    expect(screen.getByRole('link', { name: 'Marketing' })).toHaveAttribute(
+      'href',
+      '/api/v1/plugins/marketing/admin',
+    )
+  })
+
+  it('does not render a plugin with no declared admin surface', async () => {
+    useAuthMock.mockReturnValue({
+      session: sessionWithGroups(['admin']),
+      logout: vi.fn(),
+      getIdToken: () => 'token',
+    })
+    fetchInstalledPluginsMock.mockResolvedValue([
+      marketingPlugin({ has_admin_ingress: false, admin_required_group: null }),
+    ])
+
+    render(<Nav />)
+
+    await waitFor(() => {
+      expect(fetchInstalledPluginsMock).toHaveBeenCalled()
+    })
+    expect(screen.queryByRole('link', { name: 'Marketing' })).not.toBeInTheDocument()
+  })
+
+  it('does not render a plugin whose required group the session lacks', async () => {
+    useAuthMock.mockReturnValue({
+      session: sessionWithGroups(['editor']),
+      logout: vi.fn(),
+      getIdToken: () => 'token',
+    })
+    fetchInstalledPluginsMock.mockResolvedValue([marketingPlugin()])
+
+    render(<Nav />)
+
+    await waitFor(() => {
+      expect(fetchInstalledPluginsMock).toHaveBeenCalled()
+    })
+    expect(screen.queryByRole('link', { name: 'Marketing' })).not.toBeInTheDocument()
+  })
+
+  it('does not fetch plugins at all before the caller is signed in', () => {
+    useAuthMock.mockReturnValue({ session: null, logout: vi.fn(), getIdToken: () => null })
+
+    render(<Nav />)
+
+    expect(fetchInstalledPluginsMock).not.toHaveBeenCalled()
   })
 })

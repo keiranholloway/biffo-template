@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends
 from ...middleware.auth import AuthenticatedUser, require_auth
 from ...migrations.plugin_migrations import parse_plugin_tables_from_manifest
 from ...models.plugin_route import RouteDefinition, parse_plugin_routes_from_manifest
+from ...models.plugin_ui_components import parse_admin_nav_label_from_manifest
 from ...models.plugin_user_surface import parse_admin_ingress_from_manifest
 from ...plugins import discover_plugin_manifests
 from ...schemas.plugin import InstalledPluginResponse
@@ -40,22 +41,38 @@ async def list_available_plugins(
     manifests = discover_plugin_manifests()
     responses: list[InstalledPluginResponse] = []
     for manifest in manifests:
+        name = manifest.get("name", "<unknown>")
         try:
             routes: list[RouteDefinition] = parse_plugin_routes_from_manifest(manifest)
         except ValueError as exc:
             logger.warning(
-                f"Plugin {manifest.get('name', '<unknown>')!r} has invalid route "
-                f"declarations, omitting from listing: {exc}"
+                f"Plugin {name!r} has invalid route declarations, omitting from listing: {exc}"
             )
             routes = []
+
+        admin_ingress = parse_admin_ingress_from_manifest(manifest)
+
+        try:
+            admin_nav_label = parse_admin_nav_label_from_manifest(manifest)
+        except ValueError as exc:
+            logger.warning(
+                f"Plugin {name!r} has invalid ui_components declarations, "
+                f"omitting admin nav label: {exc}"
+            )
+            admin_nav_label = None
+
         responses.append(
             InstalledPluginResponse(
-                name=manifest.get("name", "<unknown>"),
+                name=name,
                 version=manifest.get("version", "0.0.0"),
                 description=manifest.get("description", ""),
                 tables=parse_plugin_tables_from_manifest(manifest),
                 routes=routes,
-                has_admin_ingress=parse_admin_ingress_from_manifest(manifest) is not None,
+                has_admin_ingress=admin_ingress is not None,
+                admin_required_group=admin_ingress.required_group
+                if admin_ingress is not None
+                else None,
+                admin_nav_label=admin_nav_label,
             )
         )
     return responses

@@ -16,6 +16,21 @@
  * "plugin not found" is the common case until plugins are published.
  */
 
+/**
+ * One `ui_components` entry, matching `_skeletons/registry/registry-schema.json`
+ * — an array of objects, not the `string[]` this field used to be typed as
+ * (issue #1555). See `plugin-api.ts`'s identical `UiComponentEntry` for why
+ * `type` stays a bare `string` rather than the schema's enum: this describes
+ * a hand-maintained external registry file, not this template's own data.
+ */
+export interface UiComponentEntry {
+  type: string
+  label: string
+  path: string
+  icon?: string
+  requires_auth?: boolean
+}
+
 export interface RegistryPluginEntry {
   name: string
   version: string
@@ -27,7 +42,7 @@ export interface RegistryPluginEntry {
   required_core_version?: string
   infra_modules?: string[]
   api_routes?: string[]
-  ui_components?: string[]
+  ui_components?: UiComponentEntry[]
   status: 'active' | 'disabled'
 }
 

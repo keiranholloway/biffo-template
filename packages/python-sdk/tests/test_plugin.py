@@ -27,6 +27,19 @@ from biffo_plugin_sdk import (
 )
 from pydantic import ValidationError
 
+# Same pattern as test_lifecycle_hooks_not_invoked.py's REPO_ROOT/requires_repo:
+# the SDK is published to PyPI and its sdist carries this test file, so a
+# checkout of _skeletons/ is not guaranteed to exist alongside it. Skip rather
+# than fail when it doesn't, so the guard is silent outside a biffo-template
+# checkout instead of red on every downstream consumer.
+_PACKAGE_ROOT = Path(__file__).resolve().parent.parent
+_REPO_ROOT = _PACKAGE_ROOT.parent.parent
+_SKELETON_MANIFEST = _REPO_ROOT / "_skeletons" / "plugin-template" / "biffo.plugin.json"
+requires_skeleton = pytest.mark.skipif(
+    not _SKELETON_MANIFEST.is_file(),
+    reason="needs a biffo-template checkout (SDK sdist ships this test but not _skeletons/)",
+)
+
 # Kept textually identical to services/api/tests/test_plugin_migrations.py's
 # manifest fixture — if the two ever need to diverge, that's a sign the SDK's
 # TableDefinition and the Core API's PluginTableDefinition have drifted apart.
@@ -385,6 +398,31 @@ class TestPluginManifestStrictness:
         )
         assert manifest.core_capabilities == {"owner-scoped-tables": "^1"}
         assert manifest.dependencies == {"biffo-plugin-sdk": "^1.1"}
+
+    @requires_skeleton
+    def test_the_plugin_skeletons_own_manifest_validates(self):
+        """``biffo plugin create`` scaffolds every new plugin from
+        ``_skeletons/plugin-template/biffo.plugin.json`` verbatim (modulo the
+        name/package-token substitutions in ``plugin-scaffold.ts``, none of
+        which touch the manifest keys asserted here). Loading the REAL file —
+        not a hand-written fixture that happens to carry the same keys — is
+        what keeps this test honest: a hand-written fixture drifts from the
+        skeleton silently, the same `_extract_detail` class this estate keeps
+        recording elsewhere. If this ever fails, the scaffold itself is
+        broken for every plugin author who runs `biffo plugin create` next,
+        which is a substantially worse discovery moment than this test.
+        """
+        manifest = load_manifest(_SKELETON_MANIFEST)
+        assert manifest.name == "example-plugin"
+        # The two fields #1517 and #1554 landed around the same time, on the
+        # same file, are both actually present and parsed as their real types
+        # — not merely "the file loaded", which extra="forbid" alone would
+        # already prove for every *other* key in it.
+        assert manifest.seed is not None
+        assert manifest.seed.dir == "db/seed"
+        assert manifest.seed.baseline_tables == ["example_widgets"]
+        assert len(manifest.ui_components) == 2
+        assert len(manifest.event_subscriptions) == 1
 
 
 # --- RouteDef tests ---

@@ -23,6 +23,17 @@ async function loadAuth() {
   return await import('./auth')
 }
 
+/**
+ * What the real library hands back: an IMMUTABLE snapshot. `getIdToken()` on a
+ * `CognitoUserSession` returns the same `CognitoIdToken` forever, so the JWT
+ * inside one of these never changes — which is the whole reason a caller must
+ * not hold on to it, and the reason `getFreshIdToken` re-reads storage.
+ */
+function session(jwt: string) {
+  const idToken = { getJwtToken: () => jwt, payload: {} }
+  return { isValid: () => true, getIdToken: () => idToken }
+}
+
 describe('getCurrentSession', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -57,6 +68,87 @@ describe('getCurrentSession', () => {
     await getCurrentSession()
 
     expect(poolConstructor).toHaveBeenCalledTimes(1)
+    expect(poolConstructor).toHaveBeenCalledWith({
+      UserPoolId: 'us-east-1_DOCPOOL',
+      ClientId: 'docclientid',
+    })
+  })
+})
+
+// Folded up from biffo-plugin-ideation's own copy of this file (biffo-template#1564).
+//
+// `filesIfPresent` maps that repo's `web/src/lib/auth.test.ts` at THIS file, and
+// #1546 added the mapping in the same commit that created this file — so the
+// canonical copy has been a strict SUBSET of the one repo already holding that
+// path, and the next sync round would have deleted every assertion below.
+// AGENTS.md section 9 ("Reconcile before you distribute") says to fold the fixes
+// upstream first, which is what this block is: the same four properties, restated
+// in this file's `loadAuth()` idiom so they hold against the in-flight-memoised
+// pool rather than the settled-value one they were written for.
+//
+// The invariant they guard is the one `getFreshIdToken`'s own docstring argues at
+// length and nothing here tested: a `CognitoUserSession` is an immutable value
+// object, so a caller that snapshots the JWT sends a frozen token that 401s for
+// the life of the page once it lapses (biffo-plugin-ideation#69).
+describe('getFreshIdToken', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    resolveCoreIdentity.mockResolvedValue({
+      userPoolId: 'us-east-1_DOCPOOL',
+      clientId: 'docclientid',
+    })
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('re-resolves through the pool on every call, so a refreshed token replaces a lapsed one', async () => {
+    // `stored` stands for what localStorage holds. The library rotates it when
+    // the cached ID token expires and the refresh token buys a new one — the
+    // caller sees that only if it asks again.
+    let stored = session('jwt-before-refresh')
+    getCurrentUser.mockReturnValue({
+      getSession: (cb: (e: Error | null, s: unknown) => void) => cb(null, stored),
+    })
+    const { getFreshIdToken } = await loadAuth()
+
+    expect(await getFreshIdToken()).toBe('jwt-before-refresh')
+
+    stored = session('jwt-after-refresh')
+
+    expect(await getFreshIdToken()).toBe('jwt-after-refresh')
+    // Two resolutions, not one memoised answer. The POOL is memoised; the
+    // session read deliberately is not.
+    expect(getCurrentUser).toHaveBeenCalledTimes(2)
+    expect(poolConstructor).toHaveBeenCalledTimes(1)
+  })
+
+  it('is null when there is no session, rather than throwing', async () => {
+    getCurrentUser.mockReturnValue(null)
+    const { getFreshIdToken } = await loadAuth()
+    await expect(getFreshIdToken()).resolves.toBeNull()
+  })
+
+  it('is null when the pool cannot be resolved (identity document unreachable)', async () => {
+    resolveCoreIdentity.mockResolvedValue(null)
+    const { getFreshIdToken } = await loadAuth()
+    await expect(getFreshIdToken()).resolves.toBeNull()
+    expect(getCurrentUser).not.toHaveBeenCalled()
+  })
+
+  it('only ever asks the pool built from the runtime identity document', async () => {
+    // The claim biffo-plugin-ideation#70 rests on and #69 disputed: the pool is
+    // constructed from the resolved identity and the library scopes every storage
+    // read by that Client ID, so no other pool's credentials can be reached here.
+    getCurrentUser.mockReturnValue({
+      getSession: (cb: (e: Error | null, s: unknown) => void) => cb(null, session('jwt')),
+    })
+    const { getFreshIdToken } = await loadAuth()
+
+    await getFreshIdToken()
+
+    expect(resolveCoreIdentity).toHaveBeenCalled()
     expect(poolConstructor).toHaveBeenCalledWith({
       UserPoolId: 'us-east-1_DOCPOOL',
       ClientId: 'docclientid',

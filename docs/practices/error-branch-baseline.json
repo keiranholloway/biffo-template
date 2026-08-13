@@ -1,9 +1,8 @@
 {
-  "total": 61,
+  "total": 60,
   "branches": [
     "packages/python-sdk/src/biffo_plugin_sdk/_cognito.py:except:except PyJWTError",
     "packages/python-sdk/src/biffo_plugin_sdk/plugin.py:except:except OSError",
-    "services/_plugin-host/src/plugin_host/discover.py:except:except (ValueError, OSError)",
     "services/_plugin-host/src/plugin_host/forward.py:fallback:if path == root_path -> ''",
     "services/_plugin-host/src/plugin_host/lifespan.py:except:except (TimeoutError, asyncio.CancelledError)",
     "services/_plugin-host/src/plugin_host/lifespan.py:except:except Exception",

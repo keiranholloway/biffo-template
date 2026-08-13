@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 from plugin_host.app import build_plugin_host
@@ -258,4 +259,67 @@ def test_a_typo_d_admin_ingress_key_is_rejected_and_logged_loudly(tmp_path, capl
 
     assert found == []
     assert any("typo" in record.message for record in caplog.records)
+    assert any(record.levelname == "ERROR" for record in caplog.records)
+
+
+def test_discover_skips_an_unreadable_manifest_but_keeps_other_plugins(
+    tmp_path, caplog, monkeypatch
+) -> None:
+    """``_load_manifest_tolerant``'s ``except OSError`` branch (biffo-template
+    #1517's error-branch coverage gate flagged it unexecuted).
+
+    A manifest that exists but cannot be *read* — permissions, a transient
+    filesystem error — must not raise out of ``discover_plugins`` and must
+    not silently vanish either: the one plugin is skipped, loudly, and every
+    other plugin in the same directory is still discovered. That last part is
+    the one this test makes explicit rather than implied — it is the same
+    shape of assertion that would have caught the pre-existing bug where one
+    broken manifest silently discarded an unrelated, valid surface.
+    """
+    root = tmp_path / "services"
+    root.mkdir()
+    _write_plugin(root, "good", ingress={"app": "good.app:app", "required_group": "founder"})
+    bad_dir = root / "unreadable"
+    bad_dir.mkdir()
+    bad_manifest = bad_dir / "biffo.plugin.json"
+    bad_manifest.write_text(json.dumps({"name": "unreadable", "version": "1.0.0"}))
+
+    real_read_text = Path.read_text
+
+    def flaky_read_text(self, *args, **kwargs):
+        if self == bad_manifest:
+            raise OSError("simulated permission denied")
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", flaky_read_text)
+
+    with caplog.at_level("ERROR"):
+        found = discover_plugins(root)
+
+    assert [p.name for p in found] == ["good"]
+    assert any("unreadable" in record.message for record in caplog.records)
+    assert any(record.levelname == "ERROR" for record in caplog.records)
+
+
+def test_discover_skips_invalid_json_but_keeps_other_plugins(tmp_path, caplog) -> None:
+    """``_load_manifest_tolerant``'s ``except json.JSONDecodeError`` branch
+    (biffo-template#1517's error-branch coverage gate flagged it unexecuted).
+
+    A manifest that is not valid JSON at all — the one raw-parsing failure
+    mode discovery always had to handle, even before this PR — must not raise
+    out of ``discover_plugins``, must be skipped loudly, and must not take an
+    unrelated, valid plugin in the same directory down with it.
+    """
+    root = tmp_path / "services"
+    root.mkdir()
+    _write_plugin(root, "good", ingress={"app": "good.app:app", "required_group": "founder"})
+    bad_dir = root / "badjson"
+    bad_dir.mkdir()
+    (bad_dir / "biffo.plugin.json").write_text("{not valid json")
+
+    with caplog.at_level("ERROR"):
+        found = discover_plugins(root)
+
+    assert [p.name for p in found] == ["good"]
+    assert any("badjson" in record.message for record in caplog.records)
     assert any(record.levelname == "ERROR" for record in caplog.records)

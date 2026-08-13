@@ -255,11 +255,17 @@ module "core_api" {
   # signer, not the Core API, holds the GitHub App credential). Present only when
   # the signer is provisioned. module.pr_signer itself is now defined in the
   # template-owned pr-signer.core.tf (#568), not here — that carve-out moved the
-  # signer's own module/secret/check block, but this argument (and the
-  # BIFFO_PR_SIGNER_FUNCTION_NAME env var below) stay on module.core_api's own
-  # block, which is not part of that carve-out. Terraform resolves module.pr_signer
-  # by name regardless of which file in this directory declares it, so the
-  # cross-file reference is unremarkable.
+  # signer's own module/secret/check block, but this argument stays on
+  # module.core_api's own block, which is not part of that carve-out. Terraform
+  # resolves module.pr_signer by name regardless of which file in this directory
+  # declares it, so the cross-file reference is unremarkable.
+  #
+  # BIFFO_PR_SIGNER_FUNCTION_NAME no longer stays here: #1540 moved it to the
+  # template-owned core-api-environment.core.tf, because an env var that only
+  # exists on a line in this user-owned file can never reach an instance. This
+  # argument cannot follow it — `invoke_function_arns` is a module ARGUMENT, not
+  # an environment variable, and there is still no channel for one of those; see
+  # that file's "What this does NOT solve".
   #
   # The Core -> agent-runtime sync-invoke grant (ADR-0016) is deliberately NOT
   # here: it lives in the template-owned plugins.core.tf as a standalone
@@ -270,12 +276,16 @@ module "core_api" {
   # conditionally provisioned per `var.enable_pr_signer`, so Core needs this env
   # var to tell "not configured" apart from a live function name.
   invoke_function_arns = var.enable_pr_signer ? [module.pr_signer[0].function_arn] : []
-  environment_variables = {
+  # `local.core_api_environment` is declared in the TEMPLATE-OWNED
+  # core-api-environment.core.tf (#1538, #1540) and is the only channel a
+  # template change has into this Lambda's environment: this map is a literal
+  # inside a module block in a user-owned file, and Terraform cannot add an
+  # argument to it from another file. BIFFO_PLUGIN_MEDIA_BUCKET and
+  # BIFFO_PR_SIGNER_FUNCTION_NAME are supplied there for exactly that reason and
+  # are deliberately no longer listed below. Keys in this literal still win over
+  # that map, so nothing an instance already sets here changes behaviour.
+  environment_variables = merge(local.core_api_environment, {
     BIFFO_ENVIRONMENT = local.environment
-    # Name of the PR-signer Lambda to invoke for endpoint permission changes
-    # (ADR-0008). Empty when the signer isn't provisioned; the Core API treats
-    # an empty value as "endpoint control plane not configured".
-    BIFFO_PR_SIGNER_FUNCTION_NAME = var.enable_pr_signer ? module.pr_signer[0].function_name : ""
     # Full DB URLs baked in — Lambda has no outbound internet so it can't call
     # Secrets Manager. Both are sensitive and stored in Terraform state.
     #
@@ -292,14 +302,7 @@ module "core_api" {
     BIFFO_COGNITO_CLIENT_ID    = module.auth.client_id
     BIFFO_COGNITO_REGION       = var.aws_region
     BIFFO_EVENT_BUS_NAME       = module.events.event_bus_name
-    # Plugin object storage (ADR-0021, #1437). Bucket name rather than ARN:
-    # every boto3 call takes a bucket name, and deriving one from the other in
-    # code is a second place to get it wrong. Empty is a valid state — Core
-    # treats it as "object storage not configured" and refuses the capability
-    # with a clear error rather than signing URLs against a bucket that is not
-    # there.
-    BIFFO_PLUGIN_MEDIA_BUCKET = module.storage.plugin_media_bucket_name
-    BIFFO_CORS_ORIGINS        = local.cors_origins
+    BIFFO_CORS_ORIGINS         = local.cors_origins
     # ADR-0009 — IAM principals allowed on /api/v1/internal/*. Maintained
     # automatically: `biffo plugin install` adds the plugin to enabled_plugins
     # (plugins.auto.tfvars.json) and the glob above follows. Fails closed when
@@ -313,7 +316,7 @@ module "core_api" {
     # deploy-app.yml's packaging step copies db/imports/<name>/*.sql into the
     # Lambda zip under db/imports/, which AWS extracts to /var/task/ (ADR-0005).
     BIFFO_DDL_IMPORT_ROOT = "/var/task/db/imports"
-  }
+  })
   tags = local.tags
 }
 
@@ -339,8 +342,10 @@ module "api_gateway" {
 # pr-signer.core.tf (#568) — same carve-out shape as plugins.core.tf and
 # plugin-host.core.tf inside this otherwise user-owned directory. See that
 # file for what it provisions and why. What stays here is only what could not
-# move without touching module.core_api's own block: invoke_function_arns and
-# BIFFO_PR_SIGNER_FUNCTION_NAME above, both on module.core_api.
+# move without touching module.core_api's own block: invoke_function_arns above.
+# BIFFO_PR_SIGNER_FUNCTION_NAME used to be in that list and no longer is — #1540
+# gave the environment map a template-owned channel (core-api-environment.core.tf)
+# and moved the key there. A module argument still has none.
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------

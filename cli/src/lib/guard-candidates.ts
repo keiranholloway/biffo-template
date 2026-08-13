@@ -181,6 +181,14 @@ export const GUARD_CANDIDATE_CLASSIFICATION: Record<string, GuardCandidateVerdic
       'exports assertBuildIsFresh/checkBuildFreshness (issue #190): refuses to scaffold from a ' +
       'stale cli/dist. One of the five #1518 spotted and left unclassified.',
   },
+  'claim-invocation-parity.ts': {
+    isGuard: true,
+    reason:
+      'exports auditClaimInvocationParity (#1562): asserts every distributed AGENTS.md — this ' +
+      "repo's own plus every _skeletons/*/AGENTS.md, discovered not listed — documents the same " +
+      'claim invocation, and that none documents an untokened form. A document/actor comparison: ' +
+      'the docs the estate receives against the flag scripts/claim.sh now requires.',
+  },
   'core-upgrade-target-fidelity.ts': {
     isGuard: true,
     reason:

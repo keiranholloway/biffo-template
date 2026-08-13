@@ -66,7 +66,9 @@ function stubGh(): { dir: string; callLog: string } {
 
 function runClaim(binDir: string) {
   try {
-    const stdout = execFileSync('sh', [script, '4242'], {
+    // `--as` is mandatory since #1562; this file is about the label, so it
+    // passes a fixed token and says so.
+    const stdout = execFileSync('sh', [script, '4242', '--as', 'label-test-0813'], {
       encoding: 'utf8',
       env: { ...process.env, PATH: `${binDir}:${process.env.PATH}` },
     })

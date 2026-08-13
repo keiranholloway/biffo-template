@@ -4,6 +4,7 @@ import { RegistryAdapter } from '../adapters/registry/index.js'
 import { checkPluginStaleness, formatStalenessReport } from '../lib/plugin-staleness.js'
 import { runAdrNumberingCheck } from '../scripts/check-adr-numbering.js'
 import { runBranchProtectionCheck } from '../scripts/check-branch-protection.js'
+import { runClaimInvocationCheck } from '../scripts/check-claim-invocation.js'
 import { runCodeqlSuppressionCheck } from '../scripts/check-codeql-suppression.js'
 import { runCognitoInviteTemplateCheck } from '../scripts/check-cognito-invite-template.js'
 import { runCoreDirectPathsCheck } from '../scripts/check-core-direct-paths.js'
@@ -194,6 +195,17 @@ checkCommand
   )
   .action(async () => {
     await runCodeqlSuppressionCheck()
+  })
+
+checkCommand
+  .command('claim-invocation')
+  .description(
+    'Refuse a distributed AGENTS.md that documents a different claim invocation from the ' +
+      'others, or an untokened `claim <issue>` (#1562) — `--as` reached one of three copies, ' +
+      'so it was documented in zero satellites while working perfectly',
+  )
+  .action(async () => {
+    await runClaimInvocationCheck()
   })
 
 checkCommand

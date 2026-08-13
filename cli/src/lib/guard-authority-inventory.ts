@@ -134,6 +134,24 @@ export interface GuardAuthorityRecord {
 export const GUARD_AUTHORITY_INVENTORY: GuardAuthorityRecord[] = [
   // ── In-class, WITH a disagreement test ──────────────────────────────────
   {
+    id: 'claim-invocation-parity',
+    path: 'cli/src/lib/claim-invocation-parity.ts',
+    inClass: true,
+    document: 'the claim invocation documented in every distributed AGENTS.md',
+    actor: "scripts/claim.sh's actual argument handling, which is what an agent runs",
+    disagreementTest: 'cli/src/lib/claim-as-required.test.ts',
+    independence: 'independent',
+    note:
+      'instance of #1562. The document/actor split is the whole defect: `--as <token>` shipped ' +
+      'in #1279 and the ACTOR supported it perfectly, while two of the three documents \u2014 both ' +
+      'skeletons, which are what every satellite receives via shared-files.json ' +
+      '`filesFromSkeleton` \u2014 went on describing an untokened form. Nothing failed, because ' +
+      'nothing compared them. Independence is by construction: this guard parses markdown and ' +
+      'never executes claim.sh, while the disagreement test executes the real script under `sh` ' +
+      'with a stubbed `gh` and never reads a markdown file, so no shared parse or decode step ' +
+      'could make the two sides agree wrongly.',
+  },
+  {
     id: 'wait-for-checks',
     path: 'scripts/wait-for-checks.sh',
     inClass: true,

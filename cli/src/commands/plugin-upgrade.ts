@@ -8,6 +8,14 @@ import { PluginMigrationsAdapter } from '../adapters/plugin-migrations/index.js'
 import { RegistryAdapter, type RegistryPluginEntry } from '../adapters/registry/index.js'
 import { log } from '../lib/logger.js'
 import { validateManifest } from '../lib/plugin-manifest.js'
+import {
+  inTreePluginProvenance,
+  readProvenance,
+  reconcileProvenance,
+  resolveLocalProvenance,
+  resolveRegistryProvenance,
+  writePluginProvenance,
+} from '../lib/plugin-provenance.js'
 import { copyPluginSource } from '../lib/plugin-source-copy.js'
 import { applyWorkspaceSources } from '../lib/plugin-workspace-sources.js'
 import {
@@ -209,10 +217,22 @@ export async function runPluginUpgrade(
       `Manifest valid — ${manifest.tables.length} table(s), ${manifest.api_routes.length} route(s)`,
     )
 
+    // Read before the wholesale replace below destroys it — see
+    // reconcileProvenance's docstring for why this can't be read afterward.
+    const previousProvenance = readProvenance(targetDir)
+
     rmSync(targetDir, { recursive: true, force: true })
     mkdirSync(targetDir, { recursive: true })
     cpSync(tmpDir, targetDir, { recursive: true })
     log.success(`Upgraded plugin source at services/${entry.name}/`)
+
+    // Record where this copy came from (#1547) — see plugin-provenance.ts.
+    const nextProvenance = resolveRegistryProvenance(
+      entry.repo,
+      await deps.git.resolveDefaultBranchSha(entry.repo),
+    )
+    writePluginProvenance(targetDir, reconcileProvenance(previousProvenance, nextProvenance))
+
     applyWorkspaceSources(targetDir, options.cwd, `services/${entry.name}`)
 
     const stagePaths = [`services/${entry.name}`]
@@ -370,6 +390,14 @@ async function runLocalPluginRefresh(
       `Manifest valid — ${manifest.tables.length} table(s), ${manifest.api_routes.length} route(s)`,
     )
 
+    // Read before the wholesale replace below destroys it — see
+    // reconcileProvenance's docstring for why this can't be read afterward.
+    // (The in-tree branch never deletes targetDir, so this is a no-op read
+    // of whatever is already correctly there — reading it unconditionally,
+    // rather than only in the non-in-tree branch, keeps this one line
+    // instead of two near-identical ones either side of the if/else.)
+    const previousProvenance = readProvenance(targetDir)
+
     if (inTreeSource) {
       log.info(
         `services/${source.name}/ is already the local checkout — nothing to copy; ` +
@@ -381,6 +409,17 @@ async function runLocalPluginRefresh(
       await copyPluginSource(source.sourceDir, targetDir)
       log.success(`Refreshed plugin source at services/${source.name}/ from ${source.origin}`)
     }
+
+    // Record where this copy came from (#1547) — see plugin-provenance.ts.
+    // reconcileProvenance (not an unconditional write) matters here
+    // specifically: a byte-identical --local refresh is meant to be a no-op
+    // (see the "nothing to commit" handling below), and touching the
+    // provenance file's timestamp unconditionally would defeat that.
+    const nextProvenance = inTreeSource
+      ? inTreePluginProvenance(`services/${source.name}`)
+      : await resolveLocalProvenance(source.sourceDir, source.origin)
+    writePluginProvenance(targetDir, reconcileProvenance(previousProvenance, nextProvenance))
+
     applyWorkspaceSources(targetDir, options.cwd, `services/${source.name}`)
 
     const stagePaths = [`services/${source.name}`]

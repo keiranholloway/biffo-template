@@ -101,7 +101,12 @@ export async function copyPluginSource(
   return { usedGitIgnoreRules: false }
 }
 
-async function isGitWorkingTree(dir: string): Promise<boolean> {
+/**
+ * Exported for reuse by `plugin-staleness.ts`'s content-diff fallback (#1547),
+ * which needs the identical "is this actually a git checkout?" test before it
+ * can trust `listGitFiles` over a plain recursive walk.
+ */
+export async function isGitWorkingTree(dir: string): Promise<boolean> {
   try {
     await execa('git', ['rev-parse', '--is-inside-work-tree'], { cwd: dir })
     return true
@@ -118,8 +123,13 @@ async function isGitWorkingTree(dir: string): Promise<boolean> {
  *
  * NUL-delimited (`-z`) so a path containing a space or unusual character
  * can't be split wrong.
+ *
+ * Exported for reuse by `plugin-staleness.ts`'s content-diff fallback
+ * (#1547): the file set that matters for staleness is exactly the file set
+ * that matters for the copy — what `.gitignore` excludes should not count as
+ * drift either.
  */
-async function listGitFiles(dir: string): Promise<string[]> {
+export async function listGitFiles(dir: string): Promise<string[]> {
   const { stdout } = await execa(
     'git',
     ['ls-files', '--cached', '--others', '--exclude-standard', '-z'],

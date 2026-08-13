@@ -183,6 +183,24 @@ export class GitAdapter {
   }
 
   /**
+   * The commit SHA `HEAD` currently resolves to on `repoUrl`'s default
+   * branch, without cloning anything — a single `git ls-remote` round trip.
+   * Built for plugin provenance/staleness (#1547): recording or checking a
+   * source commit should not need a full clone when the answer is one
+   * network call. Returns `null` on any failure (network, auth, a repo that
+   * does not exist) rather than throwing — both call sites treat an unknown
+   * SHA as an honest "could not determine", never as license to invent one.
+   */
+  async resolveDefaultBranchSha(repoUrl: string): Promise<string | null> {
+    const { stdout, exitCode } = await execa('git', ['ls-remote', '--exit-code', repoUrl, 'HEAD'], {
+      reject: false,
+    })
+    if (exitCode !== 0) return null
+    const sha = stdout.split(/\s+/)[0]
+    return sha && /^[0-9a-f]{40}$/i.test(sha) ? sha : null
+  }
+
+  /**
    * Prunes remote-tracking refs whose remote branch is gone, so `upstream:track`
    * reports `[gone]` for a merged-and-deleted branch (#758).
    *

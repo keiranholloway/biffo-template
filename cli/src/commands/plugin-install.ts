@@ -8,6 +8,14 @@ import { RegistryAdapter, type RegistryPluginEntry } from '../adapters/registry/
 import { log } from '../lib/logger.js'
 import { pluginDir } from '../lib/plugin-locations.js'
 import { validateManifest, type PluginManifest } from '../lib/plugin-manifest.js'
+import {
+  inTreePluginProvenance,
+  readProvenance,
+  reconcileProvenance,
+  resolveLocalProvenance,
+  resolveRegistryProvenance,
+  writePluginProvenance,
+} from '../lib/plugin-provenance.js'
 import { copyPluginSource } from '../lib/plugin-source-copy.js'
 import { syncPluginTerraform } from '../lib/plugin-terraform-wiring.js'
 import { applyWorkspaceSources } from '../lib/plugin-workspace-sources.js'
@@ -307,6 +315,21 @@ export async function runPluginInstall(
       await copyPluginSource(source!.sourceDir, targetDir)
       log.success(`Installed plugin source at ${relTargetDir}/`)
     }
+
+    // Record where this copy came from (#1547) — a dedicated file, not
+    // biffo.plugin.json, so recording provenance never mutates the plugin's
+    // own manifest. See plugin-provenance.ts for why each branch resolves
+    // its SHA the way it does, and why `reconcileProvenance` (not an
+    // unconditional write) matters even here: a re-run of an in-tree
+    // `--local` install must not touch an unchanged provenance file's
+    // timestamp.
+    const previousProvenance = readProvenance(targetDir)
+    const nextProvenance = inTreeSource
+      ? inTreePluginProvenance(relTargetDir)
+      : entry
+        ? resolveRegistryProvenance(entry.repo, await deps.git.resolveDefaultBranchSha(entry.repo))
+        : await resolveLocalProvenance(source!.sourceDir, source!.origin)
+    writePluginProvenance(targetDir, reconcileProvenance(previousProvenance, nextProvenance))
 
     // Wire the vendored plugin's deps to the instance's uv workspace. If the
     // instance provides one of them as a member (e.g. biffo-plugin-sdk), uv

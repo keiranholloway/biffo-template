@@ -1356,12 +1356,14 @@ if ci_has "gitleaks"; then
     run_check gitleaks gitleaks_tracked_only
   else
     # Say how to close it, pinned to the version ci.yml installs. This sat
-    # filed as a skip long enough for the `\b\d{12}\b` account-id rule to
-    # reach CI three times, most recently on two test UUIDs whose last segment
-    # happened to be twelve digits (tabsii-platform#446). Thirty seconds of
-    # install would have caught it before the push, and version parity
-    # matters — an older gitleaks disagreeing with CI reintroduces exactly the
-    # local/CI divergence this gate exists to remove.
+    # filed as a skip long enough for the account-id rule to reach CI three
+    # times, most recently on two test UUIDs whose last segment happened to
+    # be twelve digits (tabsii-platform#446) — the rule itself was narrowed in
+    # #893 so a UUID's hyphen-preceded last segment no longer matches at all,
+    # but installing locally is still what catches any OTHER divergence
+    # between a workstation's gitleaks and CI's before the push, and version
+    # parity matters — an older gitleaks disagreeing with CI reintroduces
+    # exactly the local/CI divergence this gate exists to remove.
     NOT_RUN="$NOT_RUN gitleaks"
     printf '  \033[33mWARN\033[0m %-16s NOT RUN - not installed. CI still runs both passes. Install the version ci.yml pins:\n' "gitleaks"
     printf '       \033[33m%s\033[0m\n' \

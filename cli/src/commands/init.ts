@@ -668,7 +668,9 @@ export const INSTANCE_FILE_BRANCHES = [
  *
  * The resolved config is deliberately NOT committed here. It carries the AWS
  * account id and admin email, and the template's own `.gitleaks.toml` forbids
- * both in the tree — `biffo-aws-account-id` (`\b\d{12}\b`) and
+ * both in the tree — `biffo-aws-account-id` (`(?:^|[^0-9A-Fa-f-])(\d{12})\b`,
+ * narrowed in #893 to stop matching a UUID's hyphen-preceded last segment; a
+ * real account id word-bounded by quotes/colons/etc. still fires) and
  * `biffo-placeholder-config` fire on any real value. Committing it would turn
  * the instance's own Secret Scan red on its first run, which is a worse defect
  * than the one being fixed.

@@ -38,7 +38,7 @@
     "scripts/practices-corpus.mjs"
   ],
   "scripts": {
-    "build": "tsup src/index.ts --format esm --dts --clean",
+    "build": "tsup src/index.ts --format esm --dts --clean --external typescript",
     "prepack": "node scripts/sync-packaged-assets.mjs",
     "postpack": "node scripts/sync-packaged-assets.mjs --clean",
     "dev": "tsx watch src/index.ts",

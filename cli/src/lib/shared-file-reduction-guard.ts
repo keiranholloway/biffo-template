@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs'
-import ts from 'typescript'
+import type * as TS from 'typescript'
 
 /**
  * Refuse a shared-file sync that would DELETE content from the satellite it
@@ -144,13 +144,56 @@ export function classifyTarget(target: string): TargetClassification {
   }
 }
 
+/** The runtime shape of the `typescript` module — the value `loadTypeScript`
+ * resolves, as opposed to `TS`, the type-only namespace import above used
+ * for AST node types. */
+type TypeScriptModule = typeof import('typescript')
+
+let tsModulePromise: Promise<TypeScriptModule> | undefined
+
+/**
+ * Load the `typescript` compiler, lazily and once.
+ *
+ * `typescript` is a devDependency of this repo, not a runtime dependency of
+ * the published `@biffo/cli` — it is a ~20MB compiler and this guard is a
+ * template-repo-only concern (shared-sync distributes FROM the template; the
+ * check is meaningless in an instance that receives from it). A static
+ * top-level `import ts from 'typescript'` here is resolved
+ * EAGERLY by the ESM runtime the instant this module is loaded — which
+ * happens on every CLI startup, everywhere, because `check.ts` pulls this
+ * file into the command graph unconditionally. That is what broke every
+ * published CLI from 0.286.0: tsup bundled the whole TypeScript compiler
+ * (a devDependency) into the ESM output, and TypeScript's CJS internals do a
+ * dynamic `require('fs')` an ESM bundle cannot satisfy.
+ *
+ * Loading it only when a caller actually asks this guard to analyse a pair
+ * means the CLI starts fine without `typescript` installed, this guard still
+ * works wherever it is (a template checkout), and it fails with a clear,
+ * actionable error — not a startup crash — wherever it is not (an instance).
+ */
+async function loadTypeScript(): Promise<TypeScriptModule> {
+  tsModulePromise ??= import('typescript')
+    .then((mod) => (mod as unknown as { default: TypeScriptModule }).default)
+    .catch((error: unknown) => {
+      tsModulePromise = undefined
+      throw new Error(
+        'the `typescript` compiler is not installed here. The shared-file reduction guard ' +
+          '(#1577) only runs in a biffo-template checkout, where it is a devDependency — it ' +
+          `is never installed by the published @biffo/cli. Original error: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+      )
+    })
+  return tsModulePromise
+}
+
 /**
  * The base identifier of a call's callee, unwrapping the member and template
  * forms test runners use: `it`, `it.only`, `it.skip`, `it.each([...])`,
  * `it.concurrent.only`, and the tagged-template `it.each\`…\``.
  */
-function calleeBaseName(expression: ts.Expression): string | undefined {
-  let node: ts.Node = expression
+function calleeBaseName(ts: TypeScriptModule, expression: TS.Expression): string | undefined {
+  let node: TS.Node = expression
   for (;;) {
     if (ts.isPropertyAccessExpression(node)) {
       node = node.expression
@@ -174,7 +217,7 @@ function calleeBaseName(expression: ts.Expression): string | undefined {
  * same file produce the same text, which is all a set comparison needs, and
  * it means a dynamic title is compared rather than silently dropped.
  */
-function titleOf(call: ts.CallExpression): string | undefined {
+function titleOf(ts: TypeScriptModule, call: TS.CallExpression): string | undefined {
   const [first] = call.arguments
   if (!first) return undefined
   if (ts.isStringLiteral(first) || ts.isNoSubstitutionTemplateLiteral(first)) return first.text
@@ -194,13 +237,21 @@ export interface ExtractedTitles {
  * Never a regex over source text (#956): a commented-out `it('x')` or a
  * string mentioning `it(` must not manufacture a title, and a title inside a
  * helper function or a loop must still be found.
+ *
+ * Async because it lazily loads `typescript` (see `loadTypeScript`) — the
+ * only reason this function, and everything above it in the call chain, is
+ * a promise rather than a plain value.
  */
-export function extractTestTitles(source: string, filename = 'file.test.ts'): ExtractedTitles {
+export async function extractTestTitles(
+  source: string,
+  filename = 'file.test.ts',
+): Promise<ExtractedTitles> {
+  const ts = await loadTypeScript()
   const sourceFile = ts.createSourceFile(filename, source, ts.ScriptTarget.Latest, true)
   const tests: string[] = []
   const suites: string[] = []
 
-  const visit = (node: ts.Node): void => {
+  const visit = (node: TS.Node): void => {
     // `it.each([1, 2])('each %i', …)` is two nested calls, and the INNER one
     // also resolves to base name `it` — so a naive walk records `[1, 2]` as a
     // test title. Only the outermost call in a chain declares a test; a call
@@ -210,9 +261,9 @@ export function extractTestTitles(source: string, filename = 'file.test.ts'): Ex
       ts.isCallExpression(node.parent) &&
       node.parent.expression === node
     if (ts.isCallExpression(node) && !isCurriedHalf) {
-      const base = calleeBaseName(node.expression)
+      const base = calleeBaseName(ts, node.expression)
       if (base && (LEAF_TEST_CALLS.has(base) || SUITE_CALLS.has(base))) {
-        const title = titleOf(node)
+        const title = titleOf(ts, node)
         if (title !== undefined) (LEAF_TEST_CALLS.has(base) ? tests : suites).push(title)
       }
     }
@@ -270,16 +321,17 @@ export type AcceptedReductions = Record<string, Record<string, string>>
 /**
  * Compare each pair and report what the sync would delete.
  *
- * Pure: takes contents, not paths, so the sync can hand it exactly the two
- * blobs it is about to `cp` between rather than a second, independently
- * resolved read of them. That is the #1362 property stated as a design
- * choice — the guard must not derive its answer from a different document
- * than the actor acts on, or it can certify a copy it never saw.
+ * Pure aside from lazily loading `typescript` (see `loadTypeScript`): takes
+ * contents, not paths, so the sync can hand it exactly the two blobs it is
+ * about to `cp` between rather than a second, independently resolved read of
+ * them. That is the #1362 property stated as a design choice — the guard
+ * must not derive its answer from a different document than the actor acts
+ * on, or it can certify a copy it never saw.
  */
-export function checkSharedFileReduction(
+export async function checkSharedFileReduction(
   pairs: SyncPair[],
   accepted: AcceptedReductions = {},
-): ReductionReport {
+): Promise<ReductionReport> {
   const report: ReductionReport = { analysed: [], skipped: [], findings: [], acceptedOnly: [] }
 
   for (const pair of pairs) {
@@ -290,8 +342,8 @@ export function checkSharedFileReduction(
     }
     report.analysed.push(pair.target)
 
-    const before = extractTestTitles(pair.existing, pair.target)
-    const after = extractTestTitles(pair.incoming, pair.target)
+    const before = await extractTestTitles(pair.existing, pair.target)
+    const after = await extractTestTitles(pair.incoming, pair.target)
     const upstream = new Set(after.tests)
     const lost = before.tests.filter((title) => !upstream.has(title))
     if (lost.length === 0) continue

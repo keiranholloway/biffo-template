@@ -9,7 +9,17 @@ from src.api.models.base import Base
 
 config = context.config
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # `disable_existing_loggers` defaults to True, which does not merely leave
+    # loggers alone — it sets `.disabled = True` on every logger that already
+    # exists and is not named in alembic.ini's [loggers] section (root,
+    # sqlalchemy, alembic only). A disabled logger emits nothing regardless of
+    # level, handlers, or propagation. Anything that runs Alembic in-process —
+    # a startup migration, a test fixture — therefore silently switches off
+    # logging for every module already imported, for the rest of the process.
+    # Alembic's own configuration (levels/handlers for root/sqlalchemy/alembic)
+    # still applies with this off; only the reach outside it is disabled.
+    # Guarded by test_alembic_logging.py::TestAlembicEnvDoesNotDisableExistingLoggers.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 

@@ -119,3 +119,21 @@ markers = [
 [tool.coverage.run]
 source = ["services", "packages"]
 omit = ["*/tests/*", "*/migrations/*", "services/_template/*"]
+# services/api is async throughout and reaches the database through
+# SQLAlchemy's async layer, which runs user code (including exception
+# handlers) inside a greenlet via greenlet_spawn. Coverage does not trace a
+# greenlet context unless told to, so without this a local run silently
+# under-records 24 files of async DB code -- 60 unexecuted error branches
+# reported locally against CI's correctly-measured 47 (#1588).
+#
+# `thread` is required too, and is not a defensive extra: services/api's own
+# code makes no direct use of threads (no ThreadPoolExecutor, run_in_executor,
+# or threading module), but the test suite drives it through FastAPI's/
+# Starlette's TestClient, which runs the ASGI app -- and therefore every
+# greenlet inside it -- on a background thread via anyio's blocking portal.
+# `greenlet` alone (verified empirically) traces the main thread's greenlets
+# and actually UNDER-counts relative to no setting at all (80 unexecuted vs.
+# 60), because it does not extend tracing to that background thread in the
+# first place. Only `greenlet,thread` together reach CI's number (47),
+# reproduced twice locally with the identical result.
+concurrency = ["greenlet", "thread"]

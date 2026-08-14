@@ -55,34 +55,56 @@ Tests` workflow) can pass both artefacts:
 Passing one path (or none, using the default) behaves exactly as before — this
 is additive, not a breaking change to the single-file case.
 
-## Local and CI can legitimately disagree, and that is not a bug in either
+## Local and CI used to disagree here, and the cause was not what it looked like (#1588)
 
 `--check`'s verdict is entirely a function of the coverage.json(s) you hand it,
-and a local run and CI's own run routinely exercise different scope — a
-narrower local pytest invocation, a service CI has and your workstation does
-not (Postgres, most concretely: see above), different plugins installed. A
-clean local `--check` is therefore not proof CI's `--check` will also be
-clean, in either direction — they are the same question asked of two different
-pictures of what actually ran. If the two disagree, trust the one whose
-coverage.json you can see the most of, and merge in every artefact you have
-before concluding either way.
+so any gap between what a local pytest run executed and what CI's did shows up
+here as a disagreement. In *this* repo the actual cause, found and fixed by
+#1588, was neither test selection nor environment: `services/api` is async
+throughout and reaches the database through SQLAlchemy's async layer, which
+runs user code — including exception handlers — inside a **greenlet**
+(`greenlet_spawn`), itself running on a **background thread** spun up by
+FastAPI's/Starlette's `TestClient` (an `anyio` blocking portal). Coverage does
+not trace either a greenlet context or a non-main thread unless told to, and
+`[tool.coverage.run]` named neither — so a local run silently under-recorded
+24 files of async DB code (60 unexecuted branches locally against CI's
+correctly-measured 47, reproduced exactly at commit `0820ca7f`), for no
+reason a careful contributor could see by reading test output. `concurrency =
+["greenlet", "thread"]` on `[tool.coverage.run]` closes that gap; **both**
+values are required — `greenlet` alone still under-counts (verified: 80
+unexecuted, worse than no setting at all), because it never extends tracing
+into the TestClient's background thread in the first place.
+
+If `--check` still disagrees with CI on a repo carrying that setting, do not
+reach for a narrower local pytest invocation, a Postgres service, or the
+two-lane combine below as the explanation by default — confirm what actually
+differs. This repo in particular has no `rls-tests.yml` and no Postgres
+service on its Python job, so neither applies to it; the paragraph below is
+real for a repo that has grown a genuine second test lane, not a first port of
+call everywhere this script runs.
+
+## The two-lane combine, for a repo that has a real Postgres lane (#637)
 
 Since #637, CI's own verdict for one commit is not even stable across its own
-runs, which sharpens this rather than replaces it. A local `--check` reports
-against whatever coverage.json(s) YOU hand it — for most contributors, one
-file, from one pytest invocation, compared against the recorded baseline.
-CI's `ci.yml` does exactly the same comparison against the same baseline, but
-best-effort combines a second, Postgres-only lane's artefact when it can reach
-one (see that file's own comments on the timing this depends on) — and
-combining coverage can only mark MORE lines executed, never fewer, so the
-second artefact can only turn a branch from "new and unexecuted" into
-"already covered", never the reverse. That means: a run of CI that catches the
-artefact in time can go green on a branch an earlier, artefact-less run of the
-very same commit reported as newly unexecuted. **A clean local `--check` is
-therefore not evidence CI will pass, and neither is a red CI run evidence the
-next run of the identical commit will also be red** — re-running once the
-Postgres-only lane has finished is the remedy for that shape of red, not a
-sign the gate is flaky.
+runs on a repo whose CI *does* run a second, Postgres-backed lane (e.g. an
+instance's `RLS Tests` workflow) alongside the plain Python job — that is a
+different, additive concern from the greenlet/thread gap above, and applies
+only where such a lane exists. A local `--check` reports against whatever
+coverage.json(s) YOU hand it — for most contributors, one file, from one
+pytest invocation, compared against the recorded baseline. A repo's `ci.yml`
+does exactly the same comparison against the same baseline, but best-effort
+combines the Postgres-only lane's artefact when it can reach one (see that
+file's own comments on the timing this depends on) — and combining coverage
+can only mark MORE lines executed, never fewer, so the second artefact can
+only turn a branch from "new and unexecuted" into "already covered", never
+the reverse. That means: a run of CI that catches the artefact in time can go
+green on a branch an earlier, artefact-less run of the very same commit
+reported as newly unexecuted. **On a repo with such a lane, a clean local
+`--check` is therefore not evidence CI will pass, and neither is a red CI run
+evidence the next run of the identical commit will also be red** —
+re-running once the Postgres-only lane has finished is the remedy for that
+shape of red, not a sign the gate is flaky. Pass every coverage.json you have
+(see the `--coverage` usage above) and trust the one that has seen the most.
 
 Usage:
     uv run pytest --cov --cov-report=json      # writes coverage.json

@@ -4,8 +4,19 @@ The write itself is two lines; the reason it lives in a module rather than inlin
 in the router is the race. A plugin retrying a lost ledger write must not create a
 second row, and "look first, then insert" cannot promise that — two retries
 overlap, both look, both see nothing, both insert. So the winner is decided by a
-unique index and an ``IntegrityError``, and that is testable only by driving this
-function from two concurrent sessions, which a router test cannot do.
+unique index and an ``IntegrityError``.
+
+That branch does not need two concurrent sessions to exercise, only a repeated
+key: a second call with the same ``client_request_id`` hits the same unique
+violation a real race would, sequentially, and
+``test_a_repeat_post_with_the_same_key_returns_the_existing_row`` in
+``test_media_generations.py`` does exactly that through the router — this was
+previously believed untestable there, which was wrong even before #1588's
+coverage-tracing fix made the belief visibly false. What a router test
+genuinely cannot do is prove the constraint holds under *actual* concurrent
+writers; that is what
+``test_media_generation_idempotency_pg.py::test_concurrent_retries_produce_one_row``
+is for, driving five real concurrent sessions against Postgres.
 
 Same shape as ``agent_runs.create_run`` for the same reason (#661), including the
 ``(row, created)`` return: the caller needs to know, because the HTTP status

@@ -6,7 +6,42 @@ useDefault = true
 [[rules]]
 id = "biffo-aws-account-id"
 description = "AWS Account ID — should only appear in .tfvars.example or biffo.config.json placeholders"
-regex = '''\b\d{12}\b'''
+# `\b\d{12}\b` matched any bare 12-digit run, including the final segment of a
+# UUID: `11111111-1111-1111-1111-111111111111` ends in twelve digits with a
+# word boundary on both sides (digit -> quote/EOL), so an ordinary fixture UUID
+# tripped Secret Scan on correct test code (issue #893). Editing the value
+# alone never clears it either, because the scan is history-wide
+# (`--log-opts="--full-history HEAD"`) — the finding survives in the commit
+# that introduced it regardless of what a later commit changes it to.
+#
+# The fix narrows the boundary condition rather than adding a path/value
+# allowlist. A UUID's last segment is always immediately preceded by a hyphen
+# (its 4th separator), and gitleaks/RE2 (Go's regexp) has no lookbehind, so the
+# only way to test "not preceded by a hyphen" is to consume that character as
+# part of the match and report only the digit group as the secret via
+# `secretGroup`. `(?:^|[^0-9A-Fa-f-])` requires the character immediately
+# before the 12 digits to be either nothing (start of the scanned content) or
+# something that is neither a hyphen nor a hex digit — which a UUID's
+# hyphen-and-hex surroundings can never satisfy, and which an account id
+# quoted, colon-prefixed (ARN), or otherwise word-bounded always does.
+#
+# Deliberately NOT the alternative of matching the full 8-4-4-4-12 UUID shape
+# and excluding it: that would only defeat a *genuinely* UUID-shaped prefix,
+# whereas this is the narrower, simpler condition the task calls out as
+# "likely right" — and it is provably correct in both directions (see
+# cli/src/lib/gitleaks-uuid-account-id.test.ts).
+#
+# Trade-off, stated rather than hidden: an account id butted directly against
+# a hyphen or a hex character with NO separator at all — e.g. `id-123456789012`
+# with no space/colon/quote between the hyphen and the digits — is no longer
+# caught by this rule alone. Searched the repo for that shape (any bare
+# 12-digit run outside the existing allowlist/paths) and found none; the one
+# known legitimate hyphen-adjacent case (`siblings.auto.tfvars.json`'s S3
+# bucket domains) is already excluded by `paths`, independent of this regex.
+# If that shape appears for real, the `paths`/`regexes` allowlist mechanisms
+# already in this file are the ones to reach for, not this rule.
+regex = '''(?:^|[^0-9A-Fa-f-])(\d{12})\b'''
+secretGroup = 1
 entropy = 0
 [rules.allowlist]
 regexes = [

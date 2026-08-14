@@ -474,9 +474,19 @@ scanned and the check was permanently green.
 - **Never silently disable a security gate.** If a gate must be removed or
   loosened, do it in the open and raise a tracking issue to restore it.
 - **Use the canonical placeholder values in fixtures.** `.gitleaks.toml`'s
-  `biffo-aws-account-id` rule matches _any_ bare 12-digit number and allowlists
-  only `123456789012` and `999999999999`. A plausible-looking invented account
-  id fails Secret Scan. Two agents hit this in one day.
+  `biffo-aws-account-id` rule matches any word-bounded 12-digit number and
+  allowlists only `123456789012` and `999999999999`. A plausible-looking
+  invented account id fails Secret Scan. Two agents hit this in one day.
+- **A UUID fixture is not exempt.** The rule used to be a bare `\b\d{12}\b`,
+  which also matched the last segment of an ordinary UUID whenever it happened
+  to be all-digit (`…-111111111111`) — correct test code, tripped by
+  coincidence, and the obvious "fix the value" response does not clear it (see
+  next bullet). Narrowed in #893 to
+  `(?:^|[^0-9A-Fa-f-])(\d{12})\b` — a UUID's last segment is always preceded by
+  a hyphen, which this excludes, while a real account id quoted, colon-bounded
+  (ARN), or otherwise word-bounded still fires. If you hit this on a **new**
+  12-digit value the rule doesn't currently exempt, that is very likely a real
+  finding — do not add an allowlist entry to make it pass (see below).
 - **Secret Scan reads git history, not just your diff.** Fixing the value at
   your branch tip is not enough — the finding survives in the earlier commit.
   Rewrite the branch (amend or squash) and force-push. Force-pushing your own

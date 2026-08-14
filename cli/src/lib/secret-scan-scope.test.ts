@@ -76,7 +76,8 @@ describe.each(WORKFLOWS)('Secret Scan scope — %s', (workflow) => {
  *
  * `.terraform/` is gitignored in every Biffo repo but a real `terraform.tfstate`
  * lives there once anyone runs `terraform init`/`apply`, carrying the real AWS
- * account id — which `biffo-aws-account-id` (`\b\d{12}\b`) matches correctly.
+ * account id — which `biffo-aws-account-id` (`(?:^|[^0-9A-Fa-f-])(\d{12})\b`,
+ * narrowed in #893 to stop matching inside fixture UUIDs) still matches correctly.
  * In CI that is invisible (a fresh checkout has no `.terraform/`); on a
  * workstation it failed `verify.sh` every run, for a file the developer is not
  * pushing and cannot remove.
@@ -103,7 +104,18 @@ describe('gitleaks filesystem pass ignores gitignored local state', () => {
     // The allowlist narrows WHERE the rule looks. If it ever narrows WHAT it
     // matches, this is a suppression rather than a scope correction — the
     // distinction AGENTS.md §7 turns on.
-    expect(config).toContain("regex = '''\\b\\d{12}\\b'''")
+    //
+    // The regex itself changed in #893, from a bare `\b\d{12}\b` to
+    // `(?:^|[^0-9A-Fa-f-])(\d{12})\b` with `secretGroup = 1` — narrowing the
+    // BOUNDARY CONDITION (a UUID's last segment is always hyphen-preceded) to
+    // stop matching inside fixture UUIDs, not narrowing WHERE it looks or
+    // adding a value to an allowlist. That distinction is exactly what this
+    // test guards, so it is asserted on directly rather than treated as the
+    // kind of change this test exists to catch:
+    // cli/src/lib/gitleaks-uuid-account-id.test.ts proves the tightened rule
+    // still catches a genuine account id, in both an ARN and a bare literal.
+    expect(config).toContain("regex = '''(?:^|[^0-9A-Fa-f-])(\\d{12})\\b'''")
+    expect(config).toContain('secretGroup = 1')
   })
 
   it('allowlists no account id beyond the three with a written justification', () => {

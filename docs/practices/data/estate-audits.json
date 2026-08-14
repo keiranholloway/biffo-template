@@ -1,5 +1,5 @@
 {
-  "collectedAt": "2026-08-13T03:43:05Z",
+  "collectedAt": "2026-08-14T03:43:21Z",
   "audits": [
     {
       "name": "coverage",
@@ -15,9 +15,9 @@
     },
     {
       "name": "drift",
-      "ok": false,
-      "exit": 1,
-      "summary": "11 current, 3 drifted"
+      "ok": true,
+      "exit": 0,
+      "summary": "14 current, 0 drifted"
     },
     {
       "name": "protection",
@@ -35,13 +35,13 @@
       "name": "classification",
       "ok": false,
       "exit": 1,
-      "summary": "BLIND  2026-08-13.json: 53 of 61 failing steps unclassified (86.9%) — add patterns to STEP_KINDS for: Report the result (47), CodeQL-suppression-comment guard (2), Report the denominator, and open/update a tracking issue on any failure (2), Run astral-sh/setup-uv@v6 (1), Validate every environment (1)"
+      "summary": "BLIND  2026-08-14.json: 28 of 39 failing steps unclassified (71.8%) — add patterns to STEP_KINDS for: Report the result (24), Report the denominator, and open/update a tracking issue on any failure (2), Run uv sync --all-groups --locked (1), Terraform-input guard (1)"
     },
     {
       "name": "checkout",
       "ok": false,
       "exit": 1,
-      "summary": "18 primary checkouts — $12 clean$, $4 unsafe to read$, 1 behind only, 1 not evaluated"
+      "summary": "18 primary checkouts — $12 clean$, $3 unsafe to read$, 2 behind only, 1 not evaluated"
     },
     {
       "name": "deploy",

@@ -100,7 +100,7 @@ td.mid{color:var(--warn)}
       <h1>Are we building the product, or maintaining the machine?</h1>
     </div>
     <div class="stamp num">
-      collected 2026-08-13 03:43 UTC<br />
+      collected 2026-08-14 03:43 UTC<br />
       windows 1 / 7 / 90 days
     </div>
   </div>
@@ -117,10 +117,10 @@ td.mid{color:var(--warn)}
         <div class="label">Hook arming</div>
         <div class="value num" style="font-size:15px">no line matched /^[0-9]+ working trees/ -- last output: scripts/biffo.sh: 120: exec: /home/keiran/code/biffo-template/.worktrees/practices-daily/cli/node_modules/.bin/tsx: not found</div>
         <div class="note">will the hook actually fire? &middot; exit 127</div>
-      </div><div class="tile critical">
+      </div><div class="tile good">
         <div class="label">Shared files</div>
-        <div class="value num" style="font-size:15px">11 current, 3 drifted</div>
-        <div class="note">is every repo on the current gate? &middot; exit 1</div>
+        <div class="value num" style="font-size:15px">14 current, 0 drifted</div>
+        <div class="note">is every repo on the current gate? &middot; exit 0</div>
       </div><div class="tile good">
         <div class="label">Branch protection</div>
         <div class="value num" style="font-size:15px">33 branches checked, all protected and binding</div>
@@ -131,11 +131,11 @@ td.mid{color:var(--warn)}
         <div class="note"> &middot; exit 0</div>
       </div><div class="tile critical">
         <div class="label">classification</div>
-        <div class="value num" style="font-size:15px">BLIND  2026-08-13.json: 53 of 61 failing steps unclassified (86.9%) — add patterns to STEP_KINDS for: Report the result (47), CodeQL-suppression-comment guard (2), Report the denominator, and open/update a tracking issue on any failure (2), Run astral-sh/setup-uv@v6 (1), Validate every environment (1)</div>
+        <div class="value num" style="font-size:15px">BLIND  2026-08-14.json: 28 of 39 failing steps unclassified (71.8%) — add patterns to STEP_KINDS for: Report the result (24), Report the denominator, and open/update a tracking issue on any failure (2), Run uv sync --all-groups --locked (1), Terraform-input guard (1)</div>
         <div class="note"> &middot; exit 1</div>
       </div><div class="tile critical">
         <div class="label">checkout</div>
-        <div class="value num" style="font-size:15px">18 primary checkouts — $12 clean$, $4 unsafe to read$, 1 behind only, 1 not evaluated</div>
+        <div class="value num" style="font-size:15px">18 primary checkouts — $12 clean$, $3 unsafe to read$, 2 behind only, 1 not evaluated</div>
         <div class="note"> &middot; exit 1</div>
       </div><div class="tile critical">
         <div class="label">deploy</div>
@@ -153,11 +153,11 @@ td.mid{color:var(--warn)}
 
   <div class="headline">
     <p class="q">Capability built — merges that shipped something, rolling 7 days</p>
-    <div class="v num">16.1%</div>
+    <div class="v num">16.6%</div>
     <div class="sub">
       <span class="pill critical">critical</span>
-      &nbsp;floor 28% · prior 7d baseline 19.8% · last 24h 12.1%
-      · Biffo 6.4% · Tabsii 9.7%
+      &nbsp;floor 28% · prior 7d baseline 19.6% · last 24h 23.5%
+      · Biffo 8.2% · Tabsii 8.4%
       
     </div>
   </div>
@@ -166,47 +166,47 @@ td.mid{color:var(--warn)}
     
     <div class="tile critical">
       <div class="label">Toil ratio · 7d</div>
-      <div class="value num">67%</div>
-      <div class="note">rework + toil · budget 50% · prior 7d 60.4%</div>
+      <div class="value num">68.7%</div>
+      <div class="note">rework + toil · budget 50% · prior 7d 59.8%</div>
     </div>
     
     <div class="tile good">
       <div class="label">Platform vs product · 7d</div>
-      <div class="value num">42.3% / 57.7%</div>
-      <div class="note">merges in biffo-* vs tabsii-* · prior 7d 44.3% / 55.7%</div>
+      <div class="value num">45% / 55%</div>
+      <div class="note">merges in biffo-* vs tabsii-* · prior 7d 42.7% / 57.3%</div>
     </div>
     
     <div class="tile critical">
       <div class="label">Green wait per merge · 7d</div>
-      <div class="value num">41.2 min</div>
-      <div class="note">correct work that could not land · 319.9h across 466 merges · prior 7d 17.1 min</div>
+      <div class="value num">41 min</div>
+      <div class="note">correct work that could not land · 309.6h across 453 merges · prior 7d 38.4 min</div>
     </div>
     
     <div class="tile critical">
       <div class="label">Caught second · 7d</div>
-      <div class="value num">52.7%</div>
-      <div class="note">58 of 110 failing steps · H4 target &lt;20% · baseline 66% · <strong>134 unclassified</strong><br />unclassified 134 · test 43 · dependency-audit 28 · deploy 22</div>
+      <div class="value num">56.5%</div>
+      <div class="note">61 of 108 failing steps · H4 target &lt;20% · baseline 66% · <strong>162 unclassified</strong><br />unclassified 162 · test 45 · dependency-audit 23 · deploy 22</div>
     </div>
     
     <div class="tile unknown">
       <div class="label">Merges · 24h</div>
-      <div class="value num">33</div>
-      <div class="note">7d 466 · 90d 2895</div>
+      <div class="value num">34</div>
+      <div class="note">7d 453 · 90d 2929</div>
     </div>
   </div>
 
   <h2>Work mix — 7 days, merge-weighted</h2>
-  <div class="mix"><span style="width:33%;background:var(--good)" title="delivery, quality &amp; docs 33.0%"></span><span style="width:67%;background:var(--crit)" title="toil + rework 67.0%"></span></div>
+  <div class="mix"><span style="width:31.299999999999997%;background:var(--good)" title="delivery, quality &amp; docs 31.3%"></span><span style="width:68.7%;background:var(--crit)" title="toil + rework 68.7%"></span></div>
   <div class="legend">
     <span><i style="background:var(--good)"></i>delivery, quality &amp; docs</span>
-    <span><i style="background:var(--crit)"></i>toil + rework (67%)</span>
+    <span><i style="background:var(--crit)"></i>toil + rework (68.7%)</span>
   </div>
 
   <h2>Wall-clock vs the merge proxy — is the headline believable?</h2>
   <div class="sessions">
     <div><span class="k">recorded</span> <strong class="num">112</strong> tasks · <strong class="num">303.9h</strong> over <strong class="num">12</strong> days</div>
     <div><span class="k">wall-clock</span> delivery <strong class="num">20.3%</strong> · platform <strong class="num">49.5%</strong> · toil <strong class="num">30.1%</strong></div>
-    <div><span class="k">merge proxy</span> toil <strong class="num">67%</strong> over 7d — proxy is off by -36.9 points — treat the headline with suspicion</div>
+    <div><span class="k">merge proxy</span> toil <strong class="num">68.7%</strong> over 7d — proxy is off by -38.6 points — treat the headline with suspicion</div>
     
   </div>
 
@@ -223,182 +223,182 @@ td.mid{color:var(--warn)}
       </thead>
       <tbody><tr>
       <td><strong>biffo-template</strong><span class="side">platform</span></td>
-      <td class="num">17</td>
+      <td class="num">14</td>
       <td class="num">1000</td>
-      <td class="num ">10%</td>
-      <td class="num mid">16.8%</td>
-      <td class="num mid" title="racedShare excludes 1 of 499 measured PRs that could never race (no green run: 0, merged before any run completed: 1). Over the 498 eligible PRs, racedShareEligible is 7.2%. Not a portable defect rate across repos: this repo's own median green-to-merge lag is 1.4 min against the fixed 10min threshold. Compare staleMergeShare (next column) for whether dev actually moved underneath — the two can disagree.">7.2%</td>
-      <td class="num">10.2%</td>
-      <td class="num hot">355.1h</td>
-      <td class="num mid">47.2%</td>
-      <td class="num">12.1h</td>
+      <td class="num ">10.8%</td>
+      <td class="num mid">17.4%</td>
+      <td class="num mid" title="racedShare excludes 0 of 483 measured PRs that could never race (no green run: 0, merged before any run completed: 0). Over the 483 eligible PRs, racedShareEligible is 8.1%. Not a portable defect rate across repos: this repo's own median green-to-merge lag is 1.8 min against the fixed 10min threshold. Compare staleMergeShare (next column) for whether dev actually moved underneath — the two can disagree.">8.1%</td>
+      <td class="num">10.1%</td>
+      <td class="num hot">338.4h</td>
+      <td class="num mid">46.9%</td>
+      <td class="num">12.3h</td>
     </tr>
 <tr>
       <td><strong>tabsii-platform</strong><span class="side">product</span></td>
-      <td class="num">15</td>
-      <td class="num">660</td>
-      <td class="num mid">19.7%</td>
-      <td class="num hot">32.7%</td>
-      <td class="num hot" title="racedShare excludes 0 of 370 measured PRs that could never race (no green run: 0, merged before any run completed: 0). Over the 370 eligible PRs, racedShareEligible is 30.8%. Not a portable defect rate across repos: this repo's own median green-to-merge lag is 8.7 min against the fixed 10min threshold. Compare staleMergeShare (next column) for whether dev actually moved underneath — the two can disagree.">30.8%</td>
-      <td class="num">8.6%</td>
-      <td class="num hot">268.2h</td>
-      <td class="num mid">42.8%</td>
-      <td class="num">9.4h</td>
+      <td class="num">7</td>
+      <td class="num">667</td>
+      <td class="num mid">20.3%</td>
+      <td class="num hot">32.4%</td>
+      <td class="num hot" title="racedShare excludes 0 of 364 measured PRs that could never race (no green run: 0, merged before any run completed: 0). Over the 364 eligible PRs, racedShareEligible is 30.5%. Not a portable defect rate across repos: this repo's own median green-to-merge lag is 9 min against the fixed 10min threshold. Compare staleMergeShare (next column) for whether dev actually moved underneath — the two can disagree.">30.5%</td>
+      <td class="num">8.8%</td>
+      <td class="num hot">262.5h</td>
+      <td class="num mid">43.4%</td>
+      <td class="num">10.7h</td>
     </tr>
 <tr>
       <td><strong>tabsii-crm</strong><span class="side">product</span></td>
-      <td class="num">0</td>
-      <td class="num">239</td>
+      <td class="num">1</td>
+      <td class="num">240</td>
       <td class="num ">12.1%</td>
-      <td class="num hot">32.6%</td>
-      <td class="num hot" title="racedShare excludes 6 of 239 measured PRs that could never race (no green run: 4, merged before any run completed: 2). Over the 233 eligible PRs, racedShareEligible is 15%. Not a portable defect rate across repos: this repo's own median green-to-merge lag is 0.6 min against the fixed 10min threshold. Compare staleMergeShare (next column) for whether dev actually moved underneath — the two can disagree.">14.6%</td>
+      <td class="num hot">32.5%</td>
+      <td class="num hot" title="racedShare excludes 6 of 240 measured PRs that could never race (no green run: 4, merged before any run completed: 2). Over the 234 eligible PRs, racedShareEligible is 15%. Not a portable defect rate across repos: this repo's own median green-to-merge lag is 0.6 min against the fixed 10min threshold. Compare staleMergeShare (next column) for whether dev actually moved underneath — the two can disagree.">14.6%</td>
       <td class="num">1.7%</td>
-      <td class="num hot">75h</td>
-      <td class="num mid">47.1%</td>
+      <td class="num hot">75.1h</td>
+      <td class="num mid">47.3%</td>
       <td class="num">24.5h</td>
     </tr>
 <tr>
       <td><strong>biffo-platform</strong><span class="side">platform</span></td>
-      <td class="num">0</td>
-      <td class="num">132</td>
+      <td class="num">1</td>
+      <td class="num">133</td>
       <td class="num ">8.3%</td>
-      <td class="num mid">22.7%</td>
-      <td class="num mid" title="racedShare excludes 0 of 132 measured PRs that could never race (no green run: 0, merged before any run completed: 0). Over the 132 eligible PRs, racedShareEligible is 3.8%. Not a portable defect rate across repos: this repo's own median green-to-merge lag is 0.5 min against the fixed 10min threshold. Compare staleMergeShare (next column) for whether dev actually moved underneath — the two can disagree.">3.8%</td>
+      <td class="num mid">22.6%</td>
+      <td class="num mid" title="racedShare excludes 0 of 133 measured PRs that could never race (no green run: 0, merged before any run completed: 0). Over the 133 eligible PRs, racedShareEligible is 3.8%. Not a portable defect rate across repos: this repo's own median green-to-merge lag is 0.5 min against the fixed 10min threshold. Compare staleMergeShare (next column) for whether dev actually moved underneath — the two can disagree.">3.8%</td>
       <td class="num">0%</td>
-      <td class="num mid">13.2h</td>
-      <td class="num hot">68.7%</td>
+      <td class="num mid">13.3h</td>
+      <td class="num hot">68.9%</td>
       <td class="num">13.1h</td>
     </tr>
 <tr>
       <td><strong>biffo-plugin-ideation</strong><span class="side">platform</span></td>
-      <td class="num">0</td>
-      <td class="num">96</td>
-      <td class="num ">10.5%</td>
-      <td class="num hot">40%</td>
-      <td class="num hot" title="racedShare excludes 3 of 95 measured PRs that could never race (no green run: 0, merged before any run completed: 3). Over the 92 eligible PRs, racedShareEligible is 10.9%. Not a portable defect rate across repos: this repo's own median green-to-merge lag is 0.6 min against the fixed 10min threshold. Compare staleMergeShare (next column) for whether dev actually moved underneath — the two can disagree.">10.5%</td>
+      <td class="num">1</td>
+      <td class="num">97</td>
+      <td class="num ">10.4%</td>
+      <td class="num hot">40.6%</td>
+      <td class="num hot" title="racedShare excludes 3 of 96 measured PRs that could never race (no green run: 0, merged before any run completed: 3). Over the 93 eligible PRs, racedShareEligible is 11.8%. Not a portable defect rate across repos: this repo's own median green-to-merge lag is 0.6 min against the fixed 10min threshold. Compare staleMergeShare (next column) for whether dev actually moved underneath — the two can disagree.">11.5%</td>
       <td class="num">1.1%</td>
-      <td class="num mid">42h</td>
-      <td class="num hot">68%</td>
+      <td class="num hot">53.1h</td>
+      <td class="num hot">68.4%</td>
       <td class="num">8.3h</td>
     </tr>
 <tr>
       <td><strong>biffo-plugin-idea-scout</strong><span class="side">platform</span></td>
       <td class="num">1</td>
-      <td class="num">89</td>
+      <td class="num">90</td>
       <td class="num ">0%</td>
-      <td class="num hot">42.7%</td>
-      <td class="num mid" title="racedShare excludes 9 of 89 measured PRs that could never race (no green run: 0, merged before any run completed: 9). Over the 80 eligible PRs, racedShareEligible is 10%. Not a portable defect rate across repos: this repo's own median green-to-merge lag is 0.7 min against the fixed 10min threshold. Compare staleMergeShare (next column) for whether dev actually moved underneath — the two can disagree.">9%</td>
+      <td class="num hot">43.3%</td>
+      <td class="num mid" title="racedShare excludes 9 of 90 measured PRs that could never race (no green run: 0, merged before any run completed: 9). Over the 81 eligible PRs, racedShareEligible is 11.1%. Not a portable defect rate across repos: this repo's own median green-to-merge lag is 0.7 min against the fixed 10min threshold. Compare staleMergeShare (next column) for whether dev actually moved underneath — the two can disagree.">10%</td>
       <td class="num">0%</td>
-      <td class="num mid">40.7h</td>
-      <td class="num hot">72.5%</td>
+      <td class="num hot">51.8h</td>
+      <td class="num hot">72.8%</td>
       <td class="num">17.5h</td>
     </tr>
 <tr>
       <td><strong>tabsii-marketplace</strong><span class="side">product</span></td>
-      <td class="num">0</td>
-      <td class="num">77</td>
-      <td class="num mid">20.8%</td>
-      <td class="num hot">53.2%</td>
-      <td class="num hot" title="racedShare excludes 0 of 77 measured PRs that could never race (no green run: 0, merged before any run completed: 0). Over the 77 eligible PRs, racedShareEligible is 18.2%. Not a portable defect rate across repos: this repo's own median green-to-merge lag is 1.6 min against the fixed 10min threshold. Compare staleMergeShare (next column) for whether dev actually moved underneath — the two can disagree.">18.2%</td>
+      <td class="num">1</td>
+      <td class="num">78</td>
+      <td class="num mid">20.5%</td>
+      <td class="num hot">52.6%</td>
+      <td class="num hot" title="racedShare excludes 0 of 78 measured PRs that could never race (no green run: 0, merged before any run completed: 0). Over the 78 eligible PRs, racedShareEligible is 17.9%. Not a portable defect rate across repos: this repo's own median green-to-merge lag is 1.6 min against the fixed 10min threshold. Compare staleMergeShare (next column) for whether dev actually moved underneath — the two can disagree.">17.9%</td>
       <td class="num">0%</td>
-      <td class="num mid">14h</td>
-      <td class="num hot">69.2%</td>
+      <td class="num mid">14.1h</td>
+      <td class="num hot">69.6%</td>
       <td class="num">537h</td>
     </tr>
 <tr>
       <td><strong>tabsii-intake</strong><span class="side">product</span></td>
-      <td class="num">0</td>
-      <td class="num">76</td>
-      <td class="num ">14.5%</td>
-      <td class="num hot">51.3%</td>
-      <td class="num hot" title="racedShare excludes 0 of 76 measured PRs that could never race (no green run: 0, merged before any run completed: 0). Over the 76 eligible PRs, racedShareEligible is 19.7%. Not a portable defect rate across repos: this repo's own median green-to-merge lag is 2.3 min against the fixed 10min threshold. Compare staleMergeShare (next column) for whether dev actually moved underneath — the two can disagree.">19.7%</td>
+      <td class="num">1</td>
+      <td class="num">77</td>
+      <td class="num ">14.3%</td>
+      <td class="num hot">50.6%</td>
+      <td class="num hot" title="racedShare excludes 0 of 77 measured PRs that could never race (no green run: 0, merged before any run completed: 0). Over the 77 eligible PRs, racedShareEligible is 19.5%. Not a portable defect rate across repos: this repo's own median green-to-merge lag is 2.3 min against the fixed 10min threshold. Compare staleMergeShare (next column) for whether dev actually moved underneath — the two can disagree.">19.5%</td>
       <td class="num">1.3%</td>
-      <td class="num hot">64.4h</td>
-      <td class="num hot">71.4%</td>
+      <td class="num hot">64.5h</td>
+      <td class="num hot">71.8%</td>
       <td class="num">76.6h</td>
     </tr>
 <tr>
       <td><strong>tabsii-geo</strong><span class="side">product</span></td>
-      <td class="num">0</td>
-      <td class="num">72</td>
-      <td class="num mid">23.6%</td>
-      <td class="num hot">50%</td>
-      <td class="num hot" title="racedShare excludes 15 of 72 measured PRs that could never race (no green run: 3, merged before any run completed: 12). Over the 57 eligible PRs, racedShareEligible is 22.8%. Not a portable defect rate across repos: this repo's own median green-to-merge lag is 1.9 min against the fixed 10min threshold. Compare staleMergeShare (next column) for whether dev actually moved underneath — the two can disagree.">18.1%</td>
-      <td class="num">1.8%</td>
-      <td class="num hot">50.8h</td>
-      <td class="num hot">72.6%</td>
+      <td class="num">1</td>
+      <td class="num">73</td>
+      <td class="num mid">23.3%</td>
+      <td class="num hot">49.3%</td>
+      <td class="num hot" title="racedShare excludes 15 of 73 measured PRs that could never race (no green run: 3, merged before any run completed: 12). Over the 58 eligible PRs, racedShareEligible is 22.4%. Not a portable defect rate across repos: this repo's own median green-to-merge lag is 1.9 min against the fixed 10min threshold. Compare staleMergeShare (next column) for whether dev actually moved underneath — the two can disagree.">17.8%</td>
+      <td class="num">1.7%</td>
+      <td class="num hot">50.9h</td>
+      <td class="num hot">73%</td>
       <td class="num">156h</td>
     </tr>
 <tr>
       <td><strong>tabsii-app</strong><span class="side">product</span></td>
-      <td class="num">0</td>
-      <td class="num">61</td>
-      <td class="num mid">24.6%</td>
-      <td class="num hot">62.3%</td>
-      <td class="num hot" title="racedShare excludes 1 of 61 measured PRs that could never race (no green run: 0, merged before any run completed: 1). Over the 60 eligible PRs, racedShareEligible is 23.3%. Not a portable defect rate across repos: this repo's own median green-to-merge lag is 3 min against the fixed 10min threshold. Compare staleMergeShare (next column) for whether dev actually moved underneath — the two can disagree.">23%</td>
+      <td class="num">1</td>
+      <td class="num">62</td>
+      <td class="num mid">24.2%</td>
+      <td class="num hot">61.3%</td>
+      <td class="num hot" title="racedShare excludes 1 of 62 measured PRs that could never race (no green run: 0, merged before any run completed: 1). Over the 61 eligible PRs, racedShareEligible is 23%. Not a portable defect rate across repos: this repo's own median green-to-merge lag is 3 min against the fixed 10min threshold. Compare staleMergeShare (next column) for whether dev actually moved underneath — the two can disagree.">22.6%</td>
       <td class="num">0%</td>
-      <td class="num mid">47h</td>
-      <td class="num hot">83.9%</td>
+      <td class="num mid">47.1h</td>
+      <td class="num hot">84.1%</td>
       <td class="num">298.2h</td>
     </tr>
 <tr>
       <td><strong>biffo-platform-app</strong><span class="side">platform</span></td>
-      <td class="num">0</td>
-      <td class="num">55</td>
-      <td class="num hot">25.5%</td>
-      <td class="num hot">63.6%</td>
-      <td class="num hot" title="racedShare excludes 0 of 55 measured PRs that could never race (no green run: 0, merged before any run completed: 0). Over the 55 eligible PRs, racedShareEligible is 18.2%. Not a portable defect rate across repos: this repo's own median green-to-merge lag is 2.7 min against the fixed 10min threshold. Compare staleMergeShare (next column) for whether dev actually moved underneath — the two can disagree.">18.2%</td>
+      <td class="num">1</td>
+      <td class="num">56</td>
+      <td class="num mid">25%</td>
+      <td class="num hot">62.5%</td>
+      <td class="num hot" title="racedShare excludes 0 of 56 measured PRs that could never race (no green run: 0, merged before any run completed: 0). Over the 56 eligible PRs, racedShareEligible is 17.9%. Not a portable defect rate across repos: this repo's own median green-to-merge lag is 2.7 min against the fixed 10min threshold. Compare staleMergeShare (next column) for whether dev actually moved underneath — the two can disagree.">17.9%</td>
       <td class="num">0%</td>
       <td class="num mid">41.4h</td>
-      <td class="num hot">79.3%</td>
+      <td class="num hot">79.7%</td>
       <td class="num">70.7h</td>
     </tr>
 <tr>
       <td><strong>tabsii-map</strong><span class="side">product</span></td>
-      <td class="num">0</td>
-      <td class="num">50</td>
+      <td class="num">1</td>
+      <td class="num">51</td>
       <td class="num ">0%</td>
-      <td class="num hot">68%</td>
-      <td class="num hot" title="racedShare excludes 3 of 25 measured PRs that could never race (no green run: 0, merged before any run completed: 3). Over the 22 eligible PRs, racedShareEligible is 22.7%. Not a portable defect rate across repos: this repo's own median green-to-merge lag is 2.1 min against the fixed 10min threshold. Compare staleMergeShare (next column) for whether dev actually moved underneath — the two can disagree.">20%</td>
+      <td class="num hot">65.4%</td>
+      <td class="num hot" title="racedShare excludes 3 of 26 measured PRs that could never race (no green run: 0, merged before any run completed: 3). Over the 23 eligible PRs, racedShareEligible is 21.7%. Not a portable defect rate across repos: this repo's own median green-to-merge lag is 2.2 min against the fixed 10min threshold. Compare staleMergeShare (next column) for whether dev actually moved underneath — the two can disagree.">19.2%</td>
       <td class="num">0%</td>
-      <td class="num mid">37.3h</td>
-      <td class="num hot">75.9%</td>
+      <td class="num mid">37.4h</td>
+      <td class="num hot">76.4%</td>
       <td class="num">0.9h</td>
     </tr>
 <tr>
       <td><strong>tabsii-data-model-design</strong><span class="side">product</span></td>
-      <td class="num">0</td>
-      <td class="num">49</td>
+      <td class="num">1</td>
+      <td class="num">50</td>
       <td class="num ">0%</td>
-      <td class="num hot">66.7%</td>
-      <td class="num hot" title="racedShare excludes 3 of 24 measured PRs that could never race (no green run: 0, merged before any run completed: 3). Over the 21 eligible PRs, racedShareEligible is 23.8%. Not a portable defect rate across repos: this repo's own median green-to-merge lag is 2.3 min against the fixed 10min threshold. Compare staleMergeShare (next column) for whether dev actually moved underneath — the two can disagree.">20.8%</td>
+      <td class="num hot">64%</td>
+      <td class="num hot" title="racedShare excludes 3 of 25 measured PRs that could never race (no green run: 0, merged before any run completed: 3). Over the 22 eligible PRs, racedShareEligible is 22.7%. Not a portable defect rate across repos: this repo's own median green-to-merge lag is 1.7 min against the fixed 10min threshold. Compare staleMergeShare (next column) for whether dev actually moved underneath — the two can disagree.">20%</td>
       <td class="num">0%</td>
       <td class="num mid">37.6h</td>
-      <td class="num hot">63.2%</td>
+      <td class="num hot">63.8%</td>
       <td class="num">387.8h</td>
     </tr>
 <tr>
       <td><strong>tabsii-runners</strong><span class="side">product</span></td>
-      <td class="num">0</td>
-      <td class="num">47</td>
+      <td class="num">1</td>
+      <td class="num">48</td>
       <td class="num ">0%</td>
-      <td class="num hot">60.7%</td>
-      <td class="num hot" title="racedShare excludes 3 of 28 measured PRs that could never race (no green run: 0, merged before any run completed: 3). Over the 25 eligible PRs, racedShareEligible is 20%. Not a portable defect rate across repos: this repo's own median green-to-merge lag is 2 min against the fixed 10min threshold. Compare staleMergeShare (next column) for whether dev actually moved underneath — the two can disagree.">17.9%</td>
+      <td class="num hot">58.6%</td>
+      <td class="num hot" title="racedShare excludes 3 of 29 measured PRs that could never race (no green run: 0, merged before any run completed: 3). Over the 26 eligible PRs, racedShareEligible is 19.2%. Not a portable defect rate across repos: this repo's own median green-to-merge lag is 2 min against the fixed 10min threshold. Compare staleMergeShare (next column) for whether dev actually moved underneath — the two can disagree.">17.2%</td>
       <td class="num">0%</td>
       <td class="num mid">37.9h</td>
-      <td class="num hot">82.4%</td>
+      <td class="num hot">82.7%</td>
       <td class="num">0.7h</td>
     </tr>
 <tr>
       <td><strong>biffo-runners</strong><span class="side">platform</span></td>
-      <td class="num">0</td>
-      <td class="num">40</td>
+      <td class="num">1</td>
+      <td class="num">41</td>
       <td class="num ">0%</td>
-      <td class="num hot">68%</td>
-      <td class="num hot" title="racedShare excludes 3 of 25 measured PRs that could never race (no green run: 0, merged before any run completed: 3). Over the 22 eligible PRs, racedShareEligible is 31.8%. Not a portable defect rate across repos: this repo's own median green-to-merge lag is 2.4 min against the fixed 10min threshold. Compare staleMergeShare (next column) for whether dev actually moved underneath — the two can disagree.">28%</td>
+      <td class="num hot">65.4%</td>
+      <td class="num hot" title="racedShare excludes 3 of 26 measured PRs that could never race (no green run: 0, merged before any run completed: 3). Over the 23 eligible PRs, racedShareEligible is 30.4%. Not a portable defect rate across repos: this repo's own median green-to-merge lag is 2.6 min against the fixed 10min threshold. Compare staleMergeShare (next column) for whether dev actually moved underneath — the two can disagree.">26.9%</td>
       <td class="num">0%</td>
-      <td class="num mid">37.9h</td>
-      <td class="num hot">90.2%</td>
+      <td class="num mid">38h</td>
+      <td class="num hot">90.5%</td>
       <td class="num">51.4h</td>
     </tr></tbody>
     </table>

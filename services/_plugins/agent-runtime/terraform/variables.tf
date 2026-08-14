@@ -33,7 +33,7 @@ variable "memory_size" {
 
 variable "timeout" {
   description = <<-EOT
-    Lambda timeout (seconds). 300, NOT the skeleton's 30: a single LLM call
+    Lambda timeout (seconds). 360, NOT the skeleton's 30: a single LLM call
     routinely runs longer than 30s, so the skeleton default would kill runs
     mid-turn and strand them in the state ADR-0014 §5 warns about.
 
@@ -43,9 +43,15 @@ variable "timeout" {
     (var.run_timeout_seconds) must sit strictly inside this value so a run that
     exhausts its budget still has time to POST its failure to Core rather than
     being killed before it can report.
+
+    Raised from 300 so run_timeout_seconds could go to 300 and keep a 60s
+    reporting margin (biffo-plugin-marketing#132). This value costs nothing
+    unless a run actually uses it — Lambda bills elapsed duration, not the
+    configured timeout — so the only price of the extra 60s is that a wedged
+    invocation holds its concurrency slot a minute longer.
   EOT
   type        = number
-  default     = 300
+  default     = 360
 
   validation {
     condition     = var.timeout > 0 && var.timeout <= 900
@@ -54,9 +60,31 @@ variable "timeout" {
 }
 
 variable "run_timeout_seconds" {
-  description = "The runtime's own per-run wall clock (ADR-0014 section 8 hard stop), injected as AGENT_RUNTIME_MAX_SECONDS. A worker definition may set a shorter timeout_seconds; it can never exceed this. Must stay below var.timeout so a timed-out run can still report its failure."
+  description = <<-EOT
+    The runtime's own per-run wall clock (ADR-0014 section 8 hard stop),
+    injected as AGENT_RUNTIME_MAX_SECONDS. A worker definition may set a
+    shorter timeout_seconds; it can never exceed this. Must stay below
+    var.timeout so a timed-out run can still report its failure.
+
+    300, raised from 240 (biffo-plugin-marketing#132). At 240 this was not a
+    ceiling with headroom under it — it was exactly what the busiest caller
+    asked for, so a research-shaped worker at 8 turns with `:online` retrieval
+    sat ON the ceiling and the runtime logged "Agent run finished close to its
+    wall-clock limit" against it. A worker can now ask for up to 300 without
+    being clamped, and a worker still asking for 240 has 60s of room to grow
+    into.
+
+    The margin left to var.timeout (360) is **60s**, and it is deliberately
+    larger than the 30s httpx timeout the SDK's API client uses
+    (packages/python-sdk/src/biffo_plugin_sdk/client.py): a run that exhausts
+    its wall clock POSTs its failure to Core, and if Core is unresponsive that
+    POST takes its full 30s before raising — the margin has to outlast that, or
+    the invocation is killed mid-report and the run is stranded (§5) with
+    nothing logged. Raising this variable further therefore means raising
+    var.timeout in step, not just narrowing the gap.
+  EOT
   type        = number
-  default     = 240
+  default     = 300
 
   validation {
     condition     = var.run_timeout_seconds > 0 && var.run_timeout_seconds < var.timeout

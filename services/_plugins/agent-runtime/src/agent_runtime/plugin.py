@@ -189,6 +189,44 @@ class AgentRuntimePlugin(BiffoPluginBase):
         else:
             logger.info("Agent run wall clock", extra=fields)
 
+    @staticmethod
+    def _log_clamped_limits(run: dict[str, Any], limits: RunLimits) -> None:
+        """Say so when the deployment granted a smaller budget than the worker asked for.
+
+        The clamp itself is correct and stays (ADR-0014 §8): a definition must
+        never be able to widen what the runtime spends, and a worker asking for
+        more than the deployment allows is a legitimate, expected state — so this
+        is a warning about a configuration mismatch, **not** a failed run.
+
+        What was wrong was doing it in silence (biffo-plugin-marketing#132). A
+        reduced budget is unobservable by construction: the run simply has less
+        time or fewer turns than its definition says, and every instance of the
+        class so far surfaced as a `RunNotSucceededError` on a campaign rather
+        than as anything the runtime said. The line names requested, granted, the
+        ceiling and **which** ceiling — a deployment variable, this module's
+        default, or the AWS Lambda cap are three different fixes — plus the
+        worker, so a reader knows whose budget to raise.
+
+        Emitted only when something was actually reduced. A line on every run is
+        noise that gets filtered out, and a filtered line reports nothing — the
+        same reasoning as :data:`NEAR_LIMIT_SHARE` above, one step earlier in the
+        run.
+        """
+        report = limits.clamp_report()
+        if not report:
+            return
+        logger.warning(
+            "Agent run budget was clamped below what its definition asked for; raise the "
+            "deployment ceiling or lower the worker's request",
+            extra={
+                "run_id": run.get("id"),
+                # The class of worker, not just the instance — "whose budget is
+                # being cut" is the question this log exists to answer.
+                "agent_name": run.get("agent_name"),
+                **report,
+            },
+        )
+
     async def reap_stale_runs(self) -> None:
         """Ask Core to fail runs a dead runtime left in ``running`` (§5, #402).
 
@@ -306,6 +344,10 @@ class AgentRuntimePlugin(BiffoPluginBase):
 
         payload = run.get("input_payload") or {}
         limits = RunLimits.from_snapshot(snapshot)
+        # Before the first model call, not after the run: a budget the deployment
+        # cut is worth knowing about even for a run that then dies on it — which
+        # is precisely the run whose completion report may never arrive.
+        self._log_clamped_limits(run, limits)
         if tools and limits.max_turns < 2:
             # Not fatal, but it can never work: turn 1 asks for a tool, and the
             # hard stop lands before the turn that would use the answer. Cheap to

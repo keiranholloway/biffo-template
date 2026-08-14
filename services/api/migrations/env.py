@@ -18,7 +18,7 @@ if config.config_file_name is not None:
     # logging for every module already imported, for the rest of the process.
     # Alembic's own configuration (levels/handlers for root/sqlalchemy/alembic)
     # still applies with this off; only the reach outside it is disabled.
-    # Guarded by test_alembic_env_does_not_disable_existing_loggers.
+    # Guarded by test_alembic_logging.py::TestAlembicEnvDoesNotDisableExistingLoggers.
     fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata

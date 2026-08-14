@@ -228,14 +228,31 @@ def head(key: str) -> StoredObject | None:
 def presign_download(key: str, *, filename: str | None = None) -> str:
     """A short-lived GET URL for one object.
 
-    ``response-content-disposition`` is set from the stored filename so a
-    download arrives named sensibly rather than as a uuid.
+    ``response-content-disposition`` is **always** set to ``attachment`` — this
+    used to be conditional on a truthy ``filename``, and when a caller omitted
+    one the header was silently left off entirely (tabsii-platform#902). That
+    is not cosmetic: a presigned S3 URL is cross-origin from the app that
+    requested it, and a browser only downloads a cross-origin response that
+    carries this header — without it the tab **navigates** to the raw object
+    instead. No error, no log, just a download that silently stops working the
+    day a caller forgets to pass a name. ``biffo-plugin-marketing`` depends on
+    this header for every creative download (its own #117/#122).
+
+    When ``filename`` is falsy, the name is recovered from ``key``'s own last
+    path segment rather than omitted. That is not a bare uuid: every key this
+    module mints (``build_key``) already ends in ``sanitise_filename(filename)``
+    as its last segment — the uuid is the segment *before* it — so for any
+    object this capability created, the recovered name is the real one. For a
+    key from elsewhere the recovered segment may be less meaningful, but it is
+    still sanitised and still better than a response with no filename hint at
+    all, which is the one option this rules out.
     """
-    params: dict[str, Any] = {"Bucket": _bucket(), "Key": key}
-    if filename:
-        params["ResponseContentDisposition"] = (
-            f'attachment; filename="{sanitise_filename(filename)}"'
-        )
+    disposition_name = sanitise_filename(filename or key.rsplit("/", 1)[-1])
+    params: dict[str, Any] = {
+        "Bucket": _bucket(),
+        "Key": key,
+        "ResponseContentDisposition": f'attachment; filename="{disposition_name}"',
+    }
     return str(
         _s3().generate_presigned_url("get_object", Params=params, ExpiresIn=DOWNLOAD_EXPIRY_SECONDS)
     )

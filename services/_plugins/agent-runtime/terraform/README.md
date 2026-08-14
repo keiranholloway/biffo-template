@@ -8,8 +8,8 @@ What differs from the skeleton, and why:
 
 | | Skeleton | Here | Why |
 | --- | --- | --- | --- |
-| `timeout` | 30s | **300s** | A model call routinely exceeds 30s. AWS caps an invocation at 900s (ADR-0014 §8) and a validation block enforces it. |
-| `run_timeout_seconds` | — | **240s** | The runtime's own wall-clock hard stop, strictly inside `timeout` so a timed-out run can still POST its failure to Core (§5). |
+| `timeout` | 30s | **360s** | A model call routinely exceeds 30s. Raised from 300 so `run_timeout_seconds` could reach 300 and keep a 60s reporting margin. AWS caps an invocation at 900s (ADR-0014 §8) and a validation block enforces it. |
+| `run_timeout_seconds` | — | **300s** | The runtime's own wall-clock hard stop, strictly inside `timeout` so a timed-out run can still POST its failure to Core (§5) — 60s of margin, deliberately longer than the SDK client's own 30s HTTP timeout. Raised from 240, which had no headroom under it at all: the busiest caller asked for exactly 240 (biffo-plugin-marketing#132). |
 | `max_turns_ceiling` | — | **10** | Deployment ceiling a worker's `max_turns` is clamped into; a definition can only narrow it. |
 | `memory_size` | 512 | **1024** | Memory buys CPU share; the runtime signs requests and parses responses around a long await. |
 | `subscribe_all` | false | false | Kept false. One trigger only: `biffo.core` / `agent.run.requested`. |

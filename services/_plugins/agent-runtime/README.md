@@ -67,7 +67,7 @@ provisional, because §6 lists the choices that are cheap now and expensive late
 | `OPENROUTER_API_KEY`             | local runs / tests only           | Direct key. Takes precedence; never set this in a deployment.           |
 | `BRAVE_SEARCH_API_KEY_PARAMETER` | Terraform (`terraform/`)          | Likewise for `web_search`. Unset ⇒ the tool is not offered at all.      |
 | `BRAVE_SEARCH_API_KEY`           | local runs / tests only           | Direct key. Takes precedence; never set this in a deployment.           |
-| `AGENT_RUNTIME_MAX_SECONDS`      | Terraform (`run_timeout_seconds`) | Deployment wall-clock ceiling (§8). Default 240.                        |
+| `AGENT_RUNTIME_MAX_SECONDS`      | Terraform (`run_timeout_seconds`) | Deployment wall-clock ceiling (§8). Default 300.                        |
 | `AGENT_RUNTIME_MAX_TURNS`        | Terraform (`max_turns_ceiling`)   | Deployment turn ceiling (§8). Default 10.                               |
 
 **The key is never committed and never logged.** Terraform takes a parameter

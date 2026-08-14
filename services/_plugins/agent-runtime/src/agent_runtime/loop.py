@@ -81,10 +81,15 @@ DEFAULT_MAX_TURNS_CEILING = 10
 
 DEFAULT_TIMEOUT_SECONDS = 120.0
 TIMEOUT_CEILING_ENV = "AGENT_RUNTIME_MAX_SECONDS"
-# Sits comfortably inside both LAMBDA_MAX_SECONDS and the Lambda timeout
-# Terraform configures (300s), leaving room to POST the completion afterwards —
-# a run that spends its whole invocation on the model and is then killed before
-# reporting is the stranded-run failure §5 warns about.
+# The fallback ceiling for a deployment that sets no AGENT_RUNTIME_MAX_SECONDS.
+# It sits comfortably inside both LAMBDA_MAX_SECONDS and the smallest Lambda
+# timeout this runtime has ever been deployed under, leaving room to POST the
+# completion afterwards — a run that spends its whole invocation on the model
+# and is then killed before reporting is the stranded-run failure §5 warns
+# about. Deliberately *lower* than what this repo's Terraform now configures
+# (`run_timeout_seconds` = 300 under a 360s Lambda): the deployment knows its
+# own function timeout and this constant does not, so the unconfigured case
+# stays conservative rather than tracking the configured one.
 DEFAULT_TIMEOUT_CEILING = 240.0
 
 # The share of its wall clock a run may consume before finishing is worth
@@ -101,6 +106,16 @@ NEAR_LIMIT_SHARE = 0.8
 # cap are answered with an error result rather than dropped, so the model is told
 # what happened instead of inferring it from silence.
 MAX_TOOL_CALLS_PER_TURN = 8
+
+# Where a ceiling came from. Three different things bound a run's budget, and
+# they are three different fixes — so a reader is told which, rather than only
+# that "the limit was 240". `environment` is a deployment knob somebody set
+# (Terraform's `run_timeout_seconds`/`max_turns_ceiling`); `code_default` means
+# nobody set it and this module's built-in applies; `lambda_hard_cap` is AWS's
+# 15-minute invocation cap, which no configuration raises.
+CEILING_SOURCE_ENV = "environment"
+CEILING_SOURCE_DEFAULT = "code_default"
+CEILING_SOURCE_LAMBDA = "lambda_hard_cap"
 
 # Event kinds yielded by the loop.
 RUN_STARTED = "run.started"
@@ -120,11 +135,54 @@ class TurnEvent:
 
 
 @dataclass(frozen=True)
+class LimitClamp:
+    """One budget the runtime granted in a reduced form, and what bound it.
+
+    Recorded as data rather than logged here so the emitter can carry the run's
+    own identifiers (``plugin.py``), and so "was this clamped?" is a plain
+    assertion in a test rather than an inspection of log output.
+    """
+
+    limit: str
+    requested: float
+    granted: float
+    ceiling: float
+    source: str
+    #: The environment variable that raises this ceiling — named even when it is
+    #: unset, because that is precisely the lever an operator would reach for.
+    #: ``None`` only for the Lambda cap, which nothing raises.
+    ceiling_env: str | None
+
+    def describe(self) -> str:
+        return f"{self.limit} {self.requested:g} -> {self.granted:g} ({self._bound()})"
+
+    def _bound(self) -> str:
+        if self.source == CEILING_SOURCE_LAMBDA:
+            return f"ceiling {self.ceiling:g}s is the AWS Lambda invocation cap"
+        if self.source == CEILING_SOURCE_ENV:
+            return f"ceiling {self.ceiling:g} set by {self.ceiling_env}"
+        return f"ceiling {self.ceiling:g} is the runtime default; {self.ceiling_env} is unset"
+
+    def as_fields(self) -> dict[str, Any]:
+        """Flat, per-limit structured fields, so a log filter can target one limit."""
+        return {
+            f"{self.limit}_requested": self.requested,
+            f"{self.limit}_granted": self.granted,
+            f"{self.limit}_ceiling": self.ceiling,
+            f"{self.limit}_ceiling_source": self.source,
+            f"{self.limit}_ceiling_env": self.ceiling_env,
+        }
+
+
+@dataclass(frozen=True)
 class RunLimits:
     """The hard stops for one run, resolved from its snapshot and clamped."""
 
     max_turns: int
     timeout_seconds: float
+    #: Which of the two the deployment reduced, if either (marketing#132).
+    #: Empty on the ordinary run, which is the case that must stay silent.
+    clamps: tuple[LimitClamp, ...] = ()
 
     @classmethod
     def from_snapshot(cls, snapshot: dict[str, Any]) -> RunLimits:
@@ -135,21 +193,83 @@ class RunLimits:
         into the deployment's ceilings, so an edited definition can never widen
         what the runtime will spend. A missing or unparseable value falls back to
         the default rather than to "unbounded".
+
+        **The reduction is recorded, because doing it in silence is a defect of
+        its own** (biffo-plugin-marketing#132). Clamping down is right and stays;
+        being unobservable is not. A worker asking for 300s and granted 240s
+        produced a run indistinguishable from one that asked for 240s, so the
+        cut only became visible when a run died on it — every instance of that
+        class so far (marketing#126, #130, and two since) was found by a failed
+        campaign rather than by the runtime that made the decision. What is
+        recorded here is emitted by the caller, which knows whose budget it is.
         """
         max_turns = _positive_int(snapshot.get("max_turns"), DEFAULT_MAX_TURNS)
         timeout = _positive_float(snapshot.get("timeout_seconds"), DEFAULT_TIMEOUT_SECONDS)
 
-        turns_ceiling = _positive_int(
-            os.environ.get(MAX_TURNS_CEILING_ENV), DEFAULT_MAX_TURNS_CEILING
+        turns_ceiling, turns_source = _ceiling(
+            os.environ.get(MAX_TURNS_CEILING_ENV), DEFAULT_MAX_TURNS_CEILING, int
         )
-        time_ceiling = min(
-            _positive_float(os.environ.get(TIMEOUT_CEILING_ENV), DEFAULT_TIMEOUT_CEILING),
-            float(LAMBDA_MAX_SECONDS),
+        time_ceiling, time_source = _ceiling(
+            os.environ.get(TIMEOUT_CEILING_ENV), DEFAULT_TIMEOUT_CEILING, float
+        )
+        if float(LAMBDA_MAX_SECONDS) < time_ceiling:
+            # §8's platform ceiling wins over a misconfigured deployment — and is
+            # reported as itself, since no environment variable raises it.
+            time_ceiling, time_source = float(LAMBDA_MAX_SECONDS), CEILING_SOURCE_LAMBDA
+
+        granted_turns = max(1, min(max_turns, int(turns_ceiling)))
+        granted_timeout = max(1.0, min(timeout, time_ceiling))
+        clamps = tuple(
+            clamp
+            for clamp in (
+                _clamp(
+                    "max_turns",
+                    max_turns,
+                    granted_turns,
+                    int(turns_ceiling),
+                    turns_source,
+                    MAX_TURNS_CEILING_ENV,
+                ),
+                _clamp(
+                    "timeout_seconds",
+                    timeout,
+                    granted_timeout,
+                    time_ceiling,
+                    time_source,
+                    None if time_source == CEILING_SOURCE_LAMBDA else TIMEOUT_CEILING_ENV,
+                ),
+            )
+            if clamp is not None
         )
         return cls(
-            max_turns=max(1, min(max_turns, turns_ceiling)),
-            timeout_seconds=max(1.0, min(timeout, time_ceiling)),
+            max_turns=granted_turns,
+            timeout_seconds=granted_timeout,
+            clamps=clamps,
         )
+
+    @property
+    def was_clamped(self) -> bool:
+        """Whether the deployment granted either limit in a reduced form."""
+        return bool(self.clamps)
+
+    def clamp_report(self) -> dict[str, Any]:
+        """The reductions, as structured log fields — **empty when there were none**.
+
+        Deliberately empty rather than ``{"budget_clamped": False}``: a line on
+        every run is noise, noise gets filtered, and a filtered line reports
+        nothing. The caller emits only when this is non-empty, so the presence of
+        ``budget_clamped`` in the logs *is* the signal.
+        """
+        if not self.clamps:
+            return {}
+        fields: dict[str, Any] = {
+            "budget_clamped": True,
+            "clamped_limits": [clamp.limit for clamp in self.clamps],
+            "clamp_summary": "; ".join(clamp.describe() for clamp in self.clamps),
+        }
+        for clamp in self.clamps:
+            fields.update(clamp.as_fields())
+        return fields
 
 
 @dataclass
@@ -620,6 +740,46 @@ def _as_optional_float(value: Any) -> float | None:
     if not isinstance(value, (int, float)) or isinstance(value, bool):
         return None
     return float(value)
+
+
+def _ceiling(raw: str | None, default: float, cast: Callable[[Any], Any]) -> tuple[float, str]:
+    """Resolve a deployment ceiling, and say where the value came from.
+
+    An environment variable that is absent, unparseable or non-positive is not a
+    ceiling — the built-in default applies — and the source says which happened.
+    "Nobody configured this" and "somebody configured it to exactly this" reduce
+    a budget identically and are fixed differently, so the distinction has to
+    survive as far as the log line.
+    """
+    if raw is not None:
+        try:
+            parsed = cast(raw)
+        except (TypeError, ValueError):
+            parsed = None
+        if parsed is not None and parsed > 0:
+            return float(parsed), CEILING_SOURCE_ENV
+    return float(default), CEILING_SOURCE_DEFAULT
+
+
+def _clamp(
+    limit: str,
+    requested: float,
+    granted: float,
+    ceiling: float,
+    source: str,
+    ceiling_env: str | None,
+) -> LimitClamp | None:
+    """Record the reduction — or ``None`` when the run got everything it asked for."""
+    if granted >= requested:
+        return None
+    return LimitClamp(
+        limit=limit,
+        requested=requested,
+        granted=granted,
+        ceiling=ceiling,
+        source=source,
+        ceiling_env=ceiling_env,
+    )
 
 
 def _positive_int(value: Any, fallback: int) -> int:

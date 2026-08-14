@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 from agent_runtime.loop import (
+    CEILING_SOURCE_DEFAULT,
+    CEILING_SOURCE_ENV,
+    CEILING_SOURCE_LAMBDA,
+    DEFAULT_TIMEOUT_CEILING,
     LAMBDA_MAX_SECONDS,
     MAX_TOOL_CALLS_PER_TURN,
     MAX_TURNS_CEILING_ENV,
@@ -591,6 +595,84 @@ async def test_the_platform_ceiling_wins_over_a_misconfigured_deployment(monkeyp
     assert RunLimits.from_snapshot({"timeout_seconds": 99999}).timeout_seconds == float(
         LAMBDA_MAX_SECONDS
     )
+
+
+# ── A clamp that nobody can see (marketing#132 hole 2) ───────────────────────
+#
+# Clamping downward is correct and stays. Doing it SILENTLY is the defect: a
+# worker asks for 300s, gets 240s, and nothing anywhere says so — which is why
+# every instance of the class so far was discovered by a failed campaign rather
+# than by the runtime that made the decision.
+
+
+async def test_a_clamped_limit_records_what_was_asked_granted_and_what_bound_it(monkeypatch):
+    monkeypatch.setenv(MAX_TURNS_CEILING_ENV, "3")
+    monkeypatch.delenv(TIMEOUT_CEILING_ENV, raising=False)
+
+    limits = RunLimits.from_snapshot({"max_turns": 8, "timeout_seconds": 30})
+    report = limits.clamp_report()
+
+    assert limits.max_turns == 3
+    assert report["budget_clamped"] is True
+    # Only the limit that was actually reduced — the timeout asked for less than
+    # the ceiling and must not appear.
+    assert report["clamped_limits"] == ["max_turns"]
+    assert (report["max_turns_requested"], report["max_turns_granted"]) == (8, 3)
+    assert report["max_turns_ceiling"] == 3
+    assert report["max_turns_ceiling_source"] == CEILING_SOURCE_ENV
+    assert report["max_turns_ceiling_env"] == MAX_TURNS_CEILING_ENV
+    assert "timeout_seconds_requested" not in report
+
+
+async def test_a_run_inside_the_ceilings_reports_no_clamp_at_all(monkeypatch):
+    """No line on an ordinary run. A log emitted every time is filtered, then ignored."""
+    monkeypatch.delenv(MAX_TURNS_CEILING_ENV, raising=False)
+    monkeypatch.delenv(TIMEOUT_CEILING_ENV, raising=False)
+
+    limits = RunLimits.from_snapshot({"max_turns": 4, "timeout_seconds": 30})
+
+    assert limits.clamps == ()
+    assert limits.was_clamped is False
+    assert limits.clamp_report() == {}
+
+
+async def test_a_deployment_ceiling_and_the_code_default_are_told_apart(monkeypatch):
+    """Three different levers, three different fixes — so they are three different
+    values, not one 'clamped' flag."""
+    monkeypatch.delenv(TIMEOUT_CEILING_ENV, raising=False)
+
+    report = RunLimits.from_snapshot({"timeout_seconds": 9999}).clamp_report()
+
+    assert report["timeout_seconds_requested"] == 9999.0
+    assert report["timeout_seconds_granted"] == DEFAULT_TIMEOUT_CEILING
+    assert report["timeout_seconds_ceiling_source"] == CEILING_SOURCE_DEFAULT
+    # Named even when unset: it is the lever an operator would set to raise it.
+    assert report["timeout_seconds_ceiling_env"] == TIMEOUT_CEILING_ENV
+
+
+async def test_the_lambda_hard_cap_is_named_as_the_one_nobody_can_raise(monkeypatch):
+    monkeypatch.setenv(TIMEOUT_CEILING_ENV, "100000")
+
+    report = RunLimits.from_snapshot({"timeout_seconds": 99999}).clamp_report()
+
+    assert report["timeout_seconds_granted"] == float(LAMBDA_MAX_SECONDS)
+    assert report["timeout_seconds_ceiling_source"] == CEILING_SOURCE_LAMBDA
+    # No environment variable raises the AWS invocation cap, so none is offered.
+    assert report["timeout_seconds_ceiling_env"] is None
+
+
+async def test_both_limits_clamped_are_both_reported(monkeypatch):
+    monkeypatch.setenv(MAX_TURNS_CEILING_ENV, "2")
+    monkeypatch.setenv(TIMEOUT_CEILING_ENV, "60")
+
+    report = RunLimits.from_snapshot({"max_turns": 8, "timeout_seconds": 300}).clamp_report()
+
+    assert report["clamped_limits"] == ["max_turns", "timeout_seconds"]
+    assert (report["max_turns_granted"], report["timeout_seconds_granted"]) == (2, 60.0)
+    # A one-line summary so the human reading the log does not have to reassemble
+    # the flat fields to see what happened.
+    assert "max_turns 8 -> 2" in report["clamp_summary"]
+    assert "timeout_seconds 300 -> 60" in report["clamp_summary"]
 
 
 async def test_an_invalid_output_submission_is_rejected_and_the_model_retries():

@@ -470,3 +470,68 @@ async def test_a_run_that_failed_still_reports_its_margin(caplog):
     record = _wall_clock_logs(caplog)[0]
     assert record["status"] == "failed"
     assert record["elapsed_seconds"] == 20.0
+
+
+# ── A budget the deployment quietly cut (marketing#132 hole 2) ───────────────
+#
+# `RunLimits.from_snapshot` clamps a worker's requested budget into the
+# deployment's ceilings — correctly, since a definition must never be able to
+# widen what the runtime spends. It used to do it in silence, so a worker asking
+# for 300s and getting 240s looked identical to one that asked for 240s, and the
+# reduction only became visible when a run died on it. Four instances of that
+# were found by a failed campaign (biffo-plugin-marketing#126, #130, #132).
+
+
+def _clamp_logs(caplog: pytest.LogCaptureFixture) -> list[dict[str, Any]]:
+    """Every log line reporting a reduced budget, as its flat structured fields."""
+    return [dict(r.__dict__) for r in caplog.records if "budget_clamped" in r.__dict__]
+
+
+async def test_a_clamped_budget_is_reported_with_the_worker_that_asked_for_it(caplog, monkeypatch):
+    monkeypatch.setenv("AGENT_RUNTIME_MAX_SECONDS", "60")
+    core = FakeCore(make_run(timeout_seconds=300))
+    llm = FakeLLM()
+
+    with caplog.at_level(logging.INFO):
+        await _plugin(core, llm).events.dispatch(_event())
+
+    records = _clamp_logs(caplog)
+    assert len(records) == 1
+    record = records[0]
+    assert record["levelno"] == logging.WARNING
+    assert record["clamped_limits"] == ["timeout_seconds"]
+    assert (record["timeout_seconds_requested"], record["timeout_seconds_granted"]) == (
+        300.0,
+        60.0,
+    )
+    assert record["timeout_seconds_ceiling_source"] == "environment"
+    assert record["timeout_seconds_ceiling_env"] == "AGENT_RUNTIME_MAX_SECONDS"
+    # Whose budget to raise — the same two identifiers the wall-clock line carries.
+    assert record["agent_name"] == "demo-enricher"
+    assert record["run_id"] == "run-1"
+
+
+async def test_a_clamped_budget_is_not_an_error_and_the_run_still_completes(monkeypatch):
+    """A worker asking for more than the deployment allows is a legitimate, expected
+    state: the runtime's job is to bound it, not to refuse the run."""
+    monkeypatch.setenv("AGENT_RUNTIME_MAX_SECONDS", "60")
+    core = FakeCore(make_run(timeout_seconds=300))
+    llm = FakeLLM()
+
+    await _plugin(core, llm).events.dispatch(_event())
+
+    assert core.completions()[0]["status"] == "completed"
+
+
+async def test_a_run_inside_the_ceilings_logs_no_clamp_line(caplog, monkeypatch):
+    """The quiet case must stay quiet: a line on every run is noise that gets
+    filtered out, and a filtered-out line reports nothing."""
+    monkeypatch.delenv("AGENT_RUNTIME_MAX_SECONDS", raising=False)
+    monkeypatch.delenv("AGENT_RUNTIME_MAX_TURNS", raising=False)
+    core = FakeCore(make_run(timeout_seconds=30))
+    llm = FakeLLM()
+
+    with caplog.at_level(logging.INFO):
+        await _plugin(core, llm).events.dispatch(_event())
+
+    assert _clamp_logs(caplog) == []

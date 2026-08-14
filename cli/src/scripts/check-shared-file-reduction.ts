@@ -113,7 +113,19 @@ export async function runSharedFileReductionCheck(args: ReductionCheckArgs): Pro
     process.exit(2)
   }
 
-  const report = checkSharedFileReduction(pairs, accepted)
+  let report: Awaited<ReturnType<typeof checkSharedFileReduction>>
+  try {
+    report = await checkSharedFileReduction(pairs, accepted)
+  } catch (error) {
+    // Also exit 2: this is the "typescript isn't installed" branch (see
+    // `loadTypeScript` in the guard module) as well as any other failure to
+    // analyse a pair. It only fires outside a biffo-template checkout — the
+    // guard is meaningless in an instance anyway (shared-sync distributes
+    // FROM the template), so a clear refusal here beats the CLI startup
+    // crash a bundled `typescript` used to cause instead.
+    console.error(`✗ shared-file reduction guard: cannot tell — ${(error as Error).message}.`)
+    process.exit(2)
+  }
   const output = formatReductionReport(report)
 
   if (report.findings.length > 0) {

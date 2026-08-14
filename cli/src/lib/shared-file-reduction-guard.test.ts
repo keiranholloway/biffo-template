@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it } from 'vitest'
 import {
   checkSharedFileReduction,
   classifyTarget,
@@ -53,8 +53,8 @@ describe('getFreshIdToken', () => {
 `
 
 describe('the #1577 incident', () => {
-  it('refuses the sync that would have deleted ideation four tests', () => {
-    const report = checkSharedFileReduction([
+  it('refuses the sync that would have deleted ideation four tests', async () => {
+    const report = await checkSharedFileReduction([
       {
         target: 'web/src/lib/auth.test.ts',
         existing: INCIDENT_SATELLITE,
@@ -76,17 +76,17 @@ describe('the #1577 incident', () => {
    * into the canonical copy, THEN sync. The same guard must pass over it, or
    * it forbids the remedy it recommends.
    */
-  it('passes once the canonical copy is folded into a superset', () => {
+  it('passes once the canonical copy is folded into a superset', async () => {
     const folded = INCIDENT_CANONICAL + INCIDENT_SATELLITE
-    const report = checkSharedFileReduction([
+    const report = await checkSharedFileReduction([
       { target: 'web/src/lib/auth.test.ts', existing: INCIDENT_SATELLITE, incoming: folded },
     ])
     expect(report.findings).toEqual([])
     expect(report.analysed).toEqual(['web/src/lib/auth.test.ts'])
   })
 
-  it('names the lost tests in the failure, so the author can fold rather than guess', () => {
-    const report = checkSharedFileReduction([
+  it('names the lost tests in the failure, so the author can fold rather than guess', async () => {
+    const report = await checkSharedFileReduction([
       {
         target: 'web/src/lib/auth.test.ts',
         existing: INCIDENT_SATELLITE,
@@ -104,15 +104,15 @@ describe('what counts as a reduction', () => {
   const withTests = (...titles: string[]) =>
     `describe('s', () => {\n${titles.map((t) => `  it(${JSON.stringify(t)}, () => {})`).join('\n')}\n})\n`
 
-  it('adding tests upstream is never a reduction — adding is always safe', () => {
-    const report = checkSharedFileReduction([
+  it('adding tests upstream is never a reduction — adding is always safe', async () => {
+    const report = await checkSharedFileReduction([
       { target: 'a.test.ts', existing: withTests('a'), incoming: withTests('a', 'b', 'c') },
     ])
     expect(report.findings).toEqual([])
   })
 
-  it('reordering is not a reduction — the unit compared is a set', () => {
-    const report = checkSharedFileReduction([
+  it('reordering is not a reduction — the unit compared is a set', async () => {
+    const report = await checkSharedFileReduction([
       { target: 'a.test.ts', existing: withTests('a', 'b'), incoming: withTests('b', 'a') },
     ])
     expect(report.findings).toEqual([])
@@ -125,23 +125,23 @@ describe('what counts as a reduction', () => {
    * into a finding, and a guard that fires on harmless changes is one people
    * learn to bypass.
    */
-  it('renaming a describe is not a reduction', () => {
+  it('renaming a describe is not a reduction', async () => {
     const before = `describe('old name', () => { it('a', () => {}) })`
     const after = `describe('new name', () => { it('a', () => {}) })`
-    const report = checkSharedFileReduction([
+    const report = await checkSharedFileReduction([
       { target: 'a.test.ts', existing: before, incoming: after },
     ])
     expect(report.findings).toEqual([])
   })
 
-  it('renaming a test IS a reduction, because a reader of the satellite cannot tell the two apart', () => {
-    const report = checkSharedFileReduction([
+  it('renaming a test IS a reduction, because a reader of the satellite cannot tell the two apart', async () => {
+    const report = await checkSharedFileReduction([
       { target: 'a.test.ts', existing: withTests('a'), incoming: withTests('a renamed') },
     ])
     expect(report.findings[0]?.lost).toEqual(['a'])
   })
 
-  it('finds it.only / test.skip / it.each, not just bare it()', () => {
+  it('finds it.only / test.skip / it.each, not just bare it()', async () => {
     const before = [
       "describe('s', () => {",
       "  it.only('only', () => {})",
@@ -149,7 +149,7 @@ describe('what counts as a reduction', () => {
       "  it.each([1, 2])('each %i', () => {})",
       '})',
     ].join('\n')
-    const report = checkSharedFileReduction([
+    const report = await checkSharedFileReduction([
       { target: 'a.test.ts', existing: before, incoming: withTests('unrelated') },
     ])
     expect(report.findings[0]?.lost).toEqual(['only', 'skipped', 'each %i'])
@@ -161,14 +161,14 @@ describe('what counts as a reduction', () => {
    * did, deleting a comment would read as deleting a test and the guard
    * would fire on nothing.
    */
-  it('does not count a commented-out test or a string that looks like one', () => {
+  it('does not count a commented-out test or a string that looks like one', async () => {
     const before = [
       "describe('s', () => {",
       "  // it('a ghost', () => {})",
       "  it('real', () => { expect(\"it('another ghost', () => {})\").toBeTruthy() })",
       '})',
     ].join('\n')
-    expect(extractTestTitles(before).tests).toEqual(['real'])
+    expect((await extractTestTitles(before)).tests).toEqual(['real'])
   })
 })
 
@@ -186,8 +186,8 @@ describe('scope — stated, not implied', () => {
    * that silently drops the inputs it cannot evaluate reports the remainder
    * as the whole, which is `protection-audit.sh`'s #1145 defect.
    */
-  it('reports every other mapping as not analysable, with a reason', () => {
-    const report = checkSharedFileReduction([
+  it('reports every other mapping as not analysable, with a reason', async () => {
+    const report = await checkSharedFileReduction([
       { target: 'AGENTS.md', existing: 'a\nb\n', incoming: 'a\n' },
       { target: 'scripts/routing-smoke-test.test.sh', existing: 'a\nb\n', incoming: 'a\n' },
       { target: 'web/src/lib/auth.ts', existing: 'export const a = 1\n', incoming: '' },
@@ -202,8 +202,8 @@ describe('scope — stated, not implied', () => {
     for (const skipped of report.skipped) expect(skipped.reason).toMatch(/test file/)
   })
 
-  it('prints the unanalysable count in the report, so the denominator is never hidden', () => {
-    const report = checkSharedFileReduction([
+  it('prints the unanalysable count in the report, so the denominator is never hidden', async () => {
+    const report = await checkSharedFileReduction([
       { target: 'AGENTS.md', existing: 'a\n', incoming: 'b\n' },
     ])
     expect(formatReductionReport(report)).toContain('1 not analysable')
@@ -215,10 +215,10 @@ describe('scope — stated, not implied', () => {
    * assertions inside them, and the guard passes. Pinned as a test so the
    * limit is demonstrated rather than merely claimed.
    */
-  it('does NOT catch assertions deleted inside a test that survives by name', () => {
+  it('does NOT catch assertions deleted inside a test that survives by name', async () => {
     const before = `it('a', () => { expect(1).toBe(1); expect(2).toBe(2); expect(3).toBe(3) })`
     const after = `it('a', () => { expect(1).toBe(1) })`
-    const report = checkSharedFileReduction([
+    const report = await checkSharedFileReduction([
       { target: 'a.test.ts', existing: before, incoming: after },
     ])
     expect(report.findings).toEqual([])
@@ -230,19 +230,19 @@ describe('the accepted-reductions escape hatch', () => {
     { target: 'web/src/lib/auth.test.ts', existing: `it('gone', () => {})`, incoming: '' },
   ]
 
-  it('fails when the loss is not declared', () => {
-    expect(checkSharedFileReduction(pairs).findings).toHaveLength(1)
+  it('fails when the loss is not declared', async () => {
+    expect((await checkSharedFileReduction(pairs)).findings).toHaveLength(1)
   })
 
-  it('passes when every lost title is declared intended, with a reason', () => {
-    const report = checkSharedFileReduction(pairs, {
+  it('passes when every lost title is declared intended, with a reason', async () => {
+    const report = await checkSharedFileReduction(pairs, {
       'web/src/lib/auth.test.ts': { gone: 'superseded by the pool-race test upstream' },
     })
     expect(report.findings).toEqual([])
     expect(report.acceptedOnly).toHaveLength(1)
   })
 
-  it('still fails when only SOME of the losses are declared', () => {
+  it('still fails when only SOME of the losses are declared', async () => {
     const twoLost = [
       {
         target: 'web/src/lib/auth.test.ts',
@@ -250,22 +250,24 @@ describe('the accepted-reductions escape hatch', () => {
         incoming: '',
       },
     ]
-    const report = checkSharedFileReduction(twoLost, {
+    const report = await checkSharedFileReduction(twoLost, {
       'web/src/lib/auth.test.ts': { gone: 'superseded' },
     })
     expect(report.findings).toHaveLength(1)
     expect(report.findings[0]?.lost).toEqual(['gone', 'also gone'])
   })
 
-  it('keeps an accepted loss visible in the report rather than silently clean', () => {
-    const report = checkSharedFileReduction(pairs, {
+  it('keeps an accepted loss visible in the report rather than silently clean', async () => {
+    const report = await checkSharedFileReduction(pairs, {
       'web/src/lib/auth.test.ts': { gone: 'superseded' },
     })
     expect(formatReductionReport(report)).toContain('accepted loss in web/src/lib/auth.test.ts')
   })
 
-  it('a declaration on a different target does not apply', () => {
-    const report = checkSharedFileReduction(pairs, { 'other.test.ts': { gone: 'superseded' } })
+  it('a declaration on a different target does not apply', async () => {
+    const report = await checkSharedFileReduction(pairs, {
+      'other.test.ts': { gone: 'superseded' },
+    })
     expect(report.findings).toHaveLength(1)
   })
 })
@@ -285,7 +287,10 @@ describe('the canonical plugin-skeleton auth.test.ts stays a superset (#1575)', 
     join(repoRoot, '_skeletons/plugin-template/web-admin/src/lib/auth.test.ts'),
     'utf8',
   )
-  const titles = extractTestTitles(canonical).tests
+  let titles: string[]
+  beforeAll(async () => {
+    titles = (await extractTestTitles(canonical)).tests
+  })
 
   it.each([
     're-resolves through the pool on every call, so a refreshed token replaces a lapsed one',

@@ -99,6 +99,39 @@ def test_a_path_parameter_matches_one_segment_only():
     assert resp.json()["served_by"] == "plugin"
 
 
+def test_a_request_to_exactly_the_mount_root_falls_through_to_the_plugin():
+    """`_route_path`'s exact-match fallback (``path == root_path -> ''``).
+
+    Starlette's own `Mount` can never produce this shape for a sub-mounted app —
+    its regex requires a literal `/` after the prefix, so `path` is always at
+    least one character longer than `root_path` by the time a mounted app is
+    invoked. But `root_path == path` IS the shape Mangum's `api_gateway_base_path`
+    produces for a request whose raw path is exactly the configured base path —
+    this module's own docstring says it "replac[es] ADR-0018's per-plugin Mangum
+    `api_gateway_base_path` hack", i.e. exactly this wiring, one layer up. `TestClient`'s
+    `root_path=` reproduces that shape through a real HTTP request against
+    `forwarding_gate`'s actual ASGI callable, not by calling `_route_path` with a
+    hand-built scope.
+
+    No declared route has an empty path, so the route-relative path of `''` must
+    never match, and the request must fall through to the plugin's own app
+    untouched — not 401, not forwarded to Core, not a crash."""
+    core = FakeCore()
+    app = forwarding_gate(
+        _plugin_app(),
+        DeclaredRouteForwarder("ideation", _ROUTES, send_to_core=core),
+        token_of=lambda headers: {k.decode().lower(): v.decode() for k, v in headers}.get(
+            "x-biffo-user", ""
+        ),
+    )
+    client = TestClient(app, root_path="/ideation")
+
+    resp = client.get("/ideation", headers={"x-biffo-user": "tok"})
+
+    assert resp.json()["served_by"] == "plugin"  # reached the plugin, not a 401/502
+    assert core.calls == []  # never sent to Core
+
+
 def test_an_undeclared_path_still_reaches_the_plugins_own_app():
     core = FakeCore()
     resp = _client(core).get("/sessions", headers={"x-biffo-user": "tok"})

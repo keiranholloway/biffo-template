@@ -16,7 +16,7 @@ from typing import Any
 
 from fastapi import FastAPI
 from mangum.types import LambdaCognitoIdentity, LambdaMobileClientContext
-from plugin_host.lifespan import PluginLifespans, startup_targets
+from plugin_host.lifespan import PluginLifespans, SubAppLifespan, startup_targets
 from plugin_host.mount import GateError, MountedPlugin, build_host
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse
@@ -483,3 +483,74 @@ def test_a_plugin_route_still_sees_a_healthy_neighbour_after_a_static_admin_asse
     )
     with TestClient(host) as client:
         assert client.get("/ideation/admin").json() == {"shell": True}  # no token
+
+
+# --------------------------------------------------------------------------------
+# aclose(): the shutdown handshake's `except Exception` branch.
+#
+# Never called by the host in production (the module docstring: Mangum closes the
+# cycle itself every invocation, so driving shutdown here would tear a plugin down
+# after its first request). It exists for non-Lambda embeddings and this package's
+# own tests, and it still has to get this right: a genuine shutdown failure must
+# reach the operator's logs — the docstring is explicit that this "deliberately no
+# longer wraps the wait in a blanket suppress(Exception)" because that hid real
+# shutdown errors.
+#
+# NOTE on the sibling `except (TimeoutError, asyncio.CancelledError): task.cancel()`
+# branch (lifespan.py:173, one line above): investigated and NOT covered here — see
+# this change's PR description for the full evidence. In short, `SubAppLifespan._run`
+# wraps the whole app call in `except BaseException as exc: await self._replies.put(exc)`
+# and always returns normally, so it unconditionally swallows any `CancelledError`
+# thrown into it — including the one `asyncio.wait_for`'s own timeout mechanism (and
+# an externally-cancelled awaiter) deliver on cancellation. Per `asyncio.wait_for`'s
+# own documented contract ("If the task suppresses the cancellation and returns a
+# value instead, that value is returned"), this means `await asyncio.wait_for(task,
+# timeout=5)` can never actually raise `TimeoutError` or `CancelledError` for this
+# specific `task` — confirmed empirically (branch-level `coverage run`, and directly
+# cancelling the task and awaiting it bare) rather than assumed. `task.cancel()` on
+# line 173 is therefore dead code as things stand today, not merely hard to trigger.
+# --------------------------------------------------------------------------------
+
+
+async def _hangs_after_shutdown_is_requested(scope: dict, receive, send) -> None:  # noqa: ANN001
+    """Starts cleanly, then never returns once shutdown is requested."""
+    assert scope["type"] == "lifespan"
+    await receive()  # lifespan.startup
+    await send({"type": "lifespan.startup.complete"})
+    await receive()  # lifespan.shutdown
+    await asyncio.Event().wait()  # never returns
+
+
+def test_aclose_logs_a_genuine_shutdown_failure_unlike_its_quiet_sibling(caplog):
+    """The `except Exception` branch. Same statement shape as the sibling
+    `except (TimeoutError, asyncio.CancelledError)` clause one line above (catch,
+    don't re-raise) but opposite loudness, because this one is a real defect
+    rather than an expected outcome — see the module-level note above this test
+    for why the sibling clause is not (and, on the evidence there, cannot be)
+    covered the same way.
+
+    Reproduced via the one concrete way `asyncio.wait_for(task, timeout=5)` raises
+    a plain `Exception` rather than `TimeoutError`/`CancelledError`: awaiting a task
+    that belongs to a *different* event loop than the one currently running —
+    `RuntimeError: Task ... got Future ... attached to a different loop`. That is a
+    real hazard for `aclose()` specifically: its own docstring says it exists for
+    "a non-Lambda embedding" to drive shutdown outside the host's own request
+    cycle, which is exactly the kind of caller that risks running `start()` and
+    `aclose()` on two different loops."""
+    loop_started = asyncio.new_event_loop()
+    runner = SubAppLifespan("hangs", _hangs_after_shutdown_is_requested)
+    try:
+        loop_started.run_until_complete(runner.start())
+
+        loop_closes = asyncio.new_event_loop()
+        try:
+            with caplog.at_level("ERROR", logger="plugin_host.lifespan"):
+                result = loop_closes.run_until_complete(runner.aclose())
+        finally:
+            loop_closes.close()
+
+        assert result is None  # swallowed, same as the quiet branches...
+        assert "hangs" in caplog.text  # ...but THIS one reaches the log
+        assert "different loop" in caplog.text
+    finally:
+        loop_started.close()

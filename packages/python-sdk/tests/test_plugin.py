@@ -734,6 +734,20 @@ class TestLoadManifest:
         with pytest.raises(ValueError):
             load_manifest(manifest_json)
 
+    def test_unreadable_path_wraps_the_oserror_as_value_error(self, tmp_path: Path) -> None:
+        """`p.exists()` is true for a directory too, so a manifest path that names a
+        directory clears the FileNotFoundError check above and reaches
+        `p.read_text()`, which raises `IsADirectoryError` — a subclass of `OSError`,
+        not `json.JSONDecodeError` or a schema error. This must surface as a
+        `ValueError` naming the path, matching every other failure mode
+        `load_manifest` documents, rather than an unhandled `OSError` leaking past
+        this function's contract."""
+        manifest_dir = tmp_path / "biffo.plugin.json"
+        manifest_dir.mkdir()
+
+        with pytest.raises(ValueError, match="Cannot read manifest"):
+            load_manifest(manifest_dir)
+
 
 # --- register_plugin tests ---
 

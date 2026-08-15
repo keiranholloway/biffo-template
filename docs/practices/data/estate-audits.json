@@ -1,5 +1,5 @@
 {
-  "collectedAt": "2026-08-14T03:43:21Z",
+  "collectedAt": "2026-08-15T03:43:35Z",
   "audits": [
     {
       "name": "coverage",
@@ -27,15 +27,15 @@
     },
     {
       "name": "wiring",
-      "ok": true,
-      "exit": 0,
-      "summary": "Every repo calls the shared scripts it holds, and checks the paths it keeps."
+      "ok": false,
+      "exit": 1,
+      "summary": "Some repos still run the raw command, or run no gate at all."
     },
     {
       "name": "classification",
       "ok": false,
       "exit": 1,
-      "summary": "BLIND  2026-08-14.json: 28 of 39 failing steps unclassified (71.8%) — add patterns to STEP_KINDS for: Report the result (24), Report the denominator, and open/update a tracking issue on any failure (2), Run uv sync --all-groups --locked (1), Terraform-input guard (1)"
+      "summary": "BLIND  2026-08-15.json: 30 of 34 failing steps unclassified (88.2%) — add patterns to STEP_KINDS for: Report the result (28), Post Run actions/setup-node@v4 (1), Report the denominator, and open/update a tracking issue on any failure (1)"
     },
     {
       "name": "checkout",

@@ -156,10 +156,17 @@ beforeAll(async () => {
   headBlob = head.blobShaOfWorkingFile(repoRoot, DENOMINATOR_MECHANISM_FILE)
 
   mechanism = loaded ?? head
+  // Derived from the binding that actually decided, never asserted alongside
+  // it. An earlier draft computed this from `loaded`, and a rehearsal of the
+  // "edit the harness" attack made it print "base’s copy supplied the verdict"
+  // on a run where head's copy had. A provenance line that can disagree with
+  // what acted is the #1362 guard-vs-authority defect in the log itself.
   mechanismProvenance =
-    loaded !== null
+    (mechanism as unknown) !== (head as unknown)
       ? `base ${base?.commit.slice(0, 12)} (blob ${baseBlob?.slice(0, 12)})`
-      : `HEAD — no copy of ${DENOMINATOR_MECHANISM_FILE} at the base commit (establishing run)`
+      : rootOfTrustError !== null
+        ? 'HEAD — the base commit was REJECTED, so nothing was loaded from it'
+        : `HEAD — no copy of ${DENOMINATOR_MECHANISM_FILE} at the base commit (establishing run)`
 
   baseline = mechanism.readDenominatorBaseline(repoRoot)
   observed = mechanism.observeDenominatorPrints(repoRoot, guards)
@@ -196,11 +203,11 @@ describe('guard denominator sweep (#1363): a new or modified gate cannot merge w
     // bought at a cost paid only by honest authors.
     const diverged = baseBlob !== null && baseBlob !== headBlob
     console.log(
-      `guard-denominator: mechanism ${DENOMINATOR_MECHANISM_FILE} — base blob ` +
+      `guard-denominator: mechanism ${DENOMINATOR_MECHANISM_FILE} — decided by ` +
+        `${mechanismProvenance}; base blob ` +
         `${baseBlob?.slice(0, 12) ?? 'ABSENT'}, head blob ${headBlob?.slice(0, 12) ?? 'unknown'}` +
         (diverged
-          ? '. THIS BRANCH EDITS THE MECHANISM: base’s copy supplied the verdict below, and ' +
-            'head’s copy was run as well and must pass too.'
+          ? '. THIS BRANCH EDITS THE MECHANISM, so head’s copy was run as well and must pass too.'
           : baseBlob === null
             ? '. Establishing run — head’s copy decided, because there is none at base.'
             : '. Identical, so the distinction did not matter on this run.'),

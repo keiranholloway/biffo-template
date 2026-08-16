@@ -1,19 +1,16 @@
 import { execFileSync } from 'node:child_process'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { GUARD_CANDIDATE_CLASSIFICATION, discoverGuardFiles } from './guard-candidates.js'
+import * as head from './guard-denominator.js'
 import {
+  type BaselineBase,
   DENOMINATOR_BASELINE_FILE,
+  DENOMINATOR_MECHANISM_FILE,
   type DenominatorObservation,
-  baselineEntriesAbsentAtBase,
-  denominatorRatchet,
-  observeDenominatorPrints,
   outputStatesADenominator,
-  readDenominatorBaseline,
-  readDenominatorBaselineAt,
-  resolveBaselineBaseCommit,
 } from './guard-denominator.js'
 import { makeTmpDir } from '../test-utils/tmp.js'
 
@@ -30,26 +27,35 @@ import { makeTmpDir } from '../test-utils/tmp.js'
  * that would drift from the first — this estate's most-repeated defect, and an
  * embarrassing one to commit in the issue about denominators.
  *
- * ## Two things a pre-merge prosecution broke in the first version, both closed here
+ * ## Three things independent pre-merge prosecutions broke, and where each went
  *
- * **1. The baseline was a bucket.** It was a `Set<string>` in this file. The
- * prosecutor added a non-printing guard (suite went red), added ONE LINE to
- * that Set in the same edit set, and it went fully green — so a PR could
- * exempt the very guard it was introducing. The baseline now lives in
- * `cli/biffo.denominator-baseline.json` and is compared against **the copy at
- * the merge base with `origin/dev`**. Removal is an improvement; ADDITION is
- * the failure. There is nothing a PR can write into its own tree that makes an
- * addition look like grandfathered debt, because the comparison is against a
- * commit the PR does not control. Same posture as `checkOrphanRatchet`
- * (`biffo.orphan-baseline.json`) and `shared-files.json`'s `skeletonAdoption`.
+ * **1. The baseline was a bucket** (round 1). A `Set<string>` in this file: add
+ * a non-printing guard, add one line to the Set in the same edit, green. The
+ * baseline now lives in `cli/biffo.denominator-baseline.json` and is ratcheted
+ * against the copy at the merge base. Removal is an improvement; ADDITION is
+ * the failure, and `baselineEntriesAbsentAtBase` binds even on the run that
+ * establishes the file.
  *
- * **2. The detector was satisfied by code that never ran.** It walked the AST
- * for a denominator-shaped print, with no reachability analysis, so a
- * `console.log` inside `if (false)` or inside an uncalled helper both
- * registered as compliant. That detector is gone. This sweep now RUNS the
- * guards and reads what they actually printed — see `guard-denominator.ts` for
- * the two execution routes and, at length, for what neither route reaches.
- * `defeating the detector` below is the proof, executed rather than asserted.
+ * **2. The detector was satisfied by code that never ran** (round 1). It walked
+ * the AST for a denominator-shaped print with no reachability analysis, so a
+ * `console.log` inside `if (false)` or inside an uncalled helper both counted.
+ * That detector is gone: the sweep RUNS the guards and reads the bytes they
+ * emitted. `defeating the detector` below is that proof, executed.
+ *
+ * **3. The mechanism could edit what constrained it** (round 2). One line in
+ * the merge-base resolver, returning the PR's own `HEAD`, made the ratchet
+ * compare the baseline against itself and a new non-printing guard went 19/19
+ * green. The fix is not a sharper detector — it is that *what measures* now
+ * comes from the base ref while *what is measured* comes from HEAD, and that
+ * the resolved base commit is **verified against a property this branch cannot
+ * fabricate** rather than trusted. See `guard-denominator.ts` for the full
+ * argument, including the part of this that is still not bound and cannot be
+ * from inside the checkout.
+ *
+ * Round 2 also broke route 2 (a guard credited by a count its own *test file*
+ * printed). Route 2 is deleted rather than repaired — it credited zero of 25
+ * guards, and zero of the 25 guard test files contain a `console.` call at
+ * all, so its only effect on any real input was the forge.
  */
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -57,22 +63,151 @@ const repoRoot = resolve(here, '..', '..', '..')
 const cliDir = join(repoRoot, 'cli')
 const libDir = join(cliDir, 'src', 'lib')
 
-/** One observation for the whole file: it spawns real check commands and a
- * child vitest run, so repeating it per test would multiply a ~15s cost by
- * the number of questions asked of it. */
-let observed: DenominatorObservation
+/** The subset of this module's surface the sweep drives. A copy loaded from
+ * the base ref must supply all of it, or the load is refused with a legible
+ * error instead of a `TypeError` deep inside a test. */
+const REQUIRED_MECHANISM_EXPORTS = [
+  'observeDenominatorPrints',
+  'denominatorRatchet',
+  'baselineEntriesAbsentAtBase',
+  'readDenominatorBaseline',
+  'readDenominatorBaselineAt',
+] as const
+
+type Mechanism = typeof head
+
+/** One observation for the whole file: it spawns real check commands, so
+ * repeating it per test would multiply a ~15s cost by the number of questions
+ * asked of it. */
 let guards: string[]
 let baseline: string[]
+let base: BaselineBase | null
+let headSha: string | null
+/** The copy that DECIDES — base's whenever one exists. */
+let mechanism: Mechanism
+let mechanismProvenance: string
+let rootOfTrustError: string | null = null
+let observed: DenominatorObservation
+/** Head's own verdict, computed only when head's copy differs from base's, so
+ * that a mechanism edit cannot land unexercised by the run that merges it. */
+let headObserved: DenominatorObservation | null = null
+let baseBlob: string | null = null
+let headBlob: string | null = null
 
-beforeAll(() => {
+async function loadMechanismAt(commit: string): Promise<Mechanism | null> {
+  const file = head.extractFileAtCommit(
+    repoRoot,
+    commit,
+    DENOMINATOR_MECHANISM_FILE,
+    makeTmpDir('guard-denominator-base'),
+  )
+  if (file === null) return null
+  const loaded = (await import(/* @vite-ignore */ pathToFileURL(file).href)) as Partial<Mechanism>
+  const missing = REQUIRED_MECHANISM_EXPORTS.filter((name) => typeof loaded[name] !== 'function')
+  if (missing.length > 0) {
+    throw new Error(
+      `${DENOMINATOR_MECHANISM_FILE} at ${commit} does not export ${missing.join(', ')}. The ` +
+        'sweep runs the base ref’s copy of the mechanism, so renaming or removing an export ' +
+        'that this test drives breaks the load. Keep the surface in ' +
+        'REQUIRED_MECHANISM_EXPORTS stable, or land the rename in a PR that also updates it.',
+    )
+  }
+  return loaded as Mechanism
+}
+
+beforeAll(async () => {
   guards = discoverGuardFiles(libDir)
-  baseline = readDenominatorBaseline(repoRoot)
-  observed = observeDenominatorPrints(repoRoot, guards, {
-    selfTestFile: 'guard-denominator.test.ts',
-  })
-}, 300_000)
+
+  // ── The root of trust, and its verification ──────────────────────────────
+  // Something in the head checkout has to bootstrap: the base commit must be
+  // resolved before anything can be loaded from it. So the resolution is not
+  // trusted — its RESULT is checked against facts a branch cannot fabricate.
+  base = head.resolveBaselineBase(repoRoot)
+  headSha = head.resolveHeadCommit(repoRoot)
+  const allowedRefs = head.integrationRefCandidates()
+
+  if (base === null) {
+    rootOfTrustError =
+      'Could not resolve a base commit (tried ' +
+      `${allowedRefs.join(', ')}), so neither the ratchet nor the base-ref mechanism could be ` +
+      'evaluated at all. Cannot-tell is never a pass — run `git fetch origin dev` and ' +
+      "re-run. In CI this means the checkout is not fetching the integration branch (ci.yml's " +
+      'js job uses fetch-depth: 0 precisely so that it does).'
+  } else if (!allowedRefs.includes(base.ref)) {
+    rootOfTrustError =
+      `the base was resolved via ref ${base.ref}, which is not on the integration list ` +
+      `(${allowedRefs.join(', ')}) recomputed independently here`
+  } else if (headSha !== null && base.commit === headSha) {
+    rootOfTrustError =
+      `the base commit resolved to HEAD itself (${headSha}), so the ratchet would compare this ` +
+      'branch against itself'
+  } else if (!head.baseCommitIsContainedIn(repoRoot, base.commit, base.ref)) {
+    rootOfTrustError =
+      `the base commit ${base.commit} is NOT contained in ${base.ref}, so it is a commit this ` +
+      'branch authored rather than one the integration branch already carries'
+  }
+
+  // ── Load the copy that decides ───────────────────────────────────────────
+  let loaded: Mechanism | null = null
+  if (base !== null && rootOfTrustError === null) {
+    loaded = await loadMechanismAt(base.commit)
+    baseBlob = head.blobShaAtCommit(repoRoot, base.commit, DENOMINATOR_MECHANISM_FILE)
+  }
+  headBlob = head.blobShaOfWorkingFile(repoRoot, DENOMINATOR_MECHANISM_FILE)
+
+  mechanism = loaded ?? head
+  mechanismProvenance =
+    loaded !== null
+      ? `base ${base?.commit.slice(0, 12)} (blob ${baseBlob?.slice(0, 12)})`
+      : `HEAD — no copy of ${DENOMINATOR_MECHANISM_FILE} at the base commit (establishing run)`
+
+  baseline = mechanism.readDenominatorBaseline(repoRoot)
+  observed = mechanism.observeDenominatorPrints(repoRoot, guards)
+
+  // Head's copy is exercised too whenever it differs, so an edit to the
+  // mechanism cannot land untested by the run that merges it.
+  if (loaded !== null && baseBlob !== headBlob) {
+    headObserved = head.observeDenominatorPrints(repoRoot, guards)
+  }
+}, 600_000)
 
 describe('guard denominator sweep (#1363): a new or modified gate cannot merge without stating its denominator', () => {
+  it('the base commit is one the integration branch already carries — not one this branch authored', () => {
+    // The round-2 defeat, closed. `resolveBaselineBase` can be rewritten to
+    // return anything; this asks whether the answer is a commit already on
+    // `origin/dev`, which no commit unique to a PR branch ever is.
+    console.log(
+      `guard-denominator: base ${base?.commit.slice(0, 12) ?? 'UNRESOLVED'} via ` +
+        `${base?.ref ?? 'n/a'}; HEAD ${headSha?.slice(0, 12) ?? 'unknown'}; mechanism from ` +
+        `${mechanismProvenance}`,
+    )
+    expect(
+      rootOfTrustError,
+      `Root of trust rejected: ${rootOfTrustError}. The sweep loads ` +
+        `${DENOMINATOR_MECHANISM_FILE} from the merge base and lets THAT copy decide, so the ` +
+        'resolved base commit is the one thing a branch could otherwise choose for itself. ' +
+        'It is therefore verified rather than trusted.',
+    ).toBeNull()
+  })
+
+  it('states which revision of the mechanism decided this run', () => {
+    // Answering "which document acted, and from which revision" in the log
+    // itself, which is the visibility an acknowledgement trailer would have
+    // bought at a cost paid only by honest authors.
+    const diverged = baseBlob !== null && baseBlob !== headBlob
+    console.log(
+      `guard-denominator: mechanism ${DENOMINATOR_MECHANISM_FILE} — base blob ` +
+        `${baseBlob?.slice(0, 12) ?? 'ABSENT'}, head blob ${headBlob?.slice(0, 12) ?? 'unknown'}` +
+        (diverged
+          ? '. THIS BRANCH EDITS THE MECHANISM: base’s copy supplied the verdict below, and ' +
+            'head’s copy was run as well and must pass too.'
+          : baseBlob === null
+            ? '. Establishing run — head’s copy decided, because there is none at base.'
+            : '. Identical, so the distinction did not matter on this run.'),
+    )
+    expect(headBlob).not.toBeNull()
+  })
+
   it('discovers at least one real guard file — a sweep that finds none is not sweeping', () => {
     console.log(`guard-denominator: ${guards.length} guard(s) discovered under cli/src/lib`)
     expect(guards.length).toBeGreaterThan(0)
@@ -88,40 +223,42 @@ describe('guard denominator sweep (#1363): a new or modified gate cannot merge w
       `guard-denominator: examined ${guards.length} guard(s), ${observed.printing.length} ` +
         `state their own denominator when RUN, ${observed.silent.length} do not ` +
         `(${baseline.length} baselined, ${newlyFailing.length} newly unbaselined); observed by ` +
-        `executing ${observed.commandsRun.length} CI-wired check command(s) and ` +
-        `${guards.length} guard test file(s)`,
+        `executing ${observed.commandsRun.length} CI-wired check command(s)`,
     )
     console.log(
       `guard-denominator: ${observed.commandsSkipped.length} wired check(s) not executable by ` +
         `this harness: ${observed.commandsSkipped.map((c) => `${c.name} — ${c.reason}`).join('; ')}`,
     )
 
-    expect(
-      newlyFailing,
-      `${newlyFailing.length} guard(s) were run and printed no count, and are not in ` +
-        `${DENOMINATOR_BASELINE_FILE}: ${newlyFailing.join(', ')}. This is #1363's closing ` +
-        'condition: a new or modified guard cannot merge silently uncounted. Make the guard ' +
-        'STATE how many things it examined when it passes — a line of real output carrying ' +
-        'denominator vocabulary and a number, e.g. `audited 30 shell file(s) under scripts/` — ' +
-        'reachable either from its CI-wired `biffo check` command or from its own *.test.ts. ' +
-        'Adding it to the baseline instead will NOT work: that file is ratcheted against the ' +
-        'merge base and an addition fails the build (see the ratchet test below).',
-    ).toEqual([])
+    const explain = (failing: string[]): string =>
+      `${failing.length} guard(s) were run and printed no count, and are not in ` +
+      `${DENOMINATOR_BASELINE_FILE}: ${failing.join(', ')}. This is #1363's closing condition: a ` +
+      'new or modified guard cannot merge silently uncounted. Make the guard STATE how many ' +
+      'things it examined when it passes — a line of real output carrying denominator ' +
+      'vocabulary and a number, e.g. `audited 30 shell file(s) under scripts/` — reachable from ' +
+      'its CI-wired `biffo check` command. Adding it to the baseline instead will NOT work: ' +
+      'that file is ratcheted against the merge base and an addition fails the build.'
+
+    expect(newlyFailing, explain(newlyFailing)).toEqual([])
+
+    if (headObserved !== null) {
+      const headFailing = headObserved.silent.filter((f) => !baseline.includes(f))
+      expect(
+        headFailing,
+        `Head's edited copy of the mechanism disagrees with base's: ${explain(headFailing)} ` +
+          'Base’s copy is what binds, but an edit to the mechanism must also pass under ' +
+          'its own new rules — otherwise it lands unexercised and takes effect on dev after ' +
+          'the merge, which is the "guard and authority are two revisions of one file" shape.',
+      ).toEqual([])
+    }
   })
 
   it('the baseline may only SHRINK — growing it inside this branch is itself the failure', () => {
-    const baseCommit = resolveBaselineBaseCommit(repoRoot)
-    expect(
-      baseCommit,
-      'Could not resolve a base commit (tried origin/$GITHUB_BASE_REF, origin/dev, dev), so ' +
-        'this ratchet could not be evaluated at all. Cannot-tell is never a pass — run ' +
-        '`git fetch origin dev` and re-run. If this is failing in CI, the checkout is not ' +
-        "fetching the integration branch (ci.yml's js job uses fetch-depth: 0 precisely so " +
-        'that it does).',
-    ).not.toBeNull()
+    expect(rootOfTrustError).toBeNull()
+    const baseCommit = (base as BaselineBase).commit
 
-    const base = readDenominatorBaselineAt(repoRoot, baseCommit as string)
-    const ratchet = denominatorRatchet(baseline, base)
+    const baseEntries = mechanism.readDenominatorBaselineAt(repoRoot, baseCommit)
+    const ratchet = mechanism.denominatorRatchet(baseline, baseEntries)
 
     if (ratchet.establishing) {
       console.log(
@@ -130,8 +267,8 @@ describe('guard denominator sweep (#1363): a new or modified gate cannot merge w
       )
     } else {
       console.log(
-        `guard-denominator: baseline ${baseline.length} entr(ies) vs ${base?.length ?? 0} at ` +
-          `${baseCommit}: ${ratchet.added.length} added, ${ratchet.removed.length} removed`,
+        `guard-denominator: baseline ${baseline.length} entr(ies) vs ${baseEntries?.length ?? 0} ` +
+          `at ${baseCommit}: ${ratchet.added.length} added, ${ratchet.removed.length} removed`,
       )
     }
 
@@ -149,15 +286,13 @@ describe('guard denominator sweep (#1363): a new or modified gate cannot merge w
       `${ratchet.added.join(', ')} were ADDED to ${DENOMINATOR_BASELINE_FILE} in this branch. ` +
         'The baseline records pre-existing debt and may only shrink. A guard introduced or ' +
         'modified by this PR must state its denominator, not be grandfathered by the same PR ' +
-        'that introduces it — that exact move (add a non-printing guard, add one line to the ' +
-        'exemption list) is what made the first version of this gate advisory rather than ' +
-        'binding.',
+        'that introduces it.',
     ).toEqual([])
 
     // The second condition, which binds even on the run that ESTABLISHES the
     // baseline (where the diff above is vacuously empty and would otherwise
     // let the attack through exactly once — on the change meant to stop it).
-    const notPreExisting = baselineEntriesAbsentAtBase(repoRoot, baseCommit as string, baseline)
+    const notPreExisting = mechanism.baselineEntriesAbsentAtBase(repoRoot, baseCommit, baseline)
     expect(
       notPreExisting,
       `${notPreExisting.join(', ')} ${notPreExisting.length === 1 ? 'is' : 'are'} baselined in ` +
@@ -209,6 +344,85 @@ describe('guard denominator sweep (#1363): a new or modified gate cannot merge w
     // this issue is about.
     expect(observed.printing.length + observed.silent.length).toBe(guards.length)
     expect(observed.printing.filter((f) => observed.silent.includes(f))).toEqual([])
+  })
+
+  describe('the mechanism is loaded from the base ref, proved against real git', () => {
+    /** A repo with `dev` and a topic branch that REWRITES the mechanism file,
+     * which is the shape of every attack in round 2. */
+    const makeRepo = (baseBody: string, headBody: string): { repo: string; devSha: string } => {
+      const repo = makeTmpDir('denominator-mechanism')
+      mkdirSync(join(repo, 'cli', 'src', 'lib'), { recursive: true })
+      const g = (args: string[]): string =>
+        execFileSync('git', ['-C', repo, ...args], {
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'ignore'],
+        })
+      g(['init', '-q', '-b', 'dev'])
+      g(['config', 'user.email', 'test@example.com'])
+      g(['config', 'user.name', 'Test'])
+      const mech = join(repo, DENOMINATOR_MECHANISM_FILE)
+      writeFileSync(mech, baseBody)
+      g(['add', '-A'])
+      g(['commit', '-q', '-m', 'base'])
+      const devSha = g(['rev-parse', 'HEAD']).trim()
+      g(['checkout', '-q', '-b', 'topic'])
+      writeFileSync(mech, headBody)
+      g(['commit', '-qam', 'weaken the mechanism'])
+      return { repo, devSha }
+    }
+
+    it('extracts the BASE copy, not the working tree copy — the edit is simply not read', () => {
+      const { repo, devSha } = makeRepo(
+        'export const verdict = "strict"\n',
+        'export const verdict = "anything goes"\n',
+      )
+      const dir = makeTmpDir('denominator-extract')
+      const file = head.extractFileAtCommit(repo, devSha, DENOMINATOR_MECHANISM_FILE, dir)
+      expect(file).not.toBeNull()
+      expect(execFileSync('cat', [file as string], { encoding: 'utf8' })).toContain('strict')
+      // Fail-first: the working tree really does carry the weakened copy, so
+      // this is a difference the extraction chose, not an absence of one.
+      expect(
+        execFileSync('cat', [join(repo, DENOMINATOR_MECHANISM_FILE)], { encoding: 'utf8' }),
+      ).toContain('anything goes')
+    })
+
+    it('returns null when the file does not exist at base — the establishing case, not agreement', () => {
+      const { repo } = makeRepo('x\n', 'y\n')
+      const dir = makeTmpDir('denominator-extract-absent')
+      expect(head.extractFileAtCommit(repo, 'HEAD', 'cli/no-such-file.ts', dir)).toBeNull()
+    })
+
+    it('REJECTS a base commit the branch authored — the exact round-2 defeat', () => {
+      const { repo, devSha } = makeRepo('a\n', 'b\n')
+      const headSha = execFileSync('git', ['-C', repo, 'rev-parse', 'HEAD'], {
+        encoding: 'utf8',
+      }).trim()
+
+      // What a rewritten resolver would return: this branch's own tip.
+      expect(head.baseCommitIsContainedIn(repo, headSha, 'dev')).toBe(false)
+      // What an honest resolver returns: a commit `dev` already carries.
+      expect(head.baseCommitIsContainedIn(repo, devSha, 'dev')).toBe(true)
+      // And the two really are different commits, so the assertion above is
+      // not passing because the fixture collapsed them.
+      expect(headSha).not.toBe(devSha)
+    })
+
+    it('the integration ref list is derived from the runner-set GITHUB_BASE_REF, and is checkable', () => {
+      expect(head.integrationRefCandidates({ GITHUB_BASE_REF: 'dev' })).toEqual([
+        'origin/dev',
+        'dev',
+      ])
+      expect(head.integrationRefCandidates({ GITHUB_BASE_REF: 'staging' })).toEqual([
+        'origin/staging',
+        'origin/dev',
+        'dev',
+      ])
+      expect(head.integrationRefCandidates({})).toEqual(['origin/dev', 'dev'])
+      // A ref outside the list is what a rewritten resolver would need in
+      // order to point the comparison at something it controls.
+      expect(head.integrationRefCandidates({})).not.toContain('HEAD')
+    })
   })
 
   describe('defeating the detector: the dead-code bypasses that broke the static version', () => {
@@ -307,6 +521,16 @@ assertFakeThing(['a', 'b', 'c'])
       ).toBe(false)
       expect(outputStatesADenominator('audited 30 shell file(s) under scripts/\n')).toBe(true)
     })
+
+    it('a HARDCODED count still satisfies this gate — an open hole, recorded not hidden', () => {
+      // Runtime observation cannot distinguish a computed number from a typed
+      // one; at the point the bytes leave the process they are the same bytes.
+      // The static detector this replaced required an interpolation and would
+      // have rejected it, so the two have mirror-image blind spots. Asserted
+      // rather than described so the day it stops being true, this fails and
+      // somebody updates the docstring that claims it.
+      expect(outputStatesADenominator('examined 25 item(s)\n')).toBe(true)
+    })
   })
 
   describe('fail-first: the ratchet, against real git rather than a fixture of git', () => {
@@ -341,9 +565,9 @@ assertFakeThing(['a', 'b', 'c'])
         stdio: 'ignore',
       })
 
-      const base = readDenominatorBaselineAt(repo, 'dev', REL)
-      const working = readDenominatorBaselineAt(repo, 'topic', REL)
-      const ratchet = denominatorRatchet(working as string[], base)
+      const baseEntries = head.readDenominatorBaselineAt(repo, 'dev', REL)
+      const working = head.readDenominatorBaselineAt(repo, 'topic', REL)
+      const ratchet = head.denominatorRatchet(working as string[], baseEntries)
 
       expect(ratchet.added).toEqual(['fake-thing-guard.ts'])
       expect(ratchet.establishing).toBe(false)
@@ -356,9 +580,9 @@ assertFakeThing(['a', 'b', 'c'])
         stdio: 'ignore',
       })
 
-      const ratchet = denominatorRatchet(
-        readDenominatorBaselineAt(repo, 'topic', REL) as string[],
-        readDenominatorBaselineAt(repo, 'dev', REL),
+      const ratchet = head.denominatorRatchet(
+        head.readDenominatorBaselineAt(repo, 'topic', REL) as string[],
+        head.readDenominatorBaselineAt(repo, 'dev', REL),
       )
       expect(ratchet.added).toEqual([])
       expect(ratchet.removed).toEqual(['legacy-guard.ts'])
@@ -377,12 +601,14 @@ assertFakeThing(['a', 'b', 'c'])
         stdio: 'ignore',
       })
 
-      const entries = readDenominatorBaselineAt(repo, 'topic', REL) as string[]
-      expect(baselineEntriesAbsentAtBase(repo, 'dev', entries, 'guards')).toEqual([
+      const entries = head.readDenominatorBaselineAt(repo, 'topic', REL) as string[]
+      expect(head.baselineEntriesAbsentAtBase(repo, 'dev', entries, 'guards')).toEqual([
         'fake-thing-guard.ts',
       ])
       // …and the pre-existing entry is untouched, so day-one debt never blocks.
-      expect(baselineEntriesAbsentAtBase(repo, 'dev', ['legacy-guard.ts'], 'guards')).toEqual([])
+      expect(head.baselineEntriesAbsentAtBase(repo, 'dev', ['legacy-guard.ts'], 'guards')).toEqual(
+        [],
+      )
     })
 
     it('an absent baseline at the base commit is "establishing", not an empty comparison', () => {
@@ -390,8 +616,8 @@ assertFakeThing(['a', 'b', 'c'])
       // reading as "everything was added", and keeps a missing file from
       // silently permitting anything afterwards.
       const repo = makeRepo()
-      expect(readDenominatorBaselineAt(repo, 'dev', 'no-such-file.json')).toBeNull()
-      expect(denominatorRatchet(['a.ts'], null)).toEqual({
+      expect(head.readDenominatorBaselineAt(repo, 'dev', 'no-such-file.json')).toBeNull()
+      expect(head.denominatorRatchet(['a.ts'], null)).toEqual({
         added: [],
         removed: [],
         establishing: true,
@@ -402,7 +628,7 @@ assertFakeThing(['a', 'b', 'c'])
       const repo = makeRepo()
       writeFileSync(join(repo, REL), '{"noDenominator": "not-an-array"}\n')
       execFileSync('git', ['-C', repo, 'commit', '-qam', 'break it'], { stdio: 'ignore' })
-      expect(() => readDenominatorBaselineAt(repo, 'topic', REL)).toThrow(/invalid/)
+      expect(() => head.readDenominatorBaselineAt(repo, 'topic', REL)).toThrow(/invalid/)
       // Degrading to `[]` would make every working entry read as an addition
       // (a surprise hard block) — or, if the degradation happened on the
       // working side instead, would silently permit every addition.

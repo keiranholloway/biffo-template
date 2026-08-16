@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync, readFileSync, readdirSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { basename, join } from 'node:path'
 import ts from 'typescript'
 
 /**
@@ -56,29 +56,49 @@ import ts from 'typescript'
  * bytes. That is also #1363's own "question three" — did the job execute, and
  * over what input set — applied to the mechanism built to answer it.
  *
- * ## The two execution routes, and why both
+ * ## One execution route. The second was deleted, and the deletion is measured
  *
- * A guard is credited only if a line **actually emitted** by one of these
- * states a count (denominator vocabulary AND a bare number on the same line):
+ * A guard is credited only if a line **actually emitted** by its CI-wired
+ * check command states a count (denominator vocabulary AND a bare number on
+ * the same line). `sh scripts/biffo.sh check <name>` is literally what
+ * `ci.yml` runs — in the template that bridge execs the working tree's `cli/`
+ * through tsx, so this observes THIS branch's guards against THIS repo, not a
+ * published release. The invocations are discovered by reading the wiring
+ * files (`.github/workflows/`, `.githooks/`, `scripts/`), never listed here. A
+ * check is mapped back to the guard module(s) its
+ * `cli/src/scripts/check-<name>.ts` entrypoint imports, read from the
+ * TypeScript AST (#956).
  *
- *   1. **Its CI-wired check command.** `sh scripts/biffo.sh check <name>` is
- *      literally what `ci.yml` runs — in the template that bridge execs the
- *      working tree's `cli/` through tsx, so this observes THIS branch's
- *      guards against THIS repo, not a published release. The invocations are
- *      discovered by reading the wiring files (`.github/workflows/`,
- *      `.githooks/`, `scripts/`), never listed here. A check is mapped back to
- *      the guard module(s) its `cli/src/scripts/check-<name>.ts` entrypoint
- *      imports, read from the TypeScript AST (#956).
+ * **There used to be a second route** — run each guard's own same-basename
+ * `*.test.ts` in a child `vitest run --reporter=verbose` and attribute console
+ * output per test FILE, using the reporter's `stdout | <file> > <test>`
+ * header. A pre-merge prosecution broke it: attribution by file cannot tell a
+ * count the *guard* emitted from a count its *test* emitted, so a guard whose
+ * source prints nothing passed if its paired test contained
+ * `console.log('examined 999 item(s)')` in an `it()` that never exercised it.
+ * The test file and the guard are written by the same PR, so that is not a
+ * corner case — it is a one-line forge.
  *
- *   2. **Its own same-basename `*.test.ts`.** One child `vitest run
- *      --reporter=verbose` over the guard test pairs, with console output
- *      attributed per file by the reporter's own `stdout | <file> > <test>`
- *      header. This is the route a new guard can satisfy inside a `cli/`-only
- *      change — `template-owned-scope.test.ts`'s `[coverage] <scanner>: N
- *      path(s) reached` (added by #1454, an instance of this very class) is
- *      the shape it exists for. Without it the only way to pass would be to
- *      add a CI step, and a gate that can only be satisfied by editing a
- *      workflow is a gate people route around.
+ * It was deleted rather than repaired, and the deciding fact is a measurement,
+ * not a preference: **route 2 credited zero of the 25 discovered guards**, and
+ * **zero of the 25 guard `*.test.ts` files contain a `console.` call at all**
+ * (`grep -c 'console\.' cli/src/lib/<guard>.test.ts` over the discovered set).
+ * It was machinery with no users — a full child vitest run per sweep, whose
+ * only measurable effect on any real input was the forge above. Removing it
+ * does not move the credited figure by one guard. Attribution *could* have
+ * been made sound instead (a `--setupFiles` shim wrapping `console.*` and
+ * reading the caller's frame off `new Error().stack` does resolve to the
+ * original `.ts` path under vitest 4 — verified before choosing), but building
+ * a sound mechanism for zero callers is #1413's own defect, in the change
+ * about denominators.
+ *
+ * The consequence is deliberate and makes the gate **stricter**: a new guard
+ * is now credited only by being wired into CI as a `biffo check` subcommand.
+ * The previous docstring argued that "a gate that can only be satisfied by
+ * editing a workflow is a gate people route around". That argument is
+ * retired — a guard nothing in CI invokes is exactly #1413's "guards with zero
+ * callers", so requiring the wiring is the correct demand rather than friction
+ * to be designed around.
  *
  * ## What this deliberately does NOT reach — named, not silently narrowed
  *
@@ -98,13 +118,10 @@ import ts from 'typescript'
  *   - **Checks only ever invoked with arguments.** `shared-file-reduction` is
  *     called by `scripts/shared-sync.sh` with `--pairs`, which only exist
  *     inside a live sync round. Reported by name.
- *   - **A print in an unrelated third-party caller.** Route 2 is the guard's
- *     OWN test pair only. `template-owned-scope.test.ts` prints a real count
- *     for `terraform-input-guard.findWorkflowFiles`, and that print credits
- *     nobody here. Widening route 2 to "any test file importing the guard"
- *     would let a new non-printing guard be credited by a count another guard
- *     printed in a shared test file, which is a cheaper bypass than the one
- *     this rewrite closes.
+ *   - **A count printed anywhere other than a wired check's own output.**
+ *     `template-owned-scope.test.ts` prints a real count for
+ *     `terraform-input-guard.findWorkflowFiles`; it credits nobody here, and
+ *     since route 2's removal no test file's output credits anything at all.
  *   - **Attribution is per entrypoint, not per function.** A check whose
  *     `check-<name>.ts` imports two guard modules credits both. Two do today
  *     (`check-lambda-output.ts` and `check-skeleton-drift.ts` both import
@@ -144,12 +161,93 @@ import ts from 'typescript'
  *     The gate is `guard-denominator.test.ts`, which runs in CI under
  *     `pnpm run test` and prints its own denominator unconditionally — that
  *     line in the CI log is what makes this mechanism answerable to its own
- *     rule. Route 2 cannot cover it in any case: a sweep that runs its own
- *     test file as a child recurses forever.
+ *     rule.
  *   - **The `isGuard` classification itself.** A new guard could be kept out
  *     of this denominator entirely by classifying it `isGuard: false` in
  *     `guard-candidates.ts`. That is #1519's mechanism, and it requires a
  *     written reason a reviewer reads; nothing here re-litigates it.
+ *
+ * ## What MEASURES comes from the base ref. What is MEASURED comes from HEAD
+ *
+ * A second pre-merge prosecution broke the version before this one without
+ * touching the baseline at all: **one line** changed in
+ * `resolveBaselineBaseCommit`, so that the merge base resolved to the PR's own
+ * `HEAD` instead of `origin/dev`. The ratchet then compared the baseline
+ * against itself, and a brand-new non-printing guard — grandfathered by the
+ * very PR introducing it — went fully green.
+ *
+ * That is not a bug in that function. It is the general property the
+ * prosecutor named: **no guard executed from the PR's own checkout can bind a
+ * PR that edits it.** Two rounds of cleverer detection each invited the next
+ * bypass, so this round changes the shape instead of sharpening the detector.
+ *
+ * `guard-denominator.test.ts` resolves the merge base, then extracts THIS
+ * FILE as it stands at that commit and imports it. Base's copy supplies the
+ * verdict: the vocabulary, the observation, the ratchet comparison, the
+ * absent-at-base check. A PR editing this file therefore changes what is
+ * **measured** (its guards, its baseline) but not what **measures**. Widening
+ * `DENOMINATOR_VOCABULARY`, short-circuiting `outputStatesADenominator`,
+ * making `guardsRunByCheck` credit everything, or the one-line merge-base edit
+ * above are all now edits to a copy that does not run.
+ *
+ * ### The root of trust, named rather than hidden
+ *
+ * Something has to bootstrap, and that something is in the head checkout: the
+ * test file resolves the base commit before it can load anything from it.
+ * Rather than trust that resolution, the test **verifies its result** against
+ * a property a branch cannot fabricate — the resolved commit must be
+ * contained in the remote integration branch (`git merge-base --is-ancestor`),
+ * must not be `HEAD`, and must have been reached via a ref on the allowed
+ * integration list. The prosecutor's exact attack fails on the first of those:
+ * `HEAD` is not an ancestor of `origin/dev`, so resolving to it is caught by a
+ * check that never asks how the resolution was computed. `resolveBaselineBase`
+ * returns the ref alongside the commit precisely so the caller can check both.
+ *
+ * **What still is not bound, stated plainly.** `guard-denominator.test.ts`
+ * itself runs from the head checkout and could simply be edited to skip all of
+ * the above — as could `vitest.config.ts`, `package.json`, or `ci.yml`, since
+ * a `pull_request` run uses the PR's own copy of every one of them. There is
+ * no arrangement of files inside a repository that binds a PR able to edit
+ * that repository; closing it needs something outside the checkout (a
+ * CODEOWNERS review requirement on these paths, or a `pull_request_target`
+ * job running the base's workflow), which is not a `cli/` change and is not
+ * claimed here. What this shape buys is narrower and real: the cheap,
+ * plausible-looking, one-line edit no longer works, and the remaining bypass
+ * is a visible deletion of the base-ref load in a file whose only purpose is
+ * this gate.
+ *
+ * ### Why an acknowledgement trailer was considered and not taken
+ *
+ * The alternative direction was to require a `Core-Divergence`-style trailer
+ * whenever this file or the baseline differs from base — not preventing the
+ * edit, just making it non-silent. It is rejected as the *primary* mechanism
+ * because its cost falls entirely on the honest path: a maintainer improving
+ * this gate is blocked until they edit the PR body, while an attacker types
+ * the same line and proceeds. It buys visibility, which is obtained here for
+ * free instead — the sweep prints, unconditionally and on green runs, which
+ * commit supplied the mechanism and whether head's copy differs from it. The
+ * "which document acted, and from which revision" question is answered in the
+ * CI log rather than enforced by ceremony.
+ *
+ * ### The establishing run is not bound by this, and cannot be
+ *
+ * On the PR that introduces this file there is no copy at the base commit to
+ * load, so head's copy runs and says so loudly. That hole is real and
+ * unavoidable — it is the same bootstrap the baseline ratchet has, one level
+ * up. The mitigating fact is that it is the *safest* instance of the failure
+ * mode it concerns: the danger being guarded against is a one-line edit buried
+ * in an existing file, and on the establishing run the whole file is new and
+ * read in full by a reviewer. Every PR after this one is judged by base's copy.
+ *
+ * ### A mechanism edit must still pass its own new rules
+ *
+ * Loading the verdict from base creates a hazard in the other direction: an
+ * edit to this file would otherwise never be exercised by the run that merges
+ * it, landing untested and taking effect on `dev` afterwards — the estate's
+ * recorded "guard and authority disagree, because they are two revisions of
+ * one file" shape. So when head's copy differs from base's, the sweep runs
+ * BOTH and requires both to pass. Base's copy is what a failure is attributed
+ * to; head's copy failing means the edit is broken and may not land.
  *
  * ## The baseline is a ratchet, not a bucket
  *
@@ -404,70 +502,6 @@ export function runCheckCommand(repoRoot: string, name: string): CommandRun {
   }
 }
 
-// ── Route 2: the guard's own test pair, run for real ────────────────────────
-
-/**
- * Split a `vitest run --reporter=verbose` transcript into the console output
- * each test FILE actually emitted. The reporter prefixes every intercepted
- * block with `stdout | <file> > <suite> > <test>` (or `stderr | ...`) and
- * terminates it with a blank line, which is the attribution this needs and
- * the reason `--reporter=verbose` is passed explicitly: the default reporter
- * suppresses console output entirely when stdout is not a TTY, so a harness
- * that relied on the default would observe silence from every guard and
- * report a uniform, meaningless zero.
- */
-export function parseVitestConsoleByFile(transcript: string): Record<string, string> {
-  const byFile: Record<string, string> = {}
-  const lines = transcript.split('\n')
-  let current: string | null = null
-
-  for (const line of lines) {
-    const header = /^(?:stdout|stderr) \| ([^\s|]+)/.exec(line)
-    if (header) {
-      current = header[1] as string
-      byFile[current] ??= ''
-      continue
-    }
-    if (current === null) continue
-    if (line.trim() === '') {
-      current = null
-      continue
-    }
-    byFile[current] += `${line}\n`
-  }
-
-  return byFile
-}
-
-/**
- * Run the given test files in ONE child vitest and return what each printed.
- * `CI=true` is forced so the child never tries to take over a TTY, and the
- * transcript is returned even when the child exits non-zero — a failing guard
- * test is the main suite's problem, not this sweep's.
- */
-export function runTestFilesAndCaptureConsole(
-  cliDir: string,
-  testFiles: readonly string[],
-): Record<string, string> {
-  if (testFiles.length === 0) return {}
-  const bin = join(cliDir, 'node_modules', '.bin', 'vitest')
-  let transcript: string
-  try {
-    transcript = execFileSync(bin, ['run', '--reporter=verbose', ...testFiles], {
-      cwd: cliDir,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, CI: 'true' },
-      timeout: 300_000,
-      maxBuffer: 64 * 1024 * 1024,
-    })
-  } catch (error) {
-    const err = error as { stdout?: string; stderr?: string }
-    transcript = `${err.stdout ?? ''}\n${err.stderr ?? ''}`
-  }
-  return parseVitestConsoleByFile(transcript)
-}
-
 // ── The observation itself ─────────────────────────────────────────────────
 
 export interface DenominatorObservation {
@@ -483,26 +517,23 @@ export interface DenominatorObservation {
 }
 
 /**
- * Run every observable execution route and report what was actually printed.
+ * Run every CI-wired check this harness can drive, and report what was
+ * actually printed.
  *
  * `guardFiles` is `discoverGuardFiles(libDir)` — this never enumerates guards
- * itself. `selfTestFile` is excluded from route 2 for the obvious reason that
- * a sweep which runs its own test file recurses forever.
+ * itself.
  */
 export function observeDenominatorPrints(
   repoRoot: string,
   guardFiles: readonly string[],
-  options: { selfTestFile?: string } = {},
 ): DenominatorObservation {
   const cliDir = join(repoRoot, 'cli')
-  const libDir = join(cliDir, 'src', 'lib')
   const scriptsDir = join(cliDir, 'src', 'scripts')
   const registry = registeredCheckEntrypoints(join(cliDir, 'src', 'commands'))
   const printing = new Set<string>()
   const commandsRun: DenominatorObservation['commandsRun'] = []
   const commandsSkipped: DenominatorObservation['commandsSkipped'] = []
 
-  // Route 1 — the CI-wired check commands.
   for (const invocation of discoverCheckInvocations(repoRoot)) {
     const entrypoints = registry[invocation.name] ?? []
     if (!invocation.bare) {
@@ -529,18 +560,6 @@ export function observeDenominatorPrints(
     }
   }
 
-  // Route 2 — each guard's own test pair, in one child vitest.
-  const pairs = new Map<string, string>()
-  for (const guard of guardFiles) {
-    const testFile = `src/lib/${guard.replace(/\.ts$/, '.test.ts')}`
-    if (options.selfTestFile !== undefined && testFile.endsWith(options.selfTestFile)) continue
-    if (existsSync(join(libDir, guard.replace(/\.ts$/, '.test.ts')))) pairs.set(testFile, guard)
-  }
-  const consoleByFile = runTestFilesAndCaptureConsole(cliDir, [...pairs.keys()])
-  for (const [testFile, guard] of pairs) {
-    if (outputStatesADenominator(consoleByFile[testFile] ?? '')) printing.add(guard)
-  }
-
   return {
     printing: guardFiles.filter((g) => printing.has(g)),
     silent: guardFiles.filter((g) => !printing.has(g)),
@@ -555,6 +574,10 @@ export function observeDenominatorPrints(
  * rather than at the repo root, because it is a `cli/` development artefact
  * and not something a scaffolded instance ever reads. */
 export const DENOMINATOR_BASELINE_FILE = 'cli/biffo.denominator-baseline.json'
+
+/** This file. The sweep loads the copy at the merge base and lets THAT copy
+ * decide, so the module has to be able to name itself. */
+export const DENOMINATOR_MECHANISM_FILE = 'cli/src/lib/guard-denominator.ts'
 
 /**
  * Parse a baseline document. A malformed file THROWS rather than degrading to
@@ -598,32 +621,120 @@ function git(repoRoot: string, args: string[]): string | null {
 }
 
 /**
- * The commit this branch's baseline must be judged against: the merge base
- * with the integration branch, NOT that branch's tip. Using the tip would
- * report a *shrink* that landed on `dev` after you branched as though your
- * older, larger baseline had grown — a false failure nobody could act on.
+ * The refs this sweep is willing to treat as the integration branch, in
+ * preference order: `origin/$GITHUB_BASE_REF` (the estate's existing
+ * convention, see `check-core-ownership.ts`), then `origin/dev`, then a local
+ * `dev` for a workstation with no fetched remote.
  *
- * `origin/$GITHUB_BASE_REF` first (the estate's existing convention, see
- * `check-core-ownership.ts`), then `origin/dev`, then a local `dev`. Returns
- * `null` when none of them resolve, which callers must treat as **cannot
- * tell** — never as a pass.
+ * Exported, and taking the environment as an argument, so that a caller can
+ * recompute the list independently and check that the ref a resolution claims
+ * to have used is actually on it. `GITHUB_BASE_REF` is set by the Actions
+ * runner rather than by the checkout, which is what makes it worth preferring.
  */
-export function resolveBaselineBaseCommit(repoRoot: string): string | null {
-  const base = process.env['GITHUB_BASE_REF']
-  const candidates = [
-    ...(base !== undefined && base !== '' ? [`origin/${base}`] : []),
-    'origin/dev',
-    'dev',
+export function integrationRefCandidates(env: NodeJS.ProcessEnv = process.env): string[] {
+  const base = env['GITHUB_BASE_REF']
+  return [
+    ...new Set([
+      ...(base !== undefined && base !== '' ? [`origin/${base}`] : []),
+      'origin/dev',
+      'dev',
+    ]),
   ]
-  for (const ref of candidates) {
+}
+
+export interface BaselineBase {
+  /** The merge-base commit this branch is judged against. */
+  commit: string
+  /** The integration ref it was derived from — checkable by the caller. */
+  ref: string
+}
+
+/**
+ * The commit this branch is judged against: the merge base with the
+ * integration branch, NOT that branch's tip. Using the tip would report a
+ * *shrink* that landed on `dev` after you branched as though your older,
+ * larger baseline had grown — a false failure nobody could act on.
+ *
+ * Returns `null` when no candidate ref resolves, which callers must treat as
+ * **cannot tell** — never as a pass.
+ *
+ * **Callers must verify the result rather than trust it** — see
+ * `baseCommitIsContainedIn`. A one-line edit here returning `HEAD` is exactly
+ * how the previous version of this gate was defeated, and no amount of care
+ * inside this function prevents that, because the attacker rewrites the
+ * function. What defeats it is checking the answer against a property of the
+ * repository the branch does not control.
+ */
+export function resolveBaselineBase(repoRoot: string): BaselineBase | null {
+  for (const ref of integrationRefCandidates()) {
     const resolved = git(repoRoot, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`])
     if (resolved === null || resolved.trim() === '') continue
     const mergeBase = git(repoRoot, ['merge-base', 'HEAD', ref])
     // A repo with no shared history (a fixture built from two roots) still
     // gets a usable comparison from the ref itself.
-    return (mergeBase ?? resolved).trim()
+    return { commit: (mergeBase ?? resolved).trim(), ref }
   }
   return null
+}
+
+/** The commit `HEAD` currently names, or `null` if git cannot say. */
+export function resolveHeadCommit(repoRoot: string): string | null {
+  return git(repoRoot, ['rev-parse', 'HEAD'])?.trim() ?? null
+}
+
+/**
+ * Is `commit` already contained in `ref` — i.e. is it a commit that the
+ * integration branch already carries, and therefore one this branch cannot
+ * have authored?
+ *
+ * This is the check that makes the base-commit resolution trustworthy without
+ * trusting the resolver. Any commit unique to the PR branch — `HEAD`, `HEAD^`,
+ * the commit that introduced a new non-printing guard — fails it, because it
+ * is by definition not yet on `origin/dev`. It asks nothing about *how* the
+ * commit was chosen, which is the whole point: the previous defeat rewrote the
+ * choosing.
+ */
+export function baseCommitIsContainedIn(repoRoot: string, commit: string, ref: string): boolean {
+  // `--is-ancestor` answers through the exit status and prints nothing, so
+  // `git()` returns '' for yes and null for no. Worth stating: a helper that
+  // read "no output" as "cannot tell" would invert this check silently.
+  return git(repoRoot, ['merge-base', '--is-ancestor', commit, ref]) !== null
+}
+
+/**
+ * This file, as it stands at `commit`, written somewhere importable and
+ * returned — or `null` when the path did not exist there (the establishing
+ * case, which callers must report rather than treat as agreement).
+ *
+ * `destDir` should be a temp directory: bare specifiers still resolve from
+ * outside the package root under vitest's transform pipeline (verified), and
+ * writing into `cli/src/` instead would put an untracked module where guard
+ * discovery, lint and typecheck can all see it mid-run.
+ */
+export function extractFileAtCommit(
+  repoRoot: string,
+  commit: string,
+  relPath: string,
+  destDir: string,
+): string | null {
+  const text = git(repoRoot, ['show', `${commit}:${relPath}`])
+  if (text === null) return null
+  mkdirSync(destDir, { recursive: true })
+  const dest = join(destDir, `base-${commit.slice(0, 12)}-${basename(relPath)}`)
+  writeFileSync(dest, text)
+  return dest
+}
+
+/** Blob SHA of `relPath` at `commit`, or `null` when absent — the cheap way to
+ * say whether head's copy of the mechanism differs from base's, and the value
+ * printed in the CI log so the acting revision is a matter of record. */
+export function blobShaAtCommit(repoRoot: string, commit: string, relPath: string): string | null {
+  return git(repoRoot, ['rev-parse', `${commit}:${relPath}`])?.trim() ?? null
+}
+
+/** Blob SHA of a working-tree file, computed the same way git would. */
+export function blobShaOfWorkingFile(repoRoot: string, relPath: string): string | null {
+  return git(repoRoot, ['hash-object', relPath])?.trim() ?? null
 }
 
 /**

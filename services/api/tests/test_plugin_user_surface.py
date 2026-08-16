@@ -1,14 +1,19 @@
-"""User-facing and admin-facing plugin surface declarations: manifest schema."""
+"""User-facing and admin-facing plugin surface declarations: manifest schema.
+
+``user_frontend`` (ADR-0018 §2) has no coverage here on purpose: this module no
+longer parses it (see the removal note in `plugin_user_surface.py`'s module
+docstring). Its manifest schema is still validated elsewhere —
+`cli/src/lib/plugin-manifest.ts`'s `UserFrontendSchema` and
+`biffo_plugin_sdk.plugin.UserFrontend` — and those keep their own tests.
+"""
 
 from __future__ import annotations
 
 import pytest
 from api.models.plugin_user_surface import (
     AdminIngress,
-    UserFrontend,
     UserIngress,
     parse_admin_ingress_from_manifest,
-    parse_user_frontend_from_manifest,
     parse_user_ingress_from_manifest,
 )
 from pydantic import ValidationError
@@ -73,38 +78,20 @@ def test_admin_ingress_rejects_unknown_keys():
         AdminIngress.model_validate({"required_group": "admin", "app": "m:a", "extra": True})
 
 
-# ── user_frontend ────────────────────────────────────────────────────────────────
-
-
-def test_user_frontend_parses():
-    fe = UserFrontend(dir="web/dist", required_group="founder")
-    assert fe.dir == "web/dist"
-
-
-def test_user_frontend_dir_must_be_relative_no_traversal():
-    for bad in ("/etc/passwd", "../secrets", "web/../../x", ""):
-        with pytest.raises(ValidationError):
-            UserFrontend(dir=bad, required_group="founder")
-
-
 # ── piecemeal parsing ────────────────────────────────────────────────────────────
 
 
 def test_parsers_return_none_when_absent():
     assert parse_user_ingress_from_manifest({}) is None
     assert parse_admin_ingress_from_manifest({}) is None
-    assert parse_user_frontend_from_manifest({}) is None
 
 
 def test_parsers_build_the_models_when_present():
     manifest = {
         "user_ingress": {"required_group": "founder", "app": "ideation.app:app"},
         "admin_ingress": {"required_group": "admin", "app": "ideation.admin:app"},
-        "user_frontend": {"dir": "web/dist", "required_group": "founder"},
     }
     ingress = parse_user_ingress_from_manifest(manifest)
     admin_ingress = parse_admin_ingress_from_manifest(manifest)
-    frontend = parse_user_frontend_from_manifest(manifest)
     assert ingress is not None and ingress.app == "ideation.app:app"
     assert admin_ingress is not None and admin_ingress.app == "ideation.admin:app"
-    assert frontend is not None and frontend.dir == "web/dist"

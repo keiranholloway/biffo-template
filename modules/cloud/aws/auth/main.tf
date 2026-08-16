@@ -9,6 +9,81 @@ locals {
   custom_sender_set = var.mail_from_address != "" && var.mail_source_arn != ""
 }
 
+# Plan-time detector for a consumed-but-unowned SES identity (issue #1475).
+#
+# This module only ever CONSUMES `var.mail_source_arn` — it creates no SES
+# identity of its own (see the decision memo on #1475 for why: the domain
+# identity belongs at the environment root, alongside every other SES sender
+# on the account, not tied to this pool's lifecycle). Before this, a pool
+# pointed at a deleted or never-verified identity accepted the config, sent
+# nothing, and told nobody: Cognito's admin API still returns
+# `codeDeliveryDetails` even when SES silently drops the send
+# (keiranholloway/biffo-platform#160).
+#
+# The degradation shape is the whole point. `count` gates this data source on
+# `local.custom_sender_set`, the SAME condition that gates the
+# `email_configuration` block below, so the two can never disagree about
+# whether a custom sender is in play:
+#
+#   - No SES configured (both mail_* vars left at their "" default — this is
+#     every biffo-platform environment today): count = 0. The data source is
+#     never read and the postcondition never evaluates. `terraform plan`
+#     stays exactly as clean as it was before this change. This case is the
+#     reason a `check` block was rejected below — a `check` block still
+#     executes its nested data source unconditionally, so it would have added
+#     an SES API call (and a possible read failure) to every apply that has
+#     never touched SES, which is the one outcome the issue explicitly warns
+#     against.
+#   - SES configured and the identity is missing/unverified/not yet DKIM'd:
+#     count = 1. The GetEmailIdentity read either fails outright (identity
+#     does not exist — SES returns NotFoundException, which fails the plan on
+#     its own) or succeeds with `verified_for_sending_status = false`, which
+#     the postcondition below turns into a named, actionable plan failure
+#     instead of a pool that silently accepts and drops mail.
+#   - SES configured and verified: count = 1, read succeeds, postcondition
+#     passes, plan is clean.
+#
+# `precondition` cannot do this job: Terraform rejects a `self` reference
+# inside a data source's `precondition` ("This object can be used only in
+# resource provisioner, connection, and postcondition blocks") because a
+# precondition is evaluated before the data is read, so the very attribute
+# this check depends on does not exist yet. `postcondition` runs after the
+# read and is what makes `self.verified_for_sending_status` legal here —
+# confirmed against a real `terraform validate`, not just provider docs.
+#
+# A bare variable `validation {}` block was rejected too: validation only
+# sees the literal string a caller passed, with no way to call the SES API,
+# so it can assert the ARN is well-formed but never that the identity behind
+# it is real or verified — exactly the failure mode this issue reports.
+#
+# `email_identity` takes the identity's NAME (a domain or an email address),
+# not its ARN — confirmed against the provider schema
+# (`aws_sesv2_email_identity` data source: required string `email_identity`,
+# computed bool `verified_for_sending_status`). An SES identity ARN is always
+# `arn:aws:ses:<region>:<account>:identity/<name>`, so the name is everything
+# after the final "/".
+#
+# CAVEAT — same-region only. `aws ~> 5.0` (pinned in this module's
+# `required_providers` above) has no per-data-source `region` argument, so
+# this reads via the environment root's own provider region. Both live
+# instances (biffo-platform, tabsii-platform) keep their SES identity in the
+# same region as their Cognito pool, so this does not bite today. An instance
+# whose identity lives in a different region from its pool would need this
+# module updated to a provider version carrying per-data-source `region`
+# (or a provider alias) before this detector could see it.
+data "aws_sesv2_email_identity" "custom_sender" {
+  count = local.custom_sender_set ? 1 : 0
+
+  email_identity = element(split("/", var.mail_source_arn), 1)
+
+  lifecycle {
+    postcondition {
+      condition     = self.verified_for_sending_status
+      error_message = "mail_source_arn (${var.mail_source_arn}) is not verified for sending in SES. Cognito will accept this configuration and silently drop every email it tries to send through it. Verify the identity (DKIM SUCCESS, or a confirmed email-address identity) before pointing a pool at it."
+    }
+  }
+}
+
 resource "aws_cognito_user_pool" "main" {
   name = local.name_prefix
 

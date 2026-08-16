@@ -166,7 +166,9 @@ beforeAll(async () => {
       ? `base ${base?.commit.slice(0, 12)} (blob ${baseBlob?.slice(0, 12)})`
       : rootOfTrustError !== null
         ? 'HEAD — the base commit was REJECTED, so nothing was loaded from it'
-        : `HEAD — no copy of ${DENOMINATOR_MECHANISM_FILE} at the base commit (establishing run)`
+        : baseBlob !== null
+          ? 'HEAD — although a copy EXISTS at the base commit and was not used'
+          : `HEAD — no copy of ${DENOMINATOR_MECHANISM_FILE} at the base commit (establishing run)`
 
   baseline = mechanism.readDenominatorBaseline(repoRoot)
   observed = mechanism.observeDenominatorPrints(repoRoot, guards)
@@ -216,6 +218,20 @@ describe('guard denominator sweep (#1363): a new or modified gate cannot merge w
               : '. Identical, so the distinction did not matter on this run.'),
     )
     expect(headBlob).not.toBeNull()
+
+    // Whenever a base copy exists and was accepted, it MUST be the one that
+    // decided. Rehearsing the "edit the harness" attack showed the cheapest
+    // form of it is a single `mechanism = head`, which leaves every other
+    // signal — the base commit, the blob SHAs, the root-of-trust check — fully
+    // intact and honest-looking. This is the one assertion that notices.
+    if (baseBlob !== null && rootOfTrustError === null) {
+      expect(
+        (mechanism as unknown) === (head as unknown),
+        `A copy of ${DENOMINATOR_MECHANISM_FILE} exists at the base commit and the base was ` +
+          'accepted, yet head’s copy supplied the verdict. The whole point of the base-ref load ' +
+          'is that a PR editing the mechanism does not get to be judged by its own edit.',
+      ).toBe(false)
+    }
   })
 
   it('discovers at least one real guard file — a sweep that finds none is not sweeping', () => {

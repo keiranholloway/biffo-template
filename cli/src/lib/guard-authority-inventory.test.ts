@@ -101,17 +101,55 @@ describe('guard/authority inventory sweep (#1362): every discovered guard is cla
     }
   })
 
-  it('reports the honest remainder: in-class guards with no disagreement test yet', () => {
+  it('an in-class guard cannot be added without its disagreement test', () => {
     const uncovered = GUARD_AUTHORITY_INVENTORY.filter((r) => r.inClass && !r.disagreementTest)
-    // Not a failure — this is the deliverable the dispatch brief asked for: a
-    // truthful count of what is NOT yet caught, not a claim of completeness.
-    // Printed so `pnpm --filter @biffo/cli test -- -t "honest remainder"`
-    // surfaces it without reading source.
+
+    // Printed as well as asserted, so the count is visible in a passing run
+    // and not only in a failing one.
     console.log(
       `guard-authority-inventory: ${uncovered.length} in-class guard(s) with no disagreement ` +
-        `test: ${uncovered.map((r) => r.id).join(', ')}`,
+        `test: ${uncovered.map((r) => r.id).join(', ') || 'none'}`,
     )
-    expect(uncovered.every((r) => r.note.length > 0)).toBe(true)
+
+    // **This reported instead of failing until 2026-08-16, and reporting was
+    // right at the time**: there were two in-class guards with no test, and a
+    // gate that is red on day-one residue every morning is one people learn to
+    // scroll past (`scripts/protection-audit.sh` argues this at length, and
+    // `mustBeUniform`'s baseline exists for it).
+    //
+    // Both were written that day (#1598 core-ownership, #1599 the claim
+    // resolver), so the remainder is **zero** and the residue argument no
+    // longer applies. An absolute gate is therefore available where a ratchet
+    // with a baseline would otherwise have been necessary — and it is strictly
+    // stronger, because there is no number for anyone to raise.
+    //
+    // This is #1362's own closing condition, stated in the issue as "closes
+    // when a new guard cannot be written without its disagreement test".
+    //
+    // **If you are here because this failed:** you added a guard that reads one
+    // document on behalf of an actor that reads another, and it needs a test
+    // constructing the state where the two differ. Two worked examples, and
+    // they are deliberately different shapes:
+    //   * PRESCRIPTIVE — `claim-structural-resolver-disagreement.test.ts`
+    //     asserts the guard agrees with the authority, in both directions
+    //     (a miss AND a false block), because the resolver can be correct.
+    //   * DESCRIPTIVE — `core-ownership-orphan-disagreement.test.ts` pins a
+    //     disagreement the guard cannot currently resolve (it has no view of
+    //     the template tree), and says in its own assertion message that a
+    //     failure means the fix landed. Use this shape when the guard is
+    //     structurally unable to agree yet; it is not an excuse to skip the
+    //     test, it is how you record what the guard cannot see.
+    //
+    // What you must NOT do is set `inClass: false` to get past this line. That
+    // field is answered by `document` and `actor` being nameable, not by
+    // whether a test is convenient — and the classification is itself asserted
+    // above.
+    expect(
+      uncovered.map((r) => r.id),
+      'An in-class guard has no disagreement test. See the comment above this ' +
+        'assertion for the two worked examples and why this is absolute rather ' +
+        'than baselined.',
+    ).toEqual([])
   })
 
   /**
@@ -139,19 +177,53 @@ describe('guard/authority inventory sweep (#1362): every discovered guard is cla
     ).toEqual([])
   })
 
-  it('reports the instance-11 remainder: in-class guards whose independence is shared-path or unclear', () => {
+  /**
+   * The instance-11 baseline. Unlike the disagreement-test gate above, this one
+   * is a RATCHET rather than an absolute, and the difference is a measurement
+   * rather than a preference: that remainder is zero, this one is two.
+   *
+   * A guard sharing its actor's decode step is not fixed by writing a test —
+   * it needs the guard to derive its answer by a second, independent route,
+   * which is a change to the guard. So an absolute gate here would be red
+   * every morning over work nobody has scheduled, which is the failure this
+   * estate keeps recording: `mustBeUniform` and the orphan ratchet both fail
+   * only ABOVE their baseline for exactly this reason.
+   */
+  const INDEPENDENCE_REMAINDER_BASELINE = 2
+
+  it('no NEW in-class guard may share its actor’s derivation path (ratchet)', () => {
     const exposed = GUARD_AUTHORITY_INVENTORY.filter(
       (r) => r.inClass && (r.independence === 'shared-path' || r.independence === 'unclear'),
     )
-    // Same posture as the disagreement-test remainder above: printed, not
-    // failed, so the honest count is visible without reading source, and a
-    // guard newly found to share its actor's decode step can be recorded
-    // here before anyone has had time to fix it.
     console.log(
       `guard-authority-inventory: ${exposed.length} in-class guard(s) with independence ` +
-        `shared-path/unclear: ${exposed.map((r) => `${r.id} (${r.independence ?? 'unset'})`).join(', ')}`,
+        `shared-path/unclear (baseline ${INDEPENDENCE_REMAINDER_BASELINE}): ` +
+        `${exposed.map((r) => `${r.id} (${r.independence ?? 'unset'})`).join(', ') || 'none'}`,
     )
+
+    // Every one of them still has to carry its reasoning, baseline or not.
     expect(exposed.every((r) => r.note.length > 0)).toBe(true)
+
+    expect(
+      exposed.length,
+      `${exposed.length} in-class guard(s) share or may share their actor's derivation ` +
+        `path, above the baseline of ${INDEPENDENCE_REMAINDER_BASELINE}: ` +
+        `${exposed.map((r) => r.id).join(', ')}. Instance 11 is what this catches — ` +
+        '`core-upgrade-target-fidelity` passed a real disagreement test while being blind ' +
+        'to a corrupted binary, because it re-read the same file through the same lossy ' +
+        'decode the actor used. Two independently-mangled strings agreeing is not ' +
+        'verification. Give the new guard a second derivation route, or record why it ' +
+        'cannot have one and raise this baseline deliberately.',
+    ).toBeLessThanOrEqual(INDEPENDENCE_REMAINDER_BASELINE)
+
+    // A ratchet that never tightens stops meaning anything — same instruction
+    // `shared-files.json` gives when a variant count drops below its baseline.
+    if (exposed.length < INDEPENDENCE_REMAINDER_BASELINE) {
+      console.log(
+        `guard-authority-inventory: independence remainder IMPROVED to ${exposed.length} — ` +
+          `lower INDEPENDENCE_REMAINDER_BASELINE to match.`,
+      )
+    }
   })
 
   describe('a disagreement-test claim is checked, not trusted — proven against REAL fixed instances', () => {

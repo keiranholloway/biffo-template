@@ -270,14 +270,45 @@ const DENOMINATOR_VOCABULARY =
   /\b(examined|checked|audited|scanned|covered|considered|classified|discovered|counted|denominator|reached|analysed|analyzed|processed|swept|walked|visited|inspected|assessed|evaluated)\b/i
 
 /**
- * Does one line of REAL, EMITTED output state a denominator? Vocabulary AND a
- * bare number on the same line — `audited 30 shell file(s)` passes, `audited
- * the plugin-allowlist naming convention` does not, because the second names
- * no count. The number must be a standalone token (`\b\d+\b`), so a digit
- * buried in a path segment or a version string cannot manufacture one.
+ * A count, as opposed to a digit that merely occurs. The number must be
+ * delimited by whitespace (or the line's edge) on the left and by whitespace
+ * or closing punctuation on the right.
+ *
+ * **This used to be `\b\d+\b`, and the docstring above it claimed that "a
+ * digit buried in a path segment or a version string cannot manufacture one".
+ * That claim was false**, and the attack rig built to prosecute this change
+ * found it by accident: run from a checkout under
+ * `/tmp/claude-1000/…`, the line
+ *
+ *     audited the plugin-allowlist naming convention under /tmp/claude-1000/…
+ *
+ * was credited as a denominator, because `\b` matches between `-` and `1` and
+ * so `claude-1000` supplied `1000`. `plugin-allowlist-convention` is in the
+ * baseline precisely because it states no count, and it silently left the
+ * baseline whenever the repository sat under a path containing a number.
+ *
+ * The number of guards credited was therefore a function of the absolute path
+ * the suite ran from — a denominator that changes with the working directory,
+ * in the mechanism written to stop denominators being meaningless. Every one
+ * of the nine lines actually credited today writes its count space-delimited
+ * and immediately after the vocabulary word (`audited 30 shell file(s)`), so
+ * this is a strict tightening with no observed cost.
+ */
+const BARE_COUNT = /(?:^|\s)\d+(?:$|[\s),.;:])/
+
+/**
+ * Does one line of REAL, EMITTED output state a denominator? Denominator
+ * vocabulary AND a bare count on the same line — `audited 30 shell file(s)`
+ * passes, `audited the plugin-allowlist naming convention under /repo-2` does
+ * not, because the second names no count.
+ *
+ * It deliberately does NOT require the count to be adjacent to the vocabulary
+ * word: `12 path(s) reached` is as honest a statement as `reached 12 path(s)`,
+ * and a window would have to be tuned, which is the sharpening-the-detector
+ * move this change exists to stop doing.
  */
 export function lineStatesADenominator(line: string): boolean {
-  return DENOMINATOR_VOCABULARY.test(line) && /\b\d+\b/.test(line)
+  return DENOMINATOR_VOCABULARY.test(line) && BARE_COUNT.test(line)
 }
 
 /** Any line of a captured stdout/stderr stream stating a denominator. */

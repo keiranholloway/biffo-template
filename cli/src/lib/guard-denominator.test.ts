@@ -529,6 +529,34 @@ assertFakeThing(['a', 'b', 'c'])
       expect(outputStatesADenominator('audited 30 shell file(s) under scripts/\n')).toBe(true)
     })
 
+    it('a digit inside a PATH does not manufacture a count — the verdict must not depend on cwd', () => {
+      // Found by the attack rig, not reasoned about: under `\b\d+\b` this
+      // exact line was credited, because `\b` matches between `-` and `1` and
+      // `claude-1000` supplied `1000`. `plugin-allowlist-convention` states no
+      // count and is baselined for it, yet it silently left the baseline
+      // whenever the checkout sat under a numbered path — so the number of
+      // credited guards was a function of the working directory.
+      expect(
+        outputStatesADenominator(
+          'audited the plugin-allowlist naming convention under /tmp/claude-1000/x/repo\n',
+        ),
+      ).toBe(false)
+      expect(outputStatesADenominator('scanned files under /home/build-2/app\n')).toBe(false)
+      // …while a real count sitting beside such a path is still a count.
+      expect(
+        outputStatesADenominator('audited 30 shell file(s) under /tmp/claude-1000/x/repo\n'),
+      ).toBe(true)
+    })
+
+    it('a count is credited whichever side of the vocabulary word it falls', () => {
+      // `[coverage] <scanner>: N path(s) reached` (#1454) is the shape that
+      // motivated not requiring adjacency.
+      expect(outputStatesADenominator('[coverage] terraform-input: 12 path(s) reached\n')).toBe(
+        true,
+      )
+      expect(outputStatesADenominator('reached 12 path(s)\n')).toBe(true)
+    })
+
     it('a HARDCODED count still satisfies this gate — an open hole, recorded not hidden', () => {
       // Runtime observation cannot distinguish a computed number from a typed
       // one; at the point the bytes leave the process they are the same bytes.

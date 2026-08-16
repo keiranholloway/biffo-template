@@ -766,28 +766,44 @@ export default function OrchestrationPage() {
   async function submitForm(enabledValue: boolean) {
     if (busy) return
     const [trigger_source, trigger_detail_type] = triggerKey.split('|')
-    // Save only the fields that apply, so switching e.g. WhatsApp text →
-    // template doesn't leave the abandoned branch's values in action_config.
-    // configFieldsFor (not raw config_fields) so the injected tools multiselect
-    // is recognised and its list value round-trips.
+    // Merge the user's edits over the config as loaded (loadForEdit snapshots
+    // the whole `action_config`, unmodelled keys included) rather than
+    // rebuilding it from only the fields this builder renders. Core, an
+    // older/newer catalog, or another authoring surface can write a key this
+    // version of the builder has no field for — `timeout_seconds` was one —
+    // and that key must round-trip untouched rather than vanish on the next
+    // save (tabsii-platform#927). configFieldsFor (not raw config_fields) so
+    // the injected tools multiselect is recognised and its list value
+    // round-trips too.
+    //
+    // Only a key whose field IS modelled here but no longer applies is still
+    // dropped — an abandoned conditional branch (e.g. WhatsApp text →
+    // template leaving `message`/`template_name` behind). A key with no
+    // matching field at all is never "abandoned"; it is simply not something
+    // this builder renders, so `fieldApplies` has nothing to say about it and
+    // it is kept as-is. The structured sub-configs (delivery/write-back) are
+    // handled separately below, on top of this base set.
     const fields = configFieldsFor(selectedAction)
     let applicable = Object.fromEntries(
-      Object.entries(config).filter((entry) =>
-        fields.some((f) => f.name === entry[0] && fieldApplies(fields, config, f)),
-      ),
+      Object.entries(config).filter(([key]) => {
+        const field = fields.find((f) => f.name === key)
+        return field == null || fieldApplies(fields, config, field)
+      }),
     )
-    // Prune abandoned conditional branches from a delivery sub-config too, so
-    // switching e.g. WhatsApp text → template inside a delivery doesn't leave the
-    // old branch's values behind — the same filter the top-level config gets.
+    // The delivery sub-config gets the same treatment, for the same reason: a
+    // stored delivery can carry a key this builder's `deliveryFields` doesn't
+    // model, and that key survives untouched. Only an abandoned conditional
+    // branch is still pruned — switching e.g. WhatsApp text → template inside
+    // a delivery still drops the old branch's `message`/`template_name`
+    // fields, as before.
     if (deliveryField != null && delivery != null) {
       applicable[deliveryField.name] = {
         type: delivery.type,
         config: Object.fromEntries(
-          Object.entries(delivery.config).filter(([key]) =>
-            deliveryFields.some(
-              (f) => f.name === key && fieldApplies(deliveryFields, delivery.config, f),
-            ),
-          ),
+          Object.entries(delivery.config).filter(([key]) => {
+            const field = deliveryFields.find((f) => f.name === key)
+            return field == null || fieldApplies(deliveryFields, delivery.config, field)
+          }),
         ),
       }
     }

@@ -35,6 +35,7 @@ describe('biffo check', () => {
     'core-direct-paths',
     'eventbridge-log-permissions',
     'lambda-output',
+    'migration-body-change',
     'ownership',
     'pipe-trap',
     'plugin-allowlist-convention',

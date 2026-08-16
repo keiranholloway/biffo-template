@@ -1446,7 +1446,7 @@ function printMigrationCarry(migrations: MigrationCarryPlan): void {
  *
  * Both facts were already known here. This says so, before the PR is opened.
  */
-function printMigrationBodyDrift(
+export function printMigrationBodyDrift(
   migrations: MigrationCarryPlan,
   pairings: MigrationTestPairing[],
 ): void {
@@ -1464,6 +1464,42 @@ function printMigrationBodyDrift(
             '                  alone and this change will NOT reach you.',
         ),
     )
+    // #751. The parser and the `declared` field shipped in #1205; this is the
+    // operator-visible half. Reporting only — the carry still leaves the file
+    // alone either way (see DivergedMigrationBody.declared's doc) — but a
+    // declared classification rules out one of the two hand remedies in
+    // docs/guides/core-upgrade.md's "Which of the three actually applies"
+    // table. Struck out (for a terminal that renders it) AND labelled in
+    // plain text — an operator piping this to a file, or on a terminal with
+    // colour off, still needs to see which remedy the classification rules
+    // out, not just the one a TTY would show crossed out.
+    if (d.declared) {
+      console.log(
+        chalk.dim('                  declared: ') +
+          chalk.cyan(d.declared.classification) +
+          chalk.dim(` — ${d.declared.reason}`),
+      )
+      const handPortText = '- port the body change into your copy by hand'
+      const followOnText = '- ask upstream for a follow-on migration'
+      if (d.declared.classification === 'replay-safe') {
+        // Already correct as-is (#670) — a follow-on migration cannot even be
+        // reached by a fresh environment that dies inside the old body first.
+        console.log(chalk.dim(`                    ${handPortText}`))
+        console.log(
+          chalk.strikethrough.dim(`                    ${followOnText}`) +
+            chalk.dim(' (rules out — replay-safe means your database is already correct)'),
+        )
+      } else {
+        // outcome-changing — restating unchanged-in-effect DDL against a
+        // database that already has the wrong schema changes nothing; only a
+        // follow-on migration converges it.
+        console.log(
+          chalk.strikethrough.dim(`                    ${handPortText}`) +
+            chalk.dim(' (rules out — restating this body cannot fix an already-wrong schema)'),
+        )
+        console.log(chalk.dim(`                    ${followOnText}`))
+      }
+    }
   }
 
   if (pairings.length === 0) {

@@ -173,6 +173,24 @@ jobs:
         run: sh scripts/biffo.sh check ownership
         env:
           GITHUB_BASE_REF: ${{ github.base_ref }}
+      # #751. Refuse a PR that edits an already-released migration's HASHED
+      # body (DDL, not a docstring or comment) with no `# biffo:body-change:`
+      # marker. See cli/src/lib/migration-body-change-guard.ts for why
+      # "hashed" and "already-released" are the exact two words doing the
+      # work — it reuses migrationBodyHash directly so a docstring-only edit
+      # (#931) can never be flagged. Reporting-only, like the classification
+      # it enforces the presence of: it does not act on replay-safe vs
+      # outcome-changing, only requires that a template author say which.
+      #
+      # Same gate shape as the ownership guard above (needs the merge-base
+      # history from this job's fetch-depth: 0 checkout, and the installed
+      # workspace to run the CLI's tsx entrypoint via scripts/biffo.sh) —
+      # inert in an instance, which owns no template migrations to guard.
+      - name: Migration body-change marker guard
+        if: ${{ github.event_name == 'pull_request' && !cancelled() && steps.install.outcome == 'success' }}
+        run: sh scripts/biffo.sh check migration-body-change
+        env:
+          GITHUB_BASE_REF: ${{ github.base_ref }}
       # The practices corpus is append-only and several sessions write to it at
       # once. It lost content three times in 24h — every time via a rewrite that
       # merged with no conflict, every time found by a human noticing a count had

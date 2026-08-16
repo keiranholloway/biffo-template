@@ -1,0 +1,21 @@
+{
+  "note": "Grandfathered debt for class issue #1363: isGuard:true modules under cli/src/lib that were NOT OBSERVED stating a count at runtime when this ratchet was established. cli/src/lib/guard-denominator.test.ts compares this list against the copy at the merge base with origin/dev: removing an entry is an improvement, ADDING one is a build failure. A PR that introduces a guard cannot grandfather it here in the same breath — that is the whole point, and the reason this is a file with history rather than a Set in the test that reads it. See cli/src/lib/guard-denominator.ts for the two execution routes an entry has to satisfy to be removed, and for the routes this harness cannot drive at all.",
+  "noDenominator": [
+    "adr-numbering-guard.ts",
+    "branch-protection-audit.ts",
+    "build-freshness.ts",
+    "codeql-suppression-guard.ts",
+    "core-ownership-guard.ts",
+    "core-upgrade-target-fidelity.ts",
+    "doctor.ts",
+    "instance-adoption.ts",
+    "migration-body-change-guard.ts",
+    "plugin-allowlist-convention.ts",
+    "plugin-collision-guard.ts",
+    "plugin-staleness.ts",
+    "plugin-terraform-guard.ts",
+    "release-subject-guard.ts",
+    "shared-file-reduction-guard.ts",
+    "sibling-identity-check.ts"
+  ]
+}

@@ -42,17 +42,26 @@ name: Error-branch coverage gate
 # name — proven in this PR's own description (see the PR body for the run
 # URLs of a failing and a passing gate against a scratch commit).
 #
-# Security: this job never checks out or executes anything from the commit
-# under test. `actions/checkout` below takes the default ref (this
-# workflow's own trigger context, i.e. the trusted default branch), so
+# Security: this job never EXECUTES anything from the commit under test.
+# `actions/checkout` below takes the default ref (this workflow's own trigger
+# context, i.e. the trusted default branch), so
 # `scripts/error_branch_coverage.py` always runs as the DEFAULT BRANCH'S
 # copy of itself, regardless of what a PR (fork or otherwise) changed that
 # script to say. Everything that needs to be commit-specific — does this
-# commit have an RLS lane, which artefacts belong to it — is read via the
-# GitHub API (contents lookup, workflow-run listing, artifact download),
-# never via checking out and running the PR's own code with this job's
-# write-scoped token. Running a fork's modified script here, privileged,
-# would be the classic "pwn request" shape.
+# commit have an RLS lane, which artefacts belong to it, and (since #1595)
+# what its source actually says — is read via the GitHub API (contents
+# lookup, workflow-run listing, artifact download, source tarball), never via
+# checking out and running the PR's own code with this job's write-scoped
+# token. Running a fork's modified script here, privileged, would be the
+# classic "pwn request" shape.
+#
+# The distinction that makes #1595's fix safe: the danger is executing a
+# fork's code, not reading it. "Materialise the commit under test's source"
+# below expands a tarball that is only ever PARSED, by the default branch's
+# analyser — nothing in it is imported, installed or run, and no credential
+# is written into that tree. Conflating "do not run the PR's code" with "do
+# not look at the PR's code" is what left the analyser judging one revision's
+# coverage against another revision's source in the first place.
 
 on:
   workflow_run:
@@ -208,16 +217,68 @@ jobs:
             echo "::error::error-branch coverage gate: $reason"
           fi
 
-      # The actual assertion — both artefacts are guaranteed present at this
-      # point (the step above already failed closed if either was missing),
-      # so this is a plain combine-and-check with no absence case to reason
-      # about.
-      - name: Combine and check
-        id: check
+      # The source the coverage was MEASURED against — not the source this job
+      # happens to be standing in.
+      #
+      # `scripts/error_branch_coverage.py` finds a branch by parsing a file and
+      # then asks whether that branch's line number appears in the coverage
+      # report's executed/missing lists. Both halves have to describe the same
+      # revision. The checkout above is deliberately the default branch's (see
+      # the header), so until #1595 the *source* came from there too while the
+      # *coverage* came from the commit under test — and any file the commit
+      # changed had its line numbers looked up in the wrong revision's AST.
+      # Measured on tabsii-platform#922: the default branch's `admin_app.py`
+      # was 35 lines shorter, and two branches that had tests were reported as
+      # newly unexecuted at lines holding unrelated code. It only ever
+      # diverged on files a commit changed, i.e. the ones this gate exists to
+      # judge, which is why it survived this long.
+      #
+      # This is data, not code. A tarball is expanded and READ by the default
+      # branch's analyser; nothing inside it is executed, no dependency of it
+      # is installed, and no build runs. The header's pwn-request concern is
+      # about running a fork's modified script with this job's write-scoped
+      # token, and that is unchanged: the script is still the default
+      # branch's. Fetching via the API rather than `checkout` with a `ref:`
+      # keeps it that way — there is no second checkout to accidentally
+      # execute from, and `persist-credentials` never touches this tree.
+      #
+      # Fails closed. An artefact that cannot be fetched is not a reason to
+      # quietly fall back to the default branch's source: that is precisely
+      # the wrong-revision comparison being removed here, and it would restore
+      # it silently under a green tick.
+      - name: Materialise the commit under test's source
+        id: source
         if: steps.download.outputs.ok == 'true'
         run: |
           set -uo pipefail
+          mkdir -p under-test
+          if ! gh api "repos/$REPO/tarball/$SHA" > under-test.tar.gz; then
+            echo "::error::error-branch coverage gate: could not fetch the source tarball for $SHA."
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "reason=could not fetch the source tarball for the commit under test ($SHA)." >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! tar -xzf under-test.tar.gz -C under-test --strip-components=1; then
+            echo "::error::error-branch coverage gate: the source tarball for $SHA could not be expanded."
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "reason=the source tarball for the commit under test ($SHA) could not be expanded." >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "Expanded the source of $SHA into under-test/ ($(find under-test -name '*.py' | wc -l) Python file(s))."
+          echo "ok=true" >> "$GITHUB_OUTPUT"
+
+      # The actual assertion — both artefacts are guaranteed present at this
+      # point (the download step already failed closed if either was missing),
+      # and the source they are judged against is the commit's own (the step
+      # above failed closed if it could not be fetched), so this is a plain
+      # combine-and-check with no absence case to reason about.
+      - name: Combine and check
+        id: check
+        if: steps.source.outputs.ok == 'true'
+        run: |
+          set -uo pipefail
           if python3 scripts/error_branch_coverage.py --check \
+              --source-root under-test \
               --coverage cov-ci/coverage.json --coverage cov-rls/rls-coverage.json \
               | tee check-output.txt; then
             echo "state=success" >> "$GITHUB_OUTPUT"
@@ -240,9 +301,23 @@ jobs:
           if [ "${{ steps.download.outputs.ok }}" = "false" ]; then
             state=failure
             description="${{ steps.download.outputs.reason }}"
+          elif [ "${{ steps.source.outputs.ok }}" = "false" ]; then
+            state=failure
+            description="${{ steps.source.outputs.reason }}"
           else
             state="${{ steps.check.outputs.state }}"
             description="${{ steps.check.outputs.description }}"
+          fi
+
+          # A verdict this step cannot name is a failure, never a pass. Without
+          # this, an unforeseen skip upstream leaves `state` empty, the
+          # Statuses API rejects it, and the job dies having posted NOTHING —
+          # which on a required context is indistinguishable from a run that
+          # never happened. Same "cannot tell is not a pass" posture as the
+          # rest of this file.
+          if [ -z "$state" ]; then
+            state=failure
+            description="the gate reached its reporting step without a verdict — see this run's log"
           fi
 
           # The Statuses API caps `description` at ~140 characters.

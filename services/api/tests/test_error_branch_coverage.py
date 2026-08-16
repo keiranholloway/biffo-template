@@ -227,6 +227,124 @@ class TestMainCombinesMultipleCoverageArgs:
         assert "not found" in err
 
 
+class TestSourceRootMustMatchTheMeasuredRevision:
+    """#1595 — the source judged and the coverage judging it must be one commit.
+
+    The `workflow_run` gate runs this script from the DEFAULT branch, which is
+    deliberate (a fork must not get its own analyser executed with a
+    write-scoped token) and used to drag the *source* along with it. Coverage
+    line numbers from the commit under test were then looked up in the default
+    branch's AST.
+
+    The fixtures below are the shape measured on tabsii-platform#922: a file
+    that grew above an error branch, so every line number below the insertion
+    point shifted. The covered branch got reported as newly unexecuted, and the
+    genuinely uncovered one was invisible because the default branch's source
+    did not contain it.
+    """
+
+    # The commit under test: a genuinely uncovered fallback in `q`, and a
+    # covered one in `f` further down the file.
+    UNDER_TEST = (
+        "def q():\n"
+        "    if BAD:\n"
+        "        return None\n"
+        "\n"
+        "\n"
+        "def f(x):\n"
+        "    if not x:\n"
+        "        return None\n"
+    )
+
+    # The default branch, before `q` existed. `f`'s fallback sits at line 3 —
+    # the same line number that, in the commit under test, belongs to `q`'s.
+    DEFAULT_BRANCH = "def f(x):\n    if not x:\n        return None\n"
+
+    # Measured against UNDER_TEST: `q`'s fallback (line 3) never ran; `f`'s
+    # (line 8) did.
+    COVERAGE = {"files": {"m.py": {"executed_lines": [1, 2, 6, 7, 8], "missing_lines": [3]}}}
+
+    def _tree(self, root: Path, src: str) -> Path:
+        root.mkdir(parents=True, exist_ok=True)
+        (root / "m.py").write_text(src)
+        return root
+
+    def test_judged_against_another_revision_it_convicts_a_covered_branch(self, tmp_path):
+        # The defect itself, reproduced by the route the gate took. Nothing
+        # here is about the fix — this is what the old behaviour did.
+        wrong_root = self._tree(tmp_path / "default-branch", self.DEFAULT_BRANCH)
+        found = ebc.unexecuted(self.COVERAGE, wrong_root)
+
+        # `f`'s fallback is EXECUTED (line 8 of the measured revision), yet it
+        # is the one reported — because line 3 of the wrong revision is where
+        # `q`'s uncovered branch lives.
+        assert [b.label for b in found] == ["if not x -> None"]
+
+    def test_judged_against_another_revision_it_cannot_see_the_real_finding(self, tmp_path):
+        wrong_root = self._tree(tmp_path / "default-branch", self.DEFAULT_BRANCH)
+        found = ebc.unexecuted(self.COVERAGE, wrong_root)
+        # The branch that genuinely never ran does not exist in that revision,
+        # so no amount of coverage data can surface it. A false green hiding
+        # inside the false red.
+        assert "if BAD -> None" not in [b.label for b in found]
+
+    def test_pointed_at_the_measured_revision_it_gets_both_right(self, tmp_path):
+        right_root = self._tree(tmp_path / "under-test", self.UNDER_TEST)
+        found = ebc.unexecuted(self.COVERAGE, right_root)
+        assert [b.label for b in found] == ["if BAD -> None"]
+
+    def test_main_judges_the_tree_source_root_names(self, tmp_path, monkeypatch, capsys):
+        # End to end through the CLI, the way the workflow invokes it: the
+        # script's own repo is one revision, `--source-root` is another.
+        script_repo = self._tree(tmp_path / "script-repo", self.DEFAULT_BRANCH)
+        monkeypatch.setattr(ebc, "REPO_ROOT", script_repo)
+        monkeypatch.setattr(ebc, "BASELINE", tmp_path / "script-repo" / "absent-baseline.json")
+        under_test = self._tree(tmp_path / "under-test", self.UNDER_TEST)
+        cov = tmp_path / "coverage.json"
+        cov.write_text(json.dumps(self.COVERAGE))
+
+        monkeypatch.setattr(
+            "sys.argv",
+            ["x", "--check", "--source-root", str(under_test), "--coverage", str(cov)],
+        )
+        assert ebc.main() == 0  # no baseline in that tree yet, so it reports
+        out = capsys.readouterr().out
+        assert "if BAD -> None" in out
+        assert "if not x -> None" not in out
+
+    def test_the_baseline_is_read_from_the_tree_being_judged(self, tmp_path, monkeypatch):
+        # A commit that deliberately accepts a new branch commits the updated
+        # baseline IN THAT COMMIT. Reading the default branch's copy instead
+        # leaves the gate red with no way to fix it from inside the PR.
+        script_repo = self._tree(tmp_path / "script-repo", self.DEFAULT_BRANCH)
+        monkeypatch.setattr(ebc, "REPO_ROOT", script_repo)
+        under_test = self._tree(tmp_path / "under-test", self.UNDER_TEST)
+        accepted = under_test / ebc.BASELINE_REL
+        accepted.parent.mkdir(parents=True, exist_ok=True)
+        accepted.write_text(
+            json.dumps({"total": 1, "branches": ["m.py:fallback:if BAD -> None"]}) + "\n"
+        )
+        cov = tmp_path / "coverage.json"
+        cov.write_text(json.dumps(self.COVERAGE))
+
+        monkeypatch.setattr(
+            "sys.argv",
+            ["x", "--check", "--source-root", str(under_test), "--coverage", str(cov)],
+        )
+        # Green: the only unexecuted branch is one that commit's own baseline
+        # already accepts. Against the default branch's baseline it would be NEW.
+        assert ebc.main() == 0
+
+    def test_baseline_for_leaves_the_ordinary_case_alone(self):
+        # The single-checkout callers — `ci.yml`'s inline step, a developer's
+        # terminal — must not change behaviour at all.
+        assert ebc.baseline_for(ebc.REPO_ROOT) == ebc.BASELINE
+
+    def test_the_missing_baseline_message_names_the_file_actually_looked_for(self, tmp_path):
+        elsewhere = tmp_path / "under-test" / ebc.BASELINE_REL
+        assert str(elsewhere) in ebc.no_baseline_message(elsewhere)
+
+
 @pytest.mark.skipif(
     not ebc.BASELINE.is_file(),
     reason=(

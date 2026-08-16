@@ -333,8 +333,20 @@ export const GUARD_AUTHORITY_INVENTORY: GuardAuthorityRecord[] = [
     document: "core-manifest.json's templateOwned prefix list",
     actor:
       "core-upgrade.ts's classify(), which returns keep-ours/orphaned for any path with no base and no theirs",
-    disagreementTest: null,
+    disagreementTest: 'cli/src/lib/core-ownership-orphan-disagreement.test.ts',
     independence: 'independent',
+    // DESCRIPTIVE, not prescriptive — read this before trusting the field above.
+    // The test drives BOTH sides over one state (planCoreUpgrade over real
+    // dirs, checkCoreOwnership over the same manifest) and pins the
+    // disagreement rather than asserting the behaviour we want, because the
+    // behaviour we want is not reachable from where the guard stands: at commit
+    // time in an instance it has `changedFiles` and the manifest, and no view
+    // of the template tree, so it CANNOT know whether a path under a
+    // template-owned prefix was ever shipped upstream. That is why five fixes
+    // to the prefix list never closed instance #8.
+    // The test therefore fails the day someone makes the two agree, and says so
+    // in its own assertion message. Treat that failure as the fix landing, not
+    // as a regression, and change this field's note when it does.
     note:
       'instance #8, reported 2026-08-08/09, STILL OPEN per the issue thread ("second occurrence — ' +
       'same day, different file"). A prefix match claims services/api/ template-owned; classify() ' +

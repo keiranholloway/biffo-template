@@ -11,6 +11,7 @@ import { runCoreDirectPathsCheck } from '../scripts/check-core-direct-paths.js'
 import { runOwnershipCheck } from '../scripts/check-core-ownership.js'
 import { runEventBridgeLogPermissionCheck } from '../scripts/check-eventbridge-log-permissions.js'
 import { runLambdaOutputCheck } from '../scripts/check-lambda-output.js'
+import { runMigrationBodyChangeCheck } from '../scripts/check-migration-body-change.js'
 import { runPipeTrapCheck } from '../scripts/check-pipe-trap.js'
 import { runPluginAllowlistConventionCheck } from '../scripts/check-plugin-allowlist-convention.js'
 import { runPluginCollisionCheck } from '../scripts/check-plugin-collisions.js'
@@ -46,7 +47,7 @@ export const checkCommand = new Command('check').description(
   'Repo guards (ownership, release subject, plugin terraform, plugin collisions, ' +
     'eventbridge-log-permissions, plugin-tool-supply, core-direct-paths, ' +
     'cognito-invite-template, lambda-output, pipe-trap, codeql-suppression, skeleton-drift, ' +
-    'terraform-input, plugin-allowlist-convention) ' +
+    'terraform-input, plugin-allowlist-convention, migration-body-change) ' +
     'run in CI and git hooks, plus out-of-band audits (branch protection, plugin-staleness)',
 )
 
@@ -61,6 +62,20 @@ checkCommand
     // `--staged <file>` positionally and CI passes a bare base ref. Re-deriving
     // it here would be a second parser to keep in step with that one.
     await runOwnershipCheck(rawArgsAfter('ownership'))
+  })
+
+checkCommand
+  .command('migration-body-change')
+  .description(
+    "Refuse a PR that changes an already-released migration's HASHED body (DDL, not a " +
+      'docstring or comment) with no `# biffo:body-change:` marker (#751) — mirrors ' +
+      "migrationBodyHash's normalisation, so a docstring-only edit (#931) stays silent. " +
+      'Reporting-only classification, not enforcement: this only requires the marker exist, ' +
+      'it does not act on what it declares.',
+  )
+  .argument('[base]', 'Base branch to diff against; defaults to $GITHUB_BASE_REF')
+  .action(async () => {
+    await runMigrationBodyChangeCheck(rawArgsAfter('migration-body-change'))
   })
 
 checkCommand

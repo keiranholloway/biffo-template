@@ -3,9 +3,15 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { CoreUpgradeDeps } from './core-upgrade.js'
-import { buildPrBody, resolveTemplateRepoFlag, runCoreUpgrade } from './core-upgrade.js'
+import {
+  buildPrBody,
+  printMigrationBodyDrift,
+  resolveTemplateRepoFlag,
+  runCoreUpgrade,
+} from './core-upgrade.js'
 import type { MergeEntry, MergeStatus, UpgradePlan } from '../lib/core-upgrade.js'
-import type { MigrationCarryPlan } from '../lib/core-migrations.js'
+import type { DivergedMigrationBody, MigrationCarryPlan } from '../lib/core-migrations.js'
+import { capturedLines, capturedOutput } from '../test-utils/console.js'
 import { REGISTERED_ADOPTION_PAIRS } from '../lib/instance-adoption.js'
 import { makeTmpDir } from '../test-utils/tmp.js'
 
@@ -1403,5 +1409,120 @@ describe('resolveTemplateRepoFlag — --template as an alias for --template-repo
     expect(() => resolveTemplateRepoFlag('/a', '/b')).toThrow(
       /--template-repo.*\/a.*--template.*\/b/s,
     )
+  })
+})
+
+/**
+ * #751. `parseBodyChangeDeclaration` and `DivergedMigrationBody.declared`
+ * shipped in #1205 and were never rendered — an operator staring at a
+ * `body drift` line got no benefit from a declaration the template author had
+ * already written. This covers the render only: `printMigrationBodyDrift`
+ * strips ANSI colour itself never having been asserted on before, so these
+ * tests go directly at the exported function rather than through the whole
+ * `runCoreUpgrade` pipeline.
+ */
+describe('printMigrationBodyDrift — renders the #751 declaration (#751)', () => {
+  function planWithDiverged(diverged: DivergedMigrationBody[]): MigrationCarryPlan {
+    return {
+      entries: [],
+      instanceHead: null,
+      skipped: [],
+      recognised: [],
+      declined: [],
+      staleDeclines: [],
+      divergedBodies: diverged,
+    }
+  }
+
+  beforeEach(() => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('prints nothing beyond the existing prose when there is no declaration', () => {
+    const plan = planWithDiverged([
+      { file: '0010_x.py', instanceFile: '0010_x.py', how: 'filename' },
+    ])
+    printMigrationBodyDrift(plan, [])
+    const text = capturedOutput(vi.mocked(console.log))
+    expect(text).toContain('body drift')
+    expect(text).not.toContain('declared:')
+  })
+
+  it('renders the classification and reason when a replay-safe declaration is present', () => {
+    const plan = planWithDiverged([
+      {
+        file: '0010_x.py',
+        instanceFile: '0010_x.py',
+        how: 'filename',
+        declared: { classification: 'replay-safe', reason: 'guards a table Core does not own' },
+      },
+    ])
+    printMigrationBodyDrift(plan, [])
+    const text = capturedOutput(vi.mocked(console.log))
+    expect(text).toContain('declared:')
+    expect(text).toContain('replay-safe')
+    expect(text).toContain('guards a table Core does not own')
+  })
+
+  it('renders outcome-changing declarations too', () => {
+    const plan = planWithDiverged([
+      {
+        file: '0010_x.py',
+        instanceFile: '0010_x.py',
+        how: 'filename',
+        declared: { classification: 'outcome-changing', reason: 'column type was wrong' },
+      },
+    ])
+    printMigrationBodyDrift(plan, [])
+    const text = capturedOutput(vi.mocked(console.log))
+    expect(text).toContain('outcome-changing')
+    expect(text).toContain('column type was wrong')
+  })
+
+  it('rules out the follow-on-migration remedy for a replay-safe declaration, leaving hand-port live', () => {
+    const plan = planWithDiverged([
+      {
+        file: '0010_x.py',
+        instanceFile: '0010_x.py',
+        how: 'filename',
+        declared: { classification: 'replay-safe', reason: 'guards a table Core does not own' },
+      },
+    ])
+    printMigrationBodyDrift(plan, [])
+    const lines = capturedLines(vi.mocked(console.log))
+    const handPort = lines.find((l) => l.includes('port the body change into your copy by hand'))
+    const followOn = lines.find((l) => l.includes('ask upstream for a follow-on migration'))
+    expect(handPort).toBeDefined()
+    expect(followOn).toBeDefined()
+    // The applicable remedy carries no "rules out" annotation…
+    expect(handPort).not.toContain('rules out')
+    // …and the inapplicable one is labelled as such in plain text, so the
+    // distinction survives even when the terminal renders no strikethrough
+    // (piped output, colour disabled) — not only via chalk's styling.
+    expect(followOn).toContain('rules out')
+    expect(followOn).toContain('already correct')
+  })
+
+  it('rules out the hand-port remedy for an outcome-changing declaration, leaving follow-on live', () => {
+    const plan = planWithDiverged([
+      {
+        file: '0010_x.py',
+        instanceFile: '0010_x.py',
+        how: 'filename',
+        declared: { classification: 'outcome-changing', reason: 'column type was wrong' },
+      },
+    ])
+    printMigrationBodyDrift(plan, [])
+    const lines = capturedLines(vi.mocked(console.log))
+    const handPort = lines.find((l) => l.includes('port the body change into your copy by hand'))
+    const followOn = lines.find((l) => l.includes('ask upstream for a follow-on migration'))
+    expect(handPort).toBeDefined()
+    expect(followOn).toBeDefined()
+    expect(handPort).toContain('rules out')
+    expect(handPort).toContain('already-wrong schema')
+    expect(followOn).not.toContain('rules out')
   })
 })

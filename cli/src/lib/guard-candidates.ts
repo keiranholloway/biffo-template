@@ -166,6 +166,15 @@ export const GUARD_CANDIDATE_CLASSIFICATION: Record<string, GuardCandidateVerdic
     reason: 'matches the *-guard.ts convention',
   },
   'lambda-output-guard.ts': { isGuard: true, reason: 'matches the *-guard.ts convention' },
+  'migration-body-change-guard.ts': {
+    isGuard: true,
+    reason:
+      'exports checkMigrationBodyChangeMarkers (#751): refuses a PR that changes an ' +
+      "already-released migration's hashed body with no `# biffo:body-change:` marker — a real " +
+      "document/actor comparison (the merge-base body hash vs the PR tip's) wired into CI via " +
+      'check-migration-body-change.ts and `biffo check migration-body-change`. Also matches the ' +
+      '*-guard.ts naming convention.',
+  },
   'pipe-trap-guard.ts': { isGuard: true, reason: 'matches the *-guard.ts convention' },
   'plugin-collision-guard.ts': { isGuard: true, reason: 'matches the *-guard.ts convention' },
   'plugin-terraform-guard.ts': { isGuard: true, reason: 'matches the *-guard.ts convention' },

@@ -510,6 +510,21 @@ export const GUARD_AUTHORITY_INVENTORY: GuardAuthorityRecord[] = [
     note: 'shell-script AST-adjacent pattern check on shell scripts themselves — one document',
   },
   {
+    id: 'migration-body-change-guard',
+    path: 'cli/src/lib/migration-body-change-guard.ts',
+    inClass: false,
+    disagreementTest: null,
+    note:
+      "compares one migration file's own two git revisions (merge-base content vs PR-tip " +
+      'content) via migrationBodyHash, and reads its `# biffo:body-change:` marker from that ' +
+      'SAME PR-tip content (#751) — one file at two points in time, not two independently ' +
+      'maintained documents that could silently diverge. It calls migrationBodyHash and ' +
+      'parseBodyChangeDeclaration directly rather than re-deriving either, which is what rules ' +
+      'out drift between this guard\'s notion of "changed" and core-upgrade.ts\'s own body-drift ' +
+      'detection (#739) — same function, same call, not a second parser of the same marker ' +
+      'format to keep in step by hand.',
+  },
+  {
     id: 'codeql-suppression-guard',
     path: 'cli/src/lib/codeql-suppression-guard.ts',
     inClass: false,

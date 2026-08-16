@@ -1,6 +1,7 @@
 """User-facing and admin-facing plugin surface declarations (ADR-0021 / ADR-0018 §2).
 
-Three top-level manifest keys let a marketplace plugin be user-facing or admin-facing:
+Two top-level manifest keys let a marketplace plugin be user-facing or admin-facing
+**from the Core API's point of view**:
 
 - ``user_ingress`` — the plugin's authenticated, group-gated API. Its ``app``
   names an ASGI app the **shared plugin host** (ADR-0021) mounts at
@@ -12,12 +13,26 @@ Three top-level manifest keys let a marketplace plugin be user-facing or admin-f
   Its ``app`` names an ASGI app the shared plugin host mounts at
   ``/api/v1/plugins/<name>/admin/*``; the host provides the Lambda entry and
   enforces ``required_group`` (same schema as ``user_ingress``).
-- ``user_frontend`` — a path-routed static app on an S3 origin and a
-  ``<plugin>/*`` CloudFront behaviour, under the same Cognito App Client as the
-  portal (ADR-0018 §2 frontend hosting, still in use).
 
-All three are **distinct** from ADR-0013's public, unauthenticated ``http_ingress``
-(webhooks): three declarations, two security postures, never one flag.
+A third manifest key, ``user_frontend``, declares a plugin's founder-facing static
+UI (a path-routed static app on its own S3 origin and ``<plugin>/*`` CloudFront
+behaviour — ADR-0018 §2, still how it is hosted today). It used to be parsed here
+too, via a ``UserFrontend`` model and a ``parse_user_frontend_from_manifest()``
+function mirroring the two above — but nothing in the Core API ever called either
+one (issue #558's decision memo, 2026-08-16): `admin_ingress` is live
+(``routers/admin/plugins.py``), `user_frontend` parsing was not, anywhere. Removed
+as dead code rather than kept "for symmetry". The manifest key itself is validated
+elsewhere and stays live: ``cli/src/lib/plugin-manifest.ts``'s ``UserFrontendSchema``
+(what ``biffo plugin install`` actually checks) and
+``biffo_plugin_sdk.plugin.UserFrontend`` (what a plugin's own manifest load-in
+validates). Issue #558 chose ADR-0021 option B — retiring ADR-0018 §2 by extending
+the shared plugin host's already-live static-shell serving to `user_frontend` — so
+a real `user_frontend`-aware model may return to this file once that mount is
+built; it was not resurrected speculatively here.
+
+Both remaining keys are **distinct** from ADR-0013's public, unauthenticated
+``http_ingress`` (webhooks): two declarations, two security postures, never one
+flag.
 
 These are parsed piecemeal from the manifest (like ``plugin_route.py`` /
 ``plugin_table.py``), and — being a security surface — use ``extra="forbid"`` so a
@@ -33,8 +48,6 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # An ASGI app reference "<module>:<attr>" (ADR-0021) — the shared plugin host mounts it.
 _APP_REF = re.compile(r"^[a-zA-Z_][\w]*(\.[a-zA-Z_][\w]*)*:[a-zA-Z_][\w]*$")
-# A repo-relative build directory, e.g. "web/dist". No absolute paths, no traversal.
-_REL_DIR = re.compile(r"^[\w][\w./-]*$")
 
 
 def _require_group(value: str) -> str:
@@ -115,37 +128,6 @@ class AdminIngress(BaseModel):
         return value
 
 
-class UserFrontend(BaseModel):
-    """The plugin's path-routed static frontend under shared-Cognito SSO (ADR-0018 §2)."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    dir: str = Field(
-        description="Repo-relative directory of the built static export "
-        "(e.g. 'web/dist'), deployed to a new S3 origin behind <plugin>/* on the "
-        "shared CloudFront."
-    )
-    required_group: str = Field(
-        description="The Cognito group gated client-side (the real enforcement is the "
-        "ingress and Core, never the client)."
-    )
-
-    @field_validator("dir")
-    @classmethod
-    def _validate_dir(cls, value: str) -> str:
-        if value.startswith("/") or ".." in value.split("/") or not _REL_DIR.match(value):
-            raise ValueError(
-                f"user_frontend.dir {value!r} must be a repo-relative path with no "
-                "leading '/' and no '..' traversal."
-            )
-        return value
-
-    @field_validator("required_group")
-    @classmethod
-    def _validate_required_group(cls, value: str) -> str:
-        return _require_group(value)
-
-
 def parse_user_ingress_from_manifest(manifest: dict[str, Any]) -> UserIngress | None:
     """The manifest's ``user_ingress`` declaration, or ``None`` if absent."""
     raw = manifest.get("user_ingress")
@@ -156,9 +138,3 @@ def parse_admin_ingress_from_manifest(manifest: dict[str, Any]) -> AdminIngress 
     """The manifest's ``admin_ingress`` declaration, or ``None`` if absent."""
     raw = manifest.get("admin_ingress")
     return None if raw is None else AdminIngress(**raw)
-
-
-def parse_user_frontend_from_manifest(manifest: dict[str, Any]) -> UserFrontend | None:
-    """The manifest's ``user_frontend`` declaration, or ``None`` if absent."""
-    raw = manifest.get("user_frontend")
-    return None if raw is None else UserFrontend(**raw)

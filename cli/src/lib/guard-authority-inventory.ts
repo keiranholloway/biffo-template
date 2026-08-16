@@ -363,10 +363,22 @@ export const GUARD_AUTHORITY_INVENTORY: GuardAuthorityRecord[] = [
   {
     id: 'claim-structural-resolver',
     inClass: true,
-    document: "claim.sh's closingIssuesReferences + branch-name check",
+    document:
+      "claim.sh's claim_select_expr(): closingIssuesReferences + branch name + AGENTS.md's Refs #N convention",
     actor: "GitHub's actual claim state under this estate's own Refs-not-Closes convention",
-    disagreementTest: null,
+    disagreementTest: 'cli/src/lib/claim-structural-resolver-disagreement.test.ts',
     independence: 'independent',
+    // The note below predates the fix and is kept for its history, but its
+    // closing sentence — "neither built yet" — is STALE in both halves:
+    //   * the structural resolver shipped as `claim_select_expr()` when #1411
+    //     was closed on 2026-08-10. It is one function called from both
+    //     surviving sites, which is what stops the three-copies drift that
+    //     produced #1281, #1311 and #1327 as three separate fixes to one
+    //     question;
+    //   * its disagreement test is the file named above, added 2026-08-16.
+    // Left uncorrected in the prose deliberately: rewriting the note would
+    // erase the evidence that this record went stale for six days while
+    // reading as current, which is the class this inventory exists to track.
     note:
       'instance #9 (#1411): a PR body saying "Refs #N" (which the DDL policy REQUIRES) populates ' +
       'neither signal claim.sh reads, so the guard reports the issue free while a PR for it is ' +

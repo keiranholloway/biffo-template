@@ -50,6 +50,11 @@ import {
 } from '../lib/core-upgrade-target-fidelity.js'
 import { type InstanceSeam, findNewUndeclaredSeams } from '../lib/instance-seams.js'
 import {
+  type AdoptionFinding,
+  type AdoptionReport,
+  checkInstanceAdoption,
+} from '../lib/instance-adoption.js'
+import {
   type BreakingChange,
   UPGRADE_GUIDE_PATH,
   breakingChangesBetween,
@@ -535,6 +540,14 @@ async function runCoreUpgradeResolved(
   // from tsconfig.json" are both load-bearing.
   const newSeams = findNewUndeclaredSeams(baseDir, theirsDir, options.cwd)
 
+  // #1538/#1570: same "before anything can short-circuit" reasoning as the two
+  // checks above — an adoption gap that already exists must be visible on
+  // every run, not only the run that happens to also touch something else.
+  // `theirsDir` is the upgrade TARGET (does it ship the channel?), `options.cwd`
+  // is this instance's own tree (has it consumed it?). See instance-adoption.ts
+  // for why this lives here rather than as a shipped .test.ts.
+  const adoption = checkInstanceAdoption(theirsDir, options.cwd)
+
   // Core migrations are carried separately from the merge (issue #198): the
   // versions/ directory is user-owned and must never be merged, but new core
   // migrations still have to reach the instance or a table-adding core feature
@@ -578,6 +591,7 @@ async function runCoreUpgradeResolved(
   }
 
   printNewInstanceSeams(newSeams)
+  printAdoptionReport(adoption)
   printOrphanReport(plan.orphaned, orphanRatchet)
   if (orphanRatchet.increased) {
     throw new Error(
@@ -656,6 +670,7 @@ async function runCoreUpgradeResolved(
     coreVersionCleanup,
     orphanRatchet,
     newSeams,
+    adoption,
   )
 }
 
@@ -678,6 +693,12 @@ async function applyAndOpenPr(
    * instance declaration yet. Warned, never failed on — see
    * `printNewInstanceSeams`'s docstring for why. */
   newSeams: InstanceSeam[],
+  /** #1538/#1570 — registered adoption pairs this instance has not consumed.
+   * Warned, never failed on, for the same reason as `newSeams`: `core upgrade`
+   * cannot write the user-owned fix itself, so blocking every future
+   * template-owned upgrade on an unrelated infra gap would hold security
+   * patches hostage to it. See `printAdoptionReport`'s docstring. */
+  adoption: AdoptionReport,
 ): Promise<void> {
   if (breaking.length > 0 && !options.acknowledgeBreaking) {
     throw new Error(
@@ -739,6 +760,7 @@ async function applyAndOpenPr(
       coreVersionCleanup,
       orphanRatchet,
       newSeams,
+      adoption,
       branch,
       token,
     )
@@ -851,6 +873,8 @@ async function buildCommitAndOpenPr(
   orphanRatchet: OrphanRatchet,
   /** #1188 — carried through to the PR body. */
   newSeams: InstanceSeam[],
+  /** #1538/#1570 — carried through to the PR body. */
+  adoption: AdoptionReport,
   branch: string,
   /** Resolved by the caller, before the branch exists, so a missing token fails
    * the run without having moved HEAD first. */
@@ -991,6 +1015,7 @@ async function buildCommitAndOpenPr(
       carriedPrs,
       newSeams,
       installFailures,
+      adoption.findings,
     ),
   })
 
@@ -1152,6 +1177,9 @@ export function buildPrBody(
   /** `describeInstallFailures` output, if `pnpm install` / `uv sync` could not
    * run on the machine that ran the upgrade (#1040). */
   installFailures: string[] = [],
+  /** Registered adoption-pair findings this upgrade's target ships but this
+   * instance has not consumed (#1538/#1570). */
+  adoptionFindings: AdoptionFinding[] = [],
 ): string {
   const lines: string[] = []
   if (breaking.length > 0) {
@@ -1189,6 +1217,35 @@ export function buildPrBody(
         'anywhere the instance could have written the file in advance — add it as a follow-up ' +
         'commit on this PR, before merging, once the files above have landed on this branch.',
       '',
+      '---',
+      '',
+    )
+  }
+  const unadopted = adoptionFindings.filter((f) => f.status === 'unadopted')
+  if (unadopted.length > 0) {
+    // Same placement reasoning as the two sections above (#407): this instance
+    // already has the file this upgrade (or an earlier one) shipped, and the
+    // capability it's meant to complete has been silently dead since — that
+    // belongs above a long change list, not after it.
+    lines.push(
+      `## ⚠ ${unadopted.length} instance adoption gap(s) — shipped but not consumed (#1538/#1570)`,
+      '',
+      'The template-owned file(s) below already exist in this instance, but the ' +
+        '**user-owned** file that must read them has not been edited to do so. The mechanism ' +
+        'ships, CI is green, and it does nothing at runtime — `biffo core upgrade` cannot fix ' +
+        'this itself (the file it would need to edit is user-owned), so it is surfaced here on ' +
+        'every upgrade until it is adopted by hand.',
+      '',
+      ...unadopted.flatMap((f) => [
+        `### \`${f.pair.id}\``,
+        '',
+        f.pair.description,
+        '',
+        `- Template-owned: \`${f.pair.templateFile}\` (already present in this instance)`,
+        `- Needs editing: \`${f.pair.userFile}\``,
+        `- Fix: ${f.pair.remedy}`,
+        '',
+      ]),
       '---',
       '',
     )
@@ -1504,6 +1561,53 @@ function printNewInstanceSeams(seams: InstanceSeam[]): void {
     console.log(
       chalk.dim(`      Until then, this instance gets the template default: ${s.defaultFile}`),
     )
+  }
+  console.log()
+}
+
+/**
+ * Report the #1538/#1570 instance-adoption check to the terminal. Printed on
+ * every run, dry run included, and states the denominator explicitly —
+ * "N registered pair(s), M applicable to this upgrade" — rather than a bare
+ * "clean" that could equally mean "checked and found nothing" or "checked
+ * nothing" (the prosecution's finding on #1529's guards, which exist in no
+ * instance's tree and so are clean over zero real instances). This module
+ * runs against exactly one real tree per invocation — `options.cwd` — so a
+ * genuine call always examined 1.
+ *
+ * Deliberately a warning, never a thrown error — same reasoning as
+ * `printNewInstanceSeams` above, adapted: `biffo core upgrade` only ever
+ * writes template-owned paths, and the fix here is a user-owned file it has
+ * no mandate to edit. Hard-failing every future template-owned upgrade
+ * (including a security patch) on an unrelated, pre-existing infra gap would
+ * make the cure worse than the disease. Warning loudly, on every run, in the
+ * terminal AND the PR body (`buildPrBody`'s adoption section) keeps it
+ * impossible to miss without blocking anything it cannot itself resolve.
+ */
+function printAdoptionReport(report: AdoptionReport): void {
+  console.log(
+    chalk.dim(
+      `  Instance adoption: examined ${String(report.examinedInstances)} instance against ` +
+        `${String(report.registeredPairs)} registered pair(s), ` +
+        `${String(report.applicablePairs)} applicable to this upgrade.`,
+    ),
+  )
+  const unadopted = report.findings.filter((f) => f.status === 'unadopted')
+  if (unadopted.length === 0) {
+    console.log()
+    return
+  }
+  console.log(
+    chalk.red.bold(
+      `  ⚠ ${String(unadopted.length)} adoption gap(s) — shipped but not consumed (#1538/#1570):`,
+    ),
+  )
+  for (const f of unadopted) {
+    console.log(
+      `    ${chalk.bold(f.pair.id)} — ${chalk.yellow(f.pair.userFile)} does not consume ` +
+        chalk.yellow(f.pair.templateFile),
+    )
+    console.log(chalk.dim(`      ${f.pair.remedy}`))
   }
   console.log()
 }

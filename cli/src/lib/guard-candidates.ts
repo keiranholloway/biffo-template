@@ -262,6 +262,19 @@ export const GUARD_CANDIDATE_CLASSIFICATION: Record<string, GuardCandidateVerdic
       '"guard" means throughout this inventory: there is no document/actor pair here, and no ' +
       'wiring question either — every command already calls it directly.',
   },
+  // ── Added after #1519 — the export-name signal newly admits this one ────
+  'instance-adoption.ts': {
+    isGuard: true,
+    reason:
+      'exports checkInstanceAdoption (#1538/#1570): a genuine document/actor comparison — does a ' +
+      'template-owned file the TARGET tree ships (the document) get consumed by the user-owned ' +
+      'file that must read it (the actor)? Unlike core-upgrade.ts (classified false above as the ' +
+      "whole PLANNER, of which checkOrphanRatchet is one small internal comparator), this file's " +
+      'entire content IS the detector — the same shape core-upgrade-target-fidelity.ts and ' +
+      'doctor.ts were classified true on. Wired into the core-upgrade command as a warning rather ' +
+      "than a throw (see the module's own docstring for why a hard fail would be worse here), " +
+      'which does not change that it is a standalone check module, not internal machinery.',
+  },
 }
 
 /** The `isGuard: true` subset of `discoverGuardCandidates(dir)` — what

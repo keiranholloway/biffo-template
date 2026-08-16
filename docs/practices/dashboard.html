@@ -100,7 +100,7 @@ td.mid{color:var(--warn)}
       <h1>Are we building the product, or maintaining the machine?</h1>
     </div>
     <div class="stamp num">
-      collected 2026-08-15 03:43 UTC<br />
+      collected 2026-08-16 03:43 UTC<br />
       windows 1 / 7 / 90 days
     </div>
   </div>
@@ -131,7 +131,7 @@ td.mid{color:var(--warn)}
         <div class="note"> &middot; exit 1</div>
       </div><div class="tile critical">
         <div class="label">classification</div>
-        <div class="value num" style="font-size:15px">BLIND  2026-08-15.json: 30 of 34 failing steps unclassified (88.2%) — add patterns to STEP_KINDS for: Report the result (28), Post Run actions/setup-node@v4 (1), Report the denominator, and open/update a tracking issue on any failure (1)</div>
+        <div class="value num" style="font-size:15px">BLIND  2026-08-16.json: 4 of 4 failing steps unclassified (100.0%) — add patterns to STEP_KINDS for: Report the result (4)</div>
         <div class="note"> &middot; exit 1</div>
       </div><div class="tile critical">
         <div class="label">checkout</div>
@@ -153,11 +153,11 @@ td.mid{color:var(--warn)}
 
   <div class="headline">
     <p class="q">Capability built — merges that shipped something, rolling 7 days</p>
-    <div class="v num">15.3%</div>
+    <div class="v num">16.2%</div>
     <div class="sub">
       <span class="pill critical">critical</span>
-      &nbsp;floor 28% · prior 7d baseline 18.7% · last 24h 12%
-      · Biffo 8.6% · Tabsii 6.7%
+      &nbsp;floor 28% · prior 7d baseline 17.1% · last 24h 0%
+      · Biffo 10.4% · Tabsii 5.8%
       
     </div>
   </div>
@@ -166,47 +166,47 @@ td.mid{color:var(--warn)}
     
     <div class="tile critical">
       <div class="label">Toil ratio · 7d</div>
-      <div class="value num">69.4%</div>
-      <div class="note">rework + toil · budget 50% · prior 7d 62.2%</div>
+      <div class="value num">69.8%</div>
+      <div class="note">rework + toil · budget 50% · prior 7d 63.6%</div>
     </div>
     
     <div class="tile good">
       <div class="label">Platform vs product · 7d</div>
-      <div class="value num">52.3% / 47.7%</div>
-      <div class="note">merges in biffo-* vs tabsii-* · prior 7d 38% / 62%</div>
+      <div class="value num">57.5% / 42.5%</div>
+      <div class="note">merges in biffo-* vs tabsii-* · prior 7d 37% / 63%</div>
     </div>
     
     <div class="tile critical">
       <div class="label">Green wait per merge · 7d</div>
-      <div class="value num">44.2 min</div>
-      <div class="note">correct work that could not land · 298.6h across 405 merges · prior 7d 43.8 min</div>
+      <div class="value num">47.1 min</div>
+      <div class="note">correct work that could not land · 241.6h across 308 merges · prior 7d 43.4 min</div>
     </div>
     
     <div class="tile critical">
       <div class="label">Caught second · 7d</div>
-      <div class="value num">58.3%</div>
-      <div class="note">56 of 96 failing steps · H4 target &lt;20% · baseline 66% · <strong>192 unclassified</strong><br />unclassified 192 · test 40 · deploy 21 · dependency-audit 17</div>
+      <div class="value num">67.2%</div>
+      <div class="note">41 of 61 failing steps · H4 target &lt;20% · baseline 66% · <strong>196 unclassified</strong><br />unclassified 196 · test 29 · deploy 17 · coverage 9</div>
     </div>
     
     <div class="tile unknown">
       <div class="label">Merges · 24h</div>
-      <div class="value num">25</div>
-      <div class="note">7d 405 · 90d 2954</div>
+      <div class="value num">2</div>
+      <div class="note">7d 308 · 90d 2956</div>
     </div>
   </div>
 
   <h2>Work mix — 7 days, merge-weighted</h2>
-  <div class="mix"><span style="width:30.599999999999994%;background:var(--good)" title="delivery, quality &amp; docs 30.6%"></span><span style="width:69.4%;background:var(--crit)" title="toil + rework 69.4%"></span></div>
+  <div class="mix"><span style="width:30.200000000000003%;background:var(--good)" title="delivery, quality &amp; docs 30.2%"></span><span style="width:69.8%;background:var(--crit)" title="toil + rework 69.8%"></span></div>
   <div class="legend">
     <span><i style="background:var(--good)"></i>delivery, quality &amp; docs</span>
-    <span><i style="background:var(--crit)"></i>toil + rework (69.4%)</span>
+    <span><i style="background:var(--crit)"></i>toil + rework (69.8%)</span>
   </div>
 
   <h2>Wall-clock vs the merge proxy — is the headline believable?</h2>
   <div class="sessions">
     <div><span class="k">recorded</span> <strong class="num">112</strong> tasks · <strong class="num">303.9h</strong> over <strong class="num">12</strong> days</div>
     <div><span class="k">wall-clock</span> delivery <strong class="num">20.3%</strong> · platform <strong class="num">49.5%</strong> · toil <strong class="num">30.1%</strong></div>
-    <div><span class="k">merge proxy</span> toil <strong class="num">69.4%</strong> over 7d — proxy is off by -39.3 points — treat the headline with suspicion</div>
+    <div><span class="k">merge proxy</span> toil <strong class="num">69.8%</strong> over 7d — proxy is off by -39.7 points — treat the headline with suspicion</div>
     
   </div>
 
@@ -223,26 +223,26 @@ td.mid{color:var(--warn)}
       </thead>
       <tbody><tr>
       <td><strong>biffo-template</strong><span class="side">platform</span></td>
-      <td class="num">7</td>
+      <td class="num">1</td>
       <td class="num">1000</td>
       <td class="num ">10.9%</td>
-      <td class="num mid">17.3%</td>
-      <td class="num mid" title="racedShare excludes 0 of 479 measured PRs that could never race (no green run: 0, merged before any run completed: 0). Over the 479 eligible PRs, racedShareEligible is 8.4%. Not a portable defect rate across repos: this repo's own median green-to-merge lag is 2 min against the fixed 10min threshold. Compare staleMergeShare (next column) for whether dev actually moved underneath — the two can disagree.">8.4%</td>
+      <td class="num mid">17.4%</td>
+      <td class="num mid" title="racedShare excludes 0 of 478 measured PRs that could never race (no green run: 0, merged before any run completed: 0). Over the 478 eligible PRs, racedShareEligible is 8.4%. Not a portable defect rate across repos: this repo's own median green-to-merge lag is 2 min against the fixed 10min threshold. Compare staleMergeShare (next column) for whether dev actually moved underneath — the two can disagree.">8.4%</td>
       <td class="num">10%</td>
-      <td class="num hot">339h</td>
-      <td class="num mid">47.2%</td>
+      <td class="num hot">339.1h</td>
+      <td class="num mid">47.1%</td>
       <td class="num">13.6h</td>
     </tr>
 <tr>
       <td><strong>tabsii-platform</strong><span class="side">product</span></td>
-      <td class="num">7</td>
-      <td class="num">674</td>
-      <td class="num mid">20.7%</td>
-      <td class="num hot">31.5%</td>
-      <td class="num hot" title="racedShare excludes 0 of 362 measured PRs that could never race (no green run: 0, merged before any run completed: 0). Over the 362 eligible PRs, racedShareEligible is 29.8%. Not a portable defect rate across repos: this repo's own median green-to-merge lag is 9 min against the fixed 10min threshold. Compare staleMergeShare (next column) for whether dev actually moved underneath — the two can disagree.">29.8%</td>
-      <td class="num">8.8%</td>
-      <td class="num hot">258.8h</td>
-      <td class="num mid">43.4%</td>
+      <td class="num">1</td>
+      <td class="num">675</td>
+      <td class="num mid">21.1%</td>
+      <td class="num hot">31.6%</td>
+      <td class="num hot" title="racedShare excludes 0 of 361 measured PRs that could never race (no green run: 0, merged before any run completed: 0). Over the 361 eligible PRs, racedShareEligible is 29.9%. Not a portable defect rate across repos: this repo's own median green-to-merge lag is 9.1 min against the fixed 10min threshold. Compare staleMergeShare (next column) for whether dev actually moved underneath — the two can disagree.">29.9%</td>
+      <td class="num">8.9%</td>
+      <td class="num hot">277.8h</td>
+      <td class="num mid">43.3%</td>
       <td class="num">10.7h</td>
     </tr>
 <tr>
@@ -259,7 +259,7 @@ td.mid{color:var(--warn)}
     </tr>
 <tr>
       <td><strong>biffo-platform</strong><span class="side">platform</span></td>
-      <td class="num">3</td>
+      <td class="num">0</td>
       <td class="num">136</td>
       <td class="num ">8.8%</td>
       <td class="num mid">23.5%</td>
@@ -271,7 +271,7 @@ td.mid{color:var(--warn)}
     </tr>
 <tr>
       <td><strong>biffo-plugin-ideation</strong><span class="side">platform</span></td>
-      <td class="num">5</td>
+      <td class="num">0</td>
       <td class="num">102</td>
       <td class="num ">9.9%</td>
       <td class="num hot">38.6%</td>
@@ -283,7 +283,7 @@ td.mid{color:var(--warn)}
     </tr>
 <tr>
       <td><strong>biffo-plugin-idea-scout</strong><span class="side">platform</span></td>
-      <td class="num">3</td>
+      <td class="num">0</td>
       <td class="num">93</td>
       <td class="num ">1.1%</td>
       <td class="num hot">44.1%</td>

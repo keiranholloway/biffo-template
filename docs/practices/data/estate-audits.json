@@ -1,5 +1,5 @@
 {
-  "collectedAt": "2026-08-15T03:43:35Z",
+  "collectedAt": "2026-08-16T03:43:26Z",
   "audits": [
     {
       "name": "coverage",
@@ -35,7 +35,7 @@
       "name": "classification",
       "ok": false,
       "exit": 1,
-      "summary": "BLIND  2026-08-15.json: 30 of 34 failing steps unclassified (88.2%) — add patterns to STEP_KINDS for: Report the result (28), Post Run actions/setup-node@v4 (1), Report the denominator, and open/update a tracking issue on any failure (1)"
+      "summary": "BLIND  2026-08-16.json: 4 of 4 failing steps unclassified (100.0%) — add patterns to STEP_KINDS for: Report the result (4)"
     },
     {
       "name": "checkout",

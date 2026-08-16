@@ -691,6 +691,34 @@ describe('OrchestrationPage', () => {
     })
   })
 
+  it('round-trips a stored action_config key the builder does not model (tabsii-platform#927)', async () => {
+    // `timeout_seconds` is not among the email action's config_fields above —
+    // exactly a key Core (or an older/newer catalog) can write that this
+    // builder has no field for. Editing and saving an unrelated field must
+    // not silently drop it.
+    const withUnmodelledKey: WorkflowDefinition = {
+      ...notify,
+      action_config: { ...notify.action_config, timeout_seconds: '30' },
+    }
+    fetchWorkflows.mockResolvedValue([withUnmodelledKey])
+    updateWorkflow.mockResolvedValue(withUnmodelledKey)
+
+    render(<OrchestrationPage />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }))
+
+    // Touch a modelled field, but never `timeout_seconds` — it has no input
+    // to touch, by construction.
+    const nameInput = screen.getByPlaceholderText('Notify the sales team')
+    fireEvent.change(nameInput, { target: { value: 'Notify sales v2' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    await waitFor(() => {
+      expect(updateWorkflow).toHaveBeenCalled()
+    })
+    const [, , body] = updateWorkflow.mock.calls.at(0) as [unknown, string, WorkflowInput]
+    expect(body.action_config.timeout_seconds).toBe('30')
+  })
+
   it('deletes a workflow', async () => {
     fetchWorkflows.mockResolvedValue([notify])
     deleteWorkflow.mockResolvedValue(undefined)

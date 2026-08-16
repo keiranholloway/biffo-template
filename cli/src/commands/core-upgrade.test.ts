@@ -6,6 +6,7 @@ import type { CoreUpgradeDeps } from './core-upgrade.js'
 import { buildPrBody, resolveTemplateRepoFlag, runCoreUpgrade } from './core-upgrade.js'
 import type { MergeEntry, MergeStatus, UpgradePlan } from '../lib/core-upgrade.js'
 import type { MigrationCarryPlan } from '../lib/core-migrations.js'
+import { REGISTERED_ADOPTION_PAIRS } from '../lib/instance-adoption.js'
 import { makeTmpDir } from '../test-utils/tmp.js'
 
 vi.mock('../lib/logger.js', () => ({
@@ -868,6 +869,112 @@ describe('runCoreUpgrade — new instance seam warning (#1188)', () => {
 })
 
 /**
+ * #1538/#1570: a template-owned file (here, a stand-in for
+ * `core-api-environment.core.tf`) distributes correctly, but the user-owned
+ * line that consumes it is never written, and nothing notices. Wired into
+ * `runCoreUpgrade` the same way the #1188 seam warning above is — computed
+ * and printed on every run, carried into the PR body, never thrown on.
+ *
+ * These tests use a synthetic pair (registered via the real
+ * `REGISTERED_ADOPTION_PAIRS` entry's own paths) rather than re-deriving
+ * `main.tf` here; `instance-adoption.test.ts` is where the real, historical
+ * `biffo-platform` before/after fixtures live and where the fail-first
+ * evidence was produced. This block instead proves the COMMAND actually
+ * calls the check and surfaces what it finds — the wiring, not the detector.
+ */
+describe('runCoreUpgrade — instance adoption gap warning (#1538/#1570)', () => {
+  let base: string
+  let theirs: string
+  let instance: string
+  const templateFile = 'infra/environments/dev/core-api-environment.core.tf'
+  const userFile = 'infra/environments/dev/main.tf'
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    base = makeTmpDir('adopt-base')
+    theirs = makeTmpDir('adopt-theirs')
+    instance = makeTmpDir('adopt-inst')
+    writeFileSync(join(base, 'core.version'), '0.1.0\n')
+    writeFileSync(join(base, 'core-manifest.json'), JSON.stringify(MANIFEST))
+    w(base, 'services/api/main.py', 'v1')
+    writeFileSync(join(theirs, 'core.version'), '0.2.0\n')
+    writeFileSync(join(theirs, 'core-manifest.json'), JSON.stringify(MANIFEST))
+    w(theirs, 'services/api/main.py', 'v2')
+    // The channel ships at the target version — same as core-v0.287.0 onward
+    // shipping core-api-environment.core.tf for real.
+    w(theirs, templateFile, 'core_api_environment = merge(...)\n')
+    writeFileSync(join(instance, 'biffo.core.json'), JSON.stringify({ version: '0.1.0' }))
+    w(instance, 'services/api/main.py', 'v1')
+  })
+  afterEach(() => {
+    for (const d of [base, theirs, instance]) rmSync(d, { recursive: true, force: true })
+  })
+
+  async function apply(): Promise<ReturnType<typeof fakeDeps>> {
+    const deps = fakeDeps()
+    await runCoreUpgrade(
+      { cwd: instance, templateRepo: theirs, baseDir: base, theirsDir: theirs, apply: true },
+      deps.deps,
+    )
+    return deps
+  }
+
+  it('warns in the terminal and the PR body when the instance has not adopted a shipped channel', async () => {
+    // instance's main.tf exists but does not merge the channel in — the exact
+    // genuine defect state PR #174 fixed in keiranholloway/biffo-platform.
+    w(instance, userFile, 'module "core_api" {\n  environment_variables = {\n  }\n}\n')
+
+    const { createPullRequest } = await apply()
+
+    const terminalOutput = vi
+      .mocked(console.log)
+      .mock.calls.map((c) => String(c[0]))
+      .join('\n')
+    expect(terminalOutput).toContain('#1538')
+    expect(terminalOutput).toContain('core-api-environment')
+    expect(createPullRequest).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.stringContaining('#1538') }),
+    )
+    expect(createPullRequest).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.stringContaining(userFile) }),
+    )
+  })
+
+  it('does not warn when the instance already merges the channel in', async () => {
+    w(
+      instance,
+      userFile,
+      'module "core_api" {\n  environment_variables = merge(local.core_api_environment, {\n  })\n}\n',
+    )
+
+    const { createPullRequest } = await apply()
+
+    expect(createPullRequest).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.not.stringContaining('#1538') }),
+    )
+  })
+
+  it('does not warn when the target does not ship the channel at all (not applicable)', async () => {
+    rmSync(join(theirs, templateFile))
+    // Something else still changes so the upgrade is not a no-op.
+    w(theirs, 'services/api/main.py', 'v2-again')
+    w(instance, userFile, 'module "core_api" {\n  environment_variables = {\n  }\n}\n')
+
+    const { createPullRequest } = await apply()
+
+    expect(createPullRequest).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.not.stringContaining('#1538') }),
+    )
+  })
+
+  it('never throws — an unadopted channel is a warning, not a blocked upgrade', async () => {
+    w(instance, userFile, 'module "core_api" {\n  environment_variables = {\n  }\n}\n')
+    await expect(apply()).resolves.not.toThrow()
+  })
+})
+
+/**
  * Issue #984: `--apply` created the upgrade branch by checking it out in the
  * caller's own checkout and never moved HEAD back, so the repo it was pointed at
  * was left parked on the upgrade branch — which AGENTS.md §2 forbids, and which
@@ -1172,6 +1279,99 @@ describe('buildPrBody — new instance seams (#1188)', () => {
     )
     expect(body).not.toContain('#1188')
     expect(body).not.toContain('instance seam')
+  })
+})
+
+describe('buildPrBody — instance adoption gaps (#1538/#1570)', () => {
+  function emptySummary(): Record<MergeStatus, number> {
+    return {
+      unchanged: 0,
+      'take-theirs': 0,
+      'keep-ours': 0,
+      merged: 0,
+      conflict: 0,
+      added: 0,
+      'add-conflict': 0,
+      removed: 0,
+      'remove-conflict': 0,
+    }
+  }
+
+  function planWith(changes: MergeEntry[]): UpgradePlan {
+    const summary = emptySummary()
+    for (const c of changes) summary[c.status]++
+    return { entries: changes, changes, conflicts: [], summary }
+  }
+
+  const noMigrations: MigrationCarryPlan = { entries: [], instanceHead: null, skipped: [] }
+
+  const someChange: MergeEntry = {
+    path: 'infra/environments/dev/core-api-environment.core.tf',
+    status: 'added',
+    conflicted: false,
+    content: 'core_api_environment = merge(...)\n',
+  }
+
+  const corePair = REGISTERED_ADOPTION_PAIRS.find((p) => p.id === 'core-api-environment')
+  if (!corePair) throw new Error('core-api-environment pair missing from the registry')
+
+  it('names the user-owned file and the remedy when a registered pair is unadopted', () => {
+    const body = buildPrBody(
+      '0.1.0',
+      '0.2.0',
+      planWith([someChange]),
+      noMigrations,
+      'dev',
+      [],
+      [],
+      null,
+      [],
+      [],
+      [],
+      [{ pair: corePair, status: 'unadopted' }],
+    )
+    expect(body).toContain('#1538')
+    expect(body).toContain('#1570')
+    expect(body).toContain(corePair.userFile)
+    expect(body).toContain(corePair.templateFile)
+    expect(body).toContain(corePair.remedy)
+  })
+
+  it('omits the section entirely when nothing is unadopted', () => {
+    const body = buildPrBody(
+      '0.1.0',
+      '0.2.0',
+      planWith([someChange]),
+      noMigrations,
+      'dev',
+      [],
+      [],
+      null,
+      [],
+      [],
+      [],
+      [{ pair: corePair, status: 'adopted' }],
+    )
+    expect(body).not.toContain('#1538')
+    expect(body).not.toContain('adoption gap')
+  })
+
+  it('omits the section for a not-applicable pair — nothing to adopt yet', () => {
+    const body = buildPrBody(
+      '0.1.0',
+      '0.2.0',
+      planWith([someChange]),
+      noMigrations,
+      'dev',
+      [],
+      [],
+      null,
+      [],
+      [],
+      [],
+      [{ pair: corePair, status: 'not-applicable' }],
+    )
+    expect(body).not.toContain('#1538')
   })
 })
 

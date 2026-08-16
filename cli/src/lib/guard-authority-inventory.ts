@@ -324,6 +324,43 @@ export const GUARD_AUTHORITY_INVENTORY: GuardAuthorityRecord[] = [
       "decode step on either side. The file's overall independence follows because both in-class " +
       'functions are independent and the record is per-guard.',
   },
+  {
+    id: 'instance-adoption',
+    path: 'cli/src/lib/instance-adoption.ts',
+    inClass: true,
+    document:
+      "a plain regex match (adoptedPattern) over the instance's own " +
+      'infra/environments/dev/main.tf TEXT — does it contain ' +
+      '`environment_variables = merge(local.core_api_environment, ...)`?',
+    actor:
+      "Terraform's actual resolution of module.core_api's environment_variables at plan/apply " +
+      "time and, downstream, the deployed Core Lambda's real environment (whether " +
+      'BIFFO_PLUGIN_MEDIA_BUCKET is actually present) — the two are one hop apart (a syntactically ' +
+      'present merge() could still be shadowed by a later duplicate key, or absent from state after ' +
+      'a failed apply), which this guard does not and cannot see from source text alone.',
+    disagreementTest: 'cli/src/lib/instance-adoption.test.ts',
+    independence: 'independent',
+    note:
+      'Built for #1538/#1570 (biffo-platform main.tf shipped the template-owned carve-out but ' +
+      'never merged it in — plugin object storage silently dead, fixed by hand in ' +
+      'keiranholloway/biffo-platform#174). Newly discovered by #1519’s export-name signal on ' +
+      'checkInstanceAdoption; not part of that issue’s original 8. disagreementTest constructs ' +
+      'the exact false positive #1538’s own investigation hit first (a naive env-var-name grep ' +
+      "matching plugin-host.core.tf's UNRELATED assignment onto module.plugin_host) and asserts " +
+      'the current pattern — anchored on the full merge(local.core_api_environment, expression, ' +
+      'not the env var name — is not fooled by it, plus the real pre-/post-PR#174 biffo-platform ' +
+      'main.tf fixtures (fail-first: the detector is proven to flag the genuine defect state and ' +
+      'pass the genuine fixed one, not merely a synthetic stand-in). independent: the regex read ' +
+      'here shares no helper, parser or decode step with Terraform’s own HCL evaluation — a JS ' +
+      'RegExp#test() over UTF-8 text and Terraform’s graph engine have no common code path a ' +
+      'corruption could travel through unnoticed. The residual gap named under `actor` above ' +
+      '(syntactic presence vs. real applied state) is the guard’s known, stated limit, not an ' +
+      'independence exposure — it is the same "reproduce the actual failure, not a theory of it" ' +
+      'gap AGENTS.md §4 names for any static check of infrastructure: this guard proves the ' +
+      "line was WRITTEN, not that terraform apply succeeded with it. See the guard's own module " +
+      'docstring for why that residual gap is accepted here (a per-instance terraform apply is ' +
+      'out of reach for a CLI check, and the PR body it emits says so).',
+  },
 
   // ── In-class, STILL NO disagreement test — the honest remainder ─────────
   {

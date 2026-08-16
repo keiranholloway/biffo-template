@@ -5,6 +5,16 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 
+# Coverage artefacts. `--cov-report=json` is the error-branch coverage gate's
+# only input (biffo-template#1603), so re-taking the baseline locally writes
+# one — an untracked coverage.json sitting in `git status` is how a
+# measurement output ends up committed as if it were source. `.coverage`
+# (the sqlite datafile) and coverage.xml (Codecov's input) are the same
+# category and were never ignored here either.
+.coverage
+coverage.json
+coverage.xml
+
 # Node
 node_modules/
 dist/

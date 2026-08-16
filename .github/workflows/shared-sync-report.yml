@@ -332,7 +332,17 @@ jobs:
           # checking exit status through a pipe: `tee` would report ITS OWN
           # status, masking a real drift/failure exit from shared-sync.sh.
           set +e
-          sh scripts/shared-sync.sh --check --estate "${{ steps.estate.outputs.estate }}" 2>&1 | tee "$log"
+          # `bash`, matching shared-sync.sh's own `#!/usr/bin/env bash`
+          # shebang -- not `sh`. #1603's second-pass verdict on #1619 found
+          # this exact mismatch live here too: this line ran the script under
+          # dash even though it declares bash. shared-sync.sh itself already
+          # tolerates that (its own header explains the portable
+          # `(set -o pipefail) 2>/dev/null && set -o pipefail || true` shim,
+          # added after this same class broke it once before), so nothing
+          # here was actually failing -- but leaving the mismatch in place
+          # would make `scripts/interpreter-audit.sh` (release-guards.yml)
+          # red on residue this PR could trivially close instead.
+          bash scripts/shared-sync.sh --check --estate "${{ steps.estate.outputs.estate }}" 2>&1 | tee "$log"
           rc=${PIPESTATUS[0]}
           set -e
 

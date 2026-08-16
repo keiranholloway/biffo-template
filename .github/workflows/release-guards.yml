@@ -232,3 +232,76 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           GH_REPO: ${{ github.repository }}
+      # `scripts/ci-wiring-audit.sh` (#884, #1244) had ZERO automatic callers
+      # until this line (#1603 verdict b): it appears in no workflow anywhere
+      # in the template or its skeletons, and its only live invocation was by
+      # hand or from `scripts/practices-daily.sh` -- a workstation cron job
+      # that writes a dashboard metric nobody is required to read. So the
+      # mechanism that exists specifically to catch "a repo holds a shared
+      # script or a `requiresCiStep` path and runs no gate over it" was itself
+      # exactly that: held, and never run. biffo-template#1619 (adding
+      # `scripts/error_branch_coverage.py` to `requiresCiStep`) shipped that
+      # exact gap unremarked, which is what this step closes.
+      #
+      # Gated on the manifest existing in THIS checkout, not on repo name:
+      # `.github/workflows/release-guards.yml` is itself a `filesFromSkeleton`
+      # `sync` entry (see shared-files.json), so it lands byte-identical in
+      # every sibling and plugin repo once shared-sync reaches them. The
+      # audit script's own header explains why it is deliberately NOT in the
+      # shared set itself -- it reads `shared-files.json` for its mapping, and
+      # that manifest exists only here; a satellite running it unconditionally
+      # would find no manifest and exit 2 on every PR forever, which is worse
+      # than the gap this closes. `hashFiles` makes the step a correct no-op
+      # everywhere the manifest is absent, the same "inert elsewhere" shape
+      # the ownership guard above already uses in reverse (inert HERE,
+      # active in an instance).
+      #
+      # Deliberately run WITHOUT --estate: a GitHub Actions runner has only
+      # this one repo checked out, so it can only ever audit itself, not the
+      # rest of the estate (that remains `shared-sync-report.yml`'s daily,
+      # advisory job against a local ~/code clone). What this step buys is
+      # narrower and still real: biffo-template's OWN ci.yml can no longer
+      # silently stop wiring a shared script or a `requiresCiStep` glob it
+      # holds -- exactly the regression #1619 could have shipped a second
+      # time with nobody noticing until a satellite reddened downstream.
+      #
+      # No ratchet: unlike `shared-sync.sh --check` (permanently red day-one
+      # residue across the WHOLE estate would train people to ignore it,
+      # AGENTS.md section 9), the scope this step actually examines -- this one
+      # repo -- carries no pre-existing unwired residue (verified before
+      # adding this step: `sh scripts/ci-wiring-audit.sh` reports `wired`, 0
+      # findings, both before and after #1619's `requiresCiStep` addition).
+      # A bare failing gate is the honest shape for a scope that is already
+      # clean; a ratchet is for debt you are choosing not to pay off yet, and
+      # there is none here to protect. The estate-wide residue the #1619
+      # verdict also found (`biffo-plugin-ideation`'s unwired
+      # `terraform/*.tf`) is a different repo's PR gate to carry, once this
+      # step's shape is proven here -- out of scope for this change, which
+      # closes the "runs against zero PRs" gap for the one repo a PR check
+      # can actually see.
+      # Invoked with `bash`, matching the script's own `#!/usr/bin/env bash`
+      # shebang -- NOT `sh`. The runner's `/bin/sh` is dash, and dash does not
+      # support `-o pipefail` in any form (`set -uo pipefail` at this script's
+      # own line ~65 dies with `Illegal option -o pipefail`, exit 2, before
+      # reading the manifest). #1603's own second-pass verdict caught this
+      # landing exactly this way: this step as first written forced `sh`,
+      # crashed on every PR, and turned a required check permanently red --
+      # worse than the silent no-caller gap it was meant to close. Reproduced
+      # byte-for-byte in an `ubuntu:24.04` container (the runner image this
+      # job actually uses) and fixed by matching the interpreter to the
+      # shebang; `scripts/interpreter-audit.sh` below now asserts this stays
+      # true for every script every workflow invokes, so this exact mismatch
+      # cannot recur unnoticed on any future step.
+      - name: CI wiring audit
+        if: ${{ github.event_name == 'pull_request' && !cancelled() && hashFiles('shared-files.json') != '' }}
+        run: bash scripts/ci-wiring-audit.sh
+      # #1603's second-pass verdict: a script's declared shebang and the
+      # interpreter a workflow actually invokes it with can silently diverge,
+      # and `dash -n`/`bash -n` cannot catch it -- it is a RUNTIME
+      # option-parse failure (`set -o pipefail` under dash), not a syntax
+      # error, so a pre-flight parse check is not the guard this needs. See
+      # scripts/interpreter-audit.sh's own header for the full mechanism and
+      # denominator.
+      - name: Workflow/script interpreter audit
+        if: ${{ github.event_name == 'pull_request' && !cancelled() }}
+        run: bash scripts/interpreter-audit.sh

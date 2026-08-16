@@ -8,6 +8,11 @@ admin_username = "admin"
 
 # Optional: send Cognito admin-password emails from a verified SES identity
 # instead of the default Cognito no-reply sender. Leave blank to keep defaults.
+# The identity does NOT need to be in us-east-1 — SES has no such requirement,
+# and this reads as one only because that is the historical default region.
+# It DOES need to be in the SAME region as aws_region above: the auth module's
+# plan-time verification check (issue #1475) has no way to look cross-region
+# (the pinned aws provider has no per-data-source `region` argument).
 # mail_from_address = "admin-env@mail.example.com"
 # mail_source_arn   = "arn:aws:ses:us-east-1:111111111111:identity/mail.example.com"
 

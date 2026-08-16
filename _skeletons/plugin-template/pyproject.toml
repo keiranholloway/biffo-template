@@ -107,8 +107,19 @@ python_classes = ["Test*"]
 python_functions = ["test_*"]
 asyncio_mode = "auto"
 
+# `scripts` is in `source` alongside `src` because the Test job (this repo's
+# own ci.yml) runs from the repo root, not scoped to `src/` -- so a script
+# under `scripts/` is exactly as measurable as anything under `src/`, and a
+# `source` that omits it is a scope the error-branch coverage gate
+# (biffo-template#1603) cannot see into. Measured live in
+# biffo-plugin-marketing: `source = ["src"]` alone left 4 of 6 branches in its
+# own `scripts/` unmeasured by ANY gate until an instance vendored the plugin
+# and its own wider `source` found them -- the same analyser, on the same
+# code, silently blind here and not there. Keep this in agreement with
+# whatever `scripts/` actually holds; a directory added there that is not in
+# `source` is a directory this repo does not check.
 [tool.coverage.run]
-source = ["src"]
+source = ["src", "scripts"]
 omit = ["*/tests/*"]
 
 # python-semantic-release config for release.yml. This repo does not use

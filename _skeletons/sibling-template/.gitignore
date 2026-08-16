@@ -65,8 +65,15 @@ Thumbs.db
 npm-debug.log*
 pnpm-debug.log*
 
-# Test coverage
+# Test coverage. `coverage` (bare) matches a `coverage/` directory, not the
+# `coverage.json`/`coverage.xml` files services/api's Test job now writes --
+# `--cov-report=json` is the error-branch coverage gate's only input
+# (biffo-template#1603), so re-taking the baseline locally writes one, and an
+# untracked coverage.json sitting in `git status` is how a measurement output
+# ends up committed as if it were source.
 coverage
+coverage.json
+coverage.xml
 htmlcov
 .coverage
 

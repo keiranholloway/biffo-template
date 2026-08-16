@@ -67,7 +67,24 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --all-groups
-      - run: uv run pytest --cov --cov-report=xml
+      # `--cov-report=json` is additive to the xml Codecov reads: the step
+      # below (`scripts/error_branch_coverage.py`) reads coverage.json and
+      # nothing else, so without this line it has no input and exits 2 ("no
+      # coverage data"), which is the gate failing to run rather than passing.
+      - run: uv run pytest --cov --cov-report=xml --cov-report=json
+      # Fails only when error handling is ADDED with nothing exercising it
+      # (biffo-template#956). An unexecuted `except` is unverified — nobody has
+      # ever observed what it does — and that is where every fail-open this
+      # estate has found actually lived. The analyser is template-owned and
+      # distributed verbatim via shared-files.json's `files` (biffo-template#1603):
+      # do not edit it here, edit it upstream, same rule
+      # scripts/py-dependency-audit.sh already carries. A freshly scaffolded
+      # repo has no baseline yet, so this reports what it finds and exits 0 —
+      # take the first baseline with `uv run python
+      # scripts/error_branch_coverage.py --write` once real code exists to
+      # measure.
+      - name: Error-branch coverage
+        run: uv run python scripts/error_branch_coverage.py --check --coverage coverage.json
       - uses: codecov/codecov-action@v5
         if: always()
         with:

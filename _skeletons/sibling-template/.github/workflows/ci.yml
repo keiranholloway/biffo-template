@@ -194,7 +194,31 @@ jobs:
         run: uv run pyright
       - name: Test
         if: ${{ !cancelled() }}
-        run: uv run pytest --cov --cov-report=xml
+        # `--cov-report=json` is additive to the xml Coverage upload step reads:
+        # the Error-branch coverage step below reads coverage.json and nothing
+        # else, so without this line it has no input and exits 2 rather than
+        # actually checking anything.
+        run: uv run pytest --cov --cov-report=xml --cov-report=json
+      # Fails only when error handling is ADDED with nothing exercising it
+      # (biffo-template#956). An unexecuted `except` is unverified — nobody has
+      # ever observed what it does. The analyser is template-owned and
+      # distributed verbatim via shared-files.json's `files` at the repo root
+      # (biffo-template#1603) — invoked with `../../` because this job's steps
+      # run with working-directory services/api, same as
+      # scripts/py-dependency-audit.sh below. `--source-root .` matters here:
+      # coverage.json's paths are relative to THIS cwd (services/api), and the
+      # script's default source root is two directories up from its own file —
+      # right for the template/instance, wrong here, where the code being
+      # measured lives under services/api, not the repo root. Do not edit this
+      # script here; edit it upstream, same rule
+      # scripts/py-dependency-audit.sh already carries. A freshly scaffolded
+      # sibling has no baseline yet, so this reports what it finds and exits
+      # 0 — take the first baseline with `uv run python
+      # ../../scripts/error_branch_coverage.py --write --source-root .` once
+      # real code exists to measure.
+      - name: Error-branch coverage
+        if: ${{ !cancelled() }}
+        run: uv run python ../../scripts/error_branch_coverage.py --check --coverage coverage.json --source-root .
       - name: Coverage upload
         if: ${{ !cancelled() }}
         uses: codecov/codecov-action@v5

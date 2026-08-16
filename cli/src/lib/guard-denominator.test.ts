@@ -208,9 +208,12 @@ describe('guard denominator sweep (#1363): a new or modified gate cannot merge w
         `${baseBlob?.slice(0, 12) ?? 'ABSENT'}, head blob ${headBlob?.slice(0, 12) ?? 'unknown'}` +
         (diverged
           ? '. THIS BRANCH EDITS THE MECHANISM, so head’s copy was run as well and must pass too.'
-          : baseBlob === null
-            ? '. Establishing run — head’s copy decided, because there is none at base.'
-            : '. Identical, so the distinction did not matter on this run.'),
+          : rootOfTrustError !== null
+            ? '. The base was rejected, so no copy was read from it and the verdict below is ' +
+              'NOT binding — the rejection above is.'
+            : baseBlob === null
+              ? '. Establishing run — head’s copy decided, because there is none at base.'
+              : '. Identical, so the distinction did not matter on this run.'),
     )
     expect(headBlob).not.toBeNull()
   })

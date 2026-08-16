@@ -65,7 +65,23 @@ name: Error-branch coverage gate
 
 on:
   workflow_run:
-    workflows: ['CI', 'RLS Tests']
+    # `workflow_run.workflows` matches EXACT names and supports no globbing, so
+    # this list cannot be derived and is the one place a lane's name still has
+    # to be known in advance. It is therefore an enum of ACCEPTED lane names,
+    # not a description of one repo's setup (#1597): an instance may call its
+    # second coverage lane any of these without editing this template-owned
+    # file, which it could not do without declaring a Core-Divergence.
+    #
+    # A lane whose name is absent here never triggers the gate at all — its
+    # coverage is never combined and error-branch coverage is asserted over the
+    # Python job alone, while the repo looks fully configured. That is why the
+    # membership is no longer left to luck:
+    # `scripts/second_coverage_lane.py --check` asserts a repo's actual lane
+    # name appears in this list, and `test_second_coverage_lane.py` runs it.
+    #
+    # Adding a name here is cheap and safe; a name that matches no workflow in
+    # a given repo simply never fires.
+    workflows: ['CI', 'RLS Tests', 'Postgres Tests', 'Database Tests', 'Coverage Lane']
     types: [completed]
 
 permissions:
@@ -90,36 +106,75 @@ jobs:
       # scripts/error_branch_coverage.py, never to inspect the PR's commit.
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
 
-      # A repo-level question, evaluated at the ACTUAL commit under test (via
-      # the contents API, not a checkout) so a PR that adds the RLS lane for
-      # the first time is gated by it immediately, matching the same
-      # `hashFiles('.github/workflows/rls-tests.yml')` test `ci.yml` uses —
-      # the two must agree on what "this repo has the lane" means, or a repo
-      # with the lane could end up asked for it in one place and not the
-      # other.
-      - name: Does this commit's repo have an RLS lane?
-        id: rls-lane
+      # The commit under test's own source, fetched FIRST because everything
+      # below is a question about that commit rather than about this checkout:
+      # which workflows it defines, and which lines its coverage refers to.
+      # Fetching once and reading one materialised copy is what keeps those
+      # answers from drifting apart (#1595 was exactly that drift).
+      #
+      # This is data, not code. The tarball is expanded and READ — parsed by
+      # the default branch's scripts — and nothing in it is imported,
+      # installed or run, no dependency of it is resolved, and no credential
+      # is written into that tree. The header's pwn-request concern is about
+      # EXECUTING a fork's code with this job's write-scoped token, which is
+      # unchanged.
+      #
+      # Hard-fails rather than guessing. If the source cannot be fetched, this
+      # job cannot tell whether the repo even has a lane, so it posts NOTHING
+      # and goes red: in a repo where this context is required that leaves it
+      # pending, which blocks merge exactly as a failure would, and in a repo
+      # where it is not required it is visible in Actions without inventing a
+      # status that would never otherwise exist. "Cannot tell" is never a pass.
+      - name: Materialise the commit under test's source
         run: |
           set -uo pipefail
-          if gh api "repos/$REPO/contents/.github/workflows/rls-tests.yml?ref=$SHA" >/dev/null 2>&1; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "present=false" >> "$GITHUB_OUTPUT"
+          mkdir -p under-test
+          if ! gh api "repos/$REPO/tarball/$SHA" > under-test.tar.gz; then
+            echo "::error::error-branch coverage gate: could not fetch the source tarball for $SHA — cannot determine whether this commit has a second coverage lane. Posting no status."
+            exit 1
           fi
+          if ! tar -xzf under-test.tar.gz -C under-test --strip-components=1; then
+            echo "::error::error-branch coverage gate: the source tarball for $SHA could not be expanded. Posting no status."
+            exit 1
+          fi
+          echo "Expanded the source of $SHA into under-test/ ($(find under-test -name '*.py' | wc -l) Python file(s))."
 
-      # No RLS lane at all: `ci.yml`'s own inline "Error-branch coverage"
-      # step already asserted the single-file check for this commit (it only
-      # skips itself when the lane IS present — see that file). Nothing more
+      # A repo-level question, answered from the ACTUAL commit under test, and
+      # answered by the SAME resolver `ci.yml` uses to decide whether its
+      # inline check stands down. The two must agree on what "this repo has a
+      # second lane" means: disagree one way and the commit is asserted twice,
+      # disagree the other and it is asserted NOWHERE while both files believe
+      # the other did it.
+      #
+      # Detection is by the artefact a lane publishes (`rls-coverage`) rather
+      # than by an RLS-specific filename and workflow name (#1597). A repo with
+      # no row-level security at all — `biffo-platform` — was previously forced
+      # to name its real-Postgres lane `rls-tests.yml`/`RLS Tests`, because the
+      # honest name left this gate silent AND re-enabled ci.yml's inline check.
+      - name: Does this commit have a second coverage lane?
+        id: lane
+        run: |
+          set -euo pipefail
+          # `--github-output` exits 0 for both answers, so a non-zero here is
+          # the resolver itself failing — a different fact from "no lane", and
+          # `set -e` makes it fatal rather than silently reading as absence.
+          python3 scripts/second_coverage_lane.py --root under-test --github-output > lane.env
+          cat lane.env
+          cat lane.env >> "$GITHUB_OUTPUT"
+
+      # No second lane at all: `ci.yml`'s own inline "Error-branch coverage"
+      # step already asserted the single-artefact check for this commit (it
+      # only skips itself when a lane IS present — see that file). Nothing more
       # for this workflow to do, and nothing is posted: this job is not a
-      # required context in a repo without the lane, so leaving no status is
+      # required context in a repo without a lane, so leaving no status is
       # correct, not a silent skip of something that mattered.
-      - name: No RLS lane — nothing for this gate to do
-        if: steps.rls-lane.outputs.present == 'false'
-        run: echo "No .github/workflows/rls-tests.yml at $SHA — ci.yml's own inline check already covers this commit. Exiting without posting a status."
+      - name: No second coverage lane — nothing for this gate to do
+        if: steps.lane.outputs.present == 'false'
+        run: echo "Nothing at $SHA publishes the lane coverage artefact — ci.yml's own inline check already covers this commit. Exiting without posting a status."
 
       # Wait for both lanes, or bail without asserting.
       #
-      # This job was triggered by ONE of {CI, RLS Tests} completing, so that
+      # This job was triggered by ONE of {CI, the lane} completing, so that
       # run's id is already known (`TRIGGERING_RUN_ID`) — the other has to be
       # looked up, and it may genuinely not have finished yet: the two
       # workflows start at roughly the same time with no ordering guarantee.
@@ -135,7 +190,14 @@ jobs:
       # never dispatches at all) and its recovery.
       - name: Find both runs for this commit
         id: runs
-        if: steps.rls-lane.outputs.present == 'true'
+        if: steps.lane.outputs.present == 'true'
+        env:
+          # The lane's ACTUAL workflow name, discovered from this commit rather
+          # than hardcoded (#1597). Passed through the environment rather than
+          # interpolated into the script body: a workflow name is
+          # repo-controlled text, and `${{ }}` splices it into the shell before
+          # the shell ever sees it.
+          LANE_NAME: ${{ steps.lane.outputs.name }}
         run: |
           set -uo pipefail
           # `status=completed` is the API's word for FINISHED, not SUCCEEDED
@@ -157,18 +219,42 @@ jobs:
             ci_run_id="$TRIGGERING_RUN_ID"
             ci_conclusion="${{ github.event.workflow_run.conclusion }}"
             [ "$ci_conclusion" = "success" ] || ci_run_id=""
+            # `env.LANE_NAME`, not a shell-interpolated jq variable: `gh api`
+            # takes exactly one positional argument and has no `--arg`, so
+            # `--jq --arg lane "$LANE_NAME" '…'` dies with
+            # "accepts 1 arg(s), received 4". Reading it from the environment
+            # inside the jq program is both the working form and the safe one —
+            # a workflow name is repo-controlled text and never reaches the
+            # shell or the jq source.
             rls_run_id=$(gh api "repos/$REPO/actions/runs?head_sha=$SHA&status=completed&per_page=50" \
-              --jq '[.workflow_runs[] | select(.name == "RLS Tests") | select(.conclusion == "success")] | first | .id // empty')
-          else
+              --jq '[.workflow_runs[] | select(.name == env.LANE_NAME) | select(.conclusion == "success")] | first | .id // empty')
+          elif [ "$TRIGGERING_NAME" = "$LANE_NAME" ]; then
             rls_run_id="$TRIGGERING_RUN_ID"
             rls_conclusion="${{ github.event.workflow_run.conclusion }}"
             [ "$rls_conclusion" = "success" ] || rls_run_id=""
             ci_run_id=$(gh api "repos/$REPO/actions/runs?head_sha=$SHA&status=completed&per_page=50" \
               --jq '[.workflow_runs[] | select(.name == "CI") | select(.conclusion == "success")] | first | .id // empty')
+          else
+            # Fired by a workflow that is in the trigger list but is NOT this
+            # repo's lane. The list is an enum of accepted lane names across the
+            # whole estate (#1597), so a repo holding two of them — say a real
+            # `RLS Tests` plus something called `Database Tests` that publishes
+            # no coverage — will see firings that have nothing to do with the
+            # combine.
+            #
+            # Before the list was widened this branch could only be the lane, so
+            # `else` was safe. It is not any more: treating an unrelated run as
+            # the lane would take its id, fail to find `rls-coverage` on it, and
+            # post a FAILURE blaming a missing artefact on a workflow that was
+            # never supposed to have one. Bail without asserting instead — the
+            # real lane's own completion will fire this gate properly.
+            echo "Triggered by '$TRIGGERING_NAME', which is in the trigger list but is not this repo's lane ('$LANE_NAME'). Not asserting; the lane's own completion will."
+            echo "both_found=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
           if [ -z "$ci_run_id" ] || [ -z "$rls_run_id" ]; then
-            echo "Only one of {CI, RLS Tests} has a SUCCESSFUL completed run for $SHA so far (ci=${ci_run_id:-<none>} rls=${rls_run_id:-<none>}) — this is the ordinary shape of whichever finished first, OR of a cancelled/failed run that legitimately has no coverage artefact to combine. Not asserting; a later successful completion (a re-run, or the other workflow) will re-trigger this gate. This check stays pending, which blocks merge the same way a failure would."
+            echo "Only one of {CI, $LANE_NAME} has a SUCCESSFUL completed run for $SHA so far (ci=${ci_run_id:-<none>} lane=${rls_run_id:-<none>}) — this is the ordinary shape of whichever finished first, OR of a cancelled/failed run that legitimately has no coverage artefact to combine. Not asserting; a later successful completion (a re-run, or the other workflow) will re-trigger this gate. This check stays pending, which blocks merge the same way a failure would."
             echo "both_found=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -208,7 +294,7 @@ jobs:
 
           if ! gh run download "${{ steps.runs.outputs.rls_run_id }}" --repo "$REPO" --name rls-coverage --dir cov-rls; then
             ok=false
-            reason="${reason:+$reason }RLS Tests run ${{ steps.runs.outputs.rls_run_id }} completed but its rls-coverage artefact could not be downloaded — a repo with the RLS lane must not silently fall back to Python-only coverage."
+            reason="${reason:+$reason }Lane run ${{ steps.runs.outputs.rls_run_id }} (${{ steps.lane.outputs.name }}) completed but its rls-coverage artefact could not be downloaded — a repo WITH a second lane must not silently fall back to Python-only coverage."
           fi
 
           echo "ok=$ok" >> "$GITHUB_OUTPUT"
@@ -217,56 +303,6 @@ jobs:
             echo "::error::error-branch coverage gate: $reason"
           fi
 
-      # The source the coverage was MEASURED against — not the source this job
-      # happens to be standing in.
-      #
-      # `scripts/error_branch_coverage.py` finds a branch by parsing a file and
-      # then asks whether that branch's line number appears in the coverage
-      # report's executed/missing lists. Both halves have to describe the same
-      # revision. The checkout above is deliberately the default branch's (see
-      # the header), so until #1595 the *source* came from there too while the
-      # *coverage* came from the commit under test — and any file the commit
-      # changed had its line numbers looked up in the wrong revision's AST.
-      # Measured on tabsii-platform#922: the default branch's `admin_app.py`
-      # was 35 lines shorter, and two branches that had tests were reported as
-      # newly unexecuted at lines holding unrelated code. It only ever
-      # diverged on files a commit changed, i.e. the ones this gate exists to
-      # judge, which is why it survived this long.
-      #
-      # This is data, not code. A tarball is expanded and READ by the default
-      # branch's analyser; nothing inside it is executed, no dependency of it
-      # is installed, and no build runs. The header's pwn-request concern is
-      # about running a fork's modified script with this job's write-scoped
-      # token, and that is unchanged: the script is still the default
-      # branch's. Fetching via the API rather than `checkout` with a `ref:`
-      # keeps it that way — there is no second checkout to accidentally
-      # execute from, and `persist-credentials` never touches this tree.
-      #
-      # Fails closed. An artefact that cannot be fetched is not a reason to
-      # quietly fall back to the default branch's source: that is precisely
-      # the wrong-revision comparison being removed here, and it would restore
-      # it silently under a green tick.
-      - name: Materialise the commit under test's source
-        id: source
-        if: steps.download.outputs.ok == 'true'
-        run: |
-          set -uo pipefail
-          mkdir -p under-test
-          if ! gh api "repos/$REPO/tarball/$SHA" > under-test.tar.gz; then
-            echo "::error::error-branch coverage gate: could not fetch the source tarball for $SHA."
-            echo "ok=false" >> "$GITHUB_OUTPUT"
-            echo "reason=could not fetch the source tarball for the commit under test ($SHA)." >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if ! tar -xzf under-test.tar.gz -C under-test --strip-components=1; then
-            echo "::error::error-branch coverage gate: the source tarball for $SHA could not be expanded."
-            echo "ok=false" >> "$GITHUB_OUTPUT"
-            echo "reason=the source tarball for the commit under test ($SHA) could not be expanded." >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "Expanded the source of $SHA into under-test/ ($(find under-test -name '*.py' | wc -l) Python file(s))."
-          echo "ok=true" >> "$GITHUB_OUTPUT"
-
       # The actual assertion — both artefacts are guaranteed present at this
       # point (the download step already failed closed if either was missing),
       # and the source they are judged against is the commit's own (the step
@@ -274,7 +310,7 @@ jobs:
       # combine-and-check with no absence case to reason about.
       - name: Combine and check
         id: check
-        if: steps.source.outputs.ok == 'true'
+        if: steps.download.outputs.ok == 'true'
         run: |
           set -uo pipefail
           if python3 scripts/error_branch_coverage.py --check \
@@ -301,9 +337,6 @@ jobs:
           if [ "${{ steps.download.outputs.ok }}" = "false" ]; then
             state=failure
             description="${{ steps.download.outputs.reason }}"
-          elif [ "${{ steps.source.outputs.ok }}" = "false" ]; then
-            state=failure
-            description="${{ steps.source.outputs.reason }}"
           else
             state="${{ steps.check.outputs.state }}"
             description="${{ steps.check.outputs.description }}"

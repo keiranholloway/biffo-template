@@ -358,9 +358,14 @@ jobs:
       # fail-open this estate has found actually lived.
       #
       # This asserts over coverage.json ALONE, and is skipped entirely in a
-      # repo that has an `RLS Tests` lane (`hashFiles(...)` below — same test
-      # `error-branch-coverage-gate.yml` uses, and the two must stay in
-      # agreement). That is a deliberate narrowing, not the pre-#637 gate
+      # repo that has a second coverage lane — decided by
+      # `scripts/second_coverage_lane.py`, the SAME resolver
+      # `error-branch-coverage-gate.yml` calls, because the two must stay in
+      # agreement. Disagree one way and a commit is asserted twice; disagree
+      # the other and it is asserted NOWHERE, green, with each file believing
+      # the other did it. That used to be two hand-written `hashFiles(...)`
+      # tests on an RLS-specific filename, which is a second copy of a
+      # decision and therefore drifts (#1597). That is a deliberate narrowing, not the pre-#637 gate
       # brought back: a repo WITH the lane has error branches reachable only
       # under real Postgres (an RLS refusal, a constraint violation), which
       # this job structurally cannot execute — asserting here regardless would
@@ -375,8 +380,19 @@ jobs:
       # A repo with NO lane (this template, and most instances) sees no
       # change at all: this is byte-for-byte the assertion that ran here
       # before the #637 best-effort combine existed.
+      # Resolved in its own step because a GitHub Actions `if:` expression
+      # cannot run a script — `hashFiles()` can only match paths, which is what
+      # forced the RLS-specific filename test this replaces.
+      - name: Does this repo have a second coverage lane?
+        id: lane
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          python3 scripts/second_coverage_lane.py --github-output > lane.env
+          cat lane.env
+          cat lane.env >> "$GITHUB_OUTPUT"
       - name: Error-branch coverage
-        if: ${{ !cancelled() && steps.install.outcome == 'success' && hashFiles('.github/workflows/rls-tests.yml') == '' }}
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && steps.lane.outputs.present == 'false' }}
         run: uv run python scripts/error_branch_coverage.py --check --coverage coverage.json
       - name: Coverage upload
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}

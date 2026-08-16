@@ -113,6 +113,9 @@ Usage:
     python scripts/error_branch_coverage.py --check    # fail if it grew
     python scripts/error_branch_coverage.py --check --coverage a.json --coverage b.json
                                                  # combine two lanes' coverage first (#637)
+    python scripts/error_branch_coverage.py --check --source-root <tree> --coverage a.json
+                                                 # judge a tree other than this
+                                                 # script's own repo (#1595)
 """
 
 from __future__ import annotations
@@ -125,8 +128,23 @@ from dataclasses import dataclass
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-BASELINE = REPO_ROOT / "docs/practices/error-branch-baseline.json"
+BASELINE_REL = Path("docs/practices/error-branch-baseline.json")
+BASELINE = REPO_ROOT / BASELINE_REL
 COVERAGE_JSON = REPO_ROOT / "coverage.json"
+
+
+def baseline_for(source_root: Path) -> Path:
+    """The baseline belonging to the tree being judged.
+
+    Ordinarily that is this script's own repo and the answer is `BASELINE`,
+    unchanged. It differs only for a caller that passed `--source-root` — see
+    `unexecuted`'s note for why the source and the baseline must travel
+    together rather than being taken from wherever the script happens to sit.
+    """
+    if source_root == REPO_ROOT:
+        return BASELINE
+    return source_root / BASELINE_REL
+
 
 # The two commands that take the first measurement, in the order they must run.
 # Named in every message about a missing baseline, because the missing piece is
@@ -137,6 +155,7 @@ BOOTSTRAP_COMMANDS = (
     "uv run pytest --cov --cov-report=json",
     "uv run python scripts/error_branch_coverage.py --write",
 )
+
 
 # Why an absent baseline is a normal state, not a broken repo.
 #
@@ -149,18 +168,30 @@ BOOTSTRAP_COMMANDS = (
 # So the test travels and its data cannot, and every instance arrives at this
 # gate having never taken the measurement. A ratchet with no prior position
 # should start, not block.
-NO_BASELINE_MESSAGE = (
-    f"No error-branch baseline at {BASELINE.relative_to(REPO_ROOT)}.\n"
-    "\n"
-    "That file is a measurement of THIS repo, so it is not distributed by a core\n"
-    "upgrade — a fresh instance has simply never taken it (#983). Take it with:\n"
-    "\n"
-    f"  {BOOTSTRAP_COMMANDS[0]}\n"
-    f"  {BOOTSTRAP_COMMANDS[1]}\n"
-    "\n"
-    "Until then the ratchet has no prior position to compare against, so it\n"
-    "reports what it finds and does not fail."
-)
+def no_baseline_message(baseline: Path) -> str:
+    """Written against the baseline actually looked for, not a fixed path.
+
+    A caller that passed `--source-root` is judging a different tree, and
+    naming this repo's baseline in the failure would send the reader to a file
+    that was never consulted.
+    """
+    try:
+        where: Path | str = baseline.relative_to(REPO_ROOT)
+    except ValueError:
+        where = baseline
+
+    return (
+        f"No error-branch baseline at {where}.\n"
+        "\n"
+        "That file is a measurement of THIS repo, so it is not distributed by a core\n"
+        "upgrade — a fresh instance has simply never taken it (#983). Take it with:\n"
+        "\n"
+        f"  {BOOTSTRAP_COMMANDS[0]}\n"
+        f"  {BOOTSTRAP_COMMANDS[1]}\n"
+        "\n"
+        "Until then the ratchet has no prior position to compare against, so it\n"
+        "reports what it finds and does not fail."
+    )
 
 
 @dataclass(frozen=True)
@@ -225,7 +256,24 @@ def error_branches(tree: ast.AST, path: str) -> list[Branch]:
 
 
 def unexecuted(coverage: dict, root: Path) -> list[Branch]:
-    """Error branches whose first executed line never ran under the suite."""
+    """Error branches whose first executed line never ran under the suite.
+
+    `root` MUST be the tree the coverage was measured against. This function
+    parses `root / rel` to find branches and then asks whether their line
+    numbers appear in that report's `executed_lines` / `missing_lines` — so a
+    `root` from a different revision looks the report's line numbers up in the
+    wrong file, and a change of even one line above a branch shifts every
+    verdict below it.
+
+    That was live in the `workflow_run` gate (#1595), which runs this script
+    from the default branch — correctly, so a fork's PR cannot execute its own
+    modified analyser — and until `--source-root` existed took the *source*
+    from that same checkout too. On tabsii-platform#922 the default branch's
+    `admin_app.py` was 35 lines shorter than the commit under test's, and the
+    gate reported two covered branches as newly unexecuted at lines that held
+    unrelated code. It diverges only on files a commit changes, which is
+    exactly the set a gate exists to judge.
+    """
     files = coverage.get("files", {})
     out: list[Branch] = []
 
@@ -289,7 +337,7 @@ def merge_coverage(reports: list[dict]) -> dict:
     }
 
 
-def load_baseline() -> dict | None:
+def load_baseline(baseline: Path) -> dict | None:
     """The committed baseline, or None when this repo has never taken one.
 
     None rather than an empty baseline. They are different states and used to be
@@ -298,9 +346,9 @@ def load_baseline() -> dict | None:
     measured". Reading the second as the first made every branch look NEW and
     red-lit the gate on every instance that upgraded (#983).
     """
-    if not BASELINE.is_file():
+    if not baseline.is_file():
         return None
-    return json.loads(BASELINE.read_text())
+    return json.loads(baseline.read_text())
 
 
 def main() -> int:
@@ -319,8 +367,25 @@ def main() -> int:
             "as executed. Defaults to a single coverage.json at the repo root."
         ),
     )
+    parser.add_argument(
+        "--source-root",
+        type=Path,
+        default=None,
+        help=(
+            "tree whose source and baseline to judge the coverage against. "
+            "Defaults to this script's own repo, which is correct whenever the "
+            "coverage was produced from the same checkout. A caller running "
+            "this script from one revision against coverage measured on "
+            "ANOTHER — the workflow_run gate, which deliberately executes the "
+            "default branch's copy of this script — must point it at the "
+            "commit under test, or line numbers are looked up in the wrong "
+            "revision's AST."
+        ),
+    )
     args = parser.parse_args()
     coverage_paths: list[Path] = args.coverage if args.coverage else [COVERAGE_JSON]
+    source_root: Path = args.source_root.resolve() if args.source_root else REPO_ROOT
+    baseline_path = baseline_for(source_root)
 
     present = [p for p in coverage_paths if p.is_file()]
     if not present:
@@ -363,23 +428,23 @@ def main() -> int:
 
     reports = [json.loads(p.read_text()) for p in present]
     coverage = merge_coverage(reports)
-    found = unexecuted(coverage, REPO_ROOT)
+    found = unexecuted(coverage, source_root)
     keys = sorted({b.key() for b in found})
 
     if args.write:
-        BASELINE.parent.mkdir(parents=True, exist_ok=True)
-        BASELINE.write_text(
+        baseline_path.parent.mkdir(parents=True, exist_ok=True)
+        baseline_path.write_text(
             json.dumps({"total": len(keys), "branches": keys}, indent=2) + "\n",
         )
         print(f"baseline written: {len(keys)} unexecuted error branches")
         return 0
 
-    baseline = load_baseline()
+    baseline = load_baseline(baseline_path)
     if baseline is None:
         # Report, then stop. Loudly, on stderr, naming both commands — a gate
         # that goes quiet without saying so is the fail-open this whole script
         # exists to hunt.
-        print(NO_BASELINE_MESSAGE, file=sys.stderr)
+        print(no_baseline_message(baseline_path), file=sys.stderr)
         for branch in sorted(found, key=lambda b: (b.path, b.line)):
             print(f"      {branch.path}:{branch.line}  [{branch.kind}] {branch.label}")
         print(f"unexecuted error branches: {len(keys)}  (no baseline yet; {coverage_note})")

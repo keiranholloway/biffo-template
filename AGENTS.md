@@ -477,25 +477,41 @@ scanned and the check was permanently green.
   `biffo-aws-account-id` rule matches any word-bounded 12-digit number and
   allowlists only `123456789012` and `999999999999`. A plausible-looking
   invented account id fails Secret Scan. Two agents hit this in one day.
-- **A UUID fixture is not exempt.** The rule used to be a bare `\b\d{12}\b`,
-  which also matched the last segment of an ordinary UUID whenever it happened
-  to be all-digit (`…-111111111111`) — correct test code, tripped by
-  coincidence, and the obvious "fix the value" response does not clear it (see
-  next bullet). Narrowed in #893 to `(?:^|[^0-9A-Fa-f-])(\d{12})\b` — a UUID's
-  last segment is always preceded by a hyphen, which this excluded, while a
-  real account id quoted, colon-bounded (ARN), or otherwise word-bounded still
-  fired. That over-corrected: it also silently stopped catching the most
-  common real-world leak shape, an account id at the end of a hyphenated
-  resource name (`my-app-artifacts-<id>`, `deploy-role-<id>`) — S3 buckets,
-  IAM roles, ECR repos and log groups routinely end that way. Narrowed again
-  in #1628 to
-  `(?:^|[^0-9A-Fa-f-]|[0-9A-Za-z]*[g-zG-Z][0-9A-Za-z]*-)(\d{12})\b`: a hyphen
-  is only treated like a UUID separator when the word immediately before it is
-  itself composed entirely of hex characters, which is what a UUID segment
-  always is by construction and an ordinary hyphenated resource-name word
-  essentially never is. If you hit this on a **new** 12-digit value the rule
-  doesn't currently exempt, that is very likely a real finding — do not add an
-  allowlist entry to make it pass (see below).
+- **A UUID fixture is not exempt, and its exemption lives in the allowlist,
+  not the rule regex.** The rule is a bare `\b\d{12}\b`, which matches any
+  bare 12-digit run, including the last segment of an ordinary fixture UUID
+  (e.g. `11111111-1111-1111-1111-111111111111`) — correct test code, tripped
+  by coincidence, and the obvious "fix the value" response does not clear it
+  (see next bullet). Two narrower-regex attempts were tried and both failed:
+  #893's `(?:^|[^0-9A-Fa-f-])(\d{12})\b` blanket-excluded any preceding hyphen,
+  which also silently stopped catching the most common real-world leak shape
+  — an account id at the end of a hyphenated resource name
+  (`my-app-artifacts-<id>`, `deploy-role-<id>`; S3 buckets, IAM roles, ECR
+  repos and log groups routinely end that way). #1628's first attempt tried
+  requiring the word before the hyphen to contain a non-hex letter, which
+  failed on real AWS naming: the hex class `[0-9A-Fa-f]` includes all ten
+  digits, so any date- or version-stamped prefix (`backup-2024-<id>`,
+  `snapshot-2023-<id>`) or English word spelled only in `a`-`f`
+  (`facade-<id>`, `decade-<id>`) escaped undetected — there is no way to tell
+  a UUID segment from a date by looking at the word alone, because they are
+  the same string.
+
+  The design inverts this instead of tuning the regex further: the rule stays
+  **broad** (`\b\d{12}\b`) and the rule-level allowlist matches a **complete**
+  UUID shape —
+  `[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`
+  — with `regexTarget = "line"`, because the reported secret is only the
+  12-digit run and never contains the hyphens the UUID shape depends on; the
+  allowlist regex has to see the whole line to recognise it. A full UUID has
+  a fixed, unmistakable shape a date or resource-name prefix cannot
+  accidentally produce, so the exclusion is exact rather than heuristic, and
+  the residual gap the word-heuristic approach used to accept
+  (`deadbeef-<id>`, indistinguishable from a UUID tail by that heuristic) is
+  closed — a hex-only hyphenated word that is not part of a complete UUID is
+  no longer exempt. If you hit this on a value that is not a complete UUID,
+  that is very likely a real finding — do not add an allowlist entry to make
+  it pass (see below).
+
 - **Secret Scan reads git history, not just your diff.** Fixing the value at
   your branch tip is not enough — the finding survives in the earlier commit.
   Rewrite the branch (amend or squash) and force-push. Force-pushing your own

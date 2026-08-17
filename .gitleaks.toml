@@ -6,7 +6,7 @@ useDefault = true
 [[rules]]
 id = "biffo-aws-account-id"
 description = "AWS Account ID — should only appear in .tfvars.example or biffo.config.json placeholders"
-# `\b\d{12}\b` matched any bare 12-digit run, including the final segment of a
+# `\b\d{12}\b` matches any bare 12-digit run, including the final segment of a
 # UUID: `11111111-1111-1111-1111-111111111111` ends in twelve digits with a
 # word boundary on both sides (digit -> quote/EOL), so an ordinary fixture UUID
 # tripped Secret Scan on correct test code (issue #893). Editing the value
@@ -14,60 +14,74 @@ description = "AWS Account ID — should only appear in .tfvars.example or biffo
 # (`--log-opts="--full-history HEAD"`) — the finding survives in the commit
 # that introduced it regardless of what a later commit changes it to.
 #
-# The first fix (#893) narrowed the boundary condition to
-# `(?:^|[^0-9A-Fa-f-])(\d{12})\b` — blanket-excluding a preceding hyphen so a
-# UUID's last segment (always hyphen-preceded) could never match. That
-# over-corrected: `my-app-artifacts-123456789012` and
-# `deploy-role-123456789012` — the actual shape AWS resource naming produces
-# (S3 bucket names, IAM role names, ECR repo names, log groups routinely end
-# `-<account-id>`) — are ALSO hyphen-preceded, and the blanket exclusion
-# silently dropped them too (issue #1628, found prosecuting
-# biffo-plugin-marketing#185).
+# TWO fixes were tried at narrowing the REGEX itself, and both failed for the
+# same underlying reason:
 #
-# The distinguishing feature is not the hyphen — it is what's on the far side
-# of it. A UUID's second-to-last segment (`0000`, `b3f1c0de`, …) is ALWAYS
-# composed entirely of hex characters, by construction: that's what makes it a
-# UUID segment. An ordinary word before a hyphen in a resource name
-# (`artifacts`, `role`) essentially never is — English words routinely contain
-# letters outside a-f (g-z), which a hex segment structurally cannot.
+#   #893  `(?:^|[^0-9A-Fa-f-])(\d{12})\b` — blanket-excluded any preceding
+#         hyphen so a UUID's last segment (always hyphen-preceded) could never
+#         match. That also silently dropped the most common real-world leak
+#         shape: `my-app-artifacts-123456789012`, `deploy-role-123456789012` —
+#         S3 bucket names, IAM role names, ECR repo names and log groups
+#         routinely end `-<account-id>` (issue #1628).
+#   #1628 (rejected) `(?:^|[^0-9A-Fa-f-]|[0-9A-Za-z]*[g-zG-Z][0-9A-Za-z]*-)(\d{12})\b`
+#         — tried to distinguish a UUID's hyphen-preceded segment from an
+#         ordinary resource-name word by requiring the word before the hyphen
+#         to contain a non-hex letter. This failed on real AWS naming: the hex
+#         class `[0-9A-Fa-f]` includes all ten DIGITS, not just `a`-`f`, so
+#         `backup-2024-<id>`, `snapshot-2023-<id>`, `prod-01-<id>` (any
+#         all-numeric, date- or version-stamped prefix — one of the most
+#         common S3/CFN/log-group naming conventions there is) and ordinary
+#         English words spelled only in `a`-`f` (`facade-`, `decade-`,
+#         `cafe-`, `decaf-`) all escaped undetected. There is no way to
+#         distinguish a UUID segment from a date by looking at the word alone
+#         — `2024` is four characters and every one is a valid hex digit, so
+#         tightening the word-length requirement doesn't save it either: they
+#         are the same string.
 #
-# gitleaks/RE2 (Go's regexp) has no lookbehind, so — same technique as
-# before — the preceding context has to be consumed as part of the match and
-# only the digit group reported as the secret, via `secretGroup`. The regex
-# is three alternatives for what may precede the 12 digits:
-#   1. `^`                                    — start of the scanned content
-#   2. `[^0-9A-Fa-f-]`                         — an ordinary non-hex, non-hyphen
-#                                                 boundary (space, `=`, `:`, quote, …)
-#   3. `[0-9A-Za-z]*[g-zG-Z][0-9A-Za-z]*-`     — a hyphen whose own preceding
-#                                                 word contains at least one
-#                                                 non-hex letter (g-z/G-Z)
-# Alternative 3 cannot cross a hyphen (hyphen is not in either character
-# class), so it only ever looks at the single word segment immediately before
-# the digits — never further back — which is exactly the segment a UUID's
-# hex-only construction can never satisfy and an ordinary hyphenated resource
-# name almost always does.
+# The design now inverts the approach instead of tuning the regex further.
+# Rather than trying to describe the CONTEXT that is not a UUID (unbounded,
+# heuristic, provably porous), the rule matches broadly again and an
+# allowlist describes the UUID itself, which has a fixed, unmistakable shape
+# a date or resource-name prefix can never accidentally produce:
 #
-# Deliberately NOT the alternative of matching the full 8-4-4-4-12 UUID shape
-# and excluding it: that would only defeat a *genuinely* UUID-shaped prefix,
-# whereas this stays the narrower condition on hex-ness of the adjacent
-# segment — and it is provably correct in both directions, including the two
-# new cases, against the real gitleaks binary (see
-# cli/src/lib/gitleaks-uuid-account-id.test.ts).
+#   regex (rule)      = `\b\d{12}\b` — broad again; nothing realistic escapes
+#   allowlist (regex)  = `[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`
+#                        — a COMPLETE UUID (8-4-4-4-12 hex groups)
 #
-# Trade-off, stated rather than hidden: a hyphenated segment that is ITSELF
-# composed entirely of hex characters (e.g. `deadbeef-123456789012`) is still
-# not caught by this rule alone — indistinguishable from a UUID tail by this
-# heuristic, same as the original trade-off. Searched the repo for that shape
-# and found none; if it appears for real, the `paths`/`regexes` allowlist
-# mechanisms already in this file are the ones to reach for, not this rule.
-regex = '''(?:^|[^0-9A-Fa-f-]|[0-9A-Za-z]*[g-zG-Z][0-9A-Za-z]*-)(\d{12})\b'''
-secretGroup = 1
+# `backup-2024-338764933165` does not match the full UUID pattern and stays
+# caught. `b3f1c0de-0000-0000-0000-000000000001` does match it and is
+# suppressed. The exclusion is exact rather than heuristic, so the accepted
+# residual gap this rule used to carry (`deadbeef-<id>`, indistinguishable
+# from a UUID tail by the old word-level heuristic) is CLOSED: a hex-only
+# hyphenated word that is not part of a full UUID no longer escapes.
+#
+# `regexTarget = "line"` is load-bearing and was chosen by experiment against
+# the real gitleaks 8.30.1 binary, not from the docs. The DEFAULT allowlist
+# target (and `"match"`) tests a regex against the reported SECRET, which
+# `secretGroup`/no-group here is only the 12-digit run — never the full
+# 8-4-4-4-12 shape around it — so a UUID allowlist regex tested against just
+# the digits can never match and suppresses NOTHING (verified: all three of
+# `backup-2024-<id>`, the UUID tail, and a bare id were still flagged).
+# `regexTarget = "line"` tests the allowlist regex against the whole line
+# instead, which does contain the full UUID text, and correctly suppresses
+# only the UUID-tail case while leaving the other two caught. See
+# cli/src/lib/gitleaks-uuid-account-id.test.ts for the real-binary proof in
+# both directions.
+regex = '''\b\d{12}\b'''
 entropy = 0
 [rules.allowlist]
+regexTarget = "line"
 regexes = [
   "\\{\\{AWS_ACCOUNT_ID\\}\\}",  # placeholder in template files
   "123456789012",                  # canonical example account ID used in tests
   "999999999999",                  # canonical wrong-account ID used in error-path tests
+  # A complete UUID (8-4-4-4-12 hex groups). This is what actually
+  # distinguishes a UUID's last segment from a real account id — see the rule
+  # comment above. Tested against the whole LINE (regexTarget = "line"
+  # above), not just the reported secret, because the secret is only the
+  # 12-digit run and never contains the hyphens that make this shape
+  # recognisable.
+  "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
   # The fck-nat AMI vendor's PUBLIC AWS account id (modules/cloud/aws/networking).
   # An `aws_ami` data source filters by `owners`, so the publisher's account id
   # must appear literally — it is how AMI ownership lookup works and cannot not.

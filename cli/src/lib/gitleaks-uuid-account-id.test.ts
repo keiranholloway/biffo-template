@@ -10,28 +10,50 @@
  * last segment" (unenforceable) or squashing/rewriting the branch (the
  * disproportionate cost the issue calls out).
  *
- * The fix narrows the regex's boundary condition rather than allowlisting a
- * path or value. The first pass (#893) landed on
- * `(?:^|[^0-9A-Fa-f-])(\d{12})\b`, blanket-excluding a preceding hyphen so a
- * UUID's last segment (always hyphen-preceded) could never match — but that
- * also silently dropped the most common real-world shape of a leaked account
- * id: `my-app-artifacts-123456789012`, `deploy-role-123456789012` and every
- * other S3-bucket/IAM-role/ECR-repo/log-group name that ends `-<account-id>`
- * (issue #1628, found prosecuting `biffo-plugin-marketing#185`, which it
- * blocked).
+ * TWO attempts at fixing this by narrowing the RULE REGEX both failed:
  *
- * The current regex,
- * `(?:^|[^0-9A-Fa-f-]|[0-9A-Za-z]*[g-zG-Z][0-9A-Za-z]*-)(\d{12})\b`, replaces
- * the blanket hyphen exclusion with a narrower one: a hyphen is only treated
- * like a UUID separator when the word immediately before it is composed
- * entirely of hex characters, which is what a UUID segment always is by
- * construction and an ordinary hyphenated resource-name word
- * (`artifacts`, `role`) essentially never is (English words routinely contain
- * letters outside a-f). gitleaks/RE2 has no lookbehind, so the preceding
- * context still has to be consumed as part of the match rather than asserted
- * — `secretGroup = 1` reports only the digit group as the actual secret, so
- * redacted output and allowlist `regexes` (which test the reported secret)
- * still see a bare 12-digit string, unaffected by this change.
+ * - #893 landed on `(?:^|[^0-9A-Fa-f-])(\d{12})\b`, blanket-excluding a
+ *   preceding hyphen so a UUID's last segment (always hyphen-preceded) could
+ *   never match — but that also silently dropped the most common real-world
+ *   shape of a leaked account id: `my-app-artifacts-<id>`, `deploy-role-<id>`
+ *   and every other S3-bucket/IAM-role/ECR-repo/log-group name that ends
+ *   `-<account-id>` (issue #1628, found prosecuting
+ *   `biffo-plugin-marketing#185`, which it blocked).
+ * - #1628's first attempt tried
+ *   `(?:^|[^0-9A-Fa-f-]|[0-9A-Za-z]*[g-zG-Z][0-9A-Za-z]*-)(\d{12})\b`,
+ *   requiring the word before a hyphen to contain a non-hex letter before
+ *   treating the hyphen like a UUID separator. This was PROSECUTED AND
+ *   REJECTED: the hex character class `[0-9A-Fa-f]` includes all ten digits,
+ *   not just `a`-`f`, so any all-numeric prefix (`backup-2024-<id>`,
+ *   `snapshot-2023-<id>`) or English word spelled only in `a`-`f`
+ *   (`facade-<id>`, `decade-<id>`, `cafe-<id>`) escaped undetected — a date
+ *   and a UUID segment are indistinguishable by looking at the word alone,
+ *   because they can be the same string (`2024` is four hex-valid digits).
+ *
+ * The design now INVERTS the approach instead of tuning the regex further:
+ * rather than describing the context that is NOT a UUID (heuristic, and
+ * provably porous, twice), it describes the UUID ITSELF, which has a fixed,
+ * unmistakable shape. The rule regex goes back to being broad
+ * (`\b\d{12}\b`), and the rule-level allowlist gains a regex matching a
+ * COMPLETE UUID —
+ * `[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`
+ * — with `regexTarget = "line"`. That target choice is load-bearing and was
+ * established by experiment against the real binary, not from gitleaks'
+ * docs: the reported *secret* here is only the matched 12 digits, never the
+ * hyphens around them, so an allowlist regex tested against the secret (the
+ * default target, and `"match"`) can never see a full UUID shape and
+ * suppresses NOTHING — verified directly, see the "regexTarget" test below.
+ * `"line"` tests the allowlist regex against the whole source line instead,
+ * which does contain the complete UUID text.
+ *
+ * `backup-2024-<id>` does not match the full UUID pattern and stays caught;
+ * `b3f1c0de-0000-0000-0000-000000000001` does match it and is suppressed.
+ * The exclusion is exact rather than heuristic, so the residual gap the
+ * previous (rejected) design accepted in prose — a hyphenated word that is
+ * ITSELF all-hex, e.g. `deadbeef-<id>`, indistinguishable from a UUID tail by
+ * that heuristic — is CLOSED here: it is not part of a complete UUID, so it
+ * is no longer exempt (see the "no longer exempt" test below, which replaces
+ * the old accepted-trade-off test).
  *
  * These tests prove BOTH directions with the real gitleaks binary against
  * the real `.gitleaks.toml`, the same way `verify-gitleaks-scope.test.ts`
@@ -49,8 +71,8 @@
  * `verify-gitleaks-scope.test.ts`'s `fakeToken()` documents: a plausible
  * invented value committed as a literal trips THIS repo's own Secret Scan on
  * the test file itself (AGENTS.md §7's "two agents hit this in one day" is
- * this same trap; a third one nearly wrote a fourth instance in this very
- * PR — caught by the pre-push gate before it reached CI).
+ * this same trap; a real value written into a doc comment while explaining
+ * this rule is exactly how it recurs).
  */
 import { execFileSync } from 'node:child_process'
 import { readFileSync, writeFileSync } from 'node:fs'
@@ -213,16 +235,68 @@ describe.skipIf(!HAS_GITLEAKS)(
       expect(hits[0]?.Secret).toBe(acct)
     })
 
-    // The trade-off this rule's fix explicitly accepts (documented in
-    // .gitleaks.toml, and pinned here rather than left only in that
-    // comment): a hyphen is indistinguishable from a UUID separator when the
-    // word immediately before it is ITSELF composed entirely of hex
-    // characters. This is the negative case the class of bug (#1628's
-    // shape: an accepted limit that lived only in prose) requires a test
-    // for, same as the UUID-tail case above.
-    it('does NOT flag a hyphenated account id whose preceding word is itself all-hex (accepted trade-off)', () => {
+    // The word-level heuristic tried in #1628's first (rejected) attempt
+    // accepted this as a trade-off: a hyphen is indistinguishable from a
+    // UUID separator when the word immediately before it is ITSELF composed
+    // entirely of hex characters. The UUID-allowlist design closes that gap
+    // — `deadbeef-<id>` is not part of a COMPLETE 8-4-4-4-12 UUID, so it no
+    // longer has anywhere to hide. This replaces the old "accepted
+    // trade-off" test with its opposite: the trade-off is gone, not merely
+    // documented.
+    it('flags a hyphenated account id whose preceding word is itself all-hex (no longer exempt)', () => {
       const acct = fakeAccountId(8)
       const findings = detect(`bucket = "deadbeef-${acct}"\n`)
+      const hits = findings.filter((f) => f.RuleID === 'biffo-aws-account-id')
+      expect(hits).toHaveLength(1)
+      expect(hits[0]?.Secret).toBe(acct)
+    })
+
+    // The failure the prosecution found in #1628's first (rejected) attempt:
+    // the hex character class `[0-9A-Fa-f]` includes all ten digits, so any
+    // all-numeric prefix escaped the word-level heuristic entirely. A
+    // date-stamped bucket/log-group/stack name is one of the most common AWS
+    // naming conventions there is — this must never silently escape again.
+    it('flags an account id after an all-numeric hyphenated prefix (backup-2024-<id>)', () => {
+      const acct = fakeAccountId(9)
+      const findings = detect(`bucket = "backup-2024-${acct}"\n`)
+      const hits = findings.filter((f) => f.RuleID === 'biffo-aws-account-id')
+      expect(hits).toHaveLength(1)
+      expect(hits[0]?.Secret).toBe(acct)
+    })
+
+    // Same failure, the other half: an ordinary English word spelled only in
+    // a-f is exactly as hex-shaped as a date, by the same character class.
+    it('flags an account id after an all-hex-letter English word (facade-<id>)', () => {
+      const acct = fakeAccountId(10)
+      const findings = detect(`bucket = "facade-${acct}"\n`)
+      const hits = findings.filter((f) => f.RuleID === 'biffo-aws-account-id')
+      expect(hits).toHaveLength(1)
+      expect(hits[0]?.Secret).toBe(acct)
+    })
+
+    it('flags an account id after another all-hex-letter English word (decade-<id>)', () => {
+      const acct = fakeAccountId(11)
+      const findings = detect(`role = "decade-${acct}"\n`)
+      const hits = findings.filter((f) => f.RuleID === 'biffo-aws-account-id')
+      expect(hits).toHaveLength(1)
+      expect(hits[0]?.Secret).toBe(acct)
+    })
+
+    it('does not flag a UUID embedded inside JSON', () => {
+      const findings = detect('{"id": "11111111-1111-1111-1111-111111111111"}\n')
+      expect(findings.filter((f) => f.RuleID === 'biffo-aws-account-id')).toHaveLength(0)
+    })
+
+    // `regexTarget` decides whether the UUID allowlist regex is tested
+    // against the reported SECRET (only the 12 digits, no hyphens — the
+    // allowlist can then never match a UUID shape, so it suppresses
+    // NOTHING) or the whole LINE (which contains the complete UUID text).
+    // Established by experiment against the real 8.30.1 binary, not from
+    // gitleaks' docs: without `regexTarget = "line"` in `.gitleaks.toml`,
+    // this test fails, because the UUID tail below stays flagged.
+    it('regexTarget = "line" is required for the UUID allowlist to suppress anything', () => {
+      expect(readFileSync(GITLEAKS_TOML, 'utf8')).toContain('regexTarget = "line"')
+      const findings = detect('uuid_tail = "b3f1c0de-0000-0000-0000-000000000001"\n')
       expect(findings.filter((f) => f.RuleID === 'biffo-aws-account-id')).toHaveLength(0)
     })
   },

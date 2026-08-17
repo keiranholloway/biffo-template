@@ -11,8 +11,11 @@ implementation winning.
 import ast
 from pathlib import Path
 
+import pytest
 from api import main as api_main
+from api.identity import DefaultIdentityProvider, get_identity_provider, set_identity_provider
 from api.middleware.auth import AuthenticatedUser
+from api.permissions import build_permissions_registry
 from api.routers.whoami import whoami
 
 
@@ -89,6 +92,66 @@ async def test_roles_and_marketplace_role_are_honest_empties_in_core():
 
     assert result["roles"] == []
     assert result["marketplace_role"] is None
+
+
+# --- unreachable_permission_codes (#1606's diagnostic requirement) ---------
+
+
+@pytest.fixture(autouse=True)
+def _restore_identity_provider():
+    """Process-global state — see test_auth_is_active.py's identical fixture."""
+    original = get_identity_provider()
+    yield
+    set_identity_provider(original)
+
+
+def _registry_with_unreachable_code():
+    manifest = {
+        "name": "crm",
+        "version": "1.0.0",
+        "tables": [
+            {
+                "name": "leads",
+                "permissions": {"read": {"allowed": True, "permission_code": "crm.lead.read"}},
+            }
+        ],
+    }
+    return build_permissions_registry([manifest], core_models=[])
+
+
+async def test_non_admin_never_gets_the_instance_diagnostic():
+    """This one field is deliberately not caller-scoped — see the module
+    docstring — so it must not leak instance-wide plugin metadata to every
+    authenticated caller, only a platform admin."""
+    set_identity_provider(DefaultIdentityProvider())
+    result = await whoami(caller=_caller(is_platform_admin=False))
+
+    assert "unreachable_permission_codes" not in result
+
+
+async def test_admin_sees_an_unreachable_code_by_name(monkeypatch):
+    """Fail-first for #1606's diagnostic: one call (GET /whoami) is enough to
+    learn a declared permission_code is unreachable, without reading logs."""
+    set_identity_provider(DefaultIdentityProvider())
+    monkeypatch.setattr(
+        "api.routers.whoami.get_permissions_registry",
+        lambda: _registry_with_unreachable_code(),
+    )
+
+    result = await whoami(caller=_caller(is_platform_admin=True))
+
+    assert result["unreachable_permission_codes"] == [
+        {"table": "leads", "operation": "read", "permission_code": "crm.lead.read"}
+    ]
+
+
+async def test_admin_sees_an_empty_list_when_nothing_is_unreachable(monkeypatch):
+    set_identity_provider(DefaultIdentityProvider())
+    monkeypatch.setattr("api.routers.whoami.get_permissions_registry", lambda: {})
+
+    result = await whoami(caller=_caller(is_platform_admin=True))
+
+    assert result["unreachable_permission_codes"] == []
 
 
 def test_route_is_actually_mounted_at_the_path_the_portal_calls():

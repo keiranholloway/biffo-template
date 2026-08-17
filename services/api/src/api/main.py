@@ -275,13 +275,22 @@ def _run_db_init() -> dict:
     # loudly, rather than silently vanishing from the registry at runtime (where
     # get_permissions_registry fails closed to all-denied). This does not touch
     # the database — it only validates and logs the declared CRUD surface.
-    from .permissions import build_permissions_registry, serialize_registry
+    from .permissions import (
+        build_permissions_registry,
+        log_unreachable_permission_codes,
+        serialize_registry,
+    )
 
     registry = build_permissions_registry(strict=True)
     logger.info(
         f"Permissions registry: {len(registry)} table(s) declare CRUD permissions",
         extra={"crud_permissions": serialize_registry(registry)},
     )
+    # #1606: a plugin can declare a permission_code this instance never grants
+    # to anyone — enforcement already denies it to everyone (fail-closed), but
+    # that looks identical to a table nobody uses. Name the unreachable codes
+    # at deploy time, the same "mount" moment the registry summary above logs.
+    log_unreachable_permission_codes(registry)
 
     # The step above proves the declared CRUD surface is well-formed; this one
     # proves it is *real* (#1018). A DDL-imported table's schema is written by

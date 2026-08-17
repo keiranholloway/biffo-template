@@ -197,8 +197,8 @@ def build_permissions_registry(
 
 def serialize_registry(registry: PermissionsRegistry) -> dict[str, Any]:
     """Render the registry as a plain JSON-able dict:
-    ``{table: {operation: {allowed, required_role, allowed_principals}}}`` — for
-    logging/auditing."""
+    ``{table: {operation: {allowed, required_role, permission_code,
+    allowed_principals}}}`` — for logging/auditing."""
     return {name: perms.model_dump(mode="json") for name, perms in registry.items()}
 
 
@@ -222,6 +222,8 @@ def get_permissions_registry(*, force_rebuild: bool = False) -> PermissionsRegis
                 "Failed to build permissions registry; failing closed (all generic CRUD denied)."
             )
             _REGISTRY_CACHE = {}
+        else:
+            log_unreachable_permission_codes(_REGISTRY_CACHE)
     return _REGISTRY_CACHE
 
 
@@ -243,3 +245,88 @@ def lookup_permission(
     if block is None or operation not in CRUD_OPERATIONS:
         return None
     return getattr(block, operation)
+
+
+def unreachable_permission_codes(
+    registry: PermissionsRegistry,
+) -> list[dict[str, str]]:
+    """Every declared ``permission_code`` this instance can prove it will never
+    satisfy for anyone (#1606).
+
+    ADR-0004's second axis is already enforced (``dependencies.py``'s
+    ``require_crud_permission`` ANDs ``permission_code`` against the caller's
+    ``AuthenticatedUser.permissions``), and that already fails closed the way
+    #1606 chose: a code nobody holds denies the operation to every caller
+    rather than falling open to "any authenticated caller". What enforcement
+    alone does not give you is *knowing* that has happened — a table that is
+    permanently 403 for everyone looks identical to a table that is merely
+    unused, which is the "looks broken, not denied" failure #1606's owner
+    decision named as the reason the diagnostic is a requirement.
+
+    A caller's ``permissions`` come from ``IdentityProvider.resolve_permissions``
+    (ADR-0012) — an opaque, instance-registered function this module cannot
+    enumerate without a database round trip, which the registry build
+    deliberately never makes (see the module docstring). There is exactly one
+    case this function can prove **without** touching the database:
+    ``DefaultIdentityProvider.resolve_permissions`` unconditionally returns an
+    empty set (see its docstring), so on a deployment that has not registered
+    its own provider, *every* declared ``permission_code`` is guaranteed
+    unreachable — not merely possibly so. That is precisely #1606's own worked
+    example (a fresh instance like ``biffo-platform``, no custom RBAC
+    registered).
+
+    A deployment running its own ``IdentityProvider`` may grant any code from
+    anywhere (a database table, a config file) — Core cannot know what it does
+    not own, so this reports nothing in that case. That instance's own audit
+    of "what my provider grants" vs. "what my plugins declare" is outside what
+    a build-time, database-free registry can answer; #1607 (the scope seam) is
+    adjacent territory and explicitly not this.
+    """
+    from .identity import DefaultIdentityProvider, get_identity_provider
+
+    if not isinstance(get_identity_provider(), DefaultIdentityProvider):
+        return []
+
+    findings: list[dict[str, str]] = []
+    for table, perms in sorted(registry.items()):
+        for operation in CRUD_OPERATIONS:
+            rule: PermissionRule = getattr(perms, operation)
+            if rule.permission_code:
+                findings.append(
+                    {
+                        "table": table,
+                        "operation": operation,
+                        "permission_code": rule.permission_code,
+                    }
+                )
+    return findings
+
+
+def log_unreachable_permission_codes(registry: PermissionsRegistry) -> list[dict[str, str]]:
+    """Log, by name, every finding from :func:`unreachable_permission_codes`.
+
+    Called once at deploy-time registry build (``main._run_db_init``, strict
+    mode) and once per cold start (``get_permissions_registry``), so a plugin
+    that ships a ``permission_code`` no one has wired anything for shows up in
+    the logs unasked — the "one call, not a debugging session" requirement is
+    :func:`unreachable_permission_codes` itself (also surfaced through
+    ``GET /api/v1/whoami`` for a platform admin); this is the half that means
+    nobody has to go looking for it first.
+
+    Returns the same findings, so a caller that already has the registry (e.g.
+    ``_run_db_init``, which logs its own registry summary alongside) can fold
+    them into one log record instead of two.
+    """
+    findings = unreachable_permission_codes(registry)
+    for finding in findings:
+        logger.warning(
+            f"permission_code {finding['permission_code']!r} declared on "
+            f"{finding['table']}.{finding['operation']} can never be granted on "
+            "this instance (DefaultIdentityProvider.resolve_permissions grants "
+            "no permission codes) — that operation is unreachable for every "
+            "caller, not 'any authenticated caller'. Register an "
+            "IdentityProvider that grants this code, or remove it from the "
+            "manifest.",
+            extra={"unreachable_permission_code": finding},
+        )
+    return findings

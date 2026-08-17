@@ -872,9 +872,64 @@ if [ -f "$PG_RLS_DISCOVERY_SCRIPT" ]; then
   if [ "$_pg_delegate_status" -ne 0 ]; then
     PG_DELEGATE_FAILED=1
     PG_DELEGATE_FAILED_REASON="$PG_RLS_DISCOVERY_SCRIPT exited non-zero"
-  elif [ -z "$PG_DELEGATED_MODULES" ]; then
-    PG_DELEGATE_FAILED=1
-    PG_DELEGATE_FAILED_REASON="the declared delegate returned no modules"
+  else
+    # Byte-length-zero is not the only way a delegate hands back nothing
+    # (#1647): a lone whitespace line is not empty by `[ -z ]`, and the old
+    # `grep -v '^$'` filter downstream only drops a truly-empty line, so that
+    # noise survived, got counted as "1 module(s) total", and the run ended
+    # `verify passed` -- a manufactured non-zero count is worse than an
+    # honest zero because it reads as coverage. Trim every line first; a
+    # line that is blank ONCE TRIMMED asserts nothing more than a genuinely
+    # empty one does, so it collapses to the SAME existing wording below
+    # rather than inventing a fourth message for a distinction with no new
+    # information.
+    _pg_delegate_trimmed=$(printf '%s\n' "$PG_DELEGATED_MODULES" \
+      | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | grep -v '^$')
+    if [ -z "$_pg_delegate_trimmed" ]; then
+      PG_DELEGATE_FAILED=1
+      PG_DELEGATE_FAILED_REASON="the declared delegate returned no modules"
+      PG_DELEGATED_MODULES=""
+    else
+      # What survives trimming is a CLAIM, not yet a module: the delegate is
+      # asserting each line names a real, readable test file, and that claim
+      # is checked here rather than trusted (#1647). This is deliberately
+      # broader than a whitespace fix -- it closes a stale path, a typo, a
+      # comment line, a directory, or a trailing-space path in the SAME move,
+      # because all of them are the same underlying defect: a line the
+      # delegate printed that does not resolve to a file. A mixture of valid
+      # and invalid lines is NOT filtered down to the valid ones -- silently
+      # dropping the bad half would manufacture a count from whatever
+      # happened to exist, the same untrustworthy-denominator failure this
+      # issue reports, just with real paths standing in for whitespace. Fail
+      # loudly instead and name what did not resolve: a declared delegate
+      # naming a file that does not exist is a defect in THAT repo's
+      # discovery script, and should be fixed there, not quietly tolerated
+      # here.
+      _pg_delegate_valid=""
+      _pg_delegate_invalid=""
+      _pg_saved_ifs=$IFS
+      IFS='
+'
+      set -f
+      for _pg_line in $_pg_delegate_trimmed; do
+        if [ -f "$_pg_line" ] && [ -r "$_pg_line" ]; then
+          _pg_delegate_valid="$_pg_delegate_valid$_pg_line
+"
+        else
+          _pg_delegate_invalid="$_pg_delegate_invalid$_pg_line
+"
+        fi
+      done
+      set +f
+      IFS=$_pg_saved_ifs
+      if [ -n "$_pg_delegate_invalid" ]; then
+        PG_DELEGATE_FAILED=1
+        PG_DELEGATE_FAILED_REASON="the declared delegate returned a path that is not a readable file: $(printf '%s' "$_pg_delegate_invalid" | tr '\n' ' ' | sed 's/ *$//')"
+        PG_DELEGATED_MODULES=""
+      else
+        PG_DELEGATED_MODULES="$_pg_delegate_valid"
+      fi
+    fi
   fi
 fi
 

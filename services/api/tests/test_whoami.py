@@ -127,11 +127,14 @@ async def test_non_admin_never_gets_the_instance_diagnostic():
     result = await whoami(caller=_caller(is_platform_admin=False))
 
     assert "unreachable_permission_codes" not in result
+    assert "unreachable_permission_codes_checked" not in result
+    assert "unreachable_permission_codes_provider" not in result
 
 
 async def test_admin_sees_an_unreachable_code_by_name(monkeypatch):
     """Fail-first for #1606's diagnostic: one call (GET /whoami) is enough to
-    learn a declared permission_code is unreachable, without reading logs."""
+    learn a declared permission_code is unreachable, without reading logs.
+    State 2: checked, found."""
     set_identity_provider(DefaultIdentityProvider())
     monkeypatch.setattr(
         "api.routers.whoami.get_permissions_registry",
@@ -143,15 +146,67 @@ async def test_admin_sees_an_unreachable_code_by_name(monkeypatch):
     assert result["unreachable_permission_codes"] == [
         {"table": "leads", "operation": "read", "permission_code": "crm.lead.read"}
     ]
+    assert result["unreachable_permission_codes_checked"] is True
+    assert result["unreachable_permission_codes_provider"] == "DefaultIdentityProvider"
 
 
 async def test_admin_sees_an_empty_list_when_nothing_is_unreachable(monkeypatch):
+    """State 1: checked, clean."""
     set_identity_provider(DefaultIdentityProvider())
     monkeypatch.setattr("api.routers.whoami.get_permissions_registry", lambda: {})
 
     result = await whoami(caller=_caller(is_platform_admin=True))
 
     assert result["unreachable_permission_codes"] == []
+    assert result["unreachable_permission_codes_checked"] is True
+
+
+class _CustomProvider:
+    """A plausible custom-RBAC provider — the realistic production shape this
+    diagnostic exists for (#1606's own worked example is the trivial default
+    provider case; a custom provider is the interesting one). Genuinely grants
+    a code other than the one the manifest below declares, so `crm.lead.read`
+    really is unreachable on this instance — Core just cannot prove it without
+    a database round trip it deliberately never makes.
+    """
+
+    def session(self):
+        raise NotImplementedError
+
+    async def resolve(self, db, claims):
+        raise NotImplementedError
+
+    async def sync_platform_admin(self, db, user_id, is_member):
+        return None
+
+    async def resolve_permissions(self, db, user_id):
+        return frozenset({"other.code"})
+
+
+async def test_custom_provider_reports_could_not_check_never_a_false_clean(monkeypatch):
+    """#1636, fail-first, executed exactly by the reproduction route the issue
+    used: platform admin, real `whoami` handler, a custom RBAC provider that
+    genuinely never grants the declared code.
+
+    Pre-fix this asserted `result["unreachable_permission_codes"] == []` — a
+    false clean bill of health indistinguishable from a healthy deployment
+    (proven by running the unmodified pre-change code: it returned exactly
+    `{'unreachable_permission_codes': []}`). The fix must never render this as
+    state 1: `unreachable_permission_codes` is `None`, not `[]`, and
+    `_checked` is `False` with the provider named.
+    """
+    set_identity_provider(_CustomProvider())  # type: ignore[arg-type]
+    monkeypatch.setattr(
+        "api.routers.whoami.get_permissions_registry",
+        lambda: _registry_with_unreachable_code(),
+    )
+
+    result = await whoami(caller=_caller(is_platform_admin=True))
+
+    assert result["unreachable_permission_codes"] is None
+    assert result["unreachable_permission_codes"] != []
+    assert result["unreachable_permission_codes_checked"] is False
+    assert result["unreachable_permission_codes_provider"] == "_CustomProvider"
 
 
 def test_route_is_actually_mounted_at_the_path_the_portal_calls():

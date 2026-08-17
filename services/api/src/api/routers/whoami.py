@@ -91,9 +91,18 @@ async def whoami(caller: AuthenticatedUser = Depends(require_auth)) -> dict:
     # admin rather than every authenticated caller. See
     # `permissions.unreachable_permission_codes` for exactly what it can and
     # cannot prove.
+    #
+    # Three fields, not one (#1636): `_checked` and `_provider` are always
+    # present so a reader never has to infer "was this even checked?" from the
+    # shape of the findings list. When the active IdentityProvider is not
+    # statically decidable, `unreachable_permission_codes` is `None` rather
+    # than `[]` — deliberately NOT the same value "checked, clean" produces,
+    # because that collision is exactly the defect this fixes: a `[]` a
+    # platform admin cannot distinguish from a genuinely healthy deployment.
     if caller.is_platform_admin:
-        result["unreachable_permission_codes"] = unreachable_permission_codes(
-            get_permissions_registry()
-        )
+        report = unreachable_permission_codes(get_permissions_registry())
+        result["unreachable_permission_codes"] = report.findings if report.checked else None
+        result["unreachable_permission_codes_checked"] = report.checked
+        result["unreachable_permission_codes_provider"] = report.provider
 
     return result

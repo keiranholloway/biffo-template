@@ -76,8 +76,11 @@ describe.each(WORKFLOWS)('Secret Scan scope — %s', (workflow) => {
  *
  * `.terraform/` is gitignored in every Biffo repo but a real `terraform.tfstate`
  * lives there once anyone runs `terraform init`/`apply`, carrying the real AWS
- * account id — which `biffo-aws-account-id` (`(?:^|[^0-9A-Fa-f-])(\d{12})\b`,
- * narrowed in #893 to stop matching inside fixture UUIDs) still matches correctly.
+ * account id — which `biffo-aws-account-id`
+ * (`\b(?:[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-)?(\d{12})\b`, `secretGroup = 1`, as
+ * of #1628's third attempt, with a rule-level allowlist excluding only a
+ * two-hex-quad-preceded shape per match — see the test below) still matches
+ * correctly.
  * In CI that is invisible (a fresh checkout has no `.terraform/`); on a
  * workstation it failed `verify.sh` every run, for a file the developer is not
  * pushing and cannot remove.
@@ -105,17 +108,50 @@ describe('gitleaks filesystem pass ignores gitignored local state', () => {
     // matches, this is a suppression rather than a scope correction — the
     // distinction AGENTS.md §7 turns on.
     //
-    // The regex itself changed in #893, from a bare `\b\d{12}\b` to
-    // `(?:^|[^0-9A-Fa-f-])(\d{12})\b` with `secretGroup = 1` — narrowing the
-    // BOUNDARY CONDITION (a UUID's last segment is always hyphen-preceded) to
-    // stop matching inside fixture UUIDs, not narrowing WHERE it looks or
-    // adding a value to an allowlist. That distinction is exactly what this
-    // test guards, so it is asserted on directly rather than treated as the
-    // kind of change this test exists to catch:
-    // cli/src/lib/gitleaks-uuid-account-id.test.ts proves the tightened rule
-    // still catches a genuine account id, in both an ARN and a bare literal.
-    expect(config).toContain("regex = '''(?:^|[^0-9A-Fa-f-])(\\d{12})\\b'''")
+    // THREE attempts at this rule; the first two failed for related reasons
+    // (see .gitleaks.toml's comment and AGENTS.md §7 for the full history):
+    // #893's blanket hyphen exclusion silently dropped
+    // `my-app-artifacts-<id>`/`deploy-role-<id>`. #1628 attempt 1's
+    // word-level hex heuristic
+    // (`(?:^|[^0-9A-Fa-f-]|[0-9A-Za-z]*[g-zG-Z][0-9A-Za-z]*-)(\d{12})\b`)
+    // silently dropped any all-numeric prefix (`backup-2024-<id>`) or word
+    // spelled only in a-f (`facade-<id>`), because the hex character class
+    // includes all ten digits. #1628 attempt 2 inverted to a broad rule plus
+    // a line-scoped UUID allowlist, which fixed those gaps but silently
+    // suppressed a real account id sharing a LINE with any unrelated UUID
+    // (a log line, a JSON blob, a comma-separated pair) — reproduced live,
+    // rejected.
+    //
+    // Attempt 3 (current) encodes the exclusion in the RULE's own regex
+    // instead of line-level context: a UUID's last segment is always
+    // preceded by exactly two 4-character hex groups, consumed as an
+    // optional, non-capturing prefix
+    // (`(?:[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-)?`) with only the 12 digits
+    // reported via `secretGroup`. The leading `\b` is load-bearing on its
+    // own: without it, the digit capture has no boundary constraint when the
+    // optional prefix doesn't match, so it can match a 12-digit substring
+    // embedded in a longer digit run — verified by experiment (a bare
+    // 16-digit run false-positives to its trailing twelve digits without it;
+    // see the "digit blob" test in gitleaks-uuid-account-id.test.ts).
+    //
+    // The exclusion itself lives in a SEPARATE allowlist scoped to
+    // `regexTarget = "match"`, tested against the two-hex-quad-preceded
+    // shape ANCHORED to the full raw regex match — not the `secretGroup`
+    // secret, which never contains the hyphens. Verified against the real
+    // gitleaks 8.30.1 binary with a rule regex built so match and secret
+    // diverge (`cli/src/lib/gitleaks-uuid-account-id.test.ts` documents the
+    // experiment): `regexTarget = "match"` tests the raw match, so scoping
+    // to per-MATCH rather than per-LINE closes attempt 2's failure mode
+    // structurally — an account id and an unrelated UUID on the same line
+    // each produce their own match, so only the UUID's is excluded. Also
+    // proves the broad rule still catches every realistic account-id shape,
+    // including the hyphenated-resource-name and hex-word-prefix cases the
+    // first two attempts each missed, and the same-line-as-a-UUID cases that
+    // broke attempt 2, while still exempting a UUID tail.
+    expect(config).toContain("regex = '''\\b(?:[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-)?(\\d{12})\\b'''")
     expect(config).toContain('secretGroup = 1')
+    expect(config).toContain('regexTarget = "match"')
+    expect(config).toContain('"^[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-\\\\d{12}$"')
   })
 
   it('allowlists no account id beyond the three with a written justification', () => {
@@ -132,7 +168,10 @@ describe('gitleaks filesystem pass ignores gitignored local state', () => {
     // Written first as "exactly two" on the assumption that placeholders were
     // all there could be. The third was already there, correctly, with its
     // reasoning in the config — a reminder to read the file before asserting
-    // what it ought to contain.
+    // what it ought to contain. The UUID allowlist entry added in #1628 is
+    // NOT a fourth literal account id — it is a shape pattern, not a value —
+    // so it is deliberately excluded from this count by the regex below,
+    // which only matches a bare quoted 12-digit run.
     expect(config).toContain('"123456789012"')
     expect(config).toContain('"999999999999"')
     expect(config).toContain('"568608671756"')

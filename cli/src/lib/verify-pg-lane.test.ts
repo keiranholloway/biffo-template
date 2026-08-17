@@ -513,6 +513,44 @@ describe('verify.sh delegates Postgres discovery to a per-repo script when one e
     expect(run.stdout).toContain('pg-test-discovery')
     expect(run.stdout).toContain('1 Postgres module(s) present')
   })
+
+  it('FAILS when the delegate exits 0 but returns no modules at all (#1646)', () => {
+    // The non-zero-exit case above is only HALF of "zero discovery must fail
+    // closed". A delegate that exists, runs, exits 0, and prints nothing is a
+    // declared discovery script asserting it has nothing to find -- that
+    // contradicts the delegate's own existence and must fail exactly like a
+    // non-zero exit, not read as "this repo has no Postgres tests" (#1363's
+    // shape, one layer further in: relying on the delegate's exit code made
+    // this guard only as strong as every delegate's OWN discipline).
+    const run = runIn({
+      'package.json': PASSING,
+      'scripts/rls-pg-test-discovery.sh': '#!/bin/sh\nexit 0\n',
+    })
+
+    expect(run.status).toBe(1)
+    expect(run.stdout).toContain('verify failed:')
+    expect(run.stdout).toContain('pg-test-discovery')
+  })
+
+  it('distinguishes an empty-but-successful delegate from a broken one in the failure text', () => {
+    // A reader must be able to tell "the delegate is broken" from "the
+    // delegate ran fine and asserted zero" -- they are different facts about
+    // different failure modes, even though both fail the gate the same way.
+    const brokenExit = runIn({
+      'package.json': PASSING,
+      'scripts/rls-pg-test-discovery.sh': '#!/bin/sh\nexit 1\n',
+    })
+    const emptySuccess = runIn({
+      'package.json': PASSING,
+      'scripts/rls-pg-test-discovery.sh': '#!/bin/sh\nexit 0\n',
+    })
+
+    expect(brokenExit.stdout).toContain('exited non-zero')
+    expect(brokenExit.stdout).not.toContain('returned no modules')
+
+    expect(emptySuccess.stdout).toContain('the declared delegate returned no modules')
+    expect(emptySuccess.stdout).not.toContain('exited non-zero')
+  })
 })
 
 describe('verify.sh runs the pg lane concurrently where that is safe (#703)', () => {

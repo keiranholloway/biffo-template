@@ -848,6 +848,7 @@ PG_TEST_DSN="${BIFFO_TEST_PG_DSN:-${TABSII_TEST_PG_DSN:-}}"
 PG_RLS_DISCOVERY_SCRIPT="scripts/rls-pg-test-discovery.sh"
 PG_DELEGATED_MODULES=""
 PG_DELEGATE_FAILED=""
+PG_DELEGATE_FAILED_REASON=""
 if [ -f "$PG_RLS_DISCOVERY_SCRIPT" ]; then
   # No pipe on this assignment -- `$?` right after it must reflect the
   # DELEGATE's exit status, not a downstream formatter's. The script fails
@@ -856,7 +857,25 @@ if [ -f "$PG_RLS_DISCOVERY_SCRIPT" ]; then
   # -- #1363's shape is a discovery finding nothing reading as "nothing to
   # run", and this is exactly where it would hide.
   PG_DELEGATED_MODULES=$(sh "$PG_RLS_DISCOVERY_SCRIPT" 2>/dev/null)
-  [ $? -ne 0 ] && PG_DELEGATE_FAILED=1
+  _pg_delegate_status=$?
+  # A present delegate is an assertion that this repo has Postgres tests to
+  # discover -- so empty output is its own gap, distinct from a non-zero
+  # exit, and must fail closed too (#1646). Relying only on the exit code
+  # made this guard only as strong as every delegate's OWN discipline;
+  # tabsii-platform's real script happens to `exit 1` on empty via `set -eu`,
+  # but verify.sh is template-owned and distributed to repos free to write a
+  # delegate that exits 0 with nothing -- exactly the #1363 shape ("finds
+  # nothing" reading as "nothing to run") this whole block exists to close,
+  # just one layer further in. The two causes are reported with DIFFERENT
+  # text below so a reader can tell "the delegate is broken" from "the
+  # delegate ran fine and asserted zero", which are different facts.
+  if [ "$_pg_delegate_status" -ne 0 ]; then
+    PG_DELEGATE_FAILED=1
+    PG_DELEGATE_FAILED_REASON="$PG_RLS_DISCOVERY_SCRIPT exited non-zero"
+  elif [ -z "$PG_DELEGATED_MODULES" ]; then
+    PG_DELEGATE_FAILED=1
+    PG_DELEGATE_FAILED_REASON="the declared delegate returned no modules"
+  fi
 fi
 
 pg_test_modules() {
@@ -1045,7 +1064,7 @@ fi
 # discovery is broken" and "here is what verify.sh found anyway".
 if [ -n "$PG_DELEGATE_FAILED" ] && [ -z "$LIST" ]; then
   FAILED="$FAILED pg-test-discovery"
-  printf '  \033[31mFAIL\033[0m    %-16s %s\n' "pg-test-discovery" "$PG_RLS_DISCOVERY_SCRIPT exited non-zero"
+  printf '  \033[31mFAIL\033[0m    %-16s %s\n' "pg-test-discovery" "$PG_DELEGATE_FAILED_REASON"
   printf '       \033[31m%s\033[0m\n' \
     "this repo declares an RLS discovery script, so it finding zero modules is a gap, not an empty repo (#1618)"
 fi

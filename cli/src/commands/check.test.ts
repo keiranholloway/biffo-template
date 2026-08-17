@@ -59,11 +59,22 @@ describe('biffo check', () => {
    * SATELLITE copy it is about to overwrite, and those two only exist
    * together inside a `scripts/shared-sync.sh` run — there is nothing in this
    * repo's own tree for a per-PR job to compare, so the sync invokes it at
-   * the moment of the write. Listing all three here keeps that a stated
-   * choice — a new subcommand that is neither a CI guard nor listed here
-   * fails the exhaustiveness assertion below.
+   * the moment of the write. `biffo check instance-adoption` (#1538/#1570/
+   * #1609) is here for the same shape as `branch-protection`: it has no
+   * self-check default (there is nothing in THIS repo's own tree to compare
+   * — biffo-template is the template, not an instance), and it needs a real
+   * cloned instance tree passed via `--instance-dir`, so it runs from
+   * `instance-adoption-report.yml` on a schedule, not from a per-PR diff.
+   * Listing all four here keeps that a stated choice — a new subcommand that
+   * is neither a CI guard nor listed here fails the exhaustiveness assertion
+   * below.
    */
-  const auditOnly = ['branch-protection', 'plugin-staleness', 'shared-file-reduction']
+  const auditOnly = [
+    'branch-protection',
+    'instance-adoption',
+    'plugin-staleness',
+    'shared-file-reduction',
+  ]
 
   it('exposes exactly the guards CI invokes, plus the audits that run out of band', () => {
     expect(names).toEqual([...ciGuards, ...auditOnly].sort())

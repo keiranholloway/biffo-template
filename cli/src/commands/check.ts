@@ -10,6 +10,7 @@ import { runCognitoInviteTemplateCheck } from '../scripts/check-cognito-invite-t
 import { runCoreDirectPathsCheck } from '../scripts/check-core-direct-paths.js'
 import { runOwnershipCheck } from '../scripts/check-core-ownership.js'
 import { runEventBridgeLogPermissionCheck } from '../scripts/check-eventbridge-log-permissions.js'
+import { runInstanceAdoptionCheck } from '../scripts/check-instance-adoption.js'
 import { runLambdaOutputCheck } from '../scripts/check-lambda-output.js'
 import { runMigrationBodyChangeCheck } from '../scripts/check-migration-body-change.js'
 import { runPipeTrapCheck } from '../scripts/check-pipe-trap.js'
@@ -45,7 +46,7 @@ import { runTerraformInputCheck } from '../scripts/check-terraform-input.js'
  */
 export const checkCommand = new Command('check').description(
   'Repo guards (ownership, release subject, plugin terraform, plugin collisions, ' +
-    'eventbridge-log-permissions, plugin-tool-supply, core-direct-paths, ' +
+    'eventbridge-log-permissions, plugin-tool-supply, core-direct-paths, instance-adoption, ' +
     'cognito-invite-template, lambda-output, pipe-trap, codeql-suppression, skeleton-drift, ' +
     'terraform-input, plugin-allowlist-convention, migration-body-change) ' +
     'run in CI and git hooks, plus out-of-band audits (branch protection, plugin-staleness)',
@@ -172,6 +173,29 @@ checkCommand
       await runCoreDirectPathsCheck(opts)
     },
   )
+
+checkCommand
+  .command('instance-adoption')
+  .description(
+    'Refuse a real instance tree that has not consumed a registered adoption channel its ' +
+      'target template ships (#1538/#1570/#1609) — checkInstanceAdoption previously ran only ' +
+      'inside `biffo core upgrade`, so a gap in an instance nobody happened to be upgrading ' +
+      'went undetected for days (keiranholloway/biffo-platform, PR #174). --instance-dir is ' +
+      'REQUIRED and has no self-check default: this repo is the template, not an instance.',
+  )
+  .option('--instance <name>', 'Label for the report (defaults to the basename of --instance-dir)')
+  .option(
+    '--instance-dir <dir>',
+    'REQUIRED: the real instance tree to check adoption against (oursDir) — no self-check ' +
+      'default exists (exits 2, cannot-tell, when omitted)',
+  )
+  .option(
+    '--theirs-dir <dir>',
+    'Template tree that ships the channel (theirsDir); defaults to this repo root',
+  )
+  .action(async (opts: { instance?: string; instanceDir?: string; theirsDir?: string }) => {
+    await runInstanceAdoptionCheck(opts)
+  })
 
 checkCommand
   .command('cognito-invite-template')

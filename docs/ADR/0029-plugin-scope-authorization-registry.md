@@ -1,6 +1,9 @@
 # ADR-0029: Plugin scope-authorization registry — an opaque-reference seam, Core-enforced
 
-**Status:** Accepted (steps 1-2 of 4; step 3 is instance-owned, step 4 deferred)
+**Status:** Accepted (steps 1-2 of 4; step 3 is instance-owned, step 4 deferred).
+Amended 2026-08-17 (issue #1644) to add a second, service-entitlement axis
+after an independent prosecution found the original text's central claim
+false — see "Amendment" below.
 **Date:** 2026-08-17
 **Deciders:** Core team (owner decision on issue #1607: "This looks good. Go with (B)")
 
@@ -84,12 +87,23 @@ call.
 Both are dual-authenticated (`require_signed_principal`, ADR-0017 §3/§5): a
 SigV4 service principal proves which plugin is calling; a forwarded,
 re-verified founder token proves which user it acts for. Both ALSO check
-`permission_code` against the caller's own `AuthenticatedUser.permissions`
-first (the #1606 axis) — a forwarded caller who holds no grant for that
-`permission_code` at all is refused there, **regardless of which plugin is
-asking**, with no new per-plugin ownership table needed. This is what makes
-"a plugin asking about another plugin's data" refuse itself: the check is
-always against the caller's own grant, never the calling service's identity.
+`permission_code` on **two axes**, both necessary, neither sufficient alone
+(amended by issue #1644 — see "Amendment" below for why the original
+single-axis text here was wrong):
+
+1. Against the caller's own `AuthenticatedUser.permissions` first (the #1606
+   axis) — a forwarded caller who holds no grant for that `permission_code`
+   at all is refused there, regardless of which plugin is asking.
+2. Against the **asking service's own entitlement** — the calling plugin's
+   own installed manifest must itself declare `permission_code` on at least
+   one of its own tables' CRUD `permissions` blocks (the same #1606 field,
+   reused as an entitlement source, not a new ownership list). A plugin
+   whose manifest never names a code has no declared business asking about
+   it, however many codes the forwarded caller happens to hold.
+
+Axis 1 alone does **not** make "a plugin asking about another plugin's data"
+refuse itself — it says nothing about which plugin is asking, only what the
+human caller may do. Axis 2 is what closes that gap.
 
 ### 3. Instance-side implementation (NOT this repo)
 
@@ -216,8 +230,64 @@ build order.
   a later registration resets ancestry/describer rather than keeping stale
   ones, and the `checked`/`unresolved` denominator).
   `tests/test_internal_scopes_router.py` covers the same properties over real
-  HTTP, plus the `permission_code` refusal that answers "a plugin asking
-  about another plugin's data" and the opaque response shape.
+  HTTP, plus both `permission_code` axes (a caller with no grant at all;
+  a caller who legitimately holds the code but whose asking plugin is not
+  entitled to it; a caller whose asking plugin IS entitled; a plugin whose
+  manifest declares no codes at all) and the opaque response shape.
+
+## Amendment 2026-08-17 (issue #1644) — the ask/list seam had only one axis
+
+**Finding.** An independent prosecution of PR #1642 (this ADR's own
+implementation) registered a fake `ScopeAuthorizer` — exactly what a real
+instance would do — and drove the shipped router directly. An hq-admin
+holding both `marketing.links.manage` and `workflows.manage` got the **full**
+scope hierarchy (refs, human labels, depth, parent chain) back when the
+**marketing** plugin's own signed service principal asked about
+`workflows.manage` — a `permission_code` belonging to an entirely different
+subsystem, nothing to do with marketing's own product surface.
+
+The router's `_require_permission_code` checked only
+`permission_code not in caller.user.permissions` — axis 1 above. Nothing
+checked which plugin the code belonged to. The claim this document made in
+"The HTTP seam" section — *"this is what makes 'a plugin asking about
+another plugin's data' refuse itself: the check is always against the
+caller's own grant, never the calling service's identity"* — was false for
+exactly the caller population most likely to hold multiple codes (an HQ
+admin, a brand manager with cross-domain grants), which is also the
+population most likely to be asked about by more than one plugin. The
+repo's own `test_forwarded_caller_without_the_permission_code_is_refused`
+was headed "case 4: asking about another plugin's data → refused" but only
+ever exercised a caller with **zero** permissions — a materially weaker case
+that happened to pass for an unrelated reason (axis 1 alone refuses a caller
+with no grant regardless of which plugin asks) and never exercised the
+cross-domain disclosure at all.
+
+**Fix.** `_require_permission_code` now also requires that the asking
+service be **entitled** to `permission_code`: its own installed
+`biffo.plugin.json` must declare that code on at least one of its own
+tables' CRUD `permissions` blocks (`PermissionRule.permission_code`, the
+existing #1606 field — see `_plugin_permission_codes` /
+`_service_entitled_permission_codes` in `routers/internal_scopes.py`). No new
+manifest field and no new hand-maintained ownership list were added,
+consistent with issue #744's recurring class (seven prior instances of a
+list drifting from what manifests already state): entitlement is derived
+from a declaration every plugin already makes for an unrelated reason
+(exposing its own tables to the generic CRUD layer), reused here as evidence
+of which domain the plugin belongs to.
+
+**Why not `scope_scoped_service.allowed_principals` (step 4)?** That field is
+explicitly deferred (see "4. Deliberately NOT built here" above) and, when
+built, gates **table** access for the write-side enforcement path — a
+different seam from the ask/list projections this ADR covers. Building it
+now would not close this gap even if it existed today, and step 4 remaining
+deferred does not leave this one open: the fix here is scoped entirely to
+`routers/internal_scopes.py`'s own gate function and introduces no new
+one-way-door commitment.
+
+**What did not change.** The bare-core / registered-and-denied distinction
+(`resolved` vs `allowed`) and the `checked`/`unresolved` denominator are
+untouched — both were re-verified against the amended code and remain exactly
+as this document originally described.
 
 ## Related Decisions
 

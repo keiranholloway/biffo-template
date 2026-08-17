@@ -1,5 +1,5 @@
 """Router tests for the internal scope-authorization seam (ADR-0029, issue
-#1607 steps 1-2) — ``GET /internal/scopes`` and ``POST /internal/scope-check``.
+#1607 steps 1-2; issue #1644's second, service-entitlement axis).
 
 Executes the issue's fail-first cases over real HTTP through a FastAPI
 ``TestClient``, not by calling the registry functions directly, so these
@@ -10,6 +10,7 @@ a client could choose not to call.
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
+from typing import Any
 
 import pytest
 from api import scope_authz as authz
@@ -17,12 +18,44 @@ from api.database import get_db
 from api.middleware.auth import AuthenticatedUser
 from api.middleware.principal import Principal, require_principal
 from api.middleware.service_auth import ServicePrincipal, require_service_principal
+from api.routers import internal_scopes
 from api.routers.internal_scopes import router
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 _MARKETING_ARN = "arn:aws:sts::123456789012:assumed-role/biffo-dev-plugin-marketing-role/s"
 _PERMISSION_CODE = "marketing.links.manage"
+# A permission_code that belongs to an entirely different subsystem — the
+# real example from issue #1644's prosecution: an hq-admin plausibly holds
+# both, but the marketing plugin's own manifest (below) never declares this
+# one on any of its tables.
+_OTHER_DOMAIN_PERMISSION_CODE = "workflows.manage"
+
+# The marketing plugin's own installed manifest, minimal but real-shaped: one
+# table, whose CRUD permissions name marketing.links.manage — the #1606 axis
+# a manifest already carries, reused here (issue #1644) as the entitlement
+# source for which permission_codes this plugin may ask the scope seam about.
+# It says nothing about workflows.manage anywhere.
+_MARKETING_MANIFEST: dict[str, Any] = {
+    "name": "marketing",
+    "tables": [
+        {
+            "name": "tracked_links",
+            "permissions": {
+                "list": {"allowed": True, "permission_code": _PERMISSION_CODE},
+                "read": {"allowed": True, "permission_code": _PERMISSION_CODE},
+            },
+        }
+    ],
+}
+
+# A plugin whose manifest declares tables but names no permission_code on any
+# of them anywhere (the real shape of services/_plugins/agent-runtime's
+# manifest in this repo) — entitled to ask about nothing via this seam.
+_NO_PERMISSION_CODE_MANIFEST: dict[str, Any] = {
+    "name": "agent-runtime",
+    "tables": [{"name": "runs", "permissions": {"list": {"allowed": True}}}],
+}
 
 
 def _founder(sub: str, permissions: frozenset[str] = frozenset()) -> AuthenticatedUser:
@@ -74,6 +107,21 @@ def _force_unregistered() -> None:
     authz._ancestry_resolver = authz._default_ancestry  # noqa: SLF001
     authz._describer = authz._default_describer  # noqa: SLF001
     authz._registered = False  # noqa: SLF001
+
+
+@pytest.fixture(autouse=True)
+def _default_installed_manifests(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every test's calling service is entitled to ``_PERMISSION_CODE`` by
+    default, via the real installed-manifest declaration (issue #1644's
+    second axis) — the marketing plugin's own manifest, not a disk scan of
+    whatever happens to be installed in this checkout. Tests exercising the
+    entitlement axis itself override this per-test.
+    """
+
+    def _fake_discover(services_root: Any = None) -> list[dict[str, Any]]:  # noqa: ARG001, ANN401
+        return [_MARKETING_MANIFEST]
+
+    monkeypatch.setattr(internal_scopes, "discover_plugin_manifests", _fake_discover)
 
 
 # ── fail-first case 1: a caller with the scope → allowed ────────────────────
@@ -184,15 +232,16 @@ def test_a_real_grant_is_never_confused_with_bare_core_over_http():
     assert body["unresolved"] == 0
 
 
-# ── fail-first case 4: asking about another plugin's data → refused ─────────
+# ── fail-first case 4: a caller with NO grant at all → refused ──────────────
+# (Renamed from "asking about another plugin's data" — issue #1644 found that
+# heading false: this exercises a caller holding zero permissions, which says
+# nothing about cross-plugin disclosure. See case 5 below for the real thing.)
 
 
-def test_forwarded_caller_without_the_permission_code_is_refused():
+def test_forwarded_caller_with_no_permissions_at_all_is_refused():
     """A plugin forwards a genuine, re-verified token — but for a founder who
     holds no grant on this permission_code at all. Refused before the scope
-    authorizer is even consulted, regardless of which plugin is asking: this
-    is the caller's own grant being examined, never the calling service's
-    identity, so there is no per-plugin ownership table to bypass."""
+    authorizer is even consulted: this is axis 1, the caller's own grant."""
 
     calls: list[str] = []
 
@@ -213,8 +262,106 @@ def test_forwarded_caller_without_the_permission_code_is_refused():
     assert calls == []  # the scope authorizer was never even called
 
 
-def test_forwarded_caller_without_the_permission_code_is_refused_for_listing_too():
+def test_forwarded_caller_with_no_permissions_at_all_is_refused_for_listing_too():
     client = _client(founder=_founder("alice", permissions=frozenset()))
+    resp = client.get(f"/api/v1/internal/scopes?permission_code={_PERMISSION_CODE}")
+    assert resp.status_code == 403, resp.text
+
+
+# ── fail-first case 5: asking about ANOTHER plugin's data → refused ─────────
+# The realistic, previously-untested case (issue #1644): the forwarded caller
+# legitimately holds the permission_code being asked about — an hq-admin
+# holding both marketing.links.manage and workflows.manage, exactly the
+# population most likely to trigger this, per the prosecution's own repro.
+
+
+def test_caller_holding_the_code_is_still_refused_when_asking_plugin_is_not_entitled(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Reproduces issue #1644 exactly: hq-admin holds BOTH marketing.links.manage
+    and workflows.manage. The marketing plugin's own signed principal forwards
+    that token and asks about workflows.manage — a permission_code its own
+    manifest never declares on any of its tables. Before the fix this returned
+    200 with the caller's full workflows scope hierarchy; it must now be
+    refused, and the scope authorizer must never even be consulted."""
+
+    calls: list[str] = []
+
+    async def authorizer(caller, db, permission_code):  # noqa: ANN001, ARG001
+        calls.append(permission_code)
+        return authz.ScopeGrant(unrestricted=True)  # would allow anything, if reached
+
+    authz.register_scope_authorizer(authorizer)
+    # Only the marketing manifest is installed, and it names only its own
+    # code — never workflows.manage (the default fixture already sets this
+    # up; overriding explicitly here so the case is legible on its own).
+    monkeypatch.setattr(
+        internal_scopes, "discover_plugin_manifests", lambda **_: [_MARKETING_MANIFEST]
+    )
+
+    hq_admin = _founder(
+        "hq-admin", permissions=frozenset({_PERMISSION_CODE, _OTHER_DOMAIN_PERMISSION_CODE})
+    )
+    client = _client(founder=hq_admin, principal_arn=_MARKETING_ARN)
+
+    resp = client.get(f"/api/v1/internal/scopes?permission_code={_OTHER_DOMAIN_PERMISSION_CODE}")
+    assert resp.status_code == 403, resp.text
+
+    resp = client.post(
+        "/api/v1/internal/scope-check",
+        json={"permission_code": _OTHER_DOMAIN_PERMISSION_CODE, "scope_ref": "brand-hq"},
+    )
+    assert resp.status_code == 403, resp.text
+    assert calls == []  # the scope authorizer was never even called for either route
+
+
+def test_caller_holding_the_code_is_allowed_when_asking_plugin_is_entitled():
+    """The converse of the above, and the must-not-regress case: the marketing
+    plugin asking about ITS OWN declared code (marketing.links.manage) for a
+    caller who holds it — including a caller who ALSO holds an unrelated
+    code — must still work. The fix is a second AND, not a tightening of
+    axis 1."""
+
+    async def authorizer(caller, db, permission_code):  # noqa: ANN001, ARG001
+        return authz.ScopeGrant(refs=frozenset({"brand-hq"}))
+
+    authz.register_scope_authorizer(authorizer)
+
+    hq_admin = _founder(
+        "hq-admin", permissions=frozenset({_PERMISSION_CODE, _OTHER_DOMAIN_PERMISSION_CODE})
+    )
+    client = _client(founder=hq_admin, principal_arn=_MARKETING_ARN)
+    resp = client.post(
+        "/api/v1/internal/scope-check",
+        json={"permission_code": _PERMISSION_CODE, "scope_ref": "brand-hq"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["allowed"] is True
+
+
+def test_plugin_with_no_declared_permission_codes_is_refused_even_if_caller_holds_it(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A plugin whose manifest names no permission_code anywhere (the real
+    shape of services/_plugins/agent-runtime's manifest) is entitled to ask
+    about none — even a caller who genuinely holds the code asked about must
+    still be refused, because the SERVICE has no declared business asking."""
+    monkeypatch.setattr(
+        internal_scopes, "discover_plugin_manifests", lambda **_: [_NO_PERMISSION_CODE_MANIFEST]
+    )
+    agent_runtime_arn = (
+        "arn:aws:sts::123456789012:assumed-role/biffo-dev-plugin-agent-runtime-role/s"
+    )
+
+    async def authorizer(caller, db, permission_code):  # noqa: ANN001, ARG001
+        return authz.ScopeGrant(unrestricted=True)
+
+    authz.register_scope_authorizer(authorizer)
+
+    client = _client(
+        founder=_founder("alice", permissions=frozenset({_PERMISSION_CODE})),
+        principal_arn=agent_runtime_arn,
+    )
     resp = client.get(f"/api/v1/internal/scopes?permission_code={_PERMISSION_CODE}")
     assert resp.status_code == 403, resp.text
 

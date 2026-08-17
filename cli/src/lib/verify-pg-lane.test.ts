@@ -407,6 +407,264 @@ describe('verify.sh reports a killed pg-test lane as inconclusive, not failed (#
   })
 })
 
+describe('verify.sh delegates Postgres discovery to a per-repo script when one exists (#1618)', () => {
+  // `test_orchestration_authz_matrix.py` is tabsii-platform's real defect: a
+  // module that predates the `test_*_pg.py` convention, so the repo-wide find
+  // alone never sees it. `scripts/rls-pg-test-discovery.sh` is CI's own
+  // discovery (tabsii-platform#936) -- the one place that exception is
+  // recorded -- and this fixture stands in for it rather than requiring a
+  // real RLS lane, the same way `withLane` above stands in for a real
+  // Postgres database.
+  const MATRIX_MODULE_PATH =
+    'services/api/src/api/domains/tabsii/tests/test_orchestration_authz_matrix.py'
+  const DELEGATE_ONE_MODULE = `#!/bin/sh\necho "${MATRIX_MODULE_PATH}"\n`
+
+  it('MISSED before delegation: the repo-wide find alone does not match the matrix filename', () => {
+    // No delegate script in this fixture -- pins the defect this issue
+    // reports, on the naming-convention-only path that predates this fix.
+    const run = runIn({
+      'package.json': PASSING,
+      [MATRIX_MODULE_PATH]: PG_TEST,
+    })
+
+    expect(run.stdout).toContain('no Postgres-dependent tests')
+    expect(run.stdout).not.toContain('Postgres module(s) present')
+  })
+
+  it('DISCOVERED once a delegate script exists: unions it with the repo-wide find', () => {
+    // The delegate's claimed path must be a real, readable file on disk
+    // (#1647) -- present here, same as every other genuine-discovery fixture
+    // in this block, so this test exercises the union, not the validation
+    // added below.
+    const run = runIn({
+      'package.json': PASSING,
+      'scripts/rls-pg-test-discovery.sh': DELEGATE_ONE_MODULE,
+      [MATRIX_MODULE_PATH]: PG_TEST,
+    })
+
+    expect(run.stdout).toContain('1 Postgres module(s) present')
+  })
+
+  it('unions rather than replaces: a module outside the delegate root is not lost', () => {
+    // The intentional half of the issue: verify.sh's job is broader than one
+    // RLS lane, so a module the delegate does not know about (outside its
+    // root) must still be counted, alongside the one only the delegate finds.
+    const run = runIn({
+      'package.json': PASSING,
+      'scripts/rls-pg-test-discovery.sh': DELEGATE_ONE_MODULE,
+      [MATRIX_MODULE_PATH]: PG_TEST,
+      'services/api/tests/instance/test_territories_pg.py': PG_TEST,
+    })
+
+    expect(run.stdout).toContain('2 Postgres module(s) present')
+  })
+
+  it('dedupes a module both the delegate and the repo-wide find see', () => {
+    const run = runIn({
+      'package.json': PASSING,
+      'scripts/rls-pg-test-discovery.sh': '#!/bin/sh\necho "services/api/tests/test_rls_pg.py"\n',
+      'services/api/tests/test_rls_pg.py': PG_TEST,
+    })
+
+    expect(run.stdout).toContain('1 Postgres module(s) present')
+  })
+
+  it('prints the denominator when a delegate script exists', () => {
+    const run = runIn({
+      'package.json': PASSING,
+      'scripts/rls-pg-test-discovery.sh': DELEGATE_ONE_MODULE,
+      [MATRIX_MODULE_PATH]: PG_TEST,
+    })
+
+    expect(run.stdout).toContain('pg-test discovery: 1 module(s) total')
+  })
+
+  it('does NOT print the discovery denominator line in a repo with no delegate script', () => {
+    // The vast majority of repos. Adding a line here for every repo, for a
+    // union that is trivially just the plain find(), is noise -- the line
+    // earns its place only where there are two sources to union.
+    const run = runIn({
+      'package.json': PASSING,
+      'services/api/tests/test_rls_pg.py': PG_TEST,
+    })
+
+    expect(run.stdout).not.toContain('pg-test discovery:')
+  })
+
+  it('FAILS rather than passes when the delegate exists and discovers zero (#1363)', () => {
+    // Mirrors the real script's own fail-closed contract (tabsii-platform#936:
+    // "the lane would run nothing" -> exit 1). A repo that declares an RLS
+    // discovery script and gets zero back from it has a real gap, not an
+    // empty repo -- this must never read as a quiet, passing "nothing to
+    // run", which is exactly the #1363 shape this file is the prime place for.
+    const run = runIn({
+      'package.json': PASSING,
+      'scripts/rls-pg-test-discovery.sh': '#!/bin/sh\nexit 1\n',
+    })
+
+    expect(run.status).toBe(1)
+    expect(run.stdout).toContain('verify failed:')
+    expect(run.stdout).toContain('pg-test-discovery')
+  })
+
+  it('reports the broken delegate AND still handles a module found elsewhere', () => {
+    // The two facts are independent: "the declared discovery is broken" and
+    // "here is what the repo-wide find turned up anyway". Both must be true
+    // at once without one masking the other.
+    const run = runIn({
+      'package.json': PASSING,
+      'scripts/rls-pg-test-discovery.sh': '#!/bin/sh\nexit 1\n',
+      'services/api/tests/test_rls_pg.py': PG_TEST,
+    })
+
+    expect(run.status).toBe(1)
+    expect(run.stdout).toContain('pg-test-discovery')
+    expect(run.stdout).toContain('1 Postgres module(s) present')
+  })
+
+  it('FAILS when the delegate exits 0 but returns no modules at all (#1646)', () => {
+    // The non-zero-exit case above is only HALF of "zero discovery must fail
+    // closed". A delegate that exists, runs, exits 0, and prints nothing is a
+    // declared discovery script asserting it has nothing to find -- that
+    // contradicts the delegate's own existence and must fail exactly like a
+    // non-zero exit, not read as "this repo has no Postgres tests" (#1363's
+    // shape, one layer further in: relying on the delegate's exit code made
+    // this guard only as strong as every delegate's OWN discipline).
+    const run = runIn({
+      'package.json': PASSING,
+      'scripts/rls-pg-test-discovery.sh': '#!/bin/sh\nexit 0\n',
+    })
+
+    expect(run.status).toBe(1)
+    expect(run.stdout).toContain('verify failed:')
+    expect(run.stdout).toContain('pg-test-discovery')
+  })
+
+  it('distinguishes an empty-but-successful delegate from a broken one in the failure text', () => {
+    // A reader must be able to tell "the delegate is broken" from "the
+    // delegate ran fine and asserted zero" -- they are different facts about
+    // different failure modes, even though both fail the gate the same way.
+    const brokenExit = runIn({
+      'package.json': PASSING,
+      'scripts/rls-pg-test-discovery.sh': '#!/bin/sh\nexit 1\n',
+    })
+    const emptySuccess = runIn({
+      'package.json': PASSING,
+      'scripts/rls-pg-test-discovery.sh': '#!/bin/sh\nexit 0\n',
+    })
+
+    expect(brokenExit.stdout).toContain('exited non-zero')
+    expect(brokenExit.stdout).not.toContain('returned no modules')
+
+    expect(emptySuccess.stdout).toContain('the declared delegate returned no modules')
+    expect(emptySuccess.stdout).not.toContain('exited non-zero')
+  })
+})
+
+describe('verify.sh validates what a pg-test delegate discovers, not merely that it said something (#1647)', () => {
+  // Round 3 of the same class (#1618 -> #1646 -> #1647): each prior round
+  // guarded a narrower shape of "the delegate exits 0 but has not actually
+  // found anything" -- non-zero exit, then byte-length-zero stdout. This
+  // block closes the FAMILY rather than the next individual case: every path
+  // a delegate names is checked to exist and be a readable file before it
+  // counts, so whitespace noise, a stale path, a typo, a comment line, and a
+  // directory all fail the same way a truly-empty delegate does, in one move
+  // instead of one guard per shape a prosecutor happens to find next.
+  const REAL_MODULE_PATH = 'services/api/tests/test_real_pg.py'
+  const GHOST_MODULE_PATH = 'services/api/tests/test_ghost_pg.py'
+
+  it('FAILS on whitespace-only stdout, with the SAME wording as byte-length-zero (#1647 round 3)', () => {
+    // A lone space is not byte-length zero, so the old `[ -z ]` check missed
+    // it, and the old `grep -v '^$'` filter downstream only drops a
+    // genuinely empty line -- so this noise survived both, got counted as
+    // "1 module(s) total", and the run ended `verify passed`. Once trimmed,
+    // a whitespace-only line asserts nothing more than a truly empty one, so
+    // it collapses to the SAME existing message rather than a new one.
+    const run = runIn({
+      'package.json': PASSING,
+      'scripts/rls-pg-test-discovery.sh': '#!/bin/sh\nprintf " \\n"\nexit 0\n',
+    })
+
+    expect(run.status).toBe(1)
+    expect(run.stdout).toContain('verify failed:')
+    expect(run.stdout).toContain('pg-test-discovery')
+    expect(run.stdout).toContain('the declared delegate returned no modules')
+    // The manufactured-count shape this round reports must be gone: a
+    // whitespace line must never be counted as a discovered module.
+    expect(run.stdout).not.toContain('1 module(s) total')
+  })
+
+  it('FAILS on a path that does not exist, with a message distinct from both prior rounds', () => {
+    // The delegate exits 0 and prints something that LOOKS like a module
+    // path, but nothing on disk answers to it -- a typo, a stale entry after
+    // a rename, or a path that was never real. Existence is checked, not
+    // merely non-blank-ness.
+    const run = runIn({
+      'package.json': PASSING,
+      'scripts/rls-pg-test-discovery.sh': `#!/bin/sh\necho "${GHOST_MODULE_PATH}"\nexit 0\n`,
+    })
+
+    expect(run.status).toBe(1)
+    expect(run.stdout).toContain('verify failed:')
+    expect(run.stdout).toContain('pg-test-discovery')
+    expect(run.stdout).toContain('not a readable file')
+    expect(run.stdout).toContain(GHOST_MODULE_PATH)
+    // Distinct from both earlier rounds' wording, so a reader can tell which
+    // of the three shapes occurred.
+    expect(run.stdout).not.toContain('exited non-zero')
+    expect(run.stdout).not.toContain('returned no modules')
+  })
+
+  it('FAILS a mixture of valid and invalid paths rather than silently keeping only the valid ones', () => {
+    // Decided deliberately (see PR body): a declared delegate naming a file
+    // that does not exist is a defect in THAT repo's discovery script and
+    // must fail loudly. Filtering the bad half out and reporting the good
+    // half as a real count would recreate exactly the untrustworthy
+    // denominator this issue reports -- just with a real path standing in
+    // for whitespace noise instead of a fabricated one.
+    const run = runIn({
+      'package.json': PASSING,
+      'scripts/rls-pg-test-discovery.sh': `#!/bin/sh\necho "${REAL_MODULE_PATH}"\necho "${GHOST_MODULE_PATH}"\nexit 0\n`,
+      [REAL_MODULE_PATH]: PG_TEST,
+    })
+
+    expect(run.status).toBe(1)
+    expect(run.stdout).toContain('verify failed:')
+    expect(run.stdout).toContain('pg-test-discovery')
+    expect(run.stdout).toContain(GHOST_MODULE_PATH)
+    // The valid module is named in the failure's own denominator line (it IS
+    // still counted there, for visibility), but the run does not pass on the
+    // strength of it -- the invalid entry still fails the whole gate.
+    expect(run.stdout).toContain('1 module(s) total')
+  })
+
+  it('a genuine, real-file discovery is unaffected: union intact, count correct', () => {
+    // The control: nothing about validating existence should change the
+    // ordinary case where every delegate-named path is real.
+    const run = runIn({
+      'package.json': PASSING,
+      'scripts/rls-pg-test-discovery.sh': `#!/bin/sh\necho "${REAL_MODULE_PATH}"\nexit 0\n`,
+      [REAL_MODULE_PATH]: PG_TEST,
+      'services/api/tests/instance/test_territories_pg.py': PG_TEST,
+    })
+
+    expect(run.status).toBe(0)
+    expect(run.stdout).toContain('2 Postgres module(s) present')
+    expect(run.stdout).not.toContain('verify failed:')
+  })
+
+  it('a repo with no delegate at all is unaffected -- most repos are in this state', () => {
+    const run = runIn({
+      'package.json': PASSING,
+      [REAL_MODULE_PATH]: PG_TEST,
+    })
+
+    expect(run.status).toBe(0)
+    expect(run.stdout).toContain('1 Postgres module(s) present')
+    expect(run.stdout).not.toContain('pg-test discovery:')
+  })
+})
+
 describe('verify.sh runs the pg lane concurrently where that is safe (#703)', () => {
   // Same reasoning as the block above for why a `pyproject.toml` is safe here.
   const lane = {

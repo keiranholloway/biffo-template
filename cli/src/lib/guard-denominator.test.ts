@@ -1017,6 +1017,134 @@ assertFakeThing(['a', 'b', 'c'])
           expect(outputStatesADenominator(`${line}\n`)).toBe(true)
         }
       })
+
+      describe('#1649: Shape B has no proximity bound — measured, and declared open rather than closed', () => {
+        // Independent prosecution of PR #1645 (issue #1649, filed against
+        // head 0b9f1b98) found that round 4's inversion closes only
+        // LEFT-adjacency: all four of #1617's own examples put the
+        // vocabulary word before the incidental number. Shape B still
+        // credits a count whenever denominator vocabulary sits ANYWHERE to
+        // its right on the same line, with no window — so an incidental
+        // number followed, later in the line, by unrelated vocabulary in a
+        // clause of its own still forges. These two are #1649's own
+        // reproduction lines, run against this exact head:
+        //
+        //   $ npx tsx -e "import { outputStatesADenominator } from
+        //     './src/lib/guard-denominator.ts'; console.log(
+        //     outputStatesADenominator('listening on port 8080 today; audited separately\n'))"
+        //   true
+        //
+        // Neither line states a real denominator — `8080` is a port number
+        // in one, a hostname's trailing digit in the other — yet both are
+        // credited purely because a vocabulary word exists later in the
+        // string, disconnected from the number.
+        it.each([
+          [
+            'a port number, with unrelated vocabulary in a trailing clause',
+            'listening on port 8080 today; audited separately',
+          ],
+          [
+            'a digit-hidden identifier, with unrelated vocabulary in a trailing clause',
+            'connected to host1: 8080, examined nothing else',
+          ],
+        ])(
+          'DECLARED GAP (not fixed by this PR — see reasoning below) — still forges: %s: %s',
+          (_label, line) => {
+            expect(outputStatesADenominator(`${line}\n`)).toBe(true)
+          },
+        )
+
+        it('the real Shape B corpus this module credits today, captured live via `sh scripts/biffo.sh check <name>`', () => {
+          // Every line any CI-wired check's real, bare invocation actually
+          // emits that is credited ONLY via Shape B (no touching-word Shape
+          // A match anywhere on the line) — the full set, not a sample —
+          // together with the character/word gap from the end of the
+          // credited count to the nearest vocabulary word on its right.
+          // Captured 2026-08-17 in this worktree by running the four
+          // commands below directly (not the test file's own
+          // reconstruction) and confirmed byte-identical to
+          // `runCheckCommand`'s output:
+          //
+          //   $ sh scripts/biffo.sh check eventbridge-log-permissions
+          //   $ sh scripts/biffo.sh check plugin-tool-supply   (two credited lines)
+          //   $ sh scripts/biffo.sh check core-direct-paths
+          //
+          // gap  | check                       | line
+          // -----|-----------------------------|------------------------------------------
+          //  2w  | eventbridge-log-permissions | "...70 .tf file(s) scanned under..."
+          //  3w  | plugin-tool-supply (model)  | "...7 declared model id(s) checked against..."
+          //  4w  | plugin-tool-supply (dirs)   | "...2 plugin dir(s) under...; 1 declared tool(s); 1 cross-checked..."
+          //  6w  | core-direct-paths           | "...0 core-direct call site(s) found under...(9 file(s) scanned)..."
+          //
+          // The minimum observed gap is 2 words (13 characters); the
+          // maximum is 6 words (87 characters). Every one of these is a
+          // genuine, currently-passing, CI-required credit — losing any of
+          // them is a real regression, not a tightening.
+          const realShapeBLines = [
+            '✓ EventBridge log permission guard: 70 .tf file(s) scanned under /repo; ' +
+              '8 aws_cloudwatch_event_target block(s) found (1 targeting a log group), ' +
+              '1 aws_cloudwatch_log_resource_policy block(s) found; 0 unpermissioned, 0 unterminated.',
+            '✓ plugin model-id guard: 7 declared model id(s) checked against 400 known ' +
+              'OpenRouter id(s) (snapshot fetched 2026-08-10T06:39:01Z); 0 not ok',
+            '✓ plugin tool-supply guard: 2 plugin dir(s) under /repo/services/_plugins; ' +
+              '1 declared tool(s); 1 cross-checked, 0 not ok',
+            '✓ core-direct-paths guard: sibling-template (self-check): 0 core-direct call ' +
+              'site(s) found under /repo/apps/frontend/src (9 file(s) scanned); 0 matched a ' +
+              'route prefix core registers (23 prefix(es) from 115 file(s) under /repo/api/src), ' +
+              '0 did not, 0 could not be resolved at all.',
+          ]
+          expect(realShapeBLines.every((l) => outputStatesADenominator(`${l}\n`))).toBe(true)
+        })
+
+        it('no distance bound separates the real corpus from a forge — natural language has no ceiling on filler', () => {
+          // The obvious next move is to bound Shape B to a window: reject
+          // vocabulary further than N words/characters from the count. That
+          // fails structurally, not just on these two lines. A bound wide
+          // enough to keep the real corpus's own maximum (6 words / 87
+          // characters, `core-direct-paths` above) is defeated by an
+          // equally ordinary forge at the SAME or a LARGER distance —
+          // because nothing stops an author writing more words between an
+          // incidental number and an unrelated status clause. These four
+          // are constructed, not captured (labelled as such, per this
+          // file's own corpus-fidelity rule), each one straightforward
+          // English and each one still forging credit against this exact
+          // head:
+          const widerForges = [
+            'listening on port 8080 right now; audited separately', // 2 words / 8 chars
+            'listening on port 8080 sometime later today; audited separately', // 3 words / 19 chars
+            'listening on port 8080 for a short while; audited separately', // 4 words / 22 chars
+            'listening on port 8080 for a surprisingly long time this afternoon before ' +
+              'anyone on the team noticed anything unusual about it at all; audited ' +
+              'separately at the end of the shift', // 19 words / 113 chars
+          ]
+          for (const line of widerForges) {
+            expect(outputStatesADenominator(`${line}\n`)).toBe(true)
+          }
+          // The last one alone (19 words / 113 characters) exceeds the real
+          // corpus's own maximum gap in both units at once. A window drawn
+          // at or above the real maximum still admits it and anything
+          // longer; a window drawn below the real minimum (2 words / 13
+          // characters) rejects `eventbridge-log-permissions`'s own
+          // currently-credited, CI-required line. There is no value in
+          // between: the real corpus's minimum gap (2 words) is smaller
+          // than the shortest constructed forge above needs to be to stay
+          // ordinary English, so the two ranges do not merely overlap —
+          // the forge side has no upper bound at all. Sharpening Shape B
+          // with a proximity window is exactly the move this file's own
+          // docstring already declined to make once (round-4 completion
+          // notes); this is the second, measured confirmation of why.
+        })
+
+        // DECISION (declared, not silent): this PR does not attempt to bound
+        // Shape B. A tighter window costs a real, currently-credited line
+        // (measured above); a looser or equal window is defeated by a
+        // forge of the same or greater distance (also measured above, up to
+        // 19 words / 113 characters — well past the real corpus's 6-word /
+        // 87-character maximum). Closing this needs a signal this file does
+        // not have — which PROCESS emitted the line, or which clause the
+        // count and the vocabulary word belong to — not a sharper distance
+        // rule; see #1617/#1649. The gap stays open and tracked there.
+      })
     })
   })
 

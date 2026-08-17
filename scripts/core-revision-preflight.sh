@@ -37,6 +37,28 @@
 # older commit reports a LOWER revision, because that commit genuinely has
 # fewer ancestors. This script only ever compares that one integer.
 #
+# ## This script's monotonicity guarantee is borrowed, not owned
+#
+# `git rev-list --count HEAD` is only monotonic/collision-free along one
+# continuous, non-rewritten history. If core's `dev`/`staging`/`main` ever
+# allowed force pushes or a non-linear history, a rewritten branch could
+# report a LOWER commit count for a commit that is, in reality, later —
+# silently undermining the one property this whole mechanism depends on,
+# with no signal anywhere in this script or its caller. Checked directly
+# against the live `keiranholloway/biffo-platform` repo during #1635's
+# prosecution: `allow_force_pushes: false`, `required_linear_history: true`
+# and `enforce_admins: true` are all set on every one of those branches
+# today, so the guarantee currently holds — but nothing in this script (or
+# in scripts/route-table-digest.py, which computes the number on the
+# publishing side) asserts that, or would notice if it changed. Deliberately
+# NOT asserted with a live GitHub API call here: this script runs in every
+# sibling's deploy job, on every deploy, and a branch-protection check would
+# add a second network dependency and a second way to fail closed for a
+# property that is core's to guarantee, not each sibling's to re-verify on
+# every run. If this ever needs enforcing rather than documenting, it
+# belongs as a periodic check against the CORE repo (once, not once per
+# sibling deploy) — not bolted onto this script.
+#
 # ## Fail-closed (the #1363 class)
 #
 # A sibling that declares no minimum has nothing to check — that is a
@@ -81,7 +103,20 @@ CURL=${PREFLIGHT_CURL:-curl}
 
 MIN=${CORE_MIN_ROUTE_REVISION:-}
 if [ -z "$MIN" ]; then
-  echo "core-revision-preflight: CORE_MIN_ROUTE_REVISION not set — this sibling declares no core-route dependency, nothing to check."
+  # Loud on purpose (#1635 prosecution finding 2). A green "Preflight — core
+  # route revision" step looks identical whether it actually checked
+  # something or checked nothing — the whole point of #1604 is to stop a
+  # sibling deploying blind, so its own "nothing to check" state must never
+  # read like "checked and fine". Same treatment this repo already gives the
+  # structurally identical deliberately-off case
+  # (SIBLING_DEPLOY_ENABLED=false in _skeletons/sibling-template's own
+  # deploy.yml): a GitHub Actions ::notice:: annotation, not a bare echo that
+  # only shows up if someone opens the step log.
+  MSG="core-revision-preflight: preflight did NOT run — CORE_MIN_ROUTE_REVISION is not set, so this sibling has declared no core-route dependency. This is 'nothing was checked', not 'core was checked and is ready'; set CORE_MIN_ROUTE_REVISION once this sibling depends on a specific core revision."
+  echo "::notice::${MSG}"
+  if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+    echo "${MSG}" >> "$GITHUB_STEP_SUMMARY"
+  fi
   exit 0
 fi
 

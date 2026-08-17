@@ -122,10 +122,37 @@ STUB
 }
 
 # 1. No CORE_MIN_ROUTE_REVISION declared at all — this sibling depends on
-#    nothing new from core. Must pass WITHOUT even invoking curl.
+#    nothing new from core. Must pass WITHOUT even invoking curl, and must
+#    say so LOUDLY: a GitHub Actions ::notice:: annotation (not a bare echo
+#    a reader would have to open the step log to find), and never wording
+#    that could be mistaken for "checked and fine" (#1635 prosecution
+#    finding 2 — the same treatment this repo already gives
+#    SIBLING_DEPLOY_ENABLED=false).
 _write_stub_never_called
 _run -u CORE_MIN_ROUTE_REVISION -u CORE_ROUTE_REVISION_URL --
 _assert_exit "no minimum declared" 0
+_assert_output_contains "no minimum declared — is a ::notice:: annotation" "::notice::"
+_assert_output_contains "no minimum declared — says preflight did not run" "did NOT run"
+
+# 1b. Same scenario, but with GITHUB_STEP_SUMMARY set as it is in a real
+#     GitHub Actions run — the skip must ALSO land in the job summary, not
+#     only the step log, matching how this repo's own deploy-app.yml surfaces
+#     a deploy-time skip/failure to a reader who never opens raw logs.
+SUMMARY_FILE=/tmp/core-revision-preflight-test-summary.$$
+: > "$SUMMARY_FILE"
+_write_stub_never_called
+_run -u CORE_MIN_ROUTE_REVISION -u CORE_ROUTE_REVISION_URL -- GITHUB_STEP_SUMMARY="$SUMMARY_FILE"
+_assert_exit "no minimum declared, with GITHUB_STEP_SUMMARY set" 0
+if grep -qF "did NOT run" "$SUMMARY_FILE" 2>/dev/null; then
+  echo "PASS: no minimum declared — writes to \$GITHUB_STEP_SUMMARY"
+else
+  echo "FAIL: no minimum declared — expected \$GITHUB_STEP_SUMMARY ($SUMMARY_FILE) to mention 'did NOT run'"
+  echo "--- summary file ---"
+  cat "$SUMMARY_FILE" 2>/dev/null
+  echo "--------------------"
+  FAILURES=$((FAILURES + 1))
+fi
+rm -f "$SUMMARY_FILE"
 
 # 2. Sibling requires a revision core HAS reached (core is AHEAD) — passes.
 _write_stub_ok 50

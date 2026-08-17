@@ -695,6 +695,457 @@ assertFakeThing(['a', 'b', 'c'])
       // somebody updates the docstring that claims it.
       expect(outputStatesADenominator('examined 25 item(s)\n')).toBe(true)
     })
+
+    describe('#1617: an incidental number in a real log line still forges a denominator', () => {
+      // The case matrix, derived from the corpus rather than invented — see
+      // the PR body for the commands that produced each line. must-accept
+      // lines are REAL output, captured live from `sh scripts/biffo.sh check
+      // <name>` in this repo or from a recent CI run
+      // (`gh run view <id> --log`). must-reject lines are the exact shapes
+      // #1617 names, confirmed forging credit against the PRE-fix regex
+      // before this change (see the PR body's before/after table).
+      //
+      // CORRECTION (round 2 of #1617): the "instance-adoption guard" line
+      // below was labelled captured-live but was not — it claimed 3 while
+      // listing 2 paths, which `check-claim-invocation.ts` can never emit
+      // (the count and the joined list come from the same array). Re-run
+      // live via `sh scripts/biffo.sh check claim-invocation` for this fix;
+      // the corrected line lists all 3 distributed copies, including
+      // `_skeletons/sibling-template/AGENTS.md`, which has existed since
+      // before this PR's base commit.
+
+      it.each([
+        ['pipe-trap', 'audited 34 shell file(s) under scripts/ and .githooks/ under /repo'],
+        ['terraform-input / lambda-output', 'audited 25 workflow file(s) under /repo'],
+        [
+          'plugin-tool-supply (dirs)',
+          'audited 2 plugin dir(s), 1 declared tool(s) cross-checked, under /repo/services/_plugins',
+        ],
+        ['plugin-tool-supply (model ids)', 'audited 7 declared model id(s)'],
+        [
+          'guard-denominator (self)',
+          'guard-denominator: examined 25 guard(s), 9 state their own denominator when RUN, ' +
+            '16 do not (16 baselined, 0 newly unbaselined); observed by executing 14 CI-wired ' +
+            'check command(s)',
+        ],
+        [
+          'coverage line (colon-introduced, count precedes vocabulary)',
+          '[coverage] cognito-invite-template-guard.findModuleTerraformFiles: 33 path(s) reached',
+        ],
+        [
+          'migration-body-change guard (Release Guards run, count is 0)',
+          'migration body-change guard: examined 0 already-released migration file(s) changed ' +
+            'in this PR.',
+        ],
+        [
+          'interpreter-audit-rstart guard (Release Guards run)',
+          'interpreter audit: checked 15 workflow file(s), 29 explicit-interpreter invocation(s) found',
+        ],
+        [
+          'ci-wiring-audit guard (Release Guards run)',
+          'checked 2 requiresCiStep glob(s), 2 supersedes pattern(s)',
+        ],
+        [
+          'eventbridge-log-permissions guard (count followed by a file-extension word, not "(s)")',
+          '70 .tf file(s) scanned under /repo; 8 aws_cloudwatch_event_target block(s) found',
+        ],
+        [
+          'instance-adoption guard (count followed by a filename, not a plural noun at all)',
+          'audited 3 distributed AGENTS.md (AGENTS.md, _skeletons/plugin-template/AGENTS.md, ' +
+            '_skeletons/sibling-template/AGENTS.md) under /repo',
+        ],
+      ])('must accept — real guard output: %s', (_label, line) => {
+        expect(outputStatesADenominator(`${line}\n`)).toBe(true)
+      })
+
+      it.each([
+        [
+          'an IP octet',
+          'examined hosts at 10.0.0.1 today',
+          'a whitespace-delimited "10" preceded by "at" and followed by a decimal continuation',
+        ],
+        [
+          'a port number',
+          'audited port 8080 for issues',
+          '"8080" is preceded by the ordinary noun "port", not the vocabulary word or punctuation',
+        ],
+        [
+          'a section reference',
+          'audited section 3.4 of the doc',
+          '"3" is a decimal continuation ("3.4"), and separately preceded by "section"',
+        ],
+        [
+          'a line number',
+          'examined the file at line 42 for issues',
+          '"42" is preceded by the ordinary noun "line", not the vocabulary word or punctuation',
+        ],
+      ])('must reject — %s: %s (%s)', (_label, line) => {
+        expect(outputStatesADenominator(`${line}\n`)).toBe(false)
+      })
+
+      it('regression: the pre-fix regex forged credit on all four must-reject lines', () => {
+        // Fail-first evidence that this is a real fix, not a redundant test:
+        // the OLD pattern (whitespace-delimited only, no left-neighbour or
+        // decimal check) accepted every one of the must-reject lines above.
+        const preFixBareCount = /(?:^|\s)\d+(?:$|[\s),.;:])/
+        const preFixVocabulary =
+          /\b(examined|checked|audited|scanned|covered|considered|classified|discovered|counted|denominator|reached|analysed|analyzed|processed|swept|walked|visited|inspected|assessed|evaluated)\b/i
+        const preFixLineStatesADenominator = (line: string): boolean =>
+          preFixVocabulary.test(line) && preFixBareCount.test(line)
+
+        const mustRejectLines = [
+          'examined hosts at 10.0.0.1 today',
+          'audited port 8080 for issues',
+          'audited section 3.4 of the doc',
+          'examined the file at line 42 for issues',
+        ]
+        expect(mustRejectLines.every(preFixLineStatesADenominator)).toBe(true)
+        // And the fixed function now rejects every one of them.
+        expect(mustRejectLines.every((l) => outputStatesADenominator(`${l}\n`))).toBe(false)
+        expect(mustRejectLines.some((l) => outputStatesADenominator(`${l}\n`))).toBe(false)
+      })
+
+      describe('#1617 round 2: a single punctuation character defeated the ordinary-noun check', () => {
+        // Not invented shapes: `:` and `,` are the two right-boundary
+        // delimiters BARE_COUNT itself already treats as count-terminating
+        // punctuation (see BARE_COUNT's char class), so a real log line is
+        // exactly as likely to write `port: 8080` as `port 8080`. Tab and a
+        // bracketed count are included because #1617's own report named them
+        // as untested variants worth checking, not because either turned out
+        // to be a live gap (the tab case was already correctly rejected —
+        // BARE_COUNT's `\s` lookbehind does not care which whitespace
+        // character it consumed, only `precedingWord`'s ability to see past
+        // punctuation was ever broken).
+
+        it.each([
+          ['a colon-separated port number', 'audited port: 8080 for issues'],
+          ['a comma-separated port number', 'audited port, 8080 for issues'],
+          ['a colon-separated line number', 'examined the file at line: 42 for issues'],
+          ['a comma-separated line number', 'examined the file at line, 42 for issues'],
+          [
+            'a bracketed count with interior space (space then "(" blocks the touching-word extraction)',
+            'audited port ( 8080 ) for issues',
+          ],
+        ])('must reject — %s: %s', (_label, line) => {
+          expect(outputStatesADenominator(`${line}\n`)).toBe(false)
+        })
+
+        it('must reject — a tab between noun and count (already correctly rejected, not a new gap)', () => {
+          expect(outputStatesADenominator('audited port\t8080 for issues\n')).toBe(false)
+        })
+
+        it('must reject — a colon directly after a decimal continuation (no new gap)', () => {
+          // "3.2" already fails BARE_COUNT's left-boundary check for both
+          // halves (see the #1617 round-1 decimal fix); a trailing colon
+          // changes nothing because neither digit run ever became a
+          // candidate count in the first place.
+          expect(outputStatesADenominator('audited section 3.2: of the doc\n')).toBe(false)
+        })
+
+        it('regression: the round-1-fixed regex still forged credit on every punctuated variant', () => {
+          // Fail-first evidence against the code this PR is actually built
+          // on top of (round 1's fix — decimal continuation and the
+          // DIRECTLY-adjacent ordinary-noun check), not a straw man: it
+          // rejects "port 8080" but not "port: 8080", because
+          // `precedingWord` returns `undefined` the instant punctuation
+          // touches the mandatory whitespace, and `lineStatesADenominator`
+          // read that `undefined` as an automatic accept.
+          const round1BareCount = /(?<=^|\s)\d+(?=$|[\s),;:]|\.(?!\d))/g
+          const round1Vocabulary =
+            /\b(examined|checked|audited|scanned|covered|considered|classified|discovered|counted|denominator|reached|analysed|analyzed|processed|swept|walked|visited|inspected|assessed|evaluated)\b/i
+          const round1PrecedingWord = (line: string, digitStart: number): string | undefined => {
+            if (digitStart === 0) return undefined
+            return /([A-Za-z][A-Za-z'-]*)$/.exec(line.slice(0, digitStart - 1))?.[1]
+          }
+          const round1LineStatesADenominator = (line: string): boolean => {
+            if (!round1Vocabulary.test(line)) return false
+            for (const match of line.matchAll(round1BareCount)) {
+              const word = round1PrecedingWord(line, match.index as number)
+              if (word === undefined || round1Vocabulary.test(word)) return true
+            }
+            return false
+          }
+
+          const punctuatedForgeLines = [
+            'audited port: 8080 for issues',
+            'audited port, 8080 for issues',
+            'examined the file at line: 42 for issues',
+            'examined the file at line, 42 for issues',
+            'audited port ( 8080 ) for issues',
+          ]
+          // Fail-first: round 1's own code really does forge on all five —
+          // this is the bug, reproduced against the exact pre-this-fix logic.
+          expect(punctuatedForgeLines.every(round1LineStatesADenominator)).toBe(true)
+          // And the fixed function now rejects every one of them.
+          expect(punctuatedForgeLines.some((l) => outputStatesADenominator(`${l}\n`))).toBe(false)
+        })
+
+        it('does not over-reject: a colon-introduced identifier (hyphenated or camelCase) still credits', () => {
+          // These two are REAL guard output (see the must-accept corpus
+          // above) and are structurally identical to `port: 8080` — a
+          // non-vocabulary word, a colon, a count — except the word touching
+          // the count is a hyphenated or camelCase identifier rather than an
+          // ordinary English noun, and NEITHER is vocabulary. Under round 4's
+          // allowlist this passes on Shape B (`reached` sits two words to the
+          // right of the count), not because the identifier shape was ever
+          // specially exempted — round 4 draws no distinction at all between
+          // an ordinary noun and an identifier touching the count; neither is
+          // vocabulary, so Shape A never fires for either, and it is Shape B
+          // alone that credits these two. That is the explicit allowlisted
+          // shape #1617 round 4 named: `<identifier>: N path(s) reached`.
+          expect(outputStatesADenominator('[coverage] terraform-input: 12 path(s) reached\n')).toBe(
+            true,
+          )
+          expect(
+            outputStatesADenominator(
+              '[coverage] cognito-invite-template-guard.findModuleTerraformFiles: 33 path(s) reached\n',
+            ),
+          ).toBe(true)
+        })
+      })
+
+      describe('#1617 round 4: inverted from a blocklist to an allowlist — the digit-hidden-noun forges', () => {
+        // Round 3's prosecution found that a digit INSIDE the noun defeats
+        // the word-extraction regex entirely (no digit in its word class or
+        // its punctuation-skip class), so `hiddenOrdinaryNoun` returned
+        // `undefined` — not "identified as fine", but "extraction failed" —
+        // and the old default read that failure as an accept. These four are
+        // the prosecutor's own attack lines, captured verbatim from the
+        // round-3 comment on issue #1617, run against the real pre-round-4
+        // code and confirmed forging before this fix (see the regression
+        // test below).
+        it.each([
+          ['a hostname ending in a digit', 'audited host1: 8080 for issues'],
+          ['a protocol name ending in a digit', 'audited ipv4: 8080 for issues'],
+          [
+            'an interface name ending in a digit, count followed by a non-"(s)" plural',
+            'audited eth0: 100 packets for issues',
+          ],
+          ['a comma-separated identifier ending in a digit', 'audited worker3, 42 jobs for issues'],
+        ])('must reject — %s: %s', (_label, line) => {
+          expect(outputStatesADenominator(`${line}\n`)).toBe(false)
+        })
+
+        it('regression: the round-3 (pre-round-4) code forged credit on all four digit-hidden-noun lines', () => {
+          // Fail-first evidence against the code this PR is actually built on
+          // top of — round 3's `hiddenOrdinaryNoun`/`precedingWord`/
+          // `lineStatesADenominator`, reproduced verbatim (not a straw man).
+          const round3Vocabulary =
+            /\b(examined|checked|audited|scanned|covered|considered|classified|discovered|counted|denominator|reached|analysed|analyzed|processed|swept|walked|visited|inspected|assessed|evaluated)\b/i
+          const round3BareCount = /(?<=^|\s)\d+(?=$|[\s),;:]|\.(?!\d))/g
+          const round3PlainLowercaseWord = /^[a-z]+$/
+          const round3PrecedingWord = (line: string, digitStart: number): string | undefined => {
+            if (digitStart === 0) return undefined
+            return /([A-Za-z][A-Za-z'-]*)$/.exec(line.slice(0, digitStart - 1))?.[1]
+          }
+          const round3HiddenOrdinaryNoun = (
+            line: string,
+            digitStart: number,
+          ): string | undefined => {
+            if (digitStart === 0) return undefined
+            const before = line.slice(0, digitStart - 1)
+            const word = /([A-Za-z][A-Za-z'-]*)[^A-Za-z0-9]*$/.exec(before)?.[1]
+            if (
+              word === undefined ||
+              round3Vocabulary.test(word) ||
+              !round3PlainLowercaseWord.test(word)
+            ) {
+              return undefined
+            }
+            return word
+          }
+          const round3LineStatesADenominator = (line: string): boolean => {
+            if (!round3Vocabulary.test(line)) return false
+            for (const match of line.matchAll(round3BareCount)) {
+              const word = round3PrecedingWord(line, match.index as number)
+              if (word !== undefined) {
+                if (round3Vocabulary.test(word)) return true
+                continue
+              }
+              if (round3HiddenOrdinaryNoun(line, match.index as number) !== undefined) continue
+              return true
+            }
+            return false
+          }
+
+          const digitHiddenNounForges = [
+            'audited host1: 8080 for issues',
+            'audited ipv4: 8080 for issues',
+            'audited eth0: 100 packets for issues',
+            'audited worker3, 42 jobs for issues',
+          ]
+          // Fail-first: round 3's own code really does forge on all four —
+          // this is the bug this round closes, reproduced against the exact
+          // pre-round-4 logic, not a hypothetical.
+          expect(digitHiddenNounForges.every(round3LineStatesADenominator)).toBe(true)
+          // And the fixed function now rejects every one of them.
+          expect(digitHiddenNounForges.some((l) => outputStatesADenominator(`${l}\n`))).toBe(false)
+        })
+
+        it('must still accept — the non-adjacent shape the digit-noun fix must not break', () => {
+          // "12 path(s) reached" in its own right (not just embedded in the
+          // longer coverage-line corpus above): the count precedes its
+          // vocabulary word by two words, Shape B, unaffected by round 4's
+          // digit-aware word extraction (which only ever changes Shape A's
+          // LEFT-side recovery).
+          expect(outputStatesADenominator('12 path(s) reached\n')).toBe(true)
+        })
+      })
+
+      it('genuinely ambiguous — left open deliberately, not silently: same shape as a real accept', () => {
+        // These three are REAL lines (gitleaks' Secret Scan job output, a
+        // Codecov gpg-import line from the Python job, and this repo's own
+        // terraform-generated-artifact-refs.test.ts console output) and all
+        // three still forge credit under round 4's allowlist too — decided
+        // deliberately, not inherited by accident. `gpg: Total number
+        // processed: 1` and `terraform files scanned: 70` hit Shape A (the
+        // word touching the count, across the colon, IS `processed`/
+        // `scanned` — genuinely this guard's own vocabulary, the single
+        // strongest signal this file has); `1135 commits scanned.` hits
+        // Shape B (`scanned` sits two words right of the count, the
+        // identical shape `70 .tf file(s) scanned under /repo` — a real,
+        // must-accept line — needs credited). There is no shape-based signal
+        // left to tell these apart from a genuine accept: that needs knowing
+        // which PROCESS emitted the line, which no per-line check observes.
+        // See `lineStatesADenominator`'s docstring for the full reasoning.
+        const stillForges = [
+          '1135 commits scanned.',
+          'gpg: Total number processed: 1',
+          'terraform files scanned: 70',
+        ]
+        for (const line of stillForges) {
+          expect(outputStatesADenominator(`${line}\n`)).toBe(true)
+        }
+      })
+
+      describe('#1649: Shape B has no proximity bound — measured, and declared open rather than closed', () => {
+        // Independent prosecution of PR #1645 (issue #1649, filed against
+        // head 0b9f1b98) found that round 4's inversion closes only
+        // LEFT-adjacency: all four of #1617's own examples put the
+        // vocabulary word before the incidental number. Shape B still
+        // credits a count whenever denominator vocabulary sits ANYWHERE to
+        // its right on the same line, with no window — so an incidental
+        // number followed, later in the line, by unrelated vocabulary in a
+        // clause of its own still forges. These two are #1649's own
+        // reproduction lines, run against this exact head:
+        //
+        //   $ npx tsx -e "import { outputStatesADenominator } from
+        //     './src/lib/guard-denominator.ts'; console.log(
+        //     outputStatesADenominator('listening on port 8080 today; audited separately\n'))"
+        //   true
+        //
+        // Neither line states a real denominator — `8080` is a port number
+        // in one, a hostname's trailing digit in the other — yet both are
+        // credited purely because a vocabulary word exists later in the
+        // string, disconnected from the number.
+        it.each([
+          [
+            'a port number, with unrelated vocabulary in a trailing clause',
+            'listening on port 8080 today; audited separately',
+          ],
+          [
+            'a digit-hidden identifier, with unrelated vocabulary in a trailing clause',
+            'connected to host1: 8080, examined nothing else',
+          ],
+        ])(
+          'DECLARED GAP (not fixed by this PR — see reasoning below) — still forges: %s: %s',
+          (_label, line) => {
+            expect(outputStatesADenominator(`${line}\n`)).toBe(true)
+          },
+        )
+
+        it('the real Shape B corpus this module credits today, captured live via `sh scripts/biffo.sh check <name>`', () => {
+          // Every line any CI-wired check's real, bare invocation actually
+          // emits that is credited ONLY via Shape B (no touching-word Shape
+          // A match anywhere on the line) — the full set, not a sample —
+          // together with the character/word gap from the end of the
+          // credited count to the nearest vocabulary word on its right.
+          // Captured 2026-08-17 in this worktree by running the four
+          // commands below directly (not the test file's own
+          // reconstruction) and confirmed byte-identical to
+          // `runCheckCommand`'s output:
+          //
+          //   $ sh scripts/biffo.sh check eventbridge-log-permissions
+          //   $ sh scripts/biffo.sh check plugin-tool-supply   (two credited lines)
+          //   $ sh scripts/biffo.sh check core-direct-paths
+          //
+          // gap  | check                       | line
+          // -----|-----------------------------|------------------------------------------
+          //  2w  | eventbridge-log-permissions | "...70 .tf file(s) scanned under..."
+          //  3w  | plugin-tool-supply (model)  | "...7 declared model id(s) checked against..."
+          //  4w  | plugin-tool-supply (dirs)   | "...2 plugin dir(s) under...; 1 declared tool(s); 1 cross-checked..."
+          //  6w  | core-direct-paths           | "...0 core-direct call site(s) found under...(9 file(s) scanned)..."
+          //
+          // The minimum observed gap is 2 words (13 characters); the
+          // maximum is 6 words (87 characters). Every one of these is a
+          // genuine, currently-passing, CI-required credit — losing any of
+          // them is a real regression, not a tightening.
+          const realShapeBLines = [
+            '✓ EventBridge log permission guard: 70 .tf file(s) scanned under /repo; ' +
+              '8 aws_cloudwatch_event_target block(s) found (1 targeting a log group), ' +
+              '1 aws_cloudwatch_log_resource_policy block(s) found; 0 unpermissioned, 0 unterminated.',
+            '✓ plugin model-id guard: 7 declared model id(s) checked against 400 known ' +
+              'OpenRouter id(s) (snapshot fetched 2026-08-10T06:39:01Z); 0 not ok',
+            '✓ plugin tool-supply guard: 2 plugin dir(s) under /repo/services/_plugins; ' +
+              '1 declared tool(s); 1 cross-checked, 0 not ok',
+            '✓ core-direct-paths guard: sibling-template (self-check): 0 core-direct call ' +
+              'site(s) found under /repo/apps/frontend/src (9 file(s) scanned); 0 matched a ' +
+              'route prefix core registers (23 prefix(es) from 115 file(s) under /repo/api/src), ' +
+              '0 did not, 0 could not be resolved at all.',
+          ]
+          expect(realShapeBLines.every((l) => outputStatesADenominator(`${l}\n`))).toBe(true)
+        })
+
+        it('no distance bound separates the real corpus from a forge — natural language has no ceiling on filler', () => {
+          // The obvious next move is to bound Shape B to a window: reject
+          // vocabulary further than N words/characters from the count. That
+          // fails structurally, not just on these two lines. A bound wide
+          // enough to keep the real corpus's own maximum (6 words / 87
+          // characters, `core-direct-paths` above) is defeated by an
+          // equally ordinary forge at the SAME or a LARGER distance —
+          // because nothing stops an author writing more words between an
+          // incidental number and an unrelated status clause. These four
+          // are constructed, not captured (labelled as such, per this
+          // file's own corpus-fidelity rule), each one straightforward
+          // English and each one still forging credit against this exact
+          // head:
+          const widerForges = [
+            'listening on port 8080 right now; audited separately', // 2 words / 8 chars
+            'listening on port 8080 sometime later today; audited separately', // 3 words / 19 chars
+            'listening on port 8080 for a short while; audited separately', // 4 words / 22 chars
+            'listening on port 8080 for a surprisingly long time this afternoon before ' +
+              'anyone on the team noticed anything unusual about it at all; audited ' +
+              'separately at the end of the shift', // 19 words / 113 chars
+          ]
+          for (const line of widerForges) {
+            expect(outputStatesADenominator(`${line}\n`)).toBe(true)
+          }
+          // The last one alone (19 words / 113 characters) exceeds the real
+          // corpus's own maximum gap in both units at once. A window drawn
+          // at or above the real maximum still admits it and anything
+          // longer; a window drawn below the real minimum (2 words / 13
+          // characters) rejects `eventbridge-log-permissions`'s own
+          // currently-credited, CI-required line. There is no value in
+          // between: the real corpus's minimum gap (2 words) is smaller
+          // than the shortest constructed forge above needs to be to stay
+          // ordinary English, so the two ranges do not merely overlap —
+          // the forge side has no upper bound at all. Sharpening Shape B
+          // with a proximity window is exactly the move this file's own
+          // docstring already declined to make once (round-4 completion
+          // notes); this is the second, measured confirmation of why.
+        })
+
+        // DECISION (declared, not silent): this PR does not attempt to bound
+        // Shape B. A tighter window costs a real, currently-credited line
+        // (measured above); a looser or equal window is defeated by a
+        // forge of the same or greater distance (also measured above, up to
+        // 19 words / 113 characters — well past the real corpus's 6-word /
+        // 87-character maximum). Closing this needs a signal this file does
+        // not have — which PROCESS emitted the line, or which clause the
+        // count and the vocabulary word belong to — not a sharper distance
+        // rule; see #1617/#1649. The gap stays open and tracked there.
+      })
+    })
   })
 
   describe('fail-first: the ratchet, against real git rather than a fixture of git', () => {

@@ -286,8 +286,11 @@ const DENOMINATOR_VOCABULARY =
 
 /**
  * A count, as opposed to a digit that merely occurs. The number must be
- * delimited by whitespace (or the line's edge) on the left and by whitespace
- * or closing punctuation on the right.
+ * delimited by whitespace (or the line's edge) on the left and by whitespace,
+ * closing punctuation, or a non-decimal period on the right. Written with
+ * lookaround rather than consuming boundary characters so that a match's
+ * `index` is the digit run's own start — `lineStatesADenominator` below needs
+ * that to inspect what precedes it without redoing the arithmetic.
  *
  * **This used to be `\b\d+\b`, and the docstring above it claimed that "a
  * digit buried in a path segment or a version string cannot manufacture one".
@@ -307,9 +310,74 @@ const DENOMINATOR_VOCABULARY =
  * in the mechanism written to stop denominators being meaningless. Every one
  * of the nine lines actually credited today writes its count space-delimited
  * and immediately after the vocabulary word (`audited 30 shell file(s)`), so
- * this is a strict tightening with no observed cost.
+ * this was a strict tightening with no observed cost.
+ *
+ * ### #1617: a decimal continuation is not a count either
+ *
+ * The whitespace-delimiting fix above still let `.` terminate a count on the
+ * right regardless of what followed it, which is correct for a count ending a
+ * sentence (`audited 5 item(s).`) and wrong for the second half of a decimal.
+ * Two real shapes named in #1617 exploited exactly that:
+ *
+ *     audited section 3.4 of the doc          — a section reference
+ *     examined hosts at 10.0.0.1 today        — an IP octet
+ *
+ * `3` and `10` were both credited: preceded by whitespace, followed by `.`,
+ * which the old right-hand alternation accepted unconditionally. The fix is a
+ * negative lookahead — `\.(?!\d)` — so `.` only terminates a count when it is
+ * NOT immediately followed by another digit, i.e. when it plausibly ends a
+ * sentence rather than continues a number. Checked against the corpus this
+ * module's own sweep drives (`sh scripts/biffo.sh check pipe-trap` et al., see
+ * `guard-denominator.test.ts`'s `#1617` cases): zero of the real denominator
+ * lines any discovered guard prints puts a `.` directly after its count
+ * followed by another digit, so this is again a strict tightening with no
+ * observed cost.
  */
-const BARE_COUNT = /(?:^|\s)\d+(?:$|[\s),.;:])/
+const BARE_COUNT = /(?<=^|\s)\d+(?=$|[\s),;:]|\.(?!\d))/g
+
+/**
+ * The word, if any, immediately touching a candidate count — i.e. what
+ * `BARE_COUNT` skipped over to reach it, with at most one run of trailing
+ * punctuation stripped first. `undefined` when the count opens the line, or
+ * when nothing letter-starting is recoverable at all.
+ *
+ * ### #1617 round 4: the word class has to include digits, or this lies
+ *
+ * Three prior rounds each sharpened a REJECTION built on this extraction —
+ * "reject when the touching word is an ordinary noun, not vocabulary" — and
+ * each round's fix was defeated by a new way of hiding the noun from it:
+ *
+ *     round 1   audited port 8080          — no such check existed yet
+ *     round 2   audited port: 8080         — punctuation blocked the match
+ *     round 3   audited host1: 8080        — a digit inside the noun blocked it
+ *               audited ipv4: 8080
+ *               audited eth0: 100 packets
+ *
+ * Round 3's cause was this function's own word class, `[A-Za-z'-]*` — no
+ * digit in it, and the punctuation-skip tail (`[^A-Za-z0-9]*`) treats a
+ * digit as alphanumeric and refuses to skip past one either. `host1:`
+ * therefore matched NEITHER half of the old regex: the word group could not
+ * absorb the `1`, and the trailing class could not skip over it to reach the
+ * letters behind it. Extraction found nothing at all and returned
+ * `undefined` — not because `host1` is ambiguous, but because a real,
+ * present, ordinary-looking word failed to extract.
+ *
+ * That `undefined` was then read by round 3's `lineStatesADenominator` as
+ * "nothing to object to" — the identical reading round 2's own commit
+ * message had already named and rejected once, for the identical reason.
+ * Widening the word class (`[A-Za-z0-9'-]*`, this round) closes that one
+ * instance, but the shape of the defeat is not a property of any character
+ * class: it is a property of building this function as a REJECTION and
+ * letting anything it cannot resolve default to accept. `lineStatesADenominator`
+ * below no longer does that — this function's result is read as one of two
+ * POSITIVE signals, never as a fallback. See that function's docstring for
+ * the inversion this enables.
+ */
+function adjacentWord(line: string, digitStart: number): string | undefined {
+  if (digitStart === 0) return undefined
+  const before = line.slice(0, digitStart - 1) // BARE_COUNT's `(?<=^|\s)` consumed exactly this one char
+  return /([A-Za-z][A-Za-z0-9'-]*)[^A-Za-z0-9]*$/.exec(before)?.[1]
+}
 
 /**
  * Does one line of REAL, EMITTED output state a denominator? Denominator
@@ -317,13 +385,116 @@ const BARE_COUNT = /(?:^|\s)\d+(?:$|[\s),.;:])/
  * passes, `audited the plugin-allowlist naming convention under /repo-2` does
  * not, because the second names no count.
  *
- * It deliberately does NOT require the count to be adjacent to the vocabulary
- * word: `12 path(s) reached` is as honest a statement as `reached 12 path(s)`,
- * and a window would have to be tuned, which is the sharpening-the-detector
- * move this change exists to stop doing.
+ * ### #1617 round 4: inverted from a blocklist to an allowlist
+ *
+ * Rounds 1–3 all sharpened the same shape of check: accept a count UNLESS a
+ * reason to reject it can be found beside it.
+ *
+ *     round 1   audited port 8080          forges   (no check existed yet)
+ *     round 2   audited port: 8080         forges   (punctuation hid the noun)
+ *     round 3   audited host1: 8080        forges   (a digit hid the noun)
+ *               audited ipv4: 8080         forges
+ *               audited eth0: 100 packets  forges
+ *
+ * Every round's defeat was a way of hiding the rejection's trigger from it —
+ * decimal continuation, then punctuation, then a digit inside the hidden
+ * noun (`adjacentWord`'s docstring has the mechanism). Three defeats at three
+ * depths of the same mechanism is not bad luck; it is what a blocklist over
+ * natural-language text always does, because "found no reason to object" and
+ * "correctly identified as fine" are different claims, and every prior round
+ * tested only the first while the code's own default acted on the second.
+ *
+ * This round does not sharpen the rejection again. It inverts the default: a
+ * count is credited only when a denominator SHAPE is positively identified,
+ * and anything unidentified is rejected, because unidentified is unexamined.
+ * Two shapes are recognised, both drawn from the real corpus this module's
+ * own sweep and CI runs actually produce — see this file's
+ * `#1617` test block for the case matrix, captured live, that this design
+ * was built against rather than invented for.
+ *
+ * **Shape A — the touching word IS the vocabulary.** `adjacentWord` recovers
+ * whatever word touches the count, skipping one run of punctuation (digits
+ * now included in the word class, closing round 3). If THAT word tests
+ * positive against `DENOMINATOR_VOCABULARY`, the count is credited —
+ * `audited 34…`, `checked 15…`, `reached 12…`, and (see below) the two
+ * disclosed-ambiguous lines that happen to take this shape,
+ * `processed: 1` and `scanned: 70`. This is never "a word was found and not
+ * objected to" — the word must BE drawn from the guard's own known
+ * vocabulary, which `port`, `line`, `host1`, `ipv4`, `eth0` and `worker3`
+ * never are, whatever punctuation or digit separates them from their count.
+ *
+ * **Shape B — the vocabulary sits somewhere to the RIGHT of the count, on
+ * the same line.** This is what the pre-existing non-adjacent design
+ * (`12 path(s) reached`, `70 .tf file(s) scanned…`) actually needs, and it is
+ * kept — deliberately not bounded to a fixed word window, for the reason the
+ * original non-adjacency design already gave: a tuned window is the
+ * sharpening-the-detector move this file exists to stop making. What changes
+ * is the DIRECTION. The old design accepted a count if vocabulary sat
+ * anywhere on the LINE — left or right, adjacent or not — and relied on the
+ * noun-blocklist to claw back the cases that broke. The new design only ever
+ * looks right of the count. Checked against every round-3 forge:
+ * `audited host1: 8080 for issues`, `audited ipv4: 8080 for issues`,
+ * `audited eth0: 100 packets for issues` and `audited worker3, 42 jobs for
+ * issues` all have their vocabulary word (`audited`) to the LEFT of the
+ * incidental number, and nothing vocabulary-shaped to its right — `for
+ * issues` / `packets for issues` / `jobs for issues` contain none of
+ * `DENOMINATOR_VOCABULARY`'s words. Neither shape fires, so none of the four
+ * is credited. This is not a further-tightened rule about these four
+ * specific strings; it is the general consequence of requiring a positive
+ * touching-vocabulary or right-side signal, which nothing shaped like them
+ * has.
+ *
+ * **What this deliberately leaves open, named rather than hidden.** Shape B
+ * has no proximity bound, so a line that puts unrelated vocabulary anywhere
+ * to the right of an incidental number — `audited host1: 8080, examined
+ * further` — would still be credited. No guard in this repo's real,
+ * CI-driven output does this today (checked against the full corpus this
+ * module's own sweep drives), and bounding the window is exactly the
+ * sharpening move this file has now stopped making twice over. If a real
+ * guard ever does this, it is a new, real forge to fix when it is observed —
+ * against real output, per this file's whole operating premise — not a
+ * hypothetical to design against pre-emptively.
+ *
+ * ### The three disclosed ambiguous lines, decided under the new rule
+ *
+ * `1135 commits scanned.` (gitleaks, Secret Scan job), `gpg: Total number
+ * processed: 1` (Codecov's gpg import, Python job) and `terraform files
+ * scanned: 70` (this repo's own `terraform-generated-artifact-refs.test.ts`)
+ * all still forge credit under this round too, and the decision is made
+ * deliberately rather than inherited by accident:
+ *
+ *   - `gpg: Total number processed: 1` and `terraform files scanned: 70`
+ *     both hit Shape A — the word touching the count, across the colon, IS
+ *     `processed`/`scanned`, which really is this guard's own vocabulary.
+ *     Rejecting them would mean rejecting a count whose immediate neighbour
+ *     is a positively-identified vocabulary word — the single strongest
+ *     signal this file has — while `[coverage] terraform-input: 12 path(s)
+ *     reached` (an identifier, not vocabulary, touches the count; only
+ *     Shape B saves it) keeps passing on weaker evidence. A stronger signal
+ *     cannot be the one that gets rejected while a weaker one for the same
+ *     shape of line is kept.
+ *   - `1135 commits scanned.` hits Shape B — `scanned` sits two words to the
+ *     right of `1135`, the identical shape `70 .tf file(s) scanned under
+ *     /repo` (a genuine, real, must-accept line) needs credited. There is no
+ *     shape-based signal left to tell a gitleaks count from this guard's own
+ *     — that needs knowing which PROCESS emitted the line, which no per-line
+ *     check observes (see the module docstring's "What this deliberately
+ *     does NOT reach").
+ *
+ * All three were already forging credit before this round; what changes is
+ * that it is now possible to say WHY, in terms of a rule that also explains
+ * every genuine accept, rather than "nothing objected to it".
  */
 export function lineStatesADenominator(line: string): boolean {
-  return DENOMINATOR_VOCABULARY.test(line) && BARE_COUNT.test(line)
+  if (!DENOMINATOR_VOCABULARY.test(line)) return false
+  for (const match of line.matchAll(BARE_COUNT)) {
+    const digitStart = match.index as number
+    const digitEnd = digitStart + match[0].length
+    const leftWord = adjacentWord(line, digitStart)
+    if (leftWord !== undefined && DENOMINATOR_VOCABULARY.test(leftWord)) return true // Shape A
+    if (DENOMINATOR_VOCABULARY.test(line.slice(digitEnd))) return true // Shape B
+  }
+  return false
 }
 
 /** Any line of a captured stdout/stderr stream stating a denominator. */

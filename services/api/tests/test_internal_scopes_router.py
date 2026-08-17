@@ -57,6 +57,18 @@ _NO_PERMISSION_CODE_MANIFEST: dict[str, Any] = {
     "tables": [{"name": "runs", "permissions": {"list": {"allowed": True}}}],
 }
 
+# A manifest that fails to parse: its one table entry is missing the required
+# "name" field, so PluginTableDefinition(**table_data) raises a pydantic
+# ValidationError — a ValueError subclass — inside
+# _plugin_permission_codes' try/except (issue #1644's untested branch). This
+# is a real authoring mistake (a truncated or hand-edited biffo.plugin.json),
+# not a synthetic type violation.
+_BROKEN_MANIFEST: dict[str, Any] = {
+    "name": "broken-plugin",
+    "tables": [{"permissions": {"list": {"allowed": True, "permission_code": _PERMISSION_CODE}}}],
+}
+_BROKEN_PLUGIN_ARN = "arn:aws:sts::123456789012:assumed-role/biffo-dev-plugin-broken-plugin-role/s"
+
 
 def _founder(sub: str, permissions: frozenset[str] = frozenset()) -> AuthenticatedUser:
     return AuthenticatedUser(
@@ -367,6 +379,46 @@ def test_plugin_with_no_declared_permission_codes_is_refused_even_if_caller_hold
 
 
 # ── opaque reference: no instance vocabulary crosses the seam ───────────────
+
+
+# ── malformed manifest → skipped, not a 500 (issue #1644's untested except) ─
+
+
+def test_broken_manifest_is_skipped_not_500(monkeypatch: pytest.MonkeyPatch):
+    """A plugin manifest that fails to parse — a table entry missing its
+    required "name" field, a real authoring mistake — must not take down the
+    whole entitlement scan for every installed plugin. It is skipped and
+    logged, and the plugin that owns it is left entitled to nothing (the
+    fail-closed default _plugin_permission_codes documents), rather than the
+    request 500ing.
+    """
+    monkeypatch.setattr(
+        internal_scopes,
+        "discover_plugin_manifests",
+        lambda **_: [_BROKEN_MANIFEST, _MARKETING_MANIFEST],
+    )
+
+    async def authorizer(caller, db, permission_code):  # noqa: ANN001, ARG001
+        return authz.ScopeGrant(refs=frozenset({"unit-9"}))
+
+    authz.register_scope_authorizer(authorizer)
+
+    # The broken plugin's own principal asks about a code it would need its
+    # own manifest to declare — but that manifest never parsed, so it is
+    # entitled to nothing. Refused, not a 500.
+    broken_client = _client(
+        founder=_founder("alice", permissions=frozenset({_PERMISSION_CODE})),
+        principal_arn=_BROKEN_PLUGIN_ARN,
+    )
+    resp = broken_client.get(f"/api/v1/internal/scopes?permission_code={_PERMISSION_CODE}")
+    assert resp.status_code == 403, resp.text
+
+    # The unrelated marketing plugin, discovered in the same pass, still
+    # works — one broken manifest must not take every other plugin down with
+    # it.
+    marketing_client = _client(founder=_founder("alice", permissions=frozenset({_PERMISSION_CODE})))
+    resp = marketing_client.get(f"/api/v1/internal/scopes?permission_code={_PERMISSION_CODE}")
+    assert resp.status_code == 200, resp.text
 
 
 def test_listing_response_shape_carries_only_opaque_fields():

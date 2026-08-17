@@ -203,6 +203,21 @@ import ts from 'typescript'
  * check that never asks how the resolution was computed. `resolveBaselineBase`
  * returns the ref alongside the commit precisely so the caller can check both.
  *
+ * **"Must not be HEAD" is a `pull_request` rule, not a universal one (#1629).**
+ * On a **push** run there is no PR head distinct from the base at all —
+ * `GITHUB_BASE_REF` is unset, resolution falls back to `origin/dev`, and right
+ * after this branch's own merge `origin/dev` **is** HEAD. That is the expected
+ * state on every push-to-dev run, not the attack, and rejecting it made this
+ * check fail on `dev`'s own tip permanently. `resolveBaselineBase` now asks
+ * `isPullRequestRun` before deciding what base==HEAD means: on `push` it
+ * substitutes HEAD's first parent — the commit `dev` carried immediately
+ * before this merge — and reports that substitution on `viaPushFirstParent`;
+ * on `pull_request` the substitution never runs and base==HEAD is rejected
+ * exactly as it always was. The root-of-trust checks below are unchanged by
+ * this — they still verify whatever commit `resolveBaselineBase` returns, so
+ * a push run that (for whatever reason) still resolves to HEAD is still
+ * caught by the same "must not be HEAD" check, not silently waved through.
+ *
  * **What still is not bound, stated plainly.** `guard-denominator.test.ts`
  * itself runs from the head checkout and could simply be edited to skip all of
  * the above — as could `vitest.config.ts`, `package.json`, or `ci.yml`, since
@@ -673,11 +688,41 @@ export function integrationRefCandidates(env: NodeJS.ProcessEnv = process.env): 
   ]
 }
 
+/**
+ * True on a `pull_request` (or `pull_request_target`) run — the only triggers
+ * for which the Actions runner sets `GITHUB_BASE_REF` at all. Every other
+ * trigger this repo's `ci.yml` wires (`push`, `merge_group`,
+ * `workflow_dispatch`) leaves it unset, same as an ad-hoc local run.
+ *
+ * The distinction matters because "base resolved to HEAD" means two different
+ * things depending on it (#1629). On `pull_request` the base and the PR's own
+ * tip are always distinct refs, so the two coinciding is the round-2 attack
+ * signature and stays rejected outright. On `push`, `origin/dev` legitimately
+ * **is** HEAD immediately after this branch's own merge — there is no second
+ * ref for it to differ from — so treating that as an attack rejects every
+ * push-to-dev run forever, which is exactly the bug this function exists to
+ * let `resolveBaselineBase` distinguish from the genuine attack.
+ */
+export function isPullRequestRun(env: NodeJS.ProcessEnv = process.env): boolean {
+  const base = env['GITHUB_BASE_REF']
+  return base !== undefined && base !== ''
+}
+
 export interface BaselineBase {
   /** The merge-base commit this branch is judged against. */
   commit: string
   /** The integration ref it was derived from — checkable by the caller. */
   ref: string
+  /**
+   * True when `commit` is NOT the raw merge-base result but that result's own
+   * first parent, substituted because the raw result coincided with HEAD on a
+   * **push** run (#1629). Always `false` on a `pull_request` run: there the
+   * substitution never applies, and base==HEAD is left for the caller's
+   * root-of-trust check to reject exactly as before. Named on the result
+   * (rather than left implicit) so a caller can state it in the log instead
+   * of the substitution happening silently.
+   */
+  viaPushFirstParent: boolean
 }
 
 /**
@@ -695,15 +740,55 @@ export interface BaselineBase {
  * inside this function prevents that, because the attacker rewrites the
  * function. What defeats it is checking the answer against a property of the
  * repository the branch does not control.
+ *
+ * ### push vs pull_request, and why base==HEAD is not one signal (#1629)
+ *
+ * The raw merge-base computation below legitimately returns HEAD itself on a
+ * **push** run: `GITHUB_BASE_REF` is unset, resolution falls back to
+ * `origin/dev`, and right after this branch's own merge `origin/dev` **is**
+ * HEAD — there was never a second, distinct ref for it to differ from. That is
+ * indistinguishable, byte-for-byte, from the round-2 attack (a rewritten
+ * resolver pointing base at the PR's own tip) unless the trigger is known.
+ * `isPullRequestRun` supplies that: on `push`, when the raw result equals
+ * HEAD, this substitutes HEAD's own first parent — the commit `dev` carried
+ * immediately before this branch's merge — as the base instead, which is
+ * exactly what "compare against the merge commit's first parent" means for a
+ * squash-merged integration branch. `viaPushFirstParent` records that this
+ * happened so the caller can say so. On `pull_request` the substitution never
+ * runs, so base==HEAD there is left exactly as it was: the caller's
+ * root-of-trust check still rejects it, unchanged.
+ *
+ * If no parent exists (the repository's root commit — not a case any real
+ * `dev` push can hit, since `dev` is never a single-commit branch in
+ * practice) the substitution is skipped and the raw HEAD-equal result is
+ * returned as before, so the caller's existing rejection still fires rather
+ * than silently trusting an unverifiable fallback.
  */
-export function resolveBaselineBase(repoRoot: string): BaselineBase | null {
-  for (const ref of integrationRefCandidates()) {
+export function resolveBaselineBase(
+  repoRoot: string,
+  env: NodeJS.ProcessEnv = process.env,
+): BaselineBase | null {
+  for (const ref of integrationRefCandidates(env)) {
     const resolved = git(repoRoot, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`])
     if (resolved === null || resolved.trim() === '') continue
     const mergeBase = git(repoRoot, ['merge-base', 'HEAD', ref])
     // A repo with no shared history (a fixture built from two roots) still
     // gets a usable comparison from the ref itself.
-    return { commit: (mergeBase ?? resolved).trim(), ref }
+    let commit = (mergeBase ?? resolved).trim()
+    let viaPushFirstParent = false
+
+    if (!isPullRequestRun(env)) {
+      const headCommit = git(repoRoot, ['rev-parse', '--verify', '--quiet', 'HEAD'])?.trim()
+      if (headCommit !== undefined && headCommit !== '' && commit === headCommit) {
+        const parent = git(repoRoot, ['rev-parse', '--verify', '--quiet', 'HEAD^'])?.trim()
+        if (parent !== undefined && parent !== '') {
+          commit = parent
+          viaPushFirstParent = true
+        }
+      }
+    }
+
+    return { commit, ref, viaPushFirstParent }
   }
   return null
 }

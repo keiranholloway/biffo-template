@@ -188,7 +188,11 @@ describe('guard denominator sweep (#1363): a new or modified gate cannot merge w
     console.log(
       `guard-denominator: base ${base?.commit.slice(0, 12) ?? 'UNRESOLVED'} via ` +
         `${base?.ref ?? 'n/a'}; HEAD ${headSha?.slice(0, 12) ?? 'unknown'}; mechanism from ` +
-        `${mechanismProvenance}`,
+        `${mechanismProvenance}; trigger ${head.isPullRequestRun() ? 'pull_request' : 'push (or local)'}` +
+        (base?.viaPushFirstParent === true
+          ? '; push-fallback USED — base resolved to HEAD (expected right after this branch’s ' +
+            'own merge), so its first parent was compared against instead of rejecting (#1629)'
+          : '; push-fallback not used'),
     )
     expect(
       rootOfTrustError,
@@ -448,6 +452,112 @@ describe('guard denominator sweep (#1363): a new or modified gate cannot merge w
       // A ref outside the list is what a rewritten resolver would need in
       // order to point the comparison at something it controls.
       expect(head.integrationRefCandidates({})).not.toContain('HEAD')
+    })
+  })
+
+  describe('push vs pull_request: base==HEAD is expected on push, still rejected on pull_request (#1629)', () => {
+    /** `dev` with one commit, then a second commit ON `dev` ITSELF — the shape
+     * of a squash-merge PR landing: one new commit whose parent is the branch's
+     * own previous tip. `origin/dev` is pointed at the same tip a real push
+     * run's checkout would already see it at (the push already happened by the
+     * time CI runs). No `topic` branch: a push-triggered run checks out `dev`
+     * directly, HEAD IS `dev`. */
+    const makePushLikeRepo = (): { repo: string; devSha: string; parentSha: string } => {
+      const repo = makeTmpDir('denominator-push-fallback')
+      const g = (args: string[]): string =>
+        execFileSync('git', ['-C', repo, ...args], {
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'ignore'],
+        })
+      g(['init', '-q', '-b', 'dev'])
+      g(['config', 'user.email', 'test@example.com'])
+      g(['config', 'user.name', 'Test'])
+      writeFileSync(join(repo, 'file.txt'), 'one\n')
+      g(['add', '-A'])
+      g(['commit', '-q', '-m', 'pre-existing dev history'])
+      const parentSha = g(['rev-parse', 'HEAD']).trim()
+      writeFileSync(join(repo, 'file.txt'), 'two\n')
+      g(['commit', '-qam', 'squash-merged PR lands on dev'])
+      const devSha = g(['rev-parse', 'HEAD']).trim()
+      // What CI's fetch would already show: origin/dev == the just-pushed tip.
+      g(['update-ref', 'refs/remotes/origin/dev', devSha])
+      return { repo, devSha, parentSha }
+    }
+
+    it('1. PUSH run (GITHUB_BASE_REF unset, base==HEAD): first parent used, not rejected', () => {
+      const { repo, devSha, parentSha } = makePushLikeRepo()
+      expect(head.isPullRequestRun({})).toBe(false)
+
+      const result = head.resolveBaselineBase(repo, {})
+      expect(result).not.toBeNull()
+      const b = result as BaselineBase
+      // Fail-first evidence: the RAW merge-base really is HEAD here — this is
+      // not a fixture where the substitution is vacuous.
+      const rawMergeBase = execFileSync('git', ['-C', repo, 'merge-base', 'HEAD', 'origin/dev'], {
+        encoding: 'utf8',
+      }).trim()
+      expect(rawMergeBase).toBe(devSha)
+      // What the fixed resolver returns instead:
+      expect(b.viaPushFirstParent).toBe(true)
+      expect(b.commit).toBe(parentSha)
+      expect(b.commit).not.toBe(devSha)
+      // And the substituted commit is still a real, verifiable ancestor of
+      // dev — the root-of-trust check downstream still has something to bind.
+      expect(head.baseCommitIsContainedIn(repo, b.commit, b.ref)).toBe(true)
+    })
+
+    it('2. PULL_REQUEST run with a genuinely distinct base: passes exactly as today', () => {
+      const repo = makeTmpDir('denominator-pr-legit')
+      const g = (args: string[]): string =>
+        execFileSync('git', ['-C', repo, ...args], {
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'ignore'],
+        })
+      g(['init', '-q', '-b', 'dev'])
+      g(['config', 'user.email', 'test@example.com'])
+      g(['config', 'user.name', 'Test'])
+      writeFileSync(join(repo, 'file.txt'), 'one\n')
+      g(['add', '-A'])
+      g(['commit', '-q', '-m', 'dev tip'])
+      const devSha = g(['rev-parse', 'HEAD']).trim()
+      g(['update-ref', 'refs/remotes/origin/dev', devSha])
+      g(['checkout', '-q', '-b', 'topic'])
+      writeFileSync(join(repo, 'file.txt'), 'two\n')
+      g(['commit', '-qam', 'PR work, not yet merged'])
+      const topicSha = g(['rev-parse', 'HEAD']).trim()
+      expect(topicSha).not.toBe(devSha)
+
+      expect(head.isPullRequestRun({ GITHUB_BASE_REF: 'dev' })).toBe(true)
+      const result = head.resolveBaselineBase(repo, { GITHUB_BASE_REF: 'dev' })
+      expect(result).not.toBeNull()
+      const b = result as BaselineBase
+      expect(b.viaPushFirstParent).toBe(false)
+      expect(b.commit).toBe(devSha)
+      expect(b.commit).not.toBe(topicSha)
+      expect(head.baseCommitIsContainedIn(repo, b.commit, b.ref)).toBe(true)
+    })
+
+    it('3. THE ATTACK: pull_request run where base resolves to HEAD — still REJECTED, no fallback', () => {
+      const { repo, devSha } = makePushLikeRepo()
+      // Checked out AT dev's own tip (HEAD === devSha) with GITHUB_BASE_REF
+      // set — the exact round-2 shape: a base resolution that coincides with
+      // the branch's own HEAD, this time under pull_request semantics where
+      // that coincidence is never innocent.
+      expect(head.isPullRequestRun({ GITHUB_BASE_REF: 'dev' })).toBe(true)
+
+      const result = head.resolveBaselineBase(repo, { GITHUB_BASE_REF: 'dev' })
+      expect(result).not.toBeNull()
+      const b = result as BaselineBase
+      // The load-bearing assertion: pull_request mode never substitutes, so
+      // the caller's "must not be HEAD" check still has base===HEAD to reject.
+      expect(b.viaPushFirstParent).toBe(false)
+      expect(b.commit).toBe(devSha)
+      const headCommit = execFileSync('git', ['-C', repo, 'rev-parse', 'HEAD'], {
+        encoding: 'utf8',
+      }).trim()
+      expect(b.commit).toBe(headCommit)
+      // This is precisely the condition guard-denominator.test.ts's own
+      // beforeAll rejects on: `headSha !== null && base.commit === headSha`.
     })
   })
 

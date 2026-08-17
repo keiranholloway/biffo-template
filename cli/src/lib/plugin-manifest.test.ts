@@ -311,13 +311,14 @@ describe('validateManifest — duplicate names', () => {
 })
 
 describe('validateManifest — permissions (ADR-0004)', () => {
-  const DENIED = { allowed: false, required_role: [] }
+  const DENIED = { allowed: false, required_role: [], permission_code: '' }
 
   it('defaults an absent permissions block to all five ops fully denied', () => {
     // Mirrors plugin_table.py's TablePermissions default_factory semantics:
     // TablePermissions().model_dump() yields every op {allowed:false,
-    // required_role:[]}. This asserts the exact zod-parsed equivalent so the
-    // nested `.default({})` handling is pinned, not assumed.
+    // required_role:[], permission_code:''}. This asserts the exact
+    // zod-parsed equivalent so the nested `.default({})` handling is pinned,
+    // not assumed.
     const manifest = validateManifest(validManifest())
     expect(manifest.tables[0]!.permissions).toEqual({
       list: DENIED,
@@ -337,7 +338,7 @@ describe('validateManifest — permissions (ADR-0004)', () => {
     const parsed = validateManifest(manifest)
     expect(parsed.tables[0]!.permissions).toEqual({
       list: DENIED,
-      read: { allowed: true, required_role: ['viewer'] },
+      read: { allowed: true, required_role: ['viewer'], permission_code: '' },
       create: DENIED,
       update: DENIED,
       delete: DENIED,
@@ -350,7 +351,11 @@ describe('validateManifest — permissions (ADR-0004)', () => {
       list: { allowed: true },
     }
     const parsed = validateManifest(manifest)
-    expect(parsed.tables[0]!.permissions.list).toEqual({ allowed: true, required_role: [] })
+    expect(parsed.tables[0]!.permissions.list).toEqual({
+      allowed: true,
+      required_role: [],
+      permission_code: '',
+    })
   })
 
   it('rejects an unknown operation key (e.g. "delet")', () => {
@@ -365,6 +370,40 @@ describe('validateManifest — permissions (ADR-0004)', () => {
     const manifest = validManifest()
     ;(manifest.tables[0] as Record<string, unknown>).permissions = {
       read: { allowed: true, role: ['viewer'] },
+    }
+    expect(() => validateManifest(manifest)).toThrow()
+  })
+
+  // --- permission_code (#1606) ---------------------------------------------
+
+  it('accepts a declared permission_code and defaults it to "" when omitted', () => {
+    const manifest = validManifest()
+    ;(manifest.tables[0] as Record<string, unknown>).permissions = {
+      read: { allowed: true, permission_code: 'crm.lead.read' },
+    }
+    const parsed = validateManifest(manifest)
+    expect(parsed.tables[0]!.permissions.read).toEqual({
+      allowed: true,
+      required_role: [],
+      permission_code: 'crm.lead.read',
+    })
+    // The other four ops still default permission_code to '' — the
+    // backward-compatibility claim for every manifest that doesn't use it.
+    expect(parsed.tables[0]!.permissions.list.permission_code).toBe('')
+  })
+
+  it('rejects a typo of permission_code (e.g. "permision_code")', () => {
+    const manifest = validManifest()
+    ;(manifest.tables[0] as Record<string, unknown>).permissions = {
+      read: { allowed: true, permision_code: 'crm.lead.read' },
+    }
+    expect(() => validateManifest(manifest)).toThrow()
+  })
+
+  it('does not accept allowed_principals — that axis is deliberately not mirrored (ADR-0014 §7)', () => {
+    const manifest = validManifest()
+    ;(manifest.tables[0] as Record<string, unknown>).permissions = {
+      read: { allowed: true, allowed_principals: ['system:agent-runtime'] },
     }
     expect(() => validateManifest(manifest)).toThrow()
   })

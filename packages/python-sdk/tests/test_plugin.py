@@ -694,9 +694,52 @@ class TestTablePermissions:
 
         json.dumps(registration)  # must not raise
         perms = registration["tables"][0]["permissions"]
-        assert perms["list"] == {"allowed": True, "required_role": []}
-        assert perms["delete"] == {"allowed": True, "required_role": ["admin"]}
-        assert perms["read"] == {"allowed": False, "required_role": []}
+        assert perms["list"] == {"allowed": True, "required_role": [], "permission_code": ""}
+        assert perms["delete"] == {
+            "allowed": True,
+            "required_role": ["admin"],
+            "permission_code": "",
+        }
+        assert perms["read"] == {"allowed": False, "required_role": [], "permission_code": ""}
+
+    # --- permission_code (ADR-0004 second axis, #1606) -----------------------
+    # Core (services/api/src/api/models/plugin_table.py) already carried this
+    # field and already enforced it (dependencies.py's require_crud_permission
+    # ANDs it with required_role) — #889/#896. #1606 was that a plugin manifest
+    # had no way to *declare* it: this SDK's PermissionRule, and the CLI's zod
+    # mirror, were the one place the field did not exist. These tests pin the
+    # SDK half; cli/src/lib/plugin-manifest.test.ts pins the zod half — #1362
+    # is the shape where the two disagree.
+
+    def test_permission_code_defaults_to_empty_so_existing_manifests_are_unchanged(self):
+        """Every manifest in the estate already omits permission_code. If the
+        default were anything but "", this would silently narrow access on
+        every one of them (the backward-compatibility half of #1606)."""
+        rule = PermissionRule(allowed=True)
+        assert rule.permission_code == ""
+
+    def test_permission_code_is_declarable_without_loosening_extra_forbid(self):
+        """A plugin author can now declare the second axis — and only that.
+
+        extra="forbid" stays, so the field has to exist upstream (which is the
+        whole point of #1606); a typo'd key must still fail loudly on this
+        security surface. Validated from a dict, not kwargs, because that is
+        how a manifest actually arrives (json.load), and is the only form a
+        typo can reach the model through at runtime.
+        """
+        rule = PermissionRule.model_validate({"allowed": True, "permission_code": "crm.lead.read"})
+        assert rule.permission_code == "crm.lead.read"
+        with pytest.raises(ValidationError):
+            PermissionRule.model_validate({"allowed": True, "permision_code": "typo"})
+
+    def test_allowed_principals_is_still_not_declarable(self):
+        """ADR-0014 §7's agent read-scope ceiling stays Core-only (per
+        plugin_table.py's module docstring) — adding permission_code must not
+        have accidentally widened extra="forbid" into accepting it too."""
+        with pytest.raises(ValidationError):
+            PermissionRule.model_validate(
+                {"allowed": True, "allowed_principals": ["system:agent-runtime"]}
+            )
 
 
 # --- load_manifest tests ---

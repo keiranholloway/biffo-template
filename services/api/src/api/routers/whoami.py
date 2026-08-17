@@ -52,6 +52,7 @@ empties, turning every scoped role into "no access".
 from fastapi import APIRouter, Depends
 
 from ..middleware.auth import AuthenticatedUser, require_auth
+from ..permissions import get_permissions_registry, unreachable_permission_codes
 
 router = APIRouter(tags=["auth"])
 
@@ -59,7 +60,7 @@ router = APIRouter(tags=["auth"])
 @router.get("/whoami")
 async def whoami(caller: AuthenticatedUser = Depends(require_auth)) -> dict:
     """Return the authenticated caller's identity and effective authorization."""
-    return {
+    result: dict = {
         "sub": caller.sub,
         "email": caller.email,
         "username": caller.username,
@@ -80,3 +81,28 @@ async def whoami(caller: AuthenticatedUser = Depends(require_auth)) -> dict:
         "roles": [],
         "marketplace_role": None,
     }
+
+    # #1606's diagnostic requirement: a way to ask "which permission_codes does
+    # a plugin declare that this instance does not define" in one call, rather
+    # than a debugging session against a table that is silently 403 for
+    # everyone. This is the one deliberate exception to "everything here is
+    # the caller's own context" (see the module docstring) — it is
+    # instance-wide, not caller-scoped, so it rides along only for a platform
+    # admin rather than every authenticated caller. See
+    # `permissions.unreachable_permission_codes` for exactly what it can and
+    # cannot prove.
+    #
+    # Three fields, not one (#1636): `_checked` and `_provider` are always
+    # present so a reader never has to infer "was this even checked?" from the
+    # shape of the findings list. When the active IdentityProvider is not
+    # statically decidable, `unreachable_permission_codes` is `None` rather
+    # than `[]` — deliberately NOT the same value "checked, clean" produces,
+    # because that collision is exactly the defect this fixes: a `[]` a
+    # platform admin cannot distinguish from a genuinely healthy deployment.
+    if caller.is_platform_admin:
+        report = unreachable_permission_codes(get_permissions_registry())
+        result["unreachable_permission_codes"] = report.findings if report.checked else None
+        result["unreachable_permission_codes_checked"] = report.checked
+        result["unreachable_permission_codes_provider"] = report.provider
+
+    return result

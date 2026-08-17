@@ -83,10 +83,24 @@ const IndexDefinitionSchema = z.object({
 // mirrors the Pydantic `extra="forbid"` so a typo'd key (e.g. `role` for
 // `required_role`) fails loudly rather than being silently ignored on a
 // security surface.
+//
+// `permission_code` is ADR-0004's second axis (#889/#896): a DB-held
+// permission code rather than a Cognito group, resolved per request through
+// the ADR-0012 identity seam. Core already enforced it (`dependencies.py`'s
+// `require_crud_permission` ANDs it with `required_role`) and Core's own
+// PermissionRule already carried it — a plugin manifest was the one place
+// that could not declare it, which was the entirety of #1606 ("a plugin
+// manifest cannot express a read narrower than 'any authenticated caller'").
+// Empty by default: every manifest in the estate already omits this key, and
+// an empty string leaves `required_role`-only authorization byte-for-byte
+// unchanged. `allowed_principals` (ADR-0014 §7) stays unmirrored — see the
+// exception documented in plugin_table.py's module docstring, which this
+// schema's `.strict()` enforces by simply having no such key to accept.
 const PermissionRuleSchema = z
   .object({
     allowed: z.boolean().default(false),
     required_role: z.array(z.string()).default([]),
+    permission_code: z.string().default(''),
   })
   .strict()
 

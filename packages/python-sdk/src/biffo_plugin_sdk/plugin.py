@@ -71,6 +71,32 @@ class PermissionRule(BaseModel):
     Tenant scoping (ADR-0001) is applied unconditionally by the generic layer
     regardless of this rule and is deliberately not configurable here.
 
+    ``permission_code`` is ADR-0004's second axis (#889/#896): a DB-held
+    permission code, resolved per request through the ADR-0012 identity seam
+    into ``AuthenticatedUser.permissions``, rather than a Cognito group. It was
+    already reachable from a core table's own ``__crud_permissions__`` and from
+    Core's own ``PermissionRule`` (``services/api/src/api/models/plugin_table.py``)
+    but not from a plugin manifest — #1606, a manifest could not express any
+    read narrower than "any authenticated caller" because the only axis it
+    could declare was ``required_role``, and an empty one authorises everyone.
+    Empty by default, which preserves ``required_role``-only authorization
+    exactly (issue #1606's own backward-compatibility requirement — every
+    manifest already shipped omits this key).
+
+    A code this instance never grants to anyone denies the operation to
+    *every* caller rather than falling back to "any authenticated caller" —
+    the enforcement (``require_crud_permission`` in ``dependencies.py``) ANDs
+    ``permission_code`` with ``required_role``, so a permission_code nobody
+    holds simply never passes, regardless of role. That is #1606's chosen
+    fail-closed behaviour (Option A), not something this SDK has to implement
+    separately.
+
+    ``allowed_principals`` (ADR-0014 §7's agent read-scope ceiling) is
+    deliberately **not** mirrored here, for the same reason Core's own
+    docstring gives: it is a service-principal axis evaluated only for
+    ADR-0009 service principals, never for a Cognito-authenticated caller, and
+    a plugin manifest has no legitimate reason to set it.
+
     ``extra="forbid"`` so a typo'd key (e.g. ``role`` for ``required_role``)
     fails loudly rather than being silently ignored on a security surface.
     """
@@ -84,6 +110,17 @@ class PermissionRule(BaseModel):
     required_role: list[str] = Field(
         default_factory=list,
         description="Any-of role allow-list; empty means any authenticated caller.",
+    )
+    permission_code: str = Field(
+        default="",
+        description=(
+            "ADR-0004 second authorization axis: a DB-held permission code the "
+            "caller must hold, resolved per request through the ADR-0012 "
+            "identity seam into AuthenticatedUser.permissions. Empty by "
+            "default, which preserves role-only authorization exactly. A code "
+            "this instance never grants denies the operation to every caller "
+            "(fail-closed), never 'any authenticated caller'."
+        ),
     )
 
 

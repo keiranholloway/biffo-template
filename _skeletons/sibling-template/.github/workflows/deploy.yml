@@ -141,9 +141,58 @@ jobs:
             --body "$(terraform output -raw lambda_function_name)" \
             --env "${{ needs.resolve-environment.outputs.environment }}"
 
+  # A sibling's deploy is structurally incapable of seeing core's deploy
+  # state: this workflow runs resolve-environment -> deploy-infra ->
+  # deploy-app with no step that reads anything about core, and its only
+  # post-deploy proof is its OWN Lambda health and its OWN CDN route. Merge
+  # ordering does not fix it either — in the recorded incident the core PR
+  # had already merged and the core deploy simply sat in the runner queue
+  # while the sibling went live first, serving requests against routes core
+  # had not shipped yet (#1604).
+  #
+  # Core publishes a DIGEST of its route table — never the surface itself,
+  # /openapi.json stays 401-gated — to the existing public .well-known/
+  # channel (scripts/route-table-digest.py in the core repo). This job asks
+  # that digest "is core at or past the revision this sibling needs" BEFORE
+  # deploy-app runs, and fails the whole workflow if it cannot say yes.
+  #
+  # Runs in parallel with deploy-infra (both depend only on
+  # resolve-environment) so it costs no extra wall-clock on a deploy that
+  # passes; deploy-app then needs both, so it never starts until this job
+  # has actually cleared.
+  preflight-core-revision:
+    name: Preflight — core route revision
+    needs: resolve-environment
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    environment: ${{ needs.resolve-environment.outputs.environment }}
+    if: vars.SIBLING_DEPLOY_ENABLED == 'true'
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - name: Core-revision preflight
+        # scripts/core-revision-preflight.sh does the actual check; see its
+        # own header for the full reasoning (why a monotonic revision rather
+        # than the hash, why absence fails closed rather than being treated
+        # as satisfied — the #1363 fail-open class, on the deploy path,
+        # would fire during exactly the incident this exists to prevent).
+        #
+        # CORE_MIN_ROUTE_REVISION is how THIS sibling declares which core
+        # revision its code depends on — set by hand as a per-environment
+        # repo variable, the same way a version pin is set: after merging
+        # the core PR your code needs, read the `revision` core published
+        # for that deploy from /.well-known/route-revision.json and record
+        # it here. Unset means "this sibling depends on nothing new from
+        # core" and the check is skipped — that is the correct default for
+        # a sibling that has never declared a dependency, not a fail-open:
+        # nothing here is being checked FOR IT to pass, there is simply
+        # nothing to check yet.
+        env:
+          CORE_MIN_ROUTE_REVISION: ${{ vars.CORE_MIN_ROUTE_REVISION }}
+          CORE_ROUTE_REVISION_URL: ${{ vars.CORE_PORTAL_URL }}/.well-known/route-revision.json
+        run: sh scripts/core-revision-preflight.sh
+
   deploy-app:
     name: Deploy app
-    needs: [resolve-environment, deploy-infra]
+    needs: [resolve-environment, deploy-infra, preflight-core-revision]
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     environment: ${{ needs.resolve-environment.outputs.environment }}
     steps:
@@ -345,7 +394,7 @@ jobs:
   # and "never configured" are different facts and only one of them is a defect:
   deploy-status:
     name: Deploy status
-    needs: [resolve-environment, deploy-infra, deploy-app]
+    needs: [resolve-environment, deploy-infra, preflight-core-revision, deploy-app]
     if: always()
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     steps:
@@ -353,9 +402,10 @@ jobs:
         env:
           ENABLED: ${{ vars.SIBLING_DEPLOY_ENABLED }}
           INFRA: ${{ needs.deploy-infra.result }}
+          PREFLIGHT: ${{ needs.preflight-core-revision.result }}
           APP: ${{ needs.deploy-app.result }}
         run: |
-          echo "SIBLING_DEPLOY_ENABLED='${ENABLED}'  deploy-infra=${INFRA}  deploy-app=${APP}"
+          echo "SIBLING_DEPLOY_ENABLED='${ENABLED}'  deploy-infra=${INFRA}  preflight-core-revision=${PREFLIGHT}  deploy-app=${APP}"
 
           if [ "${ENABLED}" = "false" ]; then
             echo "::notice::Deploys are deliberately disabled for this repo (SIBLING_DEPLOY_ENABLED=false). Nothing was deployed, by choice."
@@ -368,10 +418,14 @@ jobs:
           fi
 
           # A real failure already makes the run red for the right reason, and
-          # `deploy-app` needs `deploy-infra` — so a failed infra job SKIPS the
-          # app job. Reporting that skip as "deployed nothing" would bury the
-          # actual cause under a second, wrong error. Defer to the real one.
-          case "${INFRA}:${APP}" in
+          # `deploy-app` needs `deploy-infra` AND `preflight-core-revision` —
+          # so a failed infra job or a preflight that blocked a stale sibling
+          # SKIPS the app job. Reporting that skip as "deployed nothing" would
+          # bury the actual cause (visible on the failed job itself, e.g.
+          # core-revision-preflight.sh's own ::error:: naming the required
+          # and actual revisions, #1604) under a second, vaguer error. Defer
+          # to the real one.
+          case "${INFRA}:${PREFLIGHT}:${APP}" in
             *failure*|*cancelled*)
               echo "A deploy job failed or was cancelled; that failure is the run's result. Not adding a second error."
               exit 0
@@ -380,7 +434,7 @@ jobs:
 
           # Enabled — the jobs were meant to run. 'skipped' here means a gate
           # upstream of them suppressed the work while the run still went green.
-          for pair in "deploy-infra:${INFRA}" "deploy-app:${APP}"; do
+          for pair in "deploy-infra:${INFRA}" "preflight-core-revision:${PREFLIGHT}" "deploy-app:${APP}"; do
             job="${pair%%:*}"
             result="${pair#*:}"
             if [ "${result}" = "skipped" ]; then
@@ -389,4 +443,4 @@ jobs:
             fi
           done
 
-          echo "Deploy jobs ran (infra=${INFRA}, app=${APP})."
+          echo "Deploy jobs ran (infra=${INFRA}, preflight=${PREFLIGHT}, app=${APP})."

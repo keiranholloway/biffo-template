@@ -336,96 +336,47 @@ const DENOMINATOR_VOCABULARY =
 const BARE_COUNT = /(?<=^|\s)\d+(?=$|[\s),;:]|\.(?!\d))/g
 
 /**
- * The word, if any, immediately touching a candidate count's mandatory
- * leading whitespace — i.e. what `BARE_COUNT` skipped over to reach it.
- * `undefined` when nothing precedes (the count opens the line) or what
- * precedes is punctuation rather than a word.
+ * The word, if any, immediately touching a candidate count — i.e. what
+ * `BARE_COUNT` skipped over to reach it, with at most one run of trailing
+ * punctuation stripped first. `undefined` when the count opens the line, or
+ * when nothing letter-starting is recoverable at all.
  *
- * `undefined` used to be treated by `lineStatesADenominator` as standing for
- * one thing — "there is nothing here to object to" — and it was actually
- * standing for two: a genuinely non-adjacent count (line start, or a colon/
- * comma with no word further back at all) AND a count whose noun is a single
- * punctuation character away from this function's view. `precedingWord`
- * itself is unchanged and still returns `undefined` for both; the second
- * case now gets a further look from `hiddenOrdinaryNoun` below before
- * `lineStatesADenominator` accepts it. See that function's docstring for the
- * #1617 round-2 finding this split exists to close.
+ * ### #1617 round 4: the word class has to include digits, or this lies
+ *
+ * Three prior rounds each sharpened a REJECTION built on this extraction —
+ * "reject when the touching word is an ordinary noun, not vocabulary" — and
+ * each round's fix was defeated by a new way of hiding the noun from it:
+ *
+ *     round 1   audited port 8080          — no such check existed yet
+ *     round 2   audited port: 8080         — punctuation blocked the match
+ *     round 3   audited host1: 8080        — a digit inside the noun blocked it
+ *               audited ipv4: 8080
+ *               audited eth0: 100 packets
+ *
+ * Round 3's cause was this function's own word class, `[A-Za-z'-]*` — no
+ * digit in it, and the punctuation-skip tail (`[^A-Za-z0-9]*`) treats a
+ * digit as alphanumeric and refuses to skip past one either. `host1:`
+ * therefore matched NEITHER half of the old regex: the word group could not
+ * absorb the `1`, and the trailing class could not skip over it to reach the
+ * letters behind it. Extraction found nothing at all and returned
+ * `undefined` — not because `host1` is ambiguous, but because a real,
+ * present, ordinary-looking word failed to extract.
+ *
+ * That `undefined` was then read by round 3's `lineStatesADenominator` as
+ * "nothing to object to" — the identical reading round 2's own commit
+ * message had already named and rejected once, for the identical reason.
+ * Widening the word class (`[A-Za-z0-9'-]*`, this round) closes that one
+ * instance, but the shape of the defeat is not a property of any character
+ * class: it is a property of building this function as a REJECTION and
+ * letting anything it cannot resolve default to accept. `lineStatesADenominator`
+ * below no longer does that — this function's result is read as one of two
+ * POSITIVE signals, never as a fallback. See that function's docstring for
+ * the inversion this enables.
  */
-function precedingWord(line: string, digitStart: number): string | undefined {
+function adjacentWord(line: string, digitStart: number): string | undefined {
   if (digitStart === 0) return undefined
-  const beforeWhitespace = digitStart - 1 // BARE_COUNT's `(?<=^|\s)` consumed exactly this one char
-  return /([A-Za-z][A-Za-z'-]*)$/.exec(line.slice(0, beforeWhitespace))?.[1]
-}
-
-/**
- * A `[a-z]`-only, unhyphenated word — the shape of an ordinary English
- * locator noun (`port`, `line`, `section`) as opposed to a technical
- * identifier (`terraform-input`, `findModuleTerraformFiles`, a snake_case
- * name), which routinely carries a hyphen or an internal capital because it
- * names a scanner, a resource type, or a function. See
- * `hiddenOrdinaryNoun`'s docstring for why this is the line drawn between
- * "reject" and "leave ambiguous" rather than a broader one.
- */
-const PLAIN_LOWERCASE_WORD = /^[a-z]+$/
-
-/**
- * #1617 round 2: a single punctuation character between the noun and the
- * count defeated `precedingWord` entirely — `audited port 8080 for issues`
- * was correctly rejected while `audited port: 8080 for issues` and
- * `audited port, 8080 for issues` forged credit, on nothing more than a
- * character `precedingWord` was never asked to see past. The root cause
- * named in the issue is not the regex, it is the DEFAULT: `undefined` from
- * `precedingWord` was being read as "nothing to object to" when it actually
- * meant "I could not identify the preceding word" — an unexamined case
- * masquerading as a fine one, the exact class this guard exists to police.
- *
- * This function draws the distinction `precedingWord` cannot: strip the
- * trailing run of punctuation it stopped at, and look for a word behind it.
- * Finding one does NOT by itself flip the verdict — `lineStatesADenominator`
- * still treats it as unresolvable (i.e. accepts) when that word is
- * vocabulary itself (`gpg: Total number processed: 1`,
- * `terraform files scanned: 70` — both real, both still forge, both stay
- * exactly as ambiguous as before, because "processed" and "scanned" ARE the
- * vocabulary). It is rejected only when the recovered word is BOTH
- * non-vocabulary AND shaped like an ordinary noun rather than an identifier
- * (`PLAIN_LOWERCASE_WORD`) — because real denominator lines routinely put a
- * colon between an identifier and a count (`[coverage]
- * cognito-invite-template-guard.findModuleTerraformFiles: 33 path(s)
- * reached`, `[coverage] terraform-input: 12 path(s) reached`, both genuine
- * and both must keep passing), and those identifiers are indistinguishable
- * from `port`/`line` by punctuation alone — only by the shape of the word
- * itself. `terraform-input` and `findModuleTerraformFiles` both fail
- * `PLAIN_LOWERCASE_WORD` (a hyphen; an internal capital) and so are left
- * exactly as ambiguous as they always were; `port` and `line` are plain,
- * unhyphenated, all-lowercase words and are now rejected behind a colon or
- * comma exactly as they already were when directly adjacent — closing the
- * bypass without reopening the shape the non-adjacent design exists for.
- *
- * Checked against every real `console.log`/`console.error` denominator line
- * in `cli/src/scripts` and `cli/src/lib` at the time of this fix (including
- * `${sibling}: N core-direct call site(s)…`, whose real values —
- * `tabsii-crm`, `sibling-template (self-check)` — are hyphenated and so
- * already fail `PLAIN_LOWERCASE_WORD` regardless): none takes the
- * plain-lowercase-noun-plus-punctuation shape this rejects.
- *
- * **What is still left open, deliberately.** A snake_case identifier is not
- * caught by this word-shape test either — the word regex has no underscore
- * in its character class, so `aws_cloudwatch_event_target: 8` would recover
- * only `target`, a plain lowercase word, and be rejected as an ordinary noun
- * even though it is an identifier suffix. No real guard output does this
- * today (see the sweep above), so it is named here rather than silently
- * narrowed — the same posture this file already takes with the
- * gitleaks/Codecov/terraform ambiguity in `lineStatesADenominator`'s own
- * docstring.
- */
-function hiddenOrdinaryNoun(line: string, digitStart: number): string | undefined {
-  if (digitStart === 0) return undefined
-  const before = line.slice(0, digitStart - 1) // same one whitespace char precedingWord excludes
-  const word = /([A-Za-z][A-Za-z'-]*)[^A-Za-z0-9]*$/.exec(before)?.[1]
-  if (word === undefined || DENOMINATOR_VOCABULARY.test(word) || !PLAIN_LOWERCASE_WORD.test(word)) {
-    return undefined
-  }
-  return word
+  const before = line.slice(0, digitStart - 1) // BARE_COUNT's `(?<=^|\s)` consumed exactly this one char
+  return /([A-Za-z][A-Za-z0-9'-]*)[^A-Za-z0-9]*$/.exec(before)?.[1]
 }
 
 /**
@@ -434,102 +385,114 @@ function hiddenOrdinaryNoun(line: string, digitStart: number): string | undefine
  * passes, `audited the plugin-allowlist naming convention under /repo-2` does
  * not, because the second names no count.
  *
- * It deliberately does NOT require the count to be adjacent to the vocabulary
- * word: `12 path(s) reached` is as honest a statement as `reached 12 path(s)`,
- * and a fixed-width window would have to be tuned, which is the
- * sharpening-the-detector move this file exists to stop doing.
+ * ### #1617 round 4: inverted from a blocklist to an allowlist
  *
- * ### #1617: an incidental number still forges a denominator
+ * Rounds 1–3 all sharpened the same shape of check: accept a count UNLESS a
+ * reason to reject it can be found beside it.
  *
- * The decimal fix on `BARE_COUNT` closes the two shapes above regardless of
- * context, but #1617 named two more that are not decimals at all:
+ *     round 1   audited port 8080          forges   (no check existed yet)
+ *     round 2   audited port: 8080         forges   (punctuation hid the noun)
+ *     round 3   audited host1: 8080        forges   (a digit hid the noun)
+ *               audited ipv4: 8080         forges
+ *               audited eth0: 100 packets  forges
  *
- *     audited port 8080 for issues            — a port number
- *     examined the file at line 42 for issues — a line number
+ * Every round's defeat was a way of hiding the rejection's trigger from it —
+ * decimal continuation, then punctuation, then a digit inside the hidden
+ * noun (`adjacentWord`'s docstring has the mechanism). Three defeats at three
+ * depths of the same mechanism is not bad luck; it is what a blocklist over
+ * natural-language text always does, because "found no reason to object" and
+ * "correctly identified as fine" are different claims, and every prior round
+ * tested only the first while the code's own default acted on the second.
  *
- * Both are whitespace-delimited, honest-looking bare counts, exactly the
- * shape this function is asked to credit. What distinguishes them from every
- * real denominator line the discovered guards actually print (`audited 34
- * shell file(s)…`, `checked 2 requiresCiStep glob(s)…`, `[coverage] …: 12
- * path(s) reached`) is what sits immediately to the count's LEFT: in every
- * real line, that is either the vocabulary word itself, punctuation, or the
- * start of the line — never an ordinary noun standing in for one. `port` and
- * `line` are exactly that ordinary noun: a locator word between the
- * vocabulary and the count, not the vocabulary word and not a delimiter.
- * `precedingWord` extracts that left neighbour, and a count whose left
- * neighbour is a word that is not vocabulary is rejected — the whole line
- * still passes if the vocabulary word is present AND some OTHER count on the
- * line clears that bar, so this does not require every number to justify
- * itself, only the one(s) doing the crediting.
+ * This round does not sharpen the rejection again. It inverts the default: a
+ * count is credited only when a denominator SHAPE is positively identified,
+ * and anything unidentified is rejected, because unidentified is unexamined.
+ * Two shapes are recognised, both drawn from the real corpus this module's
+ * own sweep and CI runs actually produce — see this file's
+ * `#1617` test block for the case matrix, captured live, that this design
+ * was built against rather than invented for.
  *
- * ### Round 2: punctuation was a bypass of the check that already existed
+ * **Shape A — the touching word IS the vocabulary.** `adjacentWord` recovers
+ * whatever word touches the count, skipping one run of punctuation (digits
+ * now included in the word class, closing round 3). If THAT word tests
+ * positive against `DENOMINATOR_VOCABULARY`, the count is credited —
+ * `audited 34…`, `checked 15…`, `reached 12…`, and (see below) the two
+ * disclosed-ambiguous lines that happen to take this shape,
+ * `processed: 1` and `scanned: 70`. This is never "a word was found and not
+ * objected to" — the word must BE drawn from the guard's own known
+ * vocabulary, which `port`, `line`, `host1`, `ipv4`, `eth0` and `worker3`
+ * never are, whatever punctuation or digit separates them from their count.
  *
- * The first pass only rejected an ordinary noun found DIRECTLY adjacent to
- * the count. A single character defeated it: `audited port: 8080 for issues`
- * and `audited port, 8080 for issues` still forged credit, because
- * `precedingWord` returns `undefined` the instant anything but a letter
- * touches the mandatory whitespace, and `undefined` was read as "nothing to
- * object to" rather than "I could not identify the preceding word" — an
- * unexamined case standing in for a fine one, which is the exact class this
- * guard exists to police. `port`/`line` are not made safe by the colon; they
- * are the identical ordinary noun with one character of camouflage.
+ * **Shape B — the vocabulary sits somewhere to the RIGHT of the count, on
+ * the same line.** This is what the pre-existing non-adjacent design
+ * (`12 path(s) reached`, `70 .tf file(s) scanned…`) actually needs, and it is
+ * kept — deliberately not bounded to a fixed word window, for the reason the
+ * original non-adjacency design already gave: a tuned window is the
+ * sharpening-the-detector move this file exists to stop making. What changes
+ * is the DIRECTION. The old design accepted a count if vocabulary sat
+ * anywhere on the LINE — left or right, adjacent or not — and relied on the
+ * noun-blocklist to claw back the cases that broke. The new design only ever
+ * looks right of the count. Checked against every round-3 forge:
+ * `audited host1: 8080 for issues`, `audited ipv4: 8080 for issues`,
+ * `audited eth0: 100 packets for issues` and `audited worker3, 42 jobs for
+ * issues` all have their vocabulary word (`audited`) to the LEFT of the
+ * incidental number, and nothing vocabulary-shaped to its right — `for
+ * issues` / `packets for issues` / `jobs for issues` contain none of
+ * `DENOMINATOR_VOCABULARY`'s words. Neither shape fires, so none of the four
+ * is credited. This is not a further-tightened rule about these four
+ * specific strings; it is the general consequence of requiring a positive
+ * touching-vocabulary or right-side signal, which nothing shaped like them
+ * has.
  *
- * `hiddenOrdinaryNoun` closes this: when `precedingWord` returns `undefined`
- * because punctuation blocks it (as opposed to genuine line-start or nothing
- * recoverable at all), it strips that punctuation and looks behind it. If a
- * plain, unhyphenated, non-vocabulary word is there, the count is rejected
- * exactly as the adjacent case already rejects it. See that function's
- * docstring for why the check is scoped to `PLAIN_LOWERCASE_WORD` rather than
- * any recovered word — the real `[coverage] terraform-input: 12 path(s)
- * reached` and `[coverage] …findModuleTerraformFiles: 33 path(s) reached`
- * lines below depend on the narrower scope to keep passing.
+ * **What this deliberately leaves open, named rather than hidden.** Shape B
+ * has no proximity bound, so a line that puts unrelated vocabulary anywhere
+ * to the right of an incidental number — `audited host1: 8080, examined
+ * further` — would still be credited. No guard in this repo's real,
+ * CI-driven output does this today (checked against the full corpus this
+ * module's own sweep drives), and bounding the window is exactly the
+ * sharpening move this file has now stopped making twice over. If a real
+ * guard ever does this, it is a new, real forge to fix when it is observed —
+ * against real output, per this file's whole operating premise — not a
+ * hypothetical to design against pre-emptively.
  *
- * **Left unresolved, deliberately, rather than reached for:** a count whose
- * left neighbour is punctuation with NOTHING recoverable behind it, or is
- * line-start, or (after recovery) IS the vocabulary word itself, is accepted
- * regardless of what it is actually counting — because that is
- * indistinguishable from the pre-existing, intentionally-supported
- * non-adjacent design with no further local signal to tell them apart. Real,
- * observed instances:
+ * ### The three disclosed ambiguous lines, decided under the new rule
  *
- *     1135 commits scanned.                      (gitleaks, Secret Scan job)
- *     gpg: Total number processed: 1              (Codecov's gpg import, Python job)
- *     terraform files scanned: 70                 (this repo's own tf-artifact-refs test)
+ * `1135 commits scanned.` (gitleaks, Secret Scan job), `gpg: Total number
+ * processed: 1` (Codecov's gpg import, Python job) and `terraform files
+ * scanned: 70` (this repo's own `terraform-generated-artifact-refs.test.ts`)
+ * all still forge credit under this round too, and the decision is made
+ * deliberately rather than inherited by accident:
  *
- * Each is structurally IDENTICAL to a genuine accepted line — `27 entries
- * known` (`guard-authority-inventory`) and `12 path(s) reached` both also
- * have a count whose left neighbour is punctuation or line-start and whose
- * vocabulary word sits to the right, across other words, exactly like
- * `commits scanned.` does; and `Total number processed: 1` / `files scanned:
- * 70` recover `processed`/`scanned` behind their colon, which ARE the
- * vocabulary, so `hiddenOrdinaryNoun` deliberately leaves them be. There is
- * no local, line-shaped signal left that separates these from a genuine
- * count: telling "this check's own count" from "an unrelated tool's count
- * that happened to land in the same captured output" needs knowing which
- * PROCESS emitted the bytes, which `outputStatesADenominator` does not
- * observe (see the module docstring's "What this deliberately does NOT
- * reach"). None of these three lines is reachable through THIS harness today
- * — `observeDenominatorPrints` only ever captures a `biffo check <name>`
- * subcommand's own stdout/stderr, and none of the 25 discovered guards shells
- * out to git, gpg, or gitleaks — but a future guard that does would inherit
- * exactly this hole, so it is named here rather than left to be
- * rediscovered.
+ *   - `gpg: Total number processed: 1` and `terraform files scanned: 70`
+ *     both hit Shape A — the word touching the count, across the colon, IS
+ *     `processed`/`scanned`, which really is this guard's own vocabulary.
+ *     Rejecting them would mean rejecting a count whose immediate neighbour
+ *     is a positively-identified vocabulary word — the single strongest
+ *     signal this file has — while `[coverage] terraform-input: 12 path(s)
+ *     reached` (an identifier, not vocabulary, touches the count; only
+ *     Shape B saves it) keeps passing on weaker evidence. A stronger signal
+ *     cannot be the one that gets rejected while a weaker one for the same
+ *     shape of line is kept.
+ *   - `1135 commits scanned.` hits Shape B — `scanned` sits two words to the
+ *     right of `1135`, the identical shape `70 .tf file(s) scanned under
+ *     /repo` (a genuine, real, must-accept line) needs credited. There is no
+ *     shape-based signal left to tell a gitleaks count from this guard's own
+ *     — that needs knowing which PROCESS emitted the line, which no per-line
+ *     check observes (see the module docstring's "What this deliberately
+ *     does NOT reach").
+ *
+ * All three were already forging credit before this round; what changes is
+ * that it is now possible to say WHY, in terms of a rule that also explains
+ * every genuine accept, rather than "nothing objected to it".
  */
 export function lineStatesADenominator(line: string): boolean {
   if (!DENOMINATOR_VOCABULARY.test(line)) return false
   for (const match of line.matchAll(BARE_COUNT)) {
-    const word = precedingWord(line, match.index)
-    if (word !== undefined) {
-      if (DENOMINATOR_VOCABULARY.test(word)) return true
-      continue // an ordinary noun directly beside the count — not vocabulary
-    }
-    // `word` is undefined: either genuinely nothing precedes (line start, or
-    // punctuation with no word further back), or the same ordinary noun is
-    // hiding one punctuation character away (#1617 round 2). Only the first
-    // is accepted by default; the second is rejected exactly like the
-    // adjacent case above.
-    if (hiddenOrdinaryNoun(line, match.index) !== undefined) continue
-    return true
+    const digitStart = match.index as number
+    const digitEnd = digitStart + match[0].length
+    const leftWord = adjacentWord(line, digitStart)
+    if (leftWord !== undefined && DENOMINATOR_VOCABULARY.test(leftWord)) return true // Shape A
+    if (DENOMINATOR_VOCABULARY.test(line.slice(digitEnd))) return true // Shape B
   }
   return false
 }

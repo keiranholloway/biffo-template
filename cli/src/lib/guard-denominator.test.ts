@@ -823,7 +823,7 @@ assertFakeThing(['a', 'b', 'c'])
           ['a colon-separated line number', 'examined the file at line: 42 for issues'],
           ['a comma-separated line number', 'examined the file at line, 42 for issues'],
           [
-            'a bracketed count with interior space (space then "(" now blocks precedingWord)',
+            'a bracketed count with interior space (space then "(" blocks the touching-word extraction)',
             'audited port ( 8080 ) for issues',
           ],
         ])('must reject — %s: %s', (_label, line) => {
@@ -881,12 +881,18 @@ assertFakeThing(['a', 'b', 'c'])
         })
 
         it('does not over-reject: a colon-introduced identifier (hyphenated or camelCase) still credits', () => {
-          // The reason `hiddenOrdinaryNoun` is scoped to a PLAIN, unhyphenated,
-          // lowercase word rather than "any word behind punctuation": these
-          // two are REAL guard output (see the must-accept corpus above) and
-          // are structurally identical to `port: 8080` — a non-vocabulary
-          // word, a colon, a count — except the word is a hyphenated or
-          // camelCase identifier rather than an ordinary English noun.
+          // These two are REAL guard output (see the must-accept corpus
+          // above) and are structurally identical to `port: 8080` — a
+          // non-vocabulary word, a colon, a count — except the word touching
+          // the count is a hyphenated or camelCase identifier rather than an
+          // ordinary English noun, and NEITHER is vocabulary. Under round 4's
+          // allowlist this passes on Shape B (`reached` sits two words to the
+          // right of the count), not because the identifier shape was ever
+          // specially exempted — round 4 draws no distinction at all between
+          // an ordinary noun and an identifier touching the count; neither is
+          // vocabulary, so Shape A never fires for either, and it is Shape B
+          // alone that credits these two. That is the explicit allowlisted
+          // shape #1617 round 4 named: `<identifier>: N path(s) reached`.
           expect(outputStatesADenominator('[coverage] terraform-input: 12 path(s) reached\n')).toBe(
             true,
           )
@@ -898,19 +904,110 @@ assertFakeThing(['a', 'b', 'c'])
         })
       })
 
+      describe('#1617 round 4: inverted from a blocklist to an allowlist — the digit-hidden-noun forges', () => {
+        // Round 3's prosecution found that a digit INSIDE the noun defeats
+        // the word-extraction regex entirely (no digit in its word class or
+        // its punctuation-skip class), so `hiddenOrdinaryNoun` returned
+        // `undefined` — not "identified as fine", but "extraction failed" —
+        // and the old default read that failure as an accept. These four are
+        // the prosecutor's own attack lines, captured verbatim from the
+        // round-3 comment on issue #1617, run against the real pre-round-4
+        // code and confirmed forging before this fix (see the regression
+        // test below).
+        it.each([
+          ['a hostname ending in a digit', 'audited host1: 8080 for issues'],
+          ['a protocol name ending in a digit', 'audited ipv4: 8080 for issues'],
+          [
+            'an interface name ending in a digit, count followed by a non-"(s)" plural',
+            'audited eth0: 100 packets for issues',
+          ],
+          ['a comma-separated identifier ending in a digit', 'audited worker3, 42 jobs for issues'],
+        ])('must reject — %s: %s', (_label, line) => {
+          expect(outputStatesADenominator(`${line}\n`)).toBe(false)
+        })
+
+        it('regression: the round-3 (pre-round-4) code forged credit on all four digit-hidden-noun lines', () => {
+          // Fail-first evidence against the code this PR is actually built on
+          // top of — round 3's `hiddenOrdinaryNoun`/`precedingWord`/
+          // `lineStatesADenominator`, reproduced verbatim (not a straw man).
+          const round3Vocabulary =
+            /\b(examined|checked|audited|scanned|covered|considered|classified|discovered|counted|denominator|reached|analysed|analyzed|processed|swept|walked|visited|inspected|assessed|evaluated)\b/i
+          const round3BareCount = /(?<=^|\s)\d+(?=$|[\s),;:]|\.(?!\d))/g
+          const round3PlainLowercaseWord = /^[a-z]+$/
+          const round3PrecedingWord = (line: string, digitStart: number): string | undefined => {
+            if (digitStart === 0) return undefined
+            return /([A-Za-z][A-Za-z'-]*)$/.exec(line.slice(0, digitStart - 1))?.[1]
+          }
+          const round3HiddenOrdinaryNoun = (
+            line: string,
+            digitStart: number,
+          ): string | undefined => {
+            if (digitStart === 0) return undefined
+            const before = line.slice(0, digitStart - 1)
+            const word = /([A-Za-z][A-Za-z'-]*)[^A-Za-z0-9]*$/.exec(before)?.[1]
+            if (
+              word === undefined ||
+              round3Vocabulary.test(word) ||
+              !round3PlainLowercaseWord.test(word)
+            ) {
+              return undefined
+            }
+            return word
+          }
+          const round3LineStatesADenominator = (line: string): boolean => {
+            if (!round3Vocabulary.test(line)) return false
+            for (const match of line.matchAll(round3BareCount)) {
+              const word = round3PrecedingWord(line, match.index as number)
+              if (word !== undefined) {
+                if (round3Vocabulary.test(word)) return true
+                continue
+              }
+              if (round3HiddenOrdinaryNoun(line, match.index as number) !== undefined) continue
+              return true
+            }
+            return false
+          }
+
+          const digitHiddenNounForges = [
+            'audited host1: 8080 for issues',
+            'audited ipv4: 8080 for issues',
+            'audited eth0: 100 packets for issues',
+            'audited worker3, 42 jobs for issues',
+          ]
+          // Fail-first: round 3's own code really does forge on all four —
+          // this is the bug this round closes, reproduced against the exact
+          // pre-round-4 logic, not a hypothetical.
+          expect(digitHiddenNounForges.every(round3LineStatesADenominator)).toBe(true)
+          // And the fixed function now rejects every one of them.
+          expect(digitHiddenNounForges.some((l) => outputStatesADenominator(`${l}\n`))).toBe(false)
+        })
+
+        it('must still accept — the non-adjacent shape the digit-noun fix must not break', () => {
+          // "12 path(s) reached" in its own right (not just embedded in the
+          // longer coverage-line corpus above): the count precedes its
+          // vocabulary word by two words, Shape B, unaffected by round 4's
+          // digit-aware word extraction (which only ever changes Shape A's
+          // LEFT-side recovery).
+          expect(outputStatesADenominator('12 path(s) reached\n')).toBe(true)
+        })
+      })
+
       it('genuinely ambiguous — left open deliberately, not silently: same shape as a real accept', () => {
         // These three are REAL lines (gitleaks' Secret Scan job output, a
         // Codecov gpg-import line from the Python job, and this repo's own
         // terraform-generated-artifact-refs.test.ts console output) and all
-        // three still forge credit after this fix. They are not fixed here
-        // because they are structurally IDENTICAL to a genuine accepted
-        // line — a count whose left neighbour is punctuation or line-start,
-        // exactly like `[coverage] …: 12 path(s) reached` or
-        // `27 entries known` (guard-authority-inventory) — so there is no
-        // local, line-shaped signal left to tell them apart. See
-        // `lineStatesADenominator`'s docstring for why this needs knowing
-        // which PROCESS emitted the line, not just its text, and is
-        // therefore out of scope for a per-line regex.
+        // three still forge credit under round 4's allowlist too — decided
+        // deliberately, not inherited by accident. `gpg: Total number
+        // processed: 1` and `terraform files scanned: 70` hit Shape A (the
+        // word touching the count, across the colon, IS `processed`/
+        // `scanned` — genuinely this guard's own vocabulary, the single
+        // strongest signal this file has); `1135 commits scanned.` hits
+        // Shape B (`scanned` sits two words right of the count, the
+        // identical shape `70 .tf file(s) scanned under /repo` — a real,
+        // must-accept line — needs credited). There is no shape-based signal
+        // left to tell these apart from a genuine accept: that needs knowing
+        // which PROCESS emitted the line, which no per-line check observes.
+        // See `lineStatesADenominator`'s docstring for the full reasoning.
         const stillForges = [
           '1135 commits scanned.',
           'gpg: Total number processed: 1',

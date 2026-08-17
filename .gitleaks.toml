@@ -48,12 +48,15 @@ description = "AWS Account ID — should only appear in .tfvars.example or biffo
 #   allowlist (regex)  = `[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`
 #                        — a COMPLETE UUID (8-4-4-4-12 hex groups)
 #
-# `backup-2024-338764933165` does not match the full UUID pattern and stays
-# caught. `b3f1c0de-0000-0000-0000-000000000001` does match it and is
-# suppressed. The exclusion is exact rather than heuristic, so the accepted
-# residual gap this rule used to carry (`deadbeef-<id>`, indistinguishable
-# from a UUID tail by the old word-level heuristic) is CLOSED: a hex-only
-# hyphenated word that is not part of a full UUID no longer escapes.
+# `backup-2024-<id>` does not match the full UUID pattern and stays caught.
+# `b3f1c0de-0000-0000-0000-000000000001` does match it and is suppressed
+# (that example is safe to write literally: it is a complete UUID, so the
+# allowlist below matches it deliberately, unlike a bare account id which
+# must never be written as a real-looking literal in this file). The
+# exclusion is exact rather than heuristic, so the accepted residual gap
+# this rule used to carry (`deadbeef-<id>`, indistinguishable from a UUID
+# tail by the old word-level heuristic) is CLOSED: a hex-only hyphenated
+# word that is not part of a full UUID no longer escapes.
 #
 # `regexTarget = "line"` is load-bearing and was chosen by experiment against
 # the real gitleaks 8.30.1 binary, not from the docs. The DEFAULT allowlist

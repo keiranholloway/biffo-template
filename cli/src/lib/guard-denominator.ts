@@ -286,8 +286,11 @@ const DENOMINATOR_VOCABULARY =
 
 /**
  * A count, as opposed to a digit that merely occurs. The number must be
- * delimited by whitespace (or the line's edge) on the left and by whitespace
- * or closing punctuation on the right.
+ * delimited by whitespace (or the line's edge) on the left and by whitespace,
+ * closing punctuation, or a non-decimal period on the right. Written with
+ * lookaround rather than consuming boundary characters so that a match's
+ * `index` is the digit run's own start — `lineStatesADenominator` below needs
+ * that to inspect what precedes it without redoing the arithmetic.
  *
  * **This used to be `\b\d+\b`, and the docstring above it claimed that "a
  * digit buried in a path segment or a version string cannot manufacture one".
@@ -307,9 +310,46 @@ const DENOMINATOR_VOCABULARY =
  * in the mechanism written to stop denominators being meaningless. Every one
  * of the nine lines actually credited today writes its count space-delimited
  * and immediately after the vocabulary word (`audited 30 shell file(s)`), so
- * this is a strict tightening with no observed cost.
+ * this was a strict tightening with no observed cost.
+ *
+ * ### #1617: a decimal continuation is not a count either
+ *
+ * The whitespace-delimiting fix above still let `.` terminate a count on the
+ * right regardless of what followed it, which is correct for a count ending a
+ * sentence (`audited 5 item(s).`) and wrong for the second half of a decimal.
+ * Two real shapes named in #1617 exploited exactly that:
+ *
+ *     audited section 3.4 of the doc          — a section reference
+ *     examined hosts at 10.0.0.1 today        — an IP octet
+ *
+ * `3` and `10` were both credited: preceded by whitespace, followed by `.`,
+ * which the old right-hand alternation accepted unconditionally. The fix is a
+ * negative lookahead — `\.(?!\d)` — so `.` only terminates a count when it is
+ * NOT immediately followed by another digit, i.e. when it plausibly ends a
+ * sentence rather than continues a number. Checked against the corpus this
+ * module's own sweep drives (`sh scripts/biffo.sh check pipe-trap` et al., see
+ * `guard-denominator.test.ts`'s `#1617` cases): zero of the real denominator
+ * lines any discovered guard prints puts a `.` directly after its count
+ * followed by another digit, so this is again a strict tightening with no
+ * observed cost.
  */
-const BARE_COUNT = /(?:^|\s)\d+(?:$|[\s),.;:])/
+const BARE_COUNT = /(?<=^|\s)\d+(?=$|[\s),;:]|\.(?!\d))/g
+
+/**
+ * The word, if any, immediately touching a candidate count's mandatory
+ * leading whitespace — i.e. what `BARE_COUNT` skipped over to reach it.
+ * `undefined` when nothing precedes (the count opens the line) or what
+ * precedes is punctuation rather than a word: both are left alone, because a
+ * colon- or comma-introduced count (`[coverage] …: 12 path(s) reached`) is
+ * the pre-existing, deliberately non-adjacent-to-vocabulary design (see
+ * `lineStatesADenominator`) and must keep passing.
+ */
+function precedingWord(line: string, digitStart: number): string | undefined {
+  if (digitStart === 0) return undefined
+  const beforeWhitespace = digitStart - 1 // BARE_COUNT's `(?<=^|\s)` consumed exactly this one char
+  if (beforeWhitespace === 0) return undefined
+  return /([A-Za-z][A-Za-z'-]*)$/.exec(line.slice(0, beforeWhitespace))?.[1]
+}
 
 /**
  * Does one line of REAL, EMITTED output state a denominator? Denominator
@@ -319,11 +359,65 @@ const BARE_COUNT = /(?:^|\s)\d+(?:$|[\s),.;:])/
  *
  * It deliberately does NOT require the count to be adjacent to the vocabulary
  * word: `12 path(s) reached` is as honest a statement as `reached 12 path(s)`,
- * and a window would have to be tuned, which is the sharpening-the-detector
- * move this change exists to stop doing.
+ * and a fixed-width window would have to be tuned, which is the
+ * sharpening-the-detector move this file exists to stop doing.
+ *
+ * ### #1617: an incidental number still forges a denominator — narrowed, not closed
+ *
+ * The decimal fix on `BARE_COUNT` closes the two shapes above regardless of
+ * context, but #1617 named two more that are not decimals at all:
+ *
+ *     audited port 8080 for issues            — a port number
+ *     examined the file at line 42 for issues — a line number
+ *
+ * Both are whitespace-delimited, honest-looking bare counts, exactly the
+ * shape this function is asked to credit. What distinguishes them from every
+ * real denominator line the discovered guards actually print (`audited 34
+ * shell file(s)…`, `checked 2 requiresCiStep glob(s)…`, `[coverage] …: 12
+ * path(s) reached`) is what sits immediately to the count's LEFT: in every
+ * real line, that is either the vocabulary word itself, punctuation, or the
+ * start of the line — never an ordinary noun standing in for one. `port` and
+ * `line` are exactly that ordinary noun: a locator word between the
+ * vocabulary and the count, not the vocabulary word and not a delimiter.
+ * `precedingWord` extracts that left neighbour, and a count whose left
+ * neighbour is a word that is not vocabulary is rejected — the whole line
+ * still passes if the vocabulary word is present AND some OTHER count on the
+ * line clears that bar, so this does not require every number to justify
+ * itself, only the one(s) doing the crediting.
+ *
+ * **Left unresolved, deliberately, rather than reached for:** a count whose
+ * left neighbour is punctuation or line-start is accepted regardless of what
+ * it is actually counting, because that is indistinguishable from the
+ * pre-existing, intentionally-supported non-adjacent design with no further
+ * local signal to tell them apart. Real, observed instances:
+ *
+ *     1135 commits scanned.                      (gitleaks, Secret Scan job)
+ *     gpg: Total number processed: 1              (Codecov's gpg import, Python job)
+ *     terraform files scanned: 70                 (this repo's own tf-artifact-refs test)
+ *
+ * Each is structurally IDENTICAL to a genuine accepted line — `27 entries
+ * known` (`guard-authority-inventory`) and `12 path(s) reached` both also
+ * have a count whose left neighbour is punctuation or line-start and whose
+ * vocabulary word sits to the right, across other words, exactly like
+ * `commits scanned.` does. There is no local, line-shaped signal left that
+ * separates them: telling "this check's own count" from "an unrelated tool's
+ * count that happened to land in the same captured output" needs knowing
+ * which PROCESS emitted the bytes, which `outputStatesADenominator` does not
+ * observe (see the module docstring's "What this deliberately does NOT
+ * reach"). None of these three lines is reachable through THIS harness today
+ * — `observeDenominatorPrints` only ever captures a `biffo check <name>`
+ * subcommand's own stdout/stderr, and none of the 25 discovered guards shells
+ * out to git, gpg, or gitleaks — but a future guard that does would inherit
+ * exactly this hole, so it is named here rather than left to be
+ * rediscovered.
  */
 export function lineStatesADenominator(line: string): boolean {
-  return DENOMINATOR_VOCABULARY.test(line) && BARE_COUNT.test(line)
+  if (!DENOMINATOR_VOCABULARY.test(line)) return false
+  for (const match of line.matchAll(BARE_COUNT)) {
+    const word = precedingWord(line, match.index)
+    if (word === undefined || DENOMINATOR_VOCABULARY.test(word)) return true
+  }
+  return false
 }
 
 /** Any line of a captured stdout/stderr stream stating a denominator. */

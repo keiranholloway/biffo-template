@@ -695,6 +695,129 @@ assertFakeThing(['a', 'b', 'c'])
       // somebody updates the docstring that claims it.
       expect(outputStatesADenominator('examined 25 item(s)\n')).toBe(true)
     })
+
+    describe('#1617: an incidental number in a real log line still forges a denominator', () => {
+      // The case matrix, derived from the corpus rather than invented — see
+      // the PR body for the commands that produced each line. must-accept
+      // lines are REAL output, captured live from `sh scripts/biffo.sh check
+      // <name>` in this repo or from a recent CI run
+      // (`gh run view <id> --log`). must-reject lines are the exact shapes
+      // #1617 names, confirmed forging credit against the PRE-fix regex
+      // before this change (see the PR body's before/after table).
+
+      it.each([
+        ['pipe-trap', 'audited 34 shell file(s) under scripts/ and .githooks/ under /repo'],
+        ['terraform-input / lambda-output', 'audited 25 workflow file(s) under /repo'],
+        [
+          'plugin-tool-supply (dirs)',
+          'audited 2 plugin dir(s), 1 declared tool(s) cross-checked, under /repo/services/_plugins',
+        ],
+        ['plugin-tool-supply (model ids)', 'audited 7 declared model id(s)'],
+        [
+          'guard-denominator (self)',
+          'guard-denominator: examined 25 guard(s), 9 state their own denominator when RUN, ' +
+            '16 do not (16 baselined, 0 newly unbaselined); observed by executing 14 CI-wired ' +
+            'check command(s)',
+        ],
+        [
+          'coverage line (colon-introduced, count precedes vocabulary)',
+          '[coverage] cognito-invite-template-guard.findModuleTerraformFiles: 33 path(s) reached',
+        ],
+        [
+          'migration-body-change guard (Release Guards run, count is 0)',
+          'migration body-change guard: examined 0 already-released migration file(s) changed ' +
+            'in this PR.',
+        ],
+        [
+          'interpreter-audit-rstart guard (Release Guards run)',
+          'interpreter audit: checked 15 workflow file(s), 29 explicit-interpreter invocation(s) found',
+        ],
+        [
+          'ci-wiring-audit guard (Release Guards run)',
+          'checked 2 requiresCiStep glob(s), 2 supersedes pattern(s)',
+        ],
+        [
+          'eventbridge-log-permissions guard (count followed by a file-extension word, not "(s)")',
+          '70 .tf file(s) scanned under /repo; 8 aws_cloudwatch_event_target block(s) found',
+        ],
+        [
+          'instance-adoption guard (count followed by a filename, not a plural noun at all)',
+          'audited 3 distributed AGENTS.md (AGENTS.md, _skeletons/plugin-template/AGENTS.md) under /repo',
+        ],
+      ])('must accept — real guard output: %s', (_label, line) => {
+        expect(outputStatesADenominator(`${line}\n`)).toBe(true)
+      })
+
+      it.each([
+        [
+          'an IP octet',
+          'examined hosts at 10.0.0.1 today',
+          'a whitespace-delimited "10" preceded by "at" and followed by a decimal continuation',
+        ],
+        [
+          'a port number',
+          'audited port 8080 for issues',
+          '"8080" is preceded by the ordinary noun "port", not the vocabulary word or punctuation',
+        ],
+        [
+          'a section reference',
+          'audited section 3.4 of the doc',
+          '"3" is a decimal continuation ("3.4"), and separately preceded by "section"',
+        ],
+        [
+          'a line number',
+          'examined the file at line 42 for issues',
+          '"42" is preceded by the ordinary noun "line", not the vocabulary word or punctuation',
+        ],
+      ])('must reject — %s: %s (%s)', (_label, line) => {
+        expect(outputStatesADenominator(`${line}\n`)).toBe(false)
+      })
+
+      it('regression: the pre-fix regex forged credit on all four must-reject lines', () => {
+        // Fail-first evidence that this is a real fix, not a redundant test:
+        // the OLD pattern (whitespace-delimited only, no left-neighbour or
+        // decimal check) accepted every one of the must-reject lines above.
+        const preFixBareCount = /(?:^|\s)\d+(?:$|[\s),.;:])/
+        const preFixVocabulary =
+          /\b(examined|checked|audited|scanned|covered|considered|classified|discovered|counted|denominator|reached|analysed|analyzed|processed|swept|walked|visited|inspected|assessed|evaluated)\b/i
+        const preFixLineStatesADenominator = (line: string): boolean =>
+          preFixVocabulary.test(line) && preFixBareCount.test(line)
+
+        const mustRejectLines = [
+          'examined hosts at 10.0.0.1 today',
+          'audited port 8080 for issues',
+          'audited section 3.4 of the doc',
+          'examined the file at line 42 for issues',
+        ]
+        expect(mustRejectLines.every(preFixLineStatesADenominator)).toBe(true)
+        // And the fixed function now rejects every one of them.
+        expect(mustRejectLines.every((l) => outputStatesADenominator(`${l}\n`))).toBe(false)
+        expect(mustRejectLines.some((l) => outputStatesADenominator(`${l}\n`))).toBe(false)
+      })
+
+      it('genuinely ambiguous — left open deliberately, not silently: same shape as a real accept', () => {
+        // These three are REAL lines (gitleaks' Secret Scan job output, a
+        // Codecov gpg-import line from the Python job, and this repo's own
+        // terraform-generated-artifact-refs.test.ts console output) and all
+        // three still forge credit after this fix. They are not fixed here
+        // because they are structurally IDENTICAL to a genuine accepted
+        // line — a count whose left neighbour is punctuation or line-start,
+        // exactly like `[coverage] …: 12 path(s) reached` or
+        // `27 entries known` (guard-authority-inventory) — so there is no
+        // local, line-shaped signal left to tell them apart. See
+        // `lineStatesADenominator`'s docstring for why this needs knowing
+        // which PROCESS emitted the line, not just its text, and is
+        // therefore out of scope for a per-line regex.
+        const stillForges = [
+          '1135 commits scanned.',
+          'gpg: Total number processed: 1',
+          'terraform files scanned: 70',
+        ]
+        for (const line of stillForges) {
+          expect(outputStatesADenominator(`${line}\n`)).toBe(true)
+        }
+      })
+    })
   })
 
   describe('fail-first: the ratchet, against real git rather than a fixture of git', () => {

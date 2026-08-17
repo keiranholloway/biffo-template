@@ -85,6 +85,21 @@ jobs:
       # measure.
       - name: Error-branch coverage
         run: uv run python scripts/error_branch_coverage.py --check --coverage coverage.json
+      - name: Core-revision preflight — self-test
+        if: ${{ !cancelled() }}
+        # scripts/core-revision-preflight.sh (biffo-template#1604) is
+        # distributed here too, verbatim, via shared-files.json's `files` —
+        # but a plugin repo has no deploy.yml and nothing that mounts an
+        # independently-deployed service ahead of core, so it is never
+        # invoked for a REAL preflight in this repo the way the sibling
+        # skeleton's deploy.yml invokes it. This is the caller that keeps it
+        # off the #1413 zero-caller list anyway: it proves the script itself
+        # still blocks a stale core, passes a current one, and fails CLOSED
+        # when the digest is missing, against a stubbed curl — the same
+        # governance-plumbing reasoning js-dependency-audit.sh/
+        # py-dependency-audit.sh already carry as inert-but-verified copies
+        # in a Python-only or JS-only sibling.
+        run: sh scripts/core-revision-preflight.test.sh
       - uses: codecov/codecov-action@v5
         if: always()
         with:

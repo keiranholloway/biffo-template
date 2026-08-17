@@ -248,6 +248,17 @@ jobs:
         # failures against a stubbed curl. A verification script with no
         # caller is the class tracked in #1413; this is that caller.
         run: sh ../../scripts/routing-smoke-test.test.sh
+      - name: Core-revision preflight — self-test
+        if: ${{ !cancelled() }}
+        # Same shape as the routing smoke test above: not exercising a real
+        # core deployment (CI has none to reach), proves
+        # scripts/core-revision-preflight.sh — the deploy.yml
+        # preflight-core-revision job (#1604) that blocks this sibling from
+        # going live ahead of the core routes it depends on — still blocks a
+        # stale core, passes a current one, and fails CLOSED when the digest
+        # is missing, against a stubbed curl. Without this caller the script
+        # is the #1413 zero-caller class the instant it lands.
+        run: sh ../../scripts/core-revision-preflight.test.sh
 
   security-secrets:
     name: Secret Scan

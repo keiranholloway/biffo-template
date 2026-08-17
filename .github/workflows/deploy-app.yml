@@ -112,6 +112,12 @@ jobs:
           # Without this the resolver fails the build — which is the designed
           # behaviour, but the cause would be this line, not the deploy.
           fetch-tags: true
+          # Full history, not the default shallow depth-1: the route-table
+          # digest (#1604, "Compute route-table digest" below) publishes
+          # `git rev-list --count HEAD` as its monotonic revision, and that
+          # count is meaningless against a 1-commit shallow clone — every
+          # deploy would report revision 1.
+          fetch-depth: 0
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v5
         with:
@@ -146,6 +152,48 @@ jobs:
             echo '{ "siblings": [] }' > "$OUT"
           fi
           cat "$OUT"
+      - name: Install Python dependencies
+        # Needed for the route-table digest below, which imports the real
+        # FastAPI app (services/api) to compute app.openapi() rather than
+        # walking app.routes directly — FastAPI's internal route
+        # representation has changed shape across versions (this repo
+        # observed 0.138 resolving routes lazily through
+        # _IncludedRouter/effective_route_contexts, which a naive walk
+        # silently under-counted: 6 routes instead of the real 70).
+        # app.openapi() is what FastAPI itself uses to build the (401-gated)
+        # /openapi.json body, so it is correct regardless of that internal
+        # shape.
+        run: uv sync --all-groups --locked
+      - name: Compute route-table digest
+        # #1604: a sibling's deploy is structurally incapable of seeing
+        # core's deploy state — resolve-environment -> deploy-infra ->
+        # deploy-app runs with no step reading anything about core — so a
+        # sibling can go live serving requests against routes core has not
+        # shipped yet. Merge order does not fix this: in the recorded
+        # incident the core PR had already merged and the core deploy simply
+        # sat in the runner queue.
+        #
+        # This publishes a DIGEST, never the route surface — /openapi.json
+        # stays 401-gated — to the same public .well-known/ channel the
+        # siblings manifest and the runtime identity document already use.
+        # A sibling preflights against it (scripts/core-revision-preflight.sh
+        # in the sibling skeleton) before its own deploy-app runs.
+        #
+        # `revision` is `git rev-list --count HEAD`, deliberately NOT a
+        # counter that increments once per deploy: a deploy counter would
+        # report a HIGHER number after a rollback to an older commit than
+        # the deploy that actually had the routes a sibling needs — a false
+        # "at or past" fired exactly when the true answer is "no". A commit
+        # count is tied to the code's real position in history instead; see
+        # scripts/route-table-digest.py's module docstring for the full
+        # reasoning. `fetch-depth: 0` on the checkout above is what makes
+        # this count meaningful — the default shallow clone has exactly one
+        # commit, which would make every deploy report revision 1.
+        run: |
+          REVISION=$(git rev-list --count HEAD)
+          uv run python scripts/route-table-digest.py \
+            --revision "$REVISION" \
+            --out apps/portal/public/.well-known/route-revision.json
       - name: Build portal
         env:
           NEXT_PUBLIC_COGNITO_USER_POOL_ID: ${{ vars.COGNITO_USER_POOL_ID }}
@@ -351,14 +399,17 @@ jobs:
             --content-type "text/x-component" \
             --exclude "*" \
             --include "*.txt"
-          # The siblings manifest is the one .well-known/ file the portal build
-          # itself owns (see the "Generate siblings manifest" step above) — sync
-          # just that key, never --delete, so this pass can never touch the
-          # identity document that the previous pass deliberately protects.
+          # The siblings manifest and the route-revision digest (#1604) are
+          # the two .well-known/ files the portal build itself owns (see the
+          # "Generate siblings manifest" and "Compute route-table digest"
+          # steps above) — sync just those keys, never --delete, so this pass
+          # can never touch the identity document that the previous pass
+          # deliberately protects.
           aws s3 sync portal-dist/.well-known/ s3://${{ vars.PORTAL_BUCKET_NAME }}/.well-known/ \
             --cache-control "no-cache" \
             --exclude "*" \
-            --include "siblings.json"
+            --include "siblings.json" \
+            --include "route-revision.json"
       - name: Invalidate CloudFront
         # A cache invalidation must never block or abort the functional deploy
         # (Lambda / DB schema / DDL imports) that follows. create-invalidation is
@@ -1005,6 +1056,12 @@ jobs:
           # Without this the resolver fails the build — which is the designed
           # behaviour, but the cause would be this line, not the deploy.
           fetch-tags: true
+          # Full history, not the default shallow depth-1: the route-table
+          # digest (#1604, "Compute route-table digest" below) publishes
+          # `git rev-list --count HEAD` as its monotonic revision, and that
+          # count is meaningless against a 1-commit shallow clone — every
+          # deploy would report revision 1.
+          fetch-depth: 0
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v5
         with:
@@ -1039,6 +1096,18 @@ jobs:
             echo '{ "siblings": [] }' > "$OUT"
           fi
           cat "$OUT"
+      - name: Install Python dependencies
+        # See build-dev's identical step for why this is needed.
+        run: uv sync --all-groups --locked
+      - name: Compute route-table digest
+        # #1604 — see build-dev's identical step for the full reasoning
+        # (never the route surface, revision = git rev-list --count HEAD,
+        # why that beats a per-deploy counter under rollback).
+        run: |
+          REVISION=$(git rev-list --count HEAD)
+          uv run python scripts/route-table-digest.py \
+            --revision "$REVISION" \
+            --out apps/portal/public/.well-known/route-revision.json
       - name: Build portal
         env:
           NEXT_PUBLIC_COGNITO_USER_POOL_ID: ${{ vars.COGNITO_USER_POOL_ID }}
@@ -1243,14 +1312,17 @@ jobs:
             --content-type "text/x-component" \
             --exclude "*" \
             --include "*.txt"
-          # The siblings manifest is the one .well-known/ file the portal build
-          # itself owns (see the "Generate siblings manifest" step above) — sync
-          # just that key, never --delete, so this pass can never touch the
-          # identity document that the previous pass deliberately protects.
+          # The siblings manifest and the route-revision digest (#1604) are
+          # the two .well-known/ files the portal build itself owns (see the
+          # "Generate siblings manifest" and "Compute route-table digest"
+          # steps above) — sync just those keys, never --delete, so this pass
+          # can never touch the identity document that the previous pass
+          # deliberately protects.
           aws s3 sync portal-dist/.well-known/ s3://${{ vars.PORTAL_BUCKET_NAME }}/.well-known/ \
             --cache-control "no-cache" \
             --exclude "*" \
-            --include "siblings.json"
+            --include "siblings.json" \
+            --include "route-revision.json"
       - name: Invalidate CloudFront
         # A cache invalidation must never block or abort the functional deploy
         # (Lambda / DB schema / DDL imports) that follows. create-invalidation is
@@ -1905,6 +1977,12 @@ jobs:
           # Without this the resolver fails the build — which is the designed
           # behaviour, but the cause would be this line, not the deploy.
           fetch-tags: true
+          # Full history, not the default shallow depth-1: the route-table
+          # digest (#1604, "Compute route-table digest" below) publishes
+          # `git rev-list --count HEAD` as its monotonic revision, and that
+          # count is meaningless against a 1-commit shallow clone — every
+          # deploy would report revision 1.
+          fetch-depth: 0
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v5
         with:
@@ -1939,6 +2017,18 @@ jobs:
             echo '{ "siblings": [] }' > "$OUT"
           fi
           cat "$OUT"
+      - name: Install Python dependencies
+        # See build-dev's identical step for why this is needed.
+        run: uv sync --all-groups --locked
+      - name: Compute route-table digest
+        # #1604 — see build-dev's identical step for the full reasoning
+        # (never the route surface, revision = git rev-list --count HEAD,
+        # why that beats a per-deploy counter under rollback).
+        run: |
+          REVISION=$(git rev-list --count HEAD)
+          uv run python scripts/route-table-digest.py \
+            --revision "$REVISION" \
+            --out apps/portal/public/.well-known/route-revision.json
       - name: Build portal
         env:
           NEXT_PUBLIC_COGNITO_USER_POOL_ID: ${{ vars.COGNITO_USER_POOL_ID }}
@@ -2147,14 +2237,17 @@ jobs:
             --content-type "text/x-component" \
             --exclude "*" \
             --include "*.txt"
-          # The siblings manifest is the one .well-known/ file the portal build
-          # itself owns (see the "Generate siblings manifest" step above) — sync
-          # just that key, never --delete, so this pass can never touch the
-          # identity document that the previous pass deliberately protects.
+          # The siblings manifest and the route-revision digest (#1604) are
+          # the two .well-known/ files the portal build itself owns (see the
+          # "Generate siblings manifest" and "Compute route-table digest"
+          # steps above) — sync just those keys, never --delete, so this pass
+          # can never touch the identity document that the previous pass
+          # deliberately protects.
           aws s3 sync portal-dist/.well-known/ s3://${{ vars.PORTAL_BUCKET_NAME }}/.well-known/ \
             --cache-control "no-cache" \
             --exclude "*" \
-            --include "siblings.json"
+            --include "siblings.json" \
+            --include "route-revision.json"
       - name: Invalidate CloudFront
         # A cache invalidation must never block or abort the functional deploy
         # (Lambda / DB schema / DDL imports) that follows. create-invalidation is

@@ -14,33 +14,53 @@ description = "AWS Account ID — should only appear in .tfvars.example or biffo
 # (`--log-opts="--full-history HEAD"`) — the finding survives in the commit
 # that introduced it regardless of what a later commit changes it to.
 #
-# The fix narrows the boundary condition rather than adding a path/value
-# allowlist. A UUID's last segment is always immediately preceded by a hyphen
-# (its 4th separator), and gitleaks/RE2 (Go's regexp) has no lookbehind, so the
-# only way to test "not preceded by a hyphen" is to consume that character as
-# part of the match and report only the digit group as the secret via
-# `secretGroup`. `(?:^|[^0-9A-Fa-f-])` requires the character immediately
-# before the 12 digits to be either nothing (start of the scanned content) or
-# something that is neither a hyphen nor a hex digit — which a UUID's
-# hyphen-and-hex surroundings can never satisfy, and which an account id
-# quoted, colon-prefixed (ARN), or otherwise word-bounded always does.
+# The first fix (#893) narrowed the boundary condition to
+# `(?:^|[^0-9A-Fa-f-])(\d{12})\b` — blanket-excluding a preceding hyphen so a
+# UUID's last segment (always hyphen-preceded) could never match. That
+# over-corrected: `my-app-artifacts-123456789012` and
+# `deploy-role-123456789012` — the actual shape AWS resource naming produces
+# (S3 bucket names, IAM role names, ECR repo names, log groups routinely end
+# `-<account-id>`) — are ALSO hyphen-preceded, and the blanket exclusion
+# silently dropped them too (issue #1628, found prosecuting
+# biffo-plugin-marketing#185).
+#
+# The distinguishing feature is not the hyphen — it is what's on the far side
+# of it. A UUID's second-to-last segment (`0000`, `b3f1c0de`, …) is ALWAYS
+# composed entirely of hex characters, by construction: that's what makes it a
+# UUID segment. An ordinary word before a hyphen in a resource name
+# (`artifacts`, `role`) essentially never is — English words routinely contain
+# letters outside a-f (g-z), which a hex segment structurally cannot.
+#
+# gitleaks/RE2 (Go's regexp) has no lookbehind, so — same technique as
+# before — the preceding context has to be consumed as part of the match and
+# only the digit group reported as the secret, via `secretGroup`. The regex
+# is three alternatives for what may precede the 12 digits:
+#   1. `^`                                    — start of the scanned content
+#   2. `[^0-9A-Fa-f-]`                         — an ordinary non-hex, non-hyphen
+#                                                 boundary (space, `=`, `:`, quote, …)
+#   3. `[0-9A-Za-z]*[g-zG-Z][0-9A-Za-z]*-`     — a hyphen whose own preceding
+#                                                 word contains at least one
+#                                                 non-hex letter (g-z/G-Z)
+# Alternative 3 cannot cross a hyphen (hyphen is not in either character
+# class), so it only ever looks at the single word segment immediately before
+# the digits — never further back — which is exactly the segment a UUID's
+# hex-only construction can never satisfy and an ordinary hyphenated resource
+# name almost always does.
 #
 # Deliberately NOT the alternative of matching the full 8-4-4-4-12 UUID shape
 # and excluding it: that would only defeat a *genuinely* UUID-shaped prefix,
-# whereas this is the narrower, simpler condition the task calls out as
-# "likely right" — and it is provably correct in both directions (see
+# whereas this stays the narrower condition on hex-ness of the adjacent
+# segment — and it is provably correct in both directions, including the two
+# new cases, against the real gitleaks binary (see
 # cli/src/lib/gitleaks-uuid-account-id.test.ts).
 #
-# Trade-off, stated rather than hidden: an account id butted directly against
-# a hyphen or a hex character with NO separator at all — e.g. `id-123456789012`
-# with no space/colon/quote between the hyphen and the digits — is no longer
-# caught by this rule alone. Searched the repo for that shape (any bare
-# 12-digit run outside the existing allowlist/paths) and found none; the one
-# known legitimate hyphen-adjacent case (`siblings.auto.tfvars.json`'s S3
-# bucket domains) is already excluded by `paths`, independent of this regex.
-# If that shape appears for real, the `paths`/`regexes` allowlist mechanisms
-# already in this file are the ones to reach for, not this rule.
-regex = '''(?:^|[^0-9A-Fa-f-])(\d{12})\b'''
+# Trade-off, stated rather than hidden: a hyphenated segment that is ITSELF
+# composed entirely of hex characters (e.g. `deadbeef-123456789012`) is still
+# not caught by this rule alone — indistinguishable from a UUID tail by this
+# heuristic, same as the original trade-off. Searched the repo for that shape
+# and found none; if it appears for real, the `paths`/`regexes` allowlist
+# mechanisms already in this file are the ones to reach for, not this rule.
+regex = '''(?:^|[^0-9A-Fa-f-]|[0-9A-Za-z]*[g-zG-Z][0-9A-Za-z]*-)(\d{12})\b'''
 secretGroup = 1
 entropy = 0
 [rules.allowlist]

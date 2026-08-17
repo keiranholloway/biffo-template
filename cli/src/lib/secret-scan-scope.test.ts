@@ -76,8 +76,10 @@ describe.each(WORKFLOWS)('Secret Scan scope — %s', (workflow) => {
  *
  * `.terraform/` is gitignored in every Biffo repo but a real `terraform.tfstate`
  * lives there once anyone runs `terraform init`/`apply`, carrying the real AWS
- * account id — which `biffo-aws-account-id` (`(?:^|[^0-9A-Fa-f-])(\d{12})\b`,
- * narrowed in #893 to stop matching inside fixture UUIDs) still matches correctly.
+ * account id — which `biffo-aws-account-id`
+ * (`(?:^|[^0-9A-Fa-f-]|[0-9A-Za-z]*[g-zG-Z][0-9A-Za-z]*-)(\d{12})\b`, narrowed
+ * in #893 to stop matching inside fixture UUIDs and again in #1628 to stop
+ * missing hyphenated resource names) still matches correctly.
  * In CI that is invisible (a fresh checkout has no `.terraform/`); on a
  * workstation it failed `verify.sh` every run, for a file the developer is not
  * pushing and cannot remove.
@@ -109,12 +111,23 @@ describe('gitleaks filesystem pass ignores gitignored local state', () => {
     // `(?:^|[^0-9A-Fa-f-])(\d{12})\b` with `secretGroup = 1` — narrowing the
     // BOUNDARY CONDITION (a UUID's last segment is always hyphen-preceded) to
     // stop matching inside fixture UUIDs, not narrowing WHERE it looks or
-    // adding a value to an allowlist. That distinction is exactly what this
-    // test guards, so it is asserted on directly rather than treated as the
-    // kind of change this test exists to catch:
+    // adding a value to an allowlist. #1628 narrowed the boundary condition
+    // again: that first fix blanket-excluded every hyphen, which also
+    // silently dropped the shape AWS resource naming actually produces
+    // (`my-app-artifacts-<id>`, `deploy-role-<id>`). The current regex,
+    // `(?:^|[^0-9A-Fa-f-]|[0-9A-Za-z]*[g-zG-Z][0-9A-Za-z]*-)(\d{12})\b`, only
+    // treats a hyphen like a UUID separator when the word immediately before
+    // it is itself composed entirely of hex characters — what a UUID segment
+    // always is by construction and an ordinary hyphenated resource-name word
+    // essentially never is. That distinction is exactly what this test
+    // guards, so it is asserted on directly rather than treated as the kind
+    // of change this test exists to catch:
     // cli/src/lib/gitleaks-uuid-account-id.test.ts proves the tightened rule
-    // still catches a genuine account id, in both an ARN and a bare literal.
-    expect(config).toContain("regex = '''(?:^|[^0-9A-Fa-f-])(\\d{12})\\b'''")
+    // still catches a genuine account id, in an ARN, a bare literal, and both
+    // hyphenated resource-name shapes, and still ignores a UUID tail.
+    expect(config).toContain(
+      "regex = '''(?:^|[^0-9A-Fa-f-]|[0-9A-Za-z]*[g-zG-Z][0-9A-Za-z]*-)(\\d{12})\\b'''",
+    )
     expect(config).toContain('secretGroup = 1')
   })
 

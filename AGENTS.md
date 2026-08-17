@@ -481,12 +481,21 @@ scanned and the check was permanently green.
   which also matched the last segment of an ordinary UUID whenever it happened
   to be all-digit (`…-111111111111`) — correct test code, tripped by
   coincidence, and the obvious "fix the value" response does not clear it (see
-  next bullet). Narrowed in #893 to
-  `(?:^|[^0-9A-Fa-f-])(\d{12})\b` — a UUID's last segment is always preceded by
-  a hyphen, which this excludes, while a real account id quoted, colon-bounded
-  (ARN), or otherwise word-bounded still fires. If you hit this on a **new**
-  12-digit value the rule doesn't currently exempt, that is very likely a real
-  finding — do not add an allowlist entry to make it pass (see below).
+  next bullet). Narrowed in #893 to `(?:^|[^0-9A-Fa-f-])(\d{12})\b` — a UUID's
+  last segment is always preceded by a hyphen, which this excluded, while a
+  real account id quoted, colon-bounded (ARN), or otherwise word-bounded still
+  fired. That over-corrected: it also silently stopped catching the most
+  common real-world leak shape, an account id at the end of a hyphenated
+  resource name (`my-app-artifacts-<id>`, `deploy-role-<id>`) — S3 buckets,
+  IAM roles, ECR repos and log groups routinely end that way. Narrowed again
+  in #1628 to
+  `(?:^|[^0-9A-Fa-f-]|[0-9A-Za-z]*[g-zG-Z][0-9A-Za-z]*-)(\d{12})\b`: a hyphen
+  is only treated like a UUID separator when the word immediately before it is
+  itself composed entirely of hex characters, which is what a UUID segment
+  always is by construction and an ordinary hyphenated resource-name word
+  essentially never is. If you hit this on a **new** 12-digit value the rule
+  doesn't currently exempt, that is very likely a real finding — do not add an
+  allowlist entry to make it pass (see below).
 - **Secret Scan reads git history, not just your diff.** Fixing the value at
   your branch tip is not enough — the finding survives in the earlier commit.
   Rewrite the branch (amend or squash) and force-push. Force-pushing your own

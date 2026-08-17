@@ -11,21 +11,36 @@
  * disproportionate cost the issue calls out).
  *
  * The fix narrows the regex's boundary condition rather than allowlisting a
- * path or value: `(?:^|[^0-9A-Fa-f-])(\d{12})\b` requires the character
- * immediately before the 12 digits to be either nothing (start of the
- * scanned content) or something that is NOT a hyphen and NOT a hex digit.
- * A UUID's last segment is always preceded by a hyphen, which this excludes;
- * an account id quoted, colon-prefixed (ARN), or otherwise word-bounded is
- * unaffected. gitleaks/RE2 has no lookbehind, so the excluded character has
- * to be consumed as part of the match — `secretGroup = 1` reports only the
- * digit group as the actual secret, so redacted output and allowlist
- * `regexes` (which test the reported secret) still see a bare 12-digit
- * string, unaffected by this change.
+ * path or value. The first pass (#893) landed on
+ * `(?:^|[^0-9A-Fa-f-])(\d{12})\b`, blanket-excluding a preceding hyphen so a
+ * UUID's last segment (always hyphen-preceded) could never match — but that
+ * also silently dropped the most common real-world shape of a leaked account
+ * id: `my-app-artifacts-123456789012`, `deploy-role-123456789012` and every
+ * other S3-bucket/IAM-role/ECR-repo/log-group name that ends `-<account-id>`
+ * (issue #1628, found prosecuting `biffo-plugin-marketing#185`, which it
+ * blocked).
+ *
+ * The current regex,
+ * `(?:^|[^0-9A-Fa-f-]|[0-9A-Za-z]*[g-zG-Z][0-9A-Za-z]*-)(\d{12})\b`, replaces
+ * the blanket hyphen exclusion with a narrower one: a hyphen is only treated
+ * like a UUID separator when the word immediately before it is composed
+ * entirely of hex characters, which is what a UUID segment always is by
+ * construction and an ordinary hyphenated resource-name word
+ * (`artifacts`, `role`) essentially never is (English words routinely contain
+ * letters outside a-f). gitleaks/RE2 has no lookbehind, so the preceding
+ * context still has to be consumed as part of the match rather than asserted
+ * — `secretGroup = 1` reports only the digit group as the actual secret, so
+ * redacted output and allowlist `regexes` (which test the reported secret)
+ * still see a bare 12-digit string, unaffected by this change.
  *
  * These tests prove BOTH directions with the real gitleaks binary against
  * the real `.gitleaks.toml`, the same way `verify-gitleaks-scope.test.ts`
  * does — a regex that stops flagging UUIDs but ALSO stops flagging real
- * account ids would be worse than the bug it fixes.
+ * account ids would be worse than the bug it fixes. Every accepted trade-off
+ * gets its own test case here rather than living only in the `.gitleaks.toml`
+ * comment — a gap documented in prose but not pinned by a test is exactly how
+ * this rule's previous trade-off (the hyphen case, #1628) went unnoticed
+ * until it blocked an unrelated PR.
  *
  * The "still flags a real one" cases need a plausible-looking, NON-canonical
  * 12-digit value (the two canonical placeholders are allowlisted, so using
@@ -163,6 +178,51 @@ describe.skipIf(!HAS_GITLEAKS)(
 
     it('still allowlists the canonical placeholder values', () => {
       const findings = detect('A = "123456789012"\nB = "999999999999"\n')
+      expect(findings.filter((f) => f.RuleID === 'biffo-aws-account-id')).toHaveLength(0)
+    })
+
+    it('still flags an account id after a colon in YAML', () => {
+      const acct = fakeAccountId(4)
+      const findings = detect(`aws:\n  account_id: ${acct}\n`)
+      expect(findings.filter((f) => f.RuleID === 'biffo-aws-account-id')).toHaveLength(1)
+    })
+
+    it('still flags the ECR registry host shape (account id dot-bounded, not hyphenated)', () => {
+      const acct = fakeAccountId(5)
+      const findings = detect(`REPO = "${acct}.dkr.ecr.eu-west-1.amazonaws.com/foo"\n`)
+      expect(findings.filter((f) => f.RuleID === 'biffo-aws-account-id')).toHaveLength(1)
+    })
+
+    // The gap this rule used to have (#1628): S3 bucket names, IAM role
+    // names, ECR repo names and log groups routinely end `-<account-id>`,
+    // and the previous fix's blanket hyphen exclusion silently dropped every
+    // one of them. Pinned here so the trade-off cannot be lost again.
+    it('flags an S3-bucket-shaped name ending in a hyphenated account id', () => {
+      const acct = fakeAccountId(6)
+      const findings = detect(`bucket = "my-app-artifacts-${acct}"\n`)
+      const hits = findings.filter((f) => f.RuleID === 'biffo-aws-account-id')
+      expect(hits).toHaveLength(1)
+      expect(hits[0]?.Secret).toBe(acct)
+    })
+
+    it('flags an IAM-role-shaped name ending in a hyphenated account id', () => {
+      const acct = fakeAccountId(7)
+      const findings = detect(`resource "aws_iam_role" "deploy" { name = "deploy-role-${acct}" }\n`)
+      const hits = findings.filter((f) => f.RuleID === 'biffo-aws-account-id')
+      expect(hits).toHaveLength(1)
+      expect(hits[0]?.Secret).toBe(acct)
+    })
+
+    // The trade-off this rule's fix explicitly accepts (documented in
+    // .gitleaks.toml, and pinned here rather than left only in that
+    // comment): a hyphen is indistinguishable from a UUID separator when the
+    // word immediately before it is ITSELF composed entirely of hex
+    // characters. This is the negative case the class of bug (#1628's
+    // shape: an accepted limit that lived only in prose) requires a test
+    // for, same as the UUID-tail case above.
+    it('does NOT flag a hyphenated account id whose preceding word is itself all-hex (accepted trade-off)', () => {
+      const acct = fakeAccountId(8)
+      const findings = detect(`bucket = "deadbeef-${acct}"\n`)
       expect(findings.filter((f) => f.RuleID === 'biffo-aws-account-id')).toHaveLength(0)
     })
   },

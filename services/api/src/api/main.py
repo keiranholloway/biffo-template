@@ -19,6 +19,7 @@ from .routers import (
     internal_plugin_config,
     internal_plugin_storage,
     internal_plugin_workflows,
+    internal_scopes,
     orchestration,
     users,
     whoami,
@@ -102,6 +103,10 @@ app.include_router(internal_plugin_config.router, prefix="/api/v1")
 # plugin upserts its own orchestration WorkflowDefinition rows, scoped by SigV4
 # identity alone, under /api/v1/internal/plugins/me/workflows/seed.
 app.include_router(internal_plugin_workflows.router, prefix="/api/v1")
+# Internal, dual-authenticated scope-authorization seam (ADR-0029, issue
+# #1607, steps 1-2): a plugin's picker/pre-check over the caller's own scope
+# grant, under /api/v1/internal/scopes and /api/v1/internal/scope-check.
+app.include_router(internal_scopes.router, prefix="/api/v1")
 # User-facing orchestration workflow CRUD (the portal builder): Cognito-authed,
 # admin-gated, under /api/v1/orchestration/workflows, plus the read-only run
 # history under /api/v1/orchestration/runs.

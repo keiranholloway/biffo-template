@@ -668,15 +668,18 @@ export const INSTANCE_FILE_BRANCHES = [
  *
  * The resolved config is deliberately NOT committed here. It carries the AWS
  * account id and admin email, and the template's own `.gitleaks.toml` forbids
- * both in the tree — `biffo-aws-account-id` (`\b\d{12}\b`, broad again as of
- * #1628, with a rule-level allowlist matching a COMPLETE UUID shape
- * (`[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`,
- * `regexTarget = "line"`) so a fixture UUID's hyphen-preceded last segment is
- * exempt while a real account id — quoted, colon-bounded (ARN), or
- * hyphenated in a resource name — still fires) and `biffo-placeholder-config`
- * fire on any real value. Committing it would turn the instance's own Secret
- * Scan red on its first run, which is a worse defect than the one being
- * fixed.
+ * both in the tree — `biffo-aws-account-id`
+ * (`\b(?:[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-)?(\d{12})\b`, `secretGroup = 1`,
+ * as of #1628's third attempt) consumes a UUID's two-hex-quad prefix in the
+ * rule's own regex and reports only the 12 digits, with a `regexTarget =
+ * "match"` allowlist exempting that exact two-quad-preceded shape per match
+ * (not per line, which is what #1628 attempt 2 tried and broke — see
+ * AGENTS.md §7) so a fixture UUID's last segment is exempt while a real
+ * account id — quoted, colon-bounded (ARN), or hyphenated in a resource
+ * name, even sharing a line with an unrelated UUID — still fires. And
+ * `biffo-placeholder-config` fire on any real value. Committing it would turn
+ * the instance's own Secret Scan red on its first run, which is a worse
+ * defect than the one being fixed.
  *
  * All branches get ONE shared commit, not look-alikes (issue #329). The commit
  * is built once on `INSTANCE_FILE_BASE_BRANCH` (`dev`) and `staging`/`main` are

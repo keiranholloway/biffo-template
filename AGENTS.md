@@ -477,40 +477,83 @@ scanned and the check was permanently green.
   `biffo-aws-account-id` rule matches any word-bounded 12-digit number and
   allowlists only `123456789012` and `999999999999`. A plausible-looking
   invented account id fails Secret Scan. Two agents hit this in one day.
-- **A UUID fixture is not exempt, and its exemption lives in the allowlist,
-  not the rule regex.** The rule is a bare `\b\d{12}\b`, which matches any
-  bare 12-digit run, including the last segment of an ordinary fixture UUID
-  (e.g. `11111111-1111-1111-1111-111111111111`) — correct test code, tripped
-  by coincidence, and the obvious "fix the value" response does not clear it
-  (see next bullet). Two narrower-regex attempts were tried and both failed:
-  #893's `(?:^|[^0-9A-Fa-f-])(\d{12})\b` blanket-excluded any preceding hyphen,
-  which also silently stopped catching the most common real-world leak shape
-  — an account id at the end of a hyphenated resource name
-  (`my-app-artifacts-<id>`, `deploy-role-<id>`; S3 buckets, IAM roles, ECR
-  repos and log groups routinely end that way). #1628's first attempt tried
-  requiring the word before the hyphen to contain a non-hex letter, which
-  failed on real AWS naming: the hex class `[0-9A-Fa-f]` includes all ten
-  digits, so any date- or version-stamped prefix (`backup-2024-<id>`,
-  `snapshot-2023-<id>`) or English word spelled only in `a`-`f`
-  (`facade-<id>`, `decade-<id>`) escaped undetected — there is no way to tell
-  a UUID segment from a date by looking at the word alone, because they are
-  the same string.
+- **A UUID fixture is not exempt, and its exemption lives in the rule's own
+  regex plus a narrowly-scoped allowlist, not in line-level context.** The
+  rule matches any bare 12-digit run, including the last segment of an
+  ordinary fixture UUID (e.g. `11111111-1111-1111-1111-111111111111`) —
+  correct test code, tripped by coincidence, and the obvious "fix the value"
+  response does not clear it (see next bullet). Three attempts were needed;
+  read all of them before touching this rule again, because the first two
+  each looked reasonable and were each prosecuted and broken against the real
+  binary:
+  - #893's `(?:^|[^0-9A-Fa-f-])(\d{12})\b` blanket-excluded any preceding
+    hyphen, which also silently stopped catching the most common real-world
+    leak shape — an account id at the end of a hyphenated resource name
+    (`my-app-artifacts-<id>`, `deploy-role-<id>`; S3 buckets, IAM roles, ECR
+    repos and log groups routinely end that way).
+  - #1628 attempt 1 required the word before the hyphen to contain a non-hex
+    letter, which failed on real AWS naming: the hex class `[0-9A-Fa-f]`
+    includes all ten digits, so any date- or version-stamped prefix
+    (`backup-2024-<id>`, `snapshot-2023-<id>`) or English word spelled only
+    in `a`-`f` (`facade-<id>`, `decade-<id>`) escaped undetected — a UUID
+    segment and a date are the same string, so there is no way to tell them
+    apart by looking at the word alone.
+  - #1628 attempt 2 inverted the approach — broad rule (`\b\d{12}\b`) again,
+    with a rule-level allowlist matching a **complete** UUID shape
+    (`[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`)
+    and `regexTarget = "line"`, reasoning that the reported secret (via
+    `secretGroup`) is only the 12 digits and never the hyphens the UUID shape
+    depends on, so the allowlist had to see the whole line to recognise it.
+    This closed every gap the first attempt left and correctly exempted a
+    UUID on its own line, but `regexTarget = "line"` suppresses the _whole
+    line_ — so a genuine account id sharing a line with any unrelated UUID
+    (a log line with both a request-id and an account id, a JSON telemetry
+    blob, a comma-separated pair) was silently waved through with it.
+    Reproduced live: `"account <account-id> request
+11111111-1111-1111-1111-111111111111"` produced zero findings.
 
-  The design inverts this instead of tuning the regex further: the rule stays
-  **broad** (`\b\d{12}\b`) and the rule-level allowlist matches a **complete**
-  UUID shape —
-  `[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`
-  — with `regexTarget = "line"`, because the reported secret is only the
-  12-digit run and never contains the hyphens the UUID shape depends on; the
-  allowlist regex has to see the whole line to recognise it. A full UUID has
-  a fixed, unmistakable shape a date or resource-name prefix cannot
-  accidentally produce, so the exclusion is exact rather than heuristic, and
-  the residual gap the word-heuristic approach used to accept
-  (`deadbeef-<id>`, indistinguishable from a UUID tail by that heuristic) is
-  closed — a hex-only hyphenated word that is not part of a complete UUID is
-  no longer exempt. If you hit this on a value that is not a complete UUID,
-  that is very likely a real finding — do not add an allowlist entry to make
-  it pass (see below).
+  Attempt 3 (current) inverts the exclusion's _scope_ instead of tuning the
+  heuristic again. A UUID's final 12-digit segment is always preceded by
+  exactly two 4-character hex groups (its 3rd and 4th RFC-4122 fields) —
+  `backup-2024-<id>` has only one hex quad before it, and "backup" isn't hex
+  at all. RE2 has no lookbehind, so that prefix is consumed as an optional,
+  non-capturing alternation in the **rule's own regex**, and only the 12
+  digits are reported via `secretGroup`:
+  `\b(?:[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-)?(\d{12})\b`. The leading `\b` is
+  deliberate, not inherited by habit — without it the digit capture has no
+  constraint on what precedes it when the optional prefix doesn't match, so
+  it can match a 12-digit substring embedded inside a longer digit run (a
+  16-digit blob) that the original `\b\d{12}\b` never flagged; confirmed by
+  experiment.
+
+  The exclusion itself lives in a **separate** allowlist scoped to
+  `regexTarget = "match"` (gitleaks supports `[[rules.allowlists]]`, plural,
+  independently scoped per entry), tested against the anchored shape
+  `^[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-\d{12}$`. Critically, `"match"` tests the
+  **raw regex match** (the two hex quads plus digits), not the
+  `secretGroup`-narrowed secret — established by direct experiment against
+  the real 8.30.1 binary with a rule regex built so the two texts differ,
+  which is what neither previous attempt's own testing distinguished (#1628
+  attempt 2's rule had no such gap, so its match and its secret were always
+  identical text, and its conclusion that `"match"` tests the secret was true
+  only by coincidence of not being able to tell the two apart). Because the
+  allowlist is scoped per **match** rather than per **line**, attempt 2's
+  failure mode is closed structurally: an account id and an unrelated UUID on
+  the same line each produce their own match with their own full-match text,
+  so only the UUID's is excluded. `deadbeef-<id>` (the residual gap attempt
+  1's word heuristic accepted) is also closed — it is not part of a real
+  two-hex-quad prefix, so it is no longer exempt.
+
+  The residual trade-off, narrower than either previous attempt's: a bare
+  account id preceded by exactly two complete, hyphen-separated 4-hex-digit
+  groups that are _not_ part of a real UUID (e.g. `"0000-0000-<id>"` with
+  nothing else around it) is indistinguishable from a UUID tail here. That
+  requires an author to write two complete fake hex quads immediately before
+  a bare account id with no other context — narrower than a single hex-spelled
+  word or a date prefix, and no case in this repo does it. If you hit this
+  rule on a value that is not a complete two-hex-quad-preceded shape, that is
+  very likely a real finding — do not add an allowlist entry to make it pass
+  (see below).
 
 - **Secret Scan reads git history, not just your diff.** Fixing the value at
   your branch tip is not enough — the finding survives in the earlier commit.

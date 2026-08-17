@@ -10,7 +10,9 @@
  * last segment" (unenforceable) or squashing/rewriting the branch (the
  * disproportionate cost the issue calls out).
  *
- * TWO attempts at fixing this by narrowing the RULE REGEX both failed:
+ * THREE attempts were needed. Read all three before touching this rule
+ * again — the first two each looked reasonable and were each prosecuted and
+ * broken against the real gitleaks binary, not a theoretical flaw:
  *
  * - #893 landed on `(?:^|[^0-9A-Fa-f-])(\d{12})\b`, blanket-excluding a
  *   preceding hyphen so a UUID's last segment (always hyphen-preceded) could
@@ -19,41 +21,75 @@
  *   and every other S3-bucket/IAM-role/ECR-repo/log-group name that ends
  *   `-<account-id>` (issue #1628, found prosecuting
  *   `biffo-plugin-marketing#185`, which it blocked).
- * - #1628's first attempt tried
+ * - #1628 attempt 1 tried
  *   `(?:^|[^0-9A-Fa-f-]|[0-9A-Za-z]*[g-zG-Z][0-9A-Za-z]*-)(\d{12})\b`,
  *   requiring the word before a hyphen to contain a non-hex letter before
- *   treating the hyphen like a UUID separator. This was PROSECUTED AND
- *   REJECTED: the hex character class `[0-9A-Fa-f]` includes all ten digits,
- *   not just `a`-`f`, so any all-numeric prefix (`backup-2024-<id>`,
+ *   treating the hyphen like a UUID separator. PROSECUTED AND REJECTED: the
+ *   hex character class `[0-9A-Fa-f]` includes all ten digits, not just
+ *   `a`-`f`, so any all-numeric prefix (`backup-2024-<id>`,
  *   `snapshot-2023-<id>`) or English word spelled only in `a`-`f`
  *   (`facade-<id>`, `decade-<id>`, `cafe-<id>`) escaped undetected — a date
  *   and a UUID segment are indistinguishable by looking at the word alone,
  *   because they can be the same string (`2024` is four hex-valid digits).
+ * - #1628 attempt 2 inverted the approach: broad rule (`\b\d{12}\b`) again,
+ *   with a rule-level allowlist matching a COMPLETE UUID —
+ *   `[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`
+ *   — and `regexTarget = "line"`, reasoning that the reported *secret*
+ *   (`secretGroup`) is only the matched 12 digits and never the hyphens
+ *   around them, so the allowlist had to see the whole source LINE to
+ *   recognise a UUID shape at all. PROSECUTED AND REJECTED: `"line"`
+ *   suppresses the whole line, so a genuine account id sharing a line with
+ *   ANY unrelated UUID text (a log line with a request-id and an account id,
+ *   a JSON telemetry blob, a comma-separated pair) was silently waved
+ *   through with it — reproduced live, `0` findings on all of those shapes.
  *
- * The design now INVERTS the approach instead of tuning the regex further:
- * rather than describing the context that is NOT a UUID (heuristic, and
- * provably porous, twice), it describes the UUID ITSELF, which has a fixed,
- * unmistakable shape. The rule regex goes back to being broad
- * (`\b\d{12}\b`), and the rule-level allowlist gains a regex matching a
- * COMPLETE UUID —
- * `[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`
- * — with `regexTarget = "line"`. That target choice is load-bearing and was
- * established by experiment against the real binary, not from gitleaks'
- * docs: the reported *secret* here is only the matched 12 digits, never the
- * hyphens around them, so an allowlist regex tested against the secret (the
- * default target, and `"match"`) can never see a full UUID shape and
- * suppresses NOTHING — verified directly, see the "regexTarget" test below.
- * `"line"` tests the allowlist regex against the whole source line instead,
- * which does contain the complete UUID text.
+ * Attempt 3 (current) inverts the exclusion's SCOPE instead of tuning the
+ * heuristic again. A UUID's final 12-digit segment is always preceded by
+ * exactly two 4-character hex groups (RFC 4122's 3rd and 4th fields) — a
+ * date or resource-name prefix is never TWO complete hex quads, only ever
+ * zero or one. RE2 has no lookbehind, so that prefix is consumed as an
+ * optional, non-capturing alternation in the RULE's own regex, and only the
+ * 12 digits are reported via `secretGroup`:
+ * `\b(?:[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-)?(\d{12})\b`. The leading `\b` is
+ * deliberate: without it, the digit capture has no boundary constraint when
+ * the optional prefix doesn't match, so it can match a 12-digit substring
+ * embedded inside a longer digit run (a 16-digit blob) that the original
+ * `\b\d{12}\b` never flagged — verified by experiment (see the "digit blob"
+ * test below).
  *
- * `backup-2024-<id>` does not match the full UUID pattern and stays caught;
+ * The exclusion lives in a SEPARATE allowlist with `regexTarget = "match"`,
+ * tested against the anchored shape `^[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-\d{12}$`.
+ * That target choice is load-bearing and was established by experiment
+ * against the real binary, not from gitleaks' docs — and it corrects attempt
+ * 2's own experimentally-derived conclusion, which was true only by
+ * coincidence: attempt 2's rule regex had no capturing group, so its full
+ * match and its `secretGroup` secret were always identical text, and nothing
+ * in that experiment could have told "tests the match" apart from "tests the
+ * secret". Re-run here with a rule regex built so the two DIFFER (this one:
+ * for a UUID tail, the full match is `0000-0000-000000000001` but the
+ * reported secret is only its trailing twelve digits), `regexTarget =
+ * "match"` tests the RAW regex
+ * match, hyphens included, and correctly suppresses the UUID case; the
+ * default (unset) target — which behaves identically to `"match"` when no
+ * rule regex has a group narrowing the secret below the full match — was
+ * also directly confirmed to suppress nothing once match and secret diverge.
+ * See the "regexTarget" test below for both directions.
+ *
+ * Because the allowlist is now scoped per MATCH rather than per LINE,
+ * attempt 2's failure mode is closed structurally, not patched: an account
+ * id and an unrelated UUID sharing one line each produce their OWN match
+ * with their OWN full-match text, so only the UUID's gets excluded — see the
+ * "same line as a UUID" tests below, the ones attempt 2 was rejected for
+ * missing.
+ *
+ * `backup-2024-<id>` does not match the two-hex-quad prefix (only one quad
+ * precedes it, and "backup" isn't hex either) and stays caught;
  * `b3f1c0de-0000-0000-0000-000000000001` does match it and is suppressed.
- * The exclusion is exact rather than heuristic, so the residual gap the
- * previous (rejected) design accepted in prose — a hyphenated word that is
- * ITSELF all-hex, e.g. `deadbeef-<id>`, indistinguishable from a UUID tail by
- * that heuristic — is CLOSED here: it is not part of a complete UUID, so it
- * is no longer exempt (see the "no longer exempt" test below, which replaces
- * the old accepted-trade-off test).
+ * The residual gap the word-heuristic approach (attempt 1) used to accept in
+ * prose — a hyphenated word that is ITSELF all-hex, e.g. `deadbeef-<id>`,
+ * indistinguishable from a UUID tail by that heuristic — is CLOSED here: it
+ * is not part of a two-hex-quad prefix, so it is no longer exempt (see the
+ * "no longer exempt" test below).
  *
  * These tests prove BOTH directions with the real gitleaks binary against
  * the real `.gitleaks.toml`, the same way `verify-gitleaks-scope.test.ts`
@@ -61,8 +97,9 @@
  * account ids would be worse than the bug it fixes. Every accepted trade-off
  * gets its own test case here rather than living only in the `.gitleaks.toml`
  * comment — a gap documented in prose but not pinned by a test is exactly how
- * this rule's previous trade-off (the hyphen case, #1628) went unnoticed
- * until it blocked an unrelated PR.
+ * this rule's previous trade-offs (the hyphen case, #1628 attempt 1; the
+ * same-line case, #1628 attempt 2) went unnoticed until they blocked an
+ * unrelated PR or were caught by prosecution.
  *
  * The "still flags a real one" cases need a plausible-looking, NON-canonical
  * 12-digit value (the two canonical placeholders are allowlisted, so using
@@ -287,15 +324,93 @@ describe.skipIf(!HAS_GITLEAKS)(
       expect(findings.filter((f) => f.RuleID === 'biffo-aws-account-id')).toHaveLength(0)
     })
 
+    it('does not flag a UUID at the very start of a line', () => {
+      const findings = detect('11111111-1111-1111-1111-111111111111\n')
+      expect(findings.filter((f) => f.RuleID === 'biffo-aws-account-id')).toHaveLength(0)
+    })
+
+    it('does not flag a UUID inside a list', () => {
+      const findings = detect(
+        '["11111111-1111-1111-1111-111111111111", "22222222-2222-2222-2222-222222222222"]\n',
+      )
+      expect(findings.filter((f) => f.RuleID === 'biffo-aws-account-id')).toHaveLength(0)
+    })
+
+    it('does not flag several UUIDs on one line', () => {
+      const findings = detect(
+        '11111111-1111-1111-1111-111111111111 22222222-2222-2222-2222-222222222222 33333333-3333-3333-3333-333333333333\n',
+      )
+      expect(findings.filter((f) => f.RuleID === 'biffo-aws-account-id')).toHaveLength(0)
+    })
+
+    // The digit-blob regression #1628 attempt 3's leading `\b` exists to
+    // prevent. Without it, the rule's optional two-hex-quad prefix leaves
+    // the bare-digit alternative with no leading boundary at all, so it can
+    // match a 12-digit SUBSTRING inside a longer run of digits that the
+    // original `\b\d{12}\b` never flagged (both boundaries required). This
+    // is not a UUID case at all — a 16-digit blob has no hyphens anywhere —
+    // it is a second, independent false-positive class the redesign could
+    // have reintroduced by accident.
+    it('does not flag a 12-digit substring embedded in a longer run of digits', () => {
+      const findings = detect('1234567890123456\n')
+      expect(findings.filter((f) => f.RuleID === 'biffo-aws-account-id')).toHaveLength(0)
+    })
+
+    // The failure #1628 attempt 2 was rejected for: `regexTarget = "line"`
+    // suppressed a real account id whenever it shared a LINE with any
+    // unrelated UUID text. Attempt 3 scopes the allowlist to the raw regex
+    // MATCH instead, so each occurrence is judged independently regardless
+    // of what else shares its line. Each case below is a realistic
+    // co-occurrence (log line, JSON payload, comma list), not a contrived
+    // one, and each must still catch the real account id.
+    it('still flags an account id sharing a line with an unrelated UUID (log-line shape)', () => {
+      const acct = fakeAccountId(12)
+      const findings = detect(
+        `log.info("account ${acct} request 11111111-1111-1111-1111-111111111111 accepted")\n`,
+      )
+      const hits = findings.filter((f) => f.RuleID === 'biffo-aws-account-id')
+      expect(hits).toHaveLength(1)
+      expect(hits[0]?.Secret).toBe(acct)
+    })
+
+    it('still flags an account id sharing a line with an unrelated UUID (UUID first)', () => {
+      const acct = fakeAccountId(13)
+      const findings = detect(
+        `log.info("uuid 11111111-1111-1111-1111-111111111111 account ${acct}")\n`,
+      )
+      const hits = findings.filter((f) => f.RuleID === 'biffo-aws-account-id')
+      expect(hits).toHaveLength(1)
+      expect(hits[0]?.Secret).toBe(acct)
+    })
+
+    it('still flags an account id sharing a line with an unrelated UUID (inside JSON)', () => {
+      const acct = fakeAccountId(14)
+      const findings = detect(
+        `{"account": "${acct}", "trace": "11111111-1111-1111-1111-111111111111"}\n`,
+      )
+      const hits = findings.filter((f) => f.RuleID === 'biffo-aws-account-id')
+      expect(hits).toHaveLength(1)
+      expect(hits[0]?.Secret).toBe(acct)
+    })
+
+    it('still flags an account id sharing a line with an unrelated UUID (comma-separated list)', () => {
+      const acct = fakeAccountId(15)
+      const findings = detect(`11111111-1111-1111-1111-111111111111, ${acct}\n`)
+      const hits = findings.filter((f) => f.RuleID === 'biffo-aws-account-id')
+      expect(hits).toHaveLength(1)
+      expect(hits[0]?.Secret).toBe(acct)
+    })
+
     // `regexTarget` decides whether the UUID allowlist regex is tested
     // against the reported SECRET (only the 12 digits, no hyphens — the
     // allowlist can then never match a UUID shape, so it suppresses
-    // NOTHING) or the whole LINE (which contains the complete UUID text).
+    // NOTHING) or the raw regex MATCH (which, when the optional two-hex-quad
+    // prefix matched, does contain the complete two-quad-plus-digits text).
     // Established by experiment against the real 8.30.1 binary, not from
-    // gitleaks' docs: without `regexTarget = "line"` in `.gitleaks.toml`,
+    // gitleaks' docs: without `regexTarget = "match"` in `.gitleaks.toml`,
     // this test fails, because the UUID tail below stays flagged.
-    it('regexTarget = "line" is required for the UUID allowlist to suppress anything', () => {
-      expect(readFileSync(GITLEAKS_TOML, 'utf8')).toContain('regexTarget = "line"')
+    it('regexTarget = "match" is required for the UUID allowlist to suppress anything', () => {
+      expect(readFileSync(GITLEAKS_TOML, 'utf8')).toContain('regexTarget = "match"')
       const findings = detect('uuid_tail = "b3f1c0de-0000-0000-0000-000000000001"\n')
       expect(findings.filter((f) => f.RuleID === 'biffo-aws-account-id')).toHaveLength(0)
     })

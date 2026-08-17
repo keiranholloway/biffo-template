@@ -210,6 +210,35 @@
 # in prose. Recorded here rather than silently left for the next reader to
 # rediscover.
 #
+# ## Fourth-pass fix: the audit's own denominator was wrong (#1625)
+#
+# The fourth prosecution of #1619 found this script red-lighting CORRECT
+# code, and worse, silently miscounting on some inputs while still exiting
+# 0 -- a guard about an unstated denominator (#1413) carrying that exact
+# defect in itself, for the third time (see the header above: INERT, then
+# BROKEN, then silently-examined-nothing were the first three).
+#
+# Cause: find_invocations()'s awk `process()` advances `rest` past each
+# invocation it just parsed with `rest = substr(rest, RSTART + RLENGTH)`,
+# but awk has exactly one set of RSTART/RLENGTH, shared across every
+# match() call in the function. The flag-skip loop and the token-extraction
+# match() calls both overwrite it after the interpreter match() that found
+# the invocation, so that final substr() consumed a stale offset scoped to
+# a short inner string (`tail`/`tail2`), not to `rest` itself. Residue was
+# left behind and rescanned as a bogus second invocation -- landing
+# wherever the interpolated script PATH LENGTH happened to put it, which is
+# why `scripts/foo.sh` passed, `scripts/foo2.sh` false-MISMATCHed on a
+# phantom `sh` invocation nothing in the line names, and `scripts/a.sh`
+# silently reported 2 invocations for 1 real one while still exiting 0.
+#
+# Fix: a `consumed` local accumulates lengths captured the instant each
+# match() returns (flag length, whitespace length, token length), and
+# `rest` is advanced from that sum instead of from whatever match() left in
+# RSTART/RLENGTH last. See `scripts/interpreter-audit.test.sh` for the
+# fixture matrix (all four filenames from #1625's own reproduction) plus
+# every property this file's exit-code contract still had to hold
+# afterward, executed under both bash and dash.
+#
 # Usage:
 #   bash scripts/interpreter-audit.sh
 #
@@ -299,7 +328,7 @@ find_invocations() {
   process(line, startline)
 }
 
-function process(line, startline,    rest, matched, interp, wordend, tail, tail2, token, vline) {
+function process(line, startline,    rest, matched, interp, wordend, tail, tail2, token, vline,    consumed, flaglen, wslen, toklen, vconsumed) {
   rest = line
   while (match(rest, /(^|[ \t])(sh|bash)([ \t]|$)/)) {
     matched = substr(rest, RSTART, RLENGTH)
@@ -308,16 +337,38 @@ function process(line, startline,    rest, matched, interp, wordend, tail, tail2
     else if (matched ~ /^[ \t]bash/) { interp = "bash"; wordend = RSTART + 1 + 4 - 1 }
     else                        { interp = "sh";   wordend = RSTART + 1 + 2 - 1 }
 
+    # `consumed` tracks, in characters of `rest`, how far the invocation just
+    # parsed extends -- it is what `rest` gets advanced by below. It must be
+    # built from lengths captured the instant each match() returns, never
+    # from RSTART/RLENGTH read back later: awk has exactly one set of those
+    # globals, so the flag-skip and token-extraction match() calls below
+    # silently overwrite whatever the interpreter match() left there (#1625).
+    # Reusing a stale RSTART/RLENGTH -- as this function used to, on its
+    # final `rest = substr(rest, RSTART + RLENGTH)` -- advances `rest` by an
+    # offset that belongs to a short inner string (`tail`/`tail2`), not to
+    # `rest` itself, leaving residue that gets rescanned as a phantom second
+    # invocation. Where the residue lands depends on the interpolated
+    # script-path length, which is why the outward symptom tracked filename
+    # length.
+    consumed = wordend
+
     tail = substr(rest, wordend + 1)
     while (match(tail, /^[ \t]+-[^ \t]*/)) {
-      tail = substr(tail, RLENGTH + 1)
+      flaglen = RLENGTH
+      tail = substr(tail, flaglen + 1)
+      consumed += flaglen
     }
 
     token = ""
     if (match(tail, /^[ \t]+/)) {
-      tail2 = substr(tail, RLENGTH + 1)
+      wslen = RLENGTH
+      tail2 = substr(tail, wslen + 1)
       if (match(tail2, /^[^ \t]+/)) {
+        toklen = RLENGTH
         token = substr(tail2, RSTART, RLENGTH)
+        consumed += wslen + toklen
+      } else {
+        consumed += wslen
       }
     }
 
@@ -327,13 +378,14 @@ function process(line, startline,    rest, matched, interp, wordend, tail, tail2
       printf "UNPARSEABLE\t%d\t%s\tinvoked with %s, target is not a bare script path: %s\n", startline, interp, interp, token
     }
 
-    rest = substr(rest, RSTART + RLENGTH)
+    rest = substr(rest, consumed + 1)
   }
 
   vline = line
   while (match(vline, /(^|[ \t])\$\{?[A-Za-z_][A-Za-z0-9_]*\}?[ \t]+[^ \t]+\.sh([ \t]|$)/)) {
+    vconsumed = RSTART + RLENGTH
     printf "UNPARSEABLE\t%d\tvar\tinterpreter is a shell variable, cannot be resolved statically\n", startline
-    vline = substr(vline, RSTART + RLENGTH)
+    vline = substr(vline, vconsumed)
   }
 }
 ' "$1"

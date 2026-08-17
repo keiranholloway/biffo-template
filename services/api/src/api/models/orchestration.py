@@ -62,6 +62,25 @@ class WorkflowDefinition(TenantScopedModel):
             "trigger_detail_type",
             "enabled",
         ),
+        # A plugin's own natural key for a definition it declares (issue #1593):
+        # unique per (tenant, owner_plugin, definition_key) so re-declaring the
+        # same key upserts the same row instead of piling up duplicates on every
+        # cold start. Both columns are NULL together on every definition an
+        # admin authors through orchestration.py (owner_plugin is never set
+        # there), and a NULL participant exempts a row from a unique index in
+        # both SQLite and Postgres — so admin-authored rows are never
+        # constrained by this index at all, and it is a plain composite index
+        # rather than the COALESCE trick 0019 needed: that migration had to
+        # keep enforcing uniqueness for a nullable *first* column, which does
+        # not apply here since a row only ever carries a definition_key when it
+        # also carries an owner_plugin (the seed route always sets both).
+        Index(
+            "uq_orch_def_owner_key",
+            "tenant_id",
+            "owner_plugin",
+            "definition_key",
+            unique=True,
+        ),
     )
 
     name: Mapped[str] = mapped_column(String(200), nullable=False)
@@ -103,6 +122,23 @@ class WorkflowDefinition(TenantScopedModel):
     # what a missing principal means.
     run_as_user_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     run_as_kind: Mapped[str] = mapped_column(String(16), nullable=False, default="system")
+
+    # The plugin that self-declared this definition via
+    # POST /internal/plugins/me/workflows/seed (issue #1593), resolved from
+    # ServicePrincipal.logical_names — never caller-supplied. NULL for every
+    # definition authored through the human orchestration.py CRUD (the normal
+    # case today), which never sets this column, so the two authoring paths
+    # can never collide: a plugin's seed can only ever find and update rows it
+    # itself created, and an admin's row is never visible to any plugin's seed
+    # pre-read (see internal_plugin_workflows.py).
+    owner_plugin: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    # The plugin's own stable identifier for this definition (its half of the
+    # upsert key, alongside owner_plugin) — e.g. "agent-fan-in". Chosen by the
+    # plugin, stable across redeploys, and never renamed by re-declaring:
+    # changing it creates a second row rather than renaming the first, exactly
+    # like PluginChatAgent.agent_key. NULL alongside owner_plugin for every
+    # admin-authored row.
+    definition_key: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
 
 class TriggerCatalog(TenantScopedModel):

@@ -18,6 +18,7 @@ from .routers import (
     internal_orchestration,
     internal_plugin_config,
     internal_plugin_storage,
+    internal_plugin_workflows,
     orchestration,
     users,
     whoami,
@@ -97,6 +98,10 @@ app.include_router(internal_agent_chat.router, prefix="/api/v1")
 # admin-set config row from plugin_chat_agents, scoped by SigV4 identity alone,
 # under /api/v1/internal/plugins/me/config/{role}.
 app.include_router(internal_plugin_config.router, prefix="/api/v1")
+# Internal service-only plugin workflow declaration (ADR-0009, issue #1593): a
+# plugin upserts its own orchestration WorkflowDefinition rows, scoped by SigV4
+# identity alone, under /api/v1/internal/plugins/me/workflows/seed.
+app.include_router(internal_plugin_workflows.router, prefix="/api/v1")
 # User-facing orchestration workflow CRUD (the portal builder): Cognito-authed,
 # admin-gated, under /api/v1/orchestration/workflows, plus the read-only run
 # history under /api/v1/orchestration/runs.

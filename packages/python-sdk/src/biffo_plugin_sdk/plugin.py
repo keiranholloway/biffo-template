@@ -711,6 +711,14 @@ class BiffoPluginBase(ABC):
       built for that path; it was itself not idempotent until
       biffo-template#1000, so treat this route as young and verify your own
       seed rather than assuming it is a finished story.
+      ``POST /api/v1/internal/plugins/me/workflows/seed`` is the analogous
+      route for a plugin's own ``WorkflowDefinition`` rows
+      (biffo-template#1593) — unlike the config route above, it **upserts**:
+      every cold start's declared values overwrite whatever is currently
+      stored, so a definition's snapshot (e.g. an agent action's model or
+      timeout) can never outlive the build that last declared it. Call it
+      with the same ``self.api.post(...)`` shape, keyed per definition by a
+      ``definition_key`` you choose and keep stable across deploys.
     - **Out-of-band seeding, now a declared interface (biffo-template#1554).**
       This is what the first-party plugins use, and it needs no credentials
       and no running plugin — it is also the only option for an event-only

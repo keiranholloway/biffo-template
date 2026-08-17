@@ -1081,7 +1081,7 @@ export default function OrchestrationPage() {
         {label}
         {field.type === 'textarea' ? (
           <textarea
-            value={asString(cfg[field.name])}
+            value={effectiveValue(fields, cfg, field.name)}
             required={field.required}
             onChange={(e) => {
               setField(field.name, () => e.target.value)
@@ -1115,7 +1115,7 @@ export default function OrchestrationPage() {
                 ? 'text'
                 : inputType(field.type)
             }
-            value={asString(cfg[field.name])}
+            value={effectiveValue(fields, cfg, field.name)}
             required={field.required}
             onChange={(e) => {
               setField(field.name, () => e.target.value)

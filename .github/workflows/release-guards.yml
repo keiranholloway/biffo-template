@@ -305,3 +305,17 @@ jobs:
       - name: Workflow/script interpreter audit
         if: ${{ github.event_name == 'pull_request' && !cancelled() }}
         run: bash scripts/interpreter-audit.sh
+      - name: Workflow/script interpreter audit — self-test
+        if: ${{ github.event_name == 'pull_request' && !cancelled() }}
+        # scripts/interpreter-audit.test.sh had zero callers (#1629): a real,
+        # working regression test for the #1625 stale-awk-RSTART/RLENGTH bug
+        # (verified against the pre-fix script at fd0d5090, where it reports 3
+        # failures) that nothing in this tree, scripts/verify.sh, or any
+        # workflow ever invoked. Wired here, beside the guard it exists to
+        # prove, the same way routing-smoke-test.test.sh is wired at
+        # _skeletons/sibling-template/.github/workflows/ci.yml. Verified
+        # passing on current dev (both `sh` and `bash`, matching the runner's
+        # actual `/bin/sh` and the interpreter-audit.sh step above it) before
+        # this was added, so this closes the no-caller gap without itself
+        # turning a green check red.
+        run: sh scripts/interpreter-audit.test.sh

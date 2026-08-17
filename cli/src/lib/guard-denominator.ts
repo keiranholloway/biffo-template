@@ -347,7 +347,6 @@ const BARE_COUNT = /(?<=^|\s)\d+(?=$|[\s),;:]|\.(?!\d))/g
 function precedingWord(line: string, digitStart: number): string | undefined {
   if (digitStart === 0) return undefined
   const beforeWhitespace = digitStart - 1 // BARE_COUNT's `(?<=^|\s)` consumed exactly this one char
-  if (beforeWhitespace === 0) return undefined
   return /([A-Za-z][A-Za-z'-]*)$/.exec(line.slice(0, beforeWhitespace))?.[1]
 }
 

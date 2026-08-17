@@ -704,6 +704,15 @@ assertFakeThing(['a', 'b', 'c'])
       // (`gh run view <id> --log`). must-reject lines are the exact shapes
       // #1617 names, confirmed forging credit against the PRE-fix regex
       // before this change (see the PR body's before/after table).
+      //
+      // CORRECTION (round 2 of #1617): the "instance-adoption guard" line
+      // below was labelled captured-live but was not — it claimed 3 while
+      // listing 2 paths, which `check-claim-invocation.ts` can never emit
+      // (the count and the joined list come from the same array). Re-run
+      // live via `sh scripts/biffo.sh check claim-invocation` for this fix;
+      // the corrected line lists all 3 distributed copies, including
+      // `_skeletons/sibling-template/AGENTS.md`, which has existed since
+      // before this PR's base commit.
 
       it.each([
         ['pipe-trap', 'audited 34 shell file(s) under scripts/ and .githooks/ under /repo'],
@@ -742,7 +751,8 @@ assertFakeThing(['a', 'b', 'c'])
         ],
         [
           'instance-adoption guard (count followed by a filename, not a plural noun at all)',
-          'audited 3 distributed AGENTS.md (AGENTS.md, _skeletons/plugin-template/AGENTS.md) under /repo',
+          'audited 3 distributed AGENTS.md (AGENTS.md, _skeletons/plugin-template/AGENTS.md, ' +
+            '_skeletons/sibling-template/AGENTS.md) under /repo',
         ],
       ])('must accept — real guard output: %s', (_label, line) => {
         expect(outputStatesADenominator(`${line}\n`)).toBe(true)
@@ -793,6 +803,99 @@ assertFakeThing(['a', 'b', 'c'])
         // And the fixed function now rejects every one of them.
         expect(mustRejectLines.every((l) => outputStatesADenominator(`${l}\n`))).toBe(false)
         expect(mustRejectLines.some((l) => outputStatesADenominator(`${l}\n`))).toBe(false)
+      })
+
+      describe('#1617 round 2: a single punctuation character defeated the ordinary-noun check', () => {
+        // Not invented shapes: `:` and `,` are the two right-boundary
+        // delimiters BARE_COUNT itself already treats as count-terminating
+        // punctuation (see BARE_COUNT's char class), so a real log line is
+        // exactly as likely to write `port: 8080` as `port 8080`. Tab and a
+        // bracketed count are included because #1617's own report named them
+        // as untested variants worth checking, not because either turned out
+        // to be a live gap (the tab case was already correctly rejected —
+        // BARE_COUNT's `\s` lookbehind does not care which whitespace
+        // character it consumed, only `precedingWord`'s ability to see past
+        // punctuation was ever broken).
+
+        it.each([
+          ['a colon-separated port number', 'audited port: 8080 for issues'],
+          ['a comma-separated port number', 'audited port, 8080 for issues'],
+          ['a colon-separated line number', 'examined the file at line: 42 for issues'],
+          ['a comma-separated line number', 'examined the file at line, 42 for issues'],
+          [
+            'a bracketed count with interior space (space then "(" now blocks precedingWord)',
+            'audited port ( 8080 ) for issues',
+          ],
+        ])('must reject — %s: %s', (_label, line) => {
+          expect(outputStatesADenominator(`${line}\n`)).toBe(false)
+        })
+
+        it('must reject — a tab between noun and count (already correctly rejected, not a new gap)', () => {
+          expect(outputStatesADenominator('audited port\t8080 for issues\n')).toBe(false)
+        })
+
+        it('must reject — a colon directly after a decimal continuation (no new gap)', () => {
+          // "3.2" already fails BARE_COUNT's left-boundary check for both
+          // halves (see the #1617 round-1 decimal fix); a trailing colon
+          // changes nothing because neither digit run ever became a
+          // candidate count in the first place.
+          expect(outputStatesADenominator('audited section 3.2: of the doc\n')).toBe(false)
+        })
+
+        it('regression: the round-1-fixed regex still forged credit on every punctuated variant', () => {
+          // Fail-first evidence against the code this PR is actually built
+          // on top of (round 1's fix — decimal continuation and the
+          // DIRECTLY-adjacent ordinary-noun check), not a straw man: it
+          // rejects "port 8080" but not "port: 8080", because
+          // `precedingWord` returns `undefined` the instant punctuation
+          // touches the mandatory whitespace, and `lineStatesADenominator`
+          // read that `undefined` as an automatic accept.
+          const round1BareCount = /(?<=^|\s)\d+(?=$|[\s),;:]|\.(?!\d))/g
+          const round1Vocabulary =
+            /\b(examined|checked|audited|scanned|covered|considered|classified|discovered|counted|denominator|reached|analysed|analyzed|processed|swept|walked|visited|inspected|assessed|evaluated)\b/i
+          const round1PrecedingWord = (line: string, digitStart: number): string | undefined => {
+            if (digitStart === 0) return undefined
+            return /([A-Za-z][A-Za-z'-]*)$/.exec(line.slice(0, digitStart - 1))?.[1]
+          }
+          const round1LineStatesADenominator = (line: string): boolean => {
+            if (!round1Vocabulary.test(line)) return false
+            for (const match of line.matchAll(round1BareCount)) {
+              const word = round1PrecedingWord(line, match.index as number)
+              if (word === undefined || round1Vocabulary.test(word)) return true
+            }
+            return false
+          }
+
+          const punctuatedForgeLines = [
+            'audited port: 8080 for issues',
+            'audited port, 8080 for issues',
+            'examined the file at line: 42 for issues',
+            'examined the file at line, 42 for issues',
+            'audited port ( 8080 ) for issues',
+          ]
+          // Fail-first: round 1's own code really does forge on all five —
+          // this is the bug, reproduced against the exact pre-this-fix logic.
+          expect(punctuatedForgeLines.every(round1LineStatesADenominator)).toBe(true)
+          // And the fixed function now rejects every one of them.
+          expect(punctuatedForgeLines.some((l) => outputStatesADenominator(`${l}\n`))).toBe(false)
+        })
+
+        it('does not over-reject: a colon-introduced identifier (hyphenated or camelCase) still credits', () => {
+          // The reason `hiddenOrdinaryNoun` is scoped to a PLAIN, unhyphenated,
+          // lowercase word rather than "any word behind punctuation": these
+          // two are REAL guard output (see the must-accept corpus above) and
+          // are structurally identical to `port: 8080` — a non-vocabulary
+          // word, a colon, a count — except the word is a hyphenated or
+          // camelCase identifier rather than an ordinary English noun.
+          expect(outputStatesADenominator('[coverage] terraform-input: 12 path(s) reached\n')).toBe(
+            true,
+          )
+          expect(
+            outputStatesADenominator(
+              '[coverage] cognito-invite-template-guard.findModuleTerraformFiles: 33 path(s) reached\n',
+            ),
+          ).toBe(true)
+        })
       })
 
       it('genuinely ambiguous — left open deliberately, not silently: same shape as a real accept', () => {

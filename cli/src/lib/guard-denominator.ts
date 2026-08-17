@@ -339,15 +339,93 @@ const BARE_COUNT = /(?<=^|\s)\d+(?=$|[\s),;:]|\.(?!\d))/g
  * The word, if any, immediately touching a candidate count's mandatory
  * leading whitespace — i.e. what `BARE_COUNT` skipped over to reach it.
  * `undefined` when nothing precedes (the count opens the line) or what
- * precedes is punctuation rather than a word: both are left alone, because a
- * colon- or comma-introduced count (`[coverage] …: 12 path(s) reached`) is
- * the pre-existing, deliberately non-adjacent-to-vocabulary design (see
- * `lineStatesADenominator`) and must keep passing.
+ * precedes is punctuation rather than a word.
+ *
+ * `undefined` used to be treated by `lineStatesADenominator` as standing for
+ * one thing — "there is nothing here to object to" — and it was actually
+ * standing for two: a genuinely non-adjacent count (line start, or a colon/
+ * comma with no word further back at all) AND a count whose noun is a single
+ * punctuation character away from this function's view. `precedingWord`
+ * itself is unchanged and still returns `undefined` for both; the second
+ * case now gets a further look from `hiddenOrdinaryNoun` below before
+ * `lineStatesADenominator` accepts it. See that function's docstring for the
+ * #1617 round-2 finding this split exists to close.
  */
 function precedingWord(line: string, digitStart: number): string | undefined {
   if (digitStart === 0) return undefined
   const beforeWhitespace = digitStart - 1 // BARE_COUNT's `(?<=^|\s)` consumed exactly this one char
   return /([A-Za-z][A-Za-z'-]*)$/.exec(line.slice(0, beforeWhitespace))?.[1]
+}
+
+/**
+ * A `[a-z]`-only, unhyphenated word — the shape of an ordinary English
+ * locator noun (`port`, `line`, `section`) as opposed to a technical
+ * identifier (`terraform-input`, `findModuleTerraformFiles`, a snake_case
+ * name), which routinely carries a hyphen or an internal capital because it
+ * names a scanner, a resource type, or a function. See
+ * `hiddenOrdinaryNoun`'s docstring for why this is the line drawn between
+ * "reject" and "leave ambiguous" rather than a broader one.
+ */
+const PLAIN_LOWERCASE_WORD = /^[a-z]+$/
+
+/**
+ * #1617 round 2: a single punctuation character between the noun and the
+ * count defeated `precedingWord` entirely — `audited port 8080 for issues`
+ * was correctly rejected while `audited port: 8080 for issues` and
+ * `audited port, 8080 for issues` forged credit, on nothing more than a
+ * character `precedingWord` was never asked to see past. The root cause
+ * named in the issue is not the regex, it is the DEFAULT: `undefined` from
+ * `precedingWord` was being read as "nothing to object to" when it actually
+ * meant "I could not identify the preceding word" — an unexamined case
+ * masquerading as a fine one, the exact class this guard exists to police.
+ *
+ * This function draws the distinction `precedingWord` cannot: strip the
+ * trailing run of punctuation it stopped at, and look for a word behind it.
+ * Finding one does NOT by itself flip the verdict — `lineStatesADenominator`
+ * still treats it as unresolvable (i.e. accepts) when that word is
+ * vocabulary itself (`gpg: Total number processed: 1`,
+ * `terraform files scanned: 70` — both real, both still forge, both stay
+ * exactly as ambiguous as before, because "processed" and "scanned" ARE the
+ * vocabulary). It is rejected only when the recovered word is BOTH
+ * non-vocabulary AND shaped like an ordinary noun rather than an identifier
+ * (`PLAIN_LOWERCASE_WORD`) — because real denominator lines routinely put a
+ * colon between an identifier and a count (`[coverage]
+ * cognito-invite-template-guard.findModuleTerraformFiles: 33 path(s)
+ * reached`, `[coverage] terraform-input: 12 path(s) reached`, both genuine
+ * and both must keep passing), and those identifiers are indistinguishable
+ * from `port`/`line` by punctuation alone — only by the shape of the word
+ * itself. `terraform-input` and `findModuleTerraformFiles` both fail
+ * `PLAIN_LOWERCASE_WORD` (a hyphen; an internal capital) and so are left
+ * exactly as ambiguous as they always were; `port` and `line` are plain,
+ * unhyphenated, all-lowercase words and are now rejected behind a colon or
+ * comma exactly as they already were when directly adjacent — closing the
+ * bypass without reopening the shape the non-adjacent design exists for.
+ *
+ * Checked against every real `console.log`/`console.error` denominator line
+ * in `cli/src/scripts` and `cli/src/lib` at the time of this fix (including
+ * `${sibling}: N core-direct call site(s)…`, whose real values —
+ * `tabsii-crm`, `sibling-template (self-check)` — are hyphenated and so
+ * already fail `PLAIN_LOWERCASE_WORD` regardless): none takes the
+ * plain-lowercase-noun-plus-punctuation shape this rejects.
+ *
+ * **What is still left open, deliberately.** A snake_case identifier is not
+ * caught by this word-shape test either — the word regex has no underscore
+ * in its character class, so `aws_cloudwatch_event_target: 8` would recover
+ * only `target`, a plain lowercase word, and be rejected as an ordinary noun
+ * even though it is an identifier suffix. No real guard output does this
+ * today (see the sweep above), so it is named here rather than silently
+ * narrowed — the same posture this file already takes with the
+ * gitleaks/Codecov/terraform ambiguity in `lineStatesADenominator`'s own
+ * docstring.
+ */
+function hiddenOrdinaryNoun(line: string, digitStart: number): string | undefined {
+  if (digitStart === 0) return undefined
+  const before = line.slice(0, digitStart - 1) // same one whitespace char precedingWord excludes
+  const word = /([A-Za-z][A-Za-z'-]*)[^A-Za-z0-9]*$/.exec(before)?.[1]
+  if (word === undefined || DENOMINATOR_VOCABULARY.test(word) || !PLAIN_LOWERCASE_WORD.test(word)) {
+    return undefined
+  }
+  return word
 }
 
 /**
@@ -361,7 +439,7 @@ function precedingWord(line: string, digitStart: number): string | undefined {
  * and a fixed-width window would have to be tuned, which is the
  * sharpening-the-detector move this file exists to stop doing.
  *
- * ### #1617: an incidental number still forges a denominator — narrowed, not closed
+ * ### #1617: an incidental number still forges a denominator
  *
  * The decimal fix on `BARE_COUNT` closes the two shapes above regardless of
  * context, but #1617 named two more that are not decimals at all:
@@ -384,11 +462,35 @@ function precedingWord(line: string, digitStart: number): string | undefined {
  * line clears that bar, so this does not require every number to justify
  * itself, only the one(s) doing the crediting.
  *
+ * ### Round 2: punctuation was a bypass of the check that already existed
+ *
+ * The first pass only rejected an ordinary noun found DIRECTLY adjacent to
+ * the count. A single character defeated it: `audited port: 8080 for issues`
+ * and `audited port, 8080 for issues` still forged credit, because
+ * `precedingWord` returns `undefined` the instant anything but a letter
+ * touches the mandatory whitespace, and `undefined` was read as "nothing to
+ * object to" rather than "I could not identify the preceding word" — an
+ * unexamined case standing in for a fine one, which is the exact class this
+ * guard exists to police. `port`/`line` are not made safe by the colon; they
+ * are the identical ordinary noun with one character of camouflage.
+ *
+ * `hiddenOrdinaryNoun` closes this: when `precedingWord` returns `undefined`
+ * because punctuation blocks it (as opposed to genuine line-start or nothing
+ * recoverable at all), it strips that punctuation and looks behind it. If a
+ * plain, unhyphenated, non-vocabulary word is there, the count is rejected
+ * exactly as the adjacent case already rejects it. See that function's
+ * docstring for why the check is scoped to `PLAIN_LOWERCASE_WORD` rather than
+ * any recovered word — the real `[coverage] terraform-input: 12 path(s)
+ * reached` and `[coverage] …findModuleTerraformFiles: 33 path(s) reached`
+ * lines below depend on the narrower scope to keep passing.
+ *
  * **Left unresolved, deliberately, rather than reached for:** a count whose
- * left neighbour is punctuation or line-start is accepted regardless of what
- * it is actually counting, because that is indistinguishable from the
- * pre-existing, intentionally-supported non-adjacent design with no further
- * local signal to tell them apart. Real, observed instances:
+ * left neighbour is punctuation with NOTHING recoverable behind it, or is
+ * line-start, or (after recovery) IS the vocabulary word itself, is accepted
+ * regardless of what it is actually counting — because that is
+ * indistinguishable from the pre-existing, intentionally-supported
+ * non-adjacent design with no further local signal to tell them apart. Real,
+ * observed instances:
  *
  *     1135 commits scanned.                      (gitleaks, Secret Scan job)
  *     gpg: Total number processed: 1              (Codecov's gpg import, Python job)
@@ -398,10 +500,13 @@ function precedingWord(line: string, digitStart: number): string | undefined {
  * known` (`guard-authority-inventory`) and `12 path(s) reached` both also
  * have a count whose left neighbour is punctuation or line-start and whose
  * vocabulary word sits to the right, across other words, exactly like
- * `commits scanned.` does. There is no local, line-shaped signal left that
- * separates them: telling "this check's own count" from "an unrelated tool's
- * count that happened to land in the same captured output" needs knowing
- * which PROCESS emitted the bytes, which `outputStatesADenominator` does not
+ * `commits scanned.` does; and `Total number processed: 1` / `files scanned:
+ * 70` recover `processed`/`scanned` behind their colon, which ARE the
+ * vocabulary, so `hiddenOrdinaryNoun` deliberately leaves them be. There is
+ * no local, line-shaped signal left that separates these from a genuine
+ * count: telling "this check's own count" from "an unrelated tool's count
+ * that happened to land in the same captured output" needs knowing which
+ * PROCESS emitted the bytes, which `outputStatesADenominator` does not
  * observe (see the module docstring's "What this deliberately does NOT
  * reach"). None of these three lines is reachable through THIS harness today
  * — `observeDenominatorPrints` only ever captures a `biffo check <name>`
@@ -414,7 +519,17 @@ export function lineStatesADenominator(line: string): boolean {
   if (!DENOMINATOR_VOCABULARY.test(line)) return false
   for (const match of line.matchAll(BARE_COUNT)) {
     const word = precedingWord(line, match.index)
-    if (word === undefined || DENOMINATOR_VOCABULARY.test(word)) return true
+    if (word !== undefined) {
+      if (DENOMINATOR_VOCABULARY.test(word)) return true
+      continue // an ordinary noun directly beside the count — not vocabulary
+    }
+    // `word` is undefined: either genuinely nothing precedes (line start, or
+    // punctuation with no word further back), or the same ordinary noun is
+    // hiding one punctuation character away (#1617 round 2). Only the first
+    // is accepted by default; the second is rejected exactly like the
+    // adjacent case above.
+    if (hiddenOrdinaryNoun(line, match.index) !== undefined) continue
+    return true
   }
   return false
 }

@@ -407,6 +407,114 @@ describe('verify.sh reports a killed pg-test lane as inconclusive, not failed (#
   })
 })
 
+describe('verify.sh delegates Postgres discovery to a per-repo script when one exists (#1618)', () => {
+  // `test_orchestration_authz_matrix.py` is tabsii-platform's real defect: a
+  // module that predates the `test_*_pg.py` convention, so the repo-wide find
+  // alone never sees it. `scripts/rls-pg-test-discovery.sh` is CI's own
+  // discovery (tabsii-platform#936) -- the one place that exception is
+  // recorded -- and this fixture stands in for it rather than requiring a
+  // real RLS lane, the same way `withLane` above stands in for a real
+  // Postgres database.
+  const DELEGATE_ONE_MODULE =
+    '#!/bin/sh\necho "services/api/src/api/domains/tabsii/tests/test_orchestration_authz_matrix.py"\n'
+
+  it('MISSED before delegation: the repo-wide find alone does not match the matrix filename', () => {
+    // No delegate script in this fixture -- pins the defect this issue
+    // reports, on the naming-convention-only path that predates this fix.
+    const run = runIn({
+      'package.json': PASSING,
+      'services/api/src/api/domains/tabsii/tests/test_orchestration_authz_matrix.py': PG_TEST,
+    })
+
+    expect(run.stdout).toContain('no Postgres-dependent tests')
+    expect(run.stdout).not.toContain('Postgres module(s) present')
+  })
+
+  it('DISCOVERED once a delegate script exists: unions it with the repo-wide find', () => {
+    const run = runIn({
+      'package.json': PASSING,
+      'scripts/rls-pg-test-discovery.sh': DELEGATE_ONE_MODULE,
+    })
+
+    expect(run.stdout).toContain('1 Postgres module(s) present')
+  })
+
+  it('unions rather than replaces: a module outside the delegate root is not lost', () => {
+    // The intentional half of the issue: verify.sh's job is broader than one
+    // RLS lane, so a module the delegate does not know about (outside its
+    // root) must still be counted, alongside the one only the delegate finds.
+    const run = runIn({
+      'package.json': PASSING,
+      'scripts/rls-pg-test-discovery.sh': DELEGATE_ONE_MODULE,
+      'services/api/tests/instance/test_territories_pg.py': PG_TEST,
+    })
+
+    expect(run.stdout).toContain('2 Postgres module(s) present')
+  })
+
+  it('dedupes a module both the delegate and the repo-wide find see', () => {
+    const run = runIn({
+      'package.json': PASSING,
+      'scripts/rls-pg-test-discovery.sh': '#!/bin/sh\necho "services/api/tests/test_rls_pg.py"\n',
+      'services/api/tests/test_rls_pg.py': PG_TEST,
+    })
+
+    expect(run.stdout).toContain('1 Postgres module(s) present')
+  })
+
+  it('prints the denominator when a delegate script exists', () => {
+    const run = runIn({
+      'package.json': PASSING,
+      'scripts/rls-pg-test-discovery.sh': DELEGATE_ONE_MODULE,
+    })
+
+    expect(run.stdout).toContain('pg-test discovery: 1 module(s) total')
+  })
+
+  it('does NOT print the discovery denominator line in a repo with no delegate script', () => {
+    // The vast majority of repos. Adding a line here for every repo, for a
+    // union that is trivially just the plain find(), is noise -- the line
+    // earns its place only where there are two sources to union.
+    const run = runIn({
+      'package.json': PASSING,
+      'services/api/tests/test_rls_pg.py': PG_TEST,
+    })
+
+    expect(run.stdout).not.toContain('pg-test discovery:')
+  })
+
+  it('FAILS rather than passes when the delegate exists and discovers zero (#1363)', () => {
+    // Mirrors the real script's own fail-closed contract (tabsii-platform#936:
+    // "the lane would run nothing" -> exit 1). A repo that declares an RLS
+    // discovery script and gets zero back from it has a real gap, not an
+    // empty repo -- this must never read as a quiet, passing "nothing to
+    // run", which is exactly the #1363 shape this file is the prime place for.
+    const run = runIn({
+      'package.json': PASSING,
+      'scripts/rls-pg-test-discovery.sh': '#!/bin/sh\nexit 1\n',
+    })
+
+    expect(run.status).toBe(1)
+    expect(run.stdout).toContain('verify failed:')
+    expect(run.stdout).toContain('pg-test-discovery')
+  })
+
+  it('reports the broken delegate AND still handles a module found elsewhere', () => {
+    // The two facts are independent: "the declared discovery is broken" and
+    // "here is what the repo-wide find turned up anyway". Both must be true
+    // at once without one masking the other.
+    const run = runIn({
+      'package.json': PASSING,
+      'scripts/rls-pg-test-discovery.sh': '#!/bin/sh\nexit 1\n',
+      'services/api/tests/test_rls_pg.py': PG_TEST,
+    })
+
+    expect(run.status).toBe(1)
+    expect(run.stdout).toContain('pg-test-discovery')
+    expect(run.stdout).toContain('1 Postgres module(s) present')
+  })
+})
+
 describe('verify.sh runs the pg lane concurrently where that is safe (#703)', () => {
   // Same reasoning as the block above for why a `pyproject.toml` is safe here.
   const lane = {

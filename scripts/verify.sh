@@ -821,10 +821,55 @@ PG_TEST_DSN="${BIFFO_TEST_PG_DSN:-${TABSII_TEST_PG_DSN:-}}"
 # `.claude/`. A gate that runs a stale nested checkout's copy of a test would
 # fail a push over code that is not being pushed -- and the first such false
 # positive is what teaches people to reach for BIFFO_SKIP_VERIFY.
+#
+# Delegate to a per-repo `scripts/rls-pg-test-discovery.sh` when one exists,
+# UNIONED with the find below rather than replacing it (#1618). Measured on
+# tabsii-platform: CI's own discovery script (tabsii-platform#936) finds 116
+# modules under its RLS lane's root by the `test_*_pg.py` convention PLUS one
+# named exception -- a matrix file authored before the convention existed --
+# while this repo-wide find alone found 121, missing that exception because
+# it does not, and must not, match the convention. The other 6 of the 121 sit
+# outside the RLS lane's root entirely; their own docstrings say they exist to
+# be picked up by verify.sh's repo-wide run and deliberately outside the RLS
+# lane's scope. Neither find can replace the other: collapsing to the
+# delegate's list would narrow verify.sh below its own job (every
+# Postgres-dependent test in the repo, not just one lane's slice of it);
+# collapsing to the find would keep missing the one named exception, which is
+# exactly the defect this issue reports. A hand-maintained list here would be
+# a second copy of that exception, free to drift from the first the way
+# #1362's other 11 instances did -- the delegate script is the one place it
+# is recorded.
+#
+# Detected OUTSIDE this function, in plain variables assigned once below, not
+# inside it: this function is invoked as `$(pg_test_modules)` further down,
+# which runs it in a SUBSHELL, and a status flag set inside it (e.g. "the
+# delegate failed closed") would die with that subshell -- exactly the trap
+# `checkout_health` documents above, for the same reason.
+PG_RLS_DISCOVERY_SCRIPT="scripts/rls-pg-test-discovery.sh"
+PG_DELEGATED_MODULES=""
+PG_DELEGATE_FAILED=""
+if [ -f "$PG_RLS_DISCOVERY_SCRIPT" ]; then
+  # No pipe on this assignment -- `$?` right after it must reflect the
+  # DELEGATE's exit status, not a downstream formatter's. The script fails
+  # CLOSED on purpose when its own root turns up nothing (its own comment:
+  # "the lane would run nothing"), and that is a real gap, not an empty repo
+  # -- #1363's shape is a discovery finding nothing reading as "nothing to
+  # run", and this is exactly where it would hide.
+  PG_DELEGATED_MODULES=$(sh "$PG_RLS_DISCOVERY_SCRIPT" 2>/dev/null)
+  [ $? -ne 0 ] && PG_DELEGATE_FAILED=1
+fi
+
 pg_test_modules() {
-  find . -name 'test_*_pg.py' \
-    -not -path "*/node_modules/*" -not -path "*/.venv/*" \
-    -not -path "*/.worktrees/*" -not -path "*/.claude/*" -not -path "*/.git/*" 2>/dev/null | sort
+  {
+    [ -n "$PG_DELEGATED_MODULES" ] && printf '%s\n' "$PG_DELEGATED_MODULES"
+    # Normalised to match the delegate's own path style (no leading `./`) so
+    # the union below actually dedupes overlapping modules instead of
+    # counting each one twice under two different-looking paths.
+    find . -name 'test_*_pg.py' \
+      -not -path "*/node_modules/*" -not -path "*/.venv/*" \
+      -not -path "*/.worktrees/*" -not -path "*/.claude/*" -not -path "*/.git/*" 2>/dev/null \
+      | sed 's|^\./||'
+  } | grep -v '^$' | sort -u
 }
 
 # Assert the lane EXERCISED something, not merely that pytest exited 0.
@@ -980,6 +1025,30 @@ pg_test_run() {
 }
 
 _pg_modules=$(pg_test_modules)
+
+# Print the denominator, not just the verdict -- a discovery step that finds
+# nothing must never merely read as "nothing to run" (#1363). Scoped to repos
+# that actually have a delegate script: printing it everywhere would add a
+# line to every repo with no RLS lane at all, for a union that is trivially
+# just the find() below in all of them.
+if [ -n "$PG_RLS_DISCOVERY_SCRIPT" ] && [ -f "$PG_RLS_DISCOVERY_SCRIPT" ] && [ -z "$LIST" ]; then
+  printf '\033[90m  pg-test discovery: %s module(s) total (scripts/rls-pg-test-discovery.sh unioned with repo-wide find)\033[0m\n' \
+    "$(printf '%s\n' "$_pg_modules" | grep -c .)"
+fi
+
+# The delegate script fails CLOSED by design when it finds zero under its own
+# root (see above) -- that is a real gap in a repo that declares an RLS lane,
+# not "this repo has no Postgres tests", and #1363's shape is exactly a
+# discovery-finds-nothing case reading as fine. Reported as its own failure,
+# distinct from and in addition to whatever the union below decides about the
+# repo-wide picture, because the two are different facts: "the declared
+# discovery is broken" and "here is what verify.sh found anyway".
+if [ -n "$PG_DELEGATE_FAILED" ] && [ -z "$LIST" ]; then
+  FAILED="$FAILED pg-test-discovery"
+  printf '  \033[31mFAIL\033[0m    %-16s %s\n' "pg-test-discovery" "$PG_RLS_DISCOVERY_SCRIPT exited non-zero"
+  printf '       \033[31m%s\033[0m\n' \
+    "this repo declares an RLS discovery script, so it finding zero modules is a gap, not an empty repo (#1618)"
+fi
 
 # Provision the database rather than requiring the operator to remember.
 #

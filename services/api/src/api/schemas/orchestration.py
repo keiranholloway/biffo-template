@@ -1193,3 +1193,30 @@ class UpdateWorkflowDefinitionRequest(WorkflowDefinitionBody):
 
 class SetEnabledRequest(BaseModel):
     enabled: bool
+
+
+# ── Plugin self-service seeding (issue #1593) ────────────────────────────────
+#
+# A service principal declaring its own workflow — see
+# ``routers/internal_plugin_workflows.py``. Reuses ``WorkflowDefinitionBody``'s
+# validation of action_config/schedule_config/scope verbatim, so a
+# plugin-declared definition is held to exactly the same shape rules as one an
+# admin builds by hand; the only addition is ``definition_key``, the plugin's
+# own natural key for the row (this route's half of the upsert identity —
+# ``owner_plugin``, the other half, is resolved from the verified
+# ServicePrincipal and never accepted here, exactly as ``internal_plugin_config
+# ._own_plugin_name`` does for plugin_chat_agents).
+
+
+class SeedWorkflowDefinitionRequest(WorkflowDefinitionBody):
+    """One workflow definition for a plugin to declare under its own identity."""
+
+    definition_key: str = Field(pattern=r"^[a-z][a-z0-9-]*$", max_length=100)
+
+
+class SeedWorkflowDefinitionResponse(BaseModel):
+    """Result of seeding one definition — created, or updated in place."""
+
+    definition_key: str
+    definition_id: str
+    created: bool

@@ -18,6 +18,7 @@ issue rather than incidental behaviour:
 
 import asyncio
 from collections.abc import AsyncGenerator, Generator
+from unittest.mock import AsyncMock
 
 import pytest
 from api.database import get_db
@@ -30,6 +31,7 @@ from api.models.orchestration import (  # noqa: F401 — registers tables on Bas
     WorkflowDefinition,
     WorkflowRun,
 )
+from api.models.prompt_component import PromptComponent  # noqa: F401 — registers on Base.metadata
 from api.routers import internal_plugin_workflows, orchestration
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -283,6 +285,125 @@ def test_unknown_trigger_is_rejected():
 
     assert resp.status_code == 422, resp.text
     assert asyncio.run(_get_row_count(session_factory, tenant_id="default")) == 0
+    asyncio.run(engine.dispose())
+
+
+# ── Error branches (biffo-template#1633 gate): both must actually execute ──
+#
+# Neither of these is reachable by the four numbered scenarios above — they are
+# the two `except` clauses `internal_plugin_workflows.py` adds, and the
+# required "error-branch coverage" gate fails a PR that adds an error branch
+# with nothing exercising it (#956/#1593 gate verdict).
+
+
+def test_agent_action_referencing_a_missing_prompt_component_is_rejected():
+    """The `PromptPartsError` branch (422 path, `_require_resolvable_agent_prompts`).
+
+    An "agent" action's `instructions` may reference a prompt-library component
+    by name (ADR-0015 §2) — `schemas/orchestration.py`'s request-shape
+    validation accepts that on SHAPE alone (a component reference is a
+    well-formed part whether or not the component exists), so a reference to a
+    component this tenant has never created only fails here, at the router,
+    exactly as it does in the Cognito-admin CRUD this route's helper was copied
+    from (`routers.orchestration._require_resolvable_agent_prompts`).
+
+    Fails without the `except PromptPartsError` handler: the underlying
+    `PromptComponentMissingError` (a `PromptPartsError` subclass,
+    `prompt_library.py`) would propagate unhandled and FastAPI would return a
+    500, not a 422 — the status assertion below is what catches that.
+    """
+    app, session_factory, engine = _build_app(principal=_principal("marketing"))
+    client = TestClient(app)
+
+    resp = client.post(
+        _SEED_URL,
+        json=[
+            _definition(
+                action_type="agent",
+                action_config={
+                    "agent_name": "demo-enricher",
+                    "instructions": [{"component": "does-not-exist", "values": {}}],
+                },
+            )
+        ],
+    )
+
+    assert resp.status_code == 422, resp.text
+    assert "does-not-exist" in resp.text
+    assert asyncio.run(_get_row_count(session_factory, tenant_id="default")) == 0, (
+        "a rejected seed must write nothing"
+    )
+    asyncio.run(engine.dispose())
+
+
+def test_a_pre_read_race_falls_back_to_updating_the_winners_row(monkeypatch: pytest.MonkeyPatch):
+    """The `IntegrityError` branch — the concurrent cold-start race handler.
+
+    The router's own docstring names the scenario: a fresh deploy replaces
+    every warm Lambda at once (#924), so a burst of simultaneous cold starts can
+    race two requests past `_existing_by_key`'s pre-read for the same brand-new
+    `definition_key`. Both attempt an INSERT inside a SAVEPOINT; the loser's
+    unique-index violation is caught, and it re-fetches the winner's row and
+    applies its own declared values to it too, rather than 500ing or leaving a
+    duplicate.
+
+    Not reproducible sequentially through the router's public HTTP surface: a
+    second call's OWN pre-read would simply find the first call's already-
+    committed row and take the `else` (update) branch, never touching the
+    INSERT/`except IntegrityError` path at all — a repeated key here is not the
+    same trick `media_generations.record_generation` uses, because that
+    function has no pre-read to shadow the conflict. Not reproducible on this
+    file's single-connection in-memory SQLite (`StaticPool`) via genuine
+    concurrency either, for the same reason `test_agent_run_claim_race.py`
+    documents: one connection cannot hold two overlapping transactions.
+
+    So `_existing_by_key` is patched to return exactly what a genuinely
+    concurrent pre-read would have seen — nothing — while a colliding row has
+    already been committed by a prior call, which is exactly the state two
+    simultaneous cold starts leave one of them in. This is a deterministic
+    simulation of the interleaving, not a substitute for proving it under real
+    concurrency: `test_internal_plugin_workflows_seed_pg.py`
+    (``test_concurrent_seed_requests_race_the_pre_read_without_500_or_duplicate``)
+    fires genuinely concurrent requests against real Postgres and observes the
+    same outcome this test asserts.
+
+    Fails without the `except IntegrityError` handler (or with a bare
+    ``raise``): the unhandled `IntegrityError` propagates out of the router as
+    a 500 instead of a 200, which the status assertion below catches.
+    """
+    app, session_factory, engine = _build_app(principal=_principal("marketing"))
+    client = TestClient(app)
+
+    # The "winner": a row already committed under this exact natural key —
+    # the concurrent cold start that got there first.
+    winner_resp = client.post(_SEED_URL, json=[_definition(name="Winner's declaration")])
+    assert winner_resp.status_code == 200, winner_resp.text
+    winner_id = winner_resp.json()[0]["definition_id"]
+
+    # Force THIS request's pre-read to see nothing, as a genuinely concurrent
+    # one would have before the winner's commit landed.
+    monkeypatch.setattr(internal_plugin_workflows, "_existing_by_key", AsyncMock(return_value={}))
+
+    resp = client.post(_SEED_URL, json=[_definition(name="Loser's declaration")])
+
+    assert resp.status_code == 200, resp.text
+    result = resp.json()[0]
+    assert result["created"] is False, "the loser must report an update, not a duplicate create"
+    assert result["definition_id"] == winner_id, (
+        "the loser must land on the WINNER's row, not fail and not create a second one"
+    )
+
+    row = asyncio.run(_get_fan_in_row(session_factory, "marketing"))
+    assert row is not None
+    assert row.name == "Loser's declaration", (
+        "the loser's declared values must still be applied to the winner's row — "
+        "an upsert, not merely a 'somebody else created it' no-op"
+    )
+    row_count = asyncio.run(
+        _get_row_count(session_factory, tenant_id="default", owner_plugin="marketing")
+    )
+    assert row_count == 1, "the race must never leave two rows under one natural key"
+
     asyncio.run(engine.dispose())
 
 

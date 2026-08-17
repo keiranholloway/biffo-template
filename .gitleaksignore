@@ -1,0 +1,24 @@
+# Fingerprints of specific findings accepted as known-safe, NOT a weakening
+# of the rule or a general regex/value allowlist entry. Each line names one
+# finding at one exact historical commit; see the comment beside it for why.
+#
+# `.gitleaks.toml`'s `biffo-aws-account-id` rule went back to a broad
+# `\b\d{12}\b` in #1628, with a rule-level allowlist that exempts only a
+# COMPLETE UUID shape (8-4-4-4-12 hex groups). AGENTS.md's own prose,
+# written while explaining the rule's history (#893), used an abbreviated
+# form -- an ellipsis, a hyphen, and a bare 12-digit run -- to illustrate
+# "the last segment of a UUID", rather than spelling out a complete UUID
+# literal. That abbreviated form is not a complete UUID, so the new
+# allowlist regex does not exempt it, and it is frozen forever in the
+# commit that first wrote it (#893's own commit, already on `dev` before
+# this rule change, not introduced by this branch). Editing AGENTS.md at
+# any later commit cannot clear a git-history-wide scan of an earlier one
+# -- exactly the point AGENTS.md §7 itself makes about this same rule.
+# Confirmed via `git merge-base --is-ancestor` that the commit is already
+# an ancestor of `origin/dev`, so this is pre-existing repo history
+# surfaced by broadening the regex, not something this branch introduced.
+#
+# The live AGENTS.md text has already been rewritten (this same PR) to spell
+# out a complete UUID instead, so this ignore entry only ever applies to the
+# frozen historical commit, never to anything written from here on.
+5ee467041cf0e6acf72bac43b018243a25a37719:AGENTS.md:biffo-aws-account-id:482

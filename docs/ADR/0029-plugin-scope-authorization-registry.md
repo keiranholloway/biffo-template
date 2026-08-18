@@ -94,16 +94,27 @@ single-axis text here was wrong):
 1. Against the caller's own `AuthenticatedUser.permissions` first (the #1606
    axis) — a forwarded caller who holds no grant for that `permission_code`
    at all is refused there, regardless of which plugin is asking.
-2. Against the **asking service's own entitlement** — the calling plugin's
-   own installed manifest must itself declare `permission_code` on at least
-   one of its own tables' CRUD `permissions` blocks (the same #1606 field,
-   reused as an entitlement source, not a new ownership list). A plugin
-   whose manifest never names a code has no declared business asking about
-   it, however many codes the forwarded caller happens to hold.
+2. Against the **asking service's own entitlement, as declared by this
+   instance** — `register_scope_authorizer(..., entitlements={"system:<plugin>":
+   frozenset({"<code>"})})`, consulted via `scope_authz.service_is_entitled`
+   (amended by issue #1653; see the second Amendment below for why the
+   original manifest-derived source was wrong). The map is keyed by
+   `ServicePrincipal.logical_names`, and an instance that declares no map
+   entitles nobody.
 
 Axis 1 alone does **not** make "a plugin asking about another plugin's data"
 refuse itself — it says nothing about which plugin is asking, only what the
 human caller may do. Axis 2 is what closes that gap.
+
+**Be precise about what axis 2 does and does not bound.** It is a check
+against a map **the instance wrote**, and nothing more. It does not verify
+that a code "belongs to" the plugin in any structural sense — no namespace is
+enforced, no ownership is derived, and an instance is free to entitle any
+plugin to any code in its own vocabulary. What it structurally rules out is
+narrower and is the whole point: a plugin **cannot entitle itself**, because
+no artefact the plugin authors reaches this decision. The residual trust
+boundary is stated plainly and is not a bound this ADR claims to have
+closed — see "Non-goals" below.
 
 ### 3. Instance-side implementation (NOT this repo)
 
@@ -124,6 +135,26 @@ that behind a real consumer (`biffo-plugin-marketing#73`) landing, not
 speculatively alongside this registry. Nothing in this ADR's shape forces a
 particular step-4 design; `ScopeGrant`/`ScopeAuthorizer` are already exactly
 what step 4's enforcement would consume.
+
+### 5. Non-goals (issue #1653) — stated so nobody reads a bound in later
+
+**Reviewing an instance's own entitlement map is not this seam's job, and is
+deliberately left to the third-party publishing gate** (ADR-0003's community
+publish flow and its security CI, both still aspirational). An instance that
+entitles `system:marketing` to `workflows.manage` has over-granted its own
+codes to a plugin it chose to install — that is the operator's decision to
+make, and an authorization decision belongs to the party that owns both the
+vocabulary and the install. Nothing here second-guesses it, and nothing here
+should be read as claiming to.
+
+**The residual trust boundary, stated honestly:** _the operator installed
+this plugin and wrote the entitlement map._ That is defensible. What was not
+defensible, and is what #1653 removed, is a docstring implying a structural
+bound over what was in fact an honour system among plugin manifests — a
+plugin could name any code it liked in its own `biffo.plugin.json` and
+thereby entitle itself. The bound this seam now genuinely has is narrower and
+real: **the plugin is not the source of the entitlement**, so it cannot grant
+itself one.
 
 ## Options Considered
 
@@ -217,8 +248,8 @@ build order.
 ## Compliance
 
 - **Contract.** `scope_authz.py`'s `register_scope_authorizer` /
-  `authorize_scope` / `list_reachable_scopes`, mirroring
-  `orchestration_authz.py`'s `register_workflow_scope_authorizer` /
+  `authorize_scope` / `list_reachable_scopes` / `service_is_entitled`,
+  mirroring `orchestration_authz.py`'s `register_workflow_scope_authorizer` /
   `authorize_workflow_scope` shape.
 - **HTTP seam.** `routers/internal_scopes.py`, mounted in `main.py` under
   `/api/v1/internal/*`, dual-authenticated via `require_signed_principal`
@@ -227,13 +258,18 @@ build order.
   fail-closed and its `resolved=False` distinguishability, a registered
   authorizer's real denial reporting `resolved=True`, ancestry-based
   broader-grant coverage, idempotent last-wins registration including that
-  a later registration resets ancestry/describer rather than keeping stale
-  ones, and the `checked`/`unresolved` denominator).
+  a later registration resets ancestry/describer/**entitlements** rather than
+  keeping stale ones, the `checked`/`unresolved` denominator, and
+  `service_is_entitled`'s fail-closed default).
   `tests/test_internal_scopes_router.py` covers the same properties over real
   HTTP, plus both `permission_code` axes (a caller with no grant at all;
-  a caller who legitimately holds the code but whose asking plugin is not
-  entitled to it; a caller whose asking plugin IS entitled; a plugin whose
-  manifest declares no codes at all) and the opaque response shape.
+  a caller who legitimately holds the code but whose asking plugin the
+  instance never entitled; a caller whose asking plugin IS entitled; an
+  instance that registered no entitlements at all) and the opaque response
+  shape. `test_plugin_cannot_entitle_itself_by_declaring_a_foreign_code`
+  is #1653's Case C probe: a plugin manifest naming a foreign
+  `permission_code` on its own table changes nothing, because the manifest is
+  no longer an input.
 
 ## Amendment 2026-08-17 (issue #1644) — the ask/list seam had only one axis
 
@@ -262,18 +298,25 @@ that happened to pass for an unrelated reason (axis 1 alone refuses a caller
 with no grant regardless of which plugin asks) and never exercised the
 cross-domain disclosure at all.
 
-**Fix.** `_require_permission_code` now also requires that the asking
-service be **entitled** to `permission_code`: its own installed
-`biffo.plugin.json` must declare that code on at least one of its own
-tables' CRUD `permissions` blocks (`PermissionRule.permission_code`, the
-existing #1606 field — see `_plugin_permission_codes` /
-`_service_entitled_permission_codes` in `routers/internal_scopes.py`). No new
-manifest field and no new hand-maintained ownership list were added,
-consistent with issue #744's recurring class (seven prior instances of a
-list drifting from what manifests already state): entitlement is derived
-from a declaration every plugin already makes for an unrelated reason
-(exposing its own tables to the generic CRUD layer), reused here as evidence
-of which domain the plugin belongs to.
+**Fix — SUPERSEDED 2026-08-18 by the #1653 amendment below; retained for the
+record, and neither function named here still exists.**
+`_require_permission_code` was made to also require that the asking service
+be **entitled** to `permission_code`: its own installed `biffo.plugin.json`
+had to declare that code on at least one of its own tables' CRUD
+`permissions` blocks (`PermissionRule.permission_code`, the existing #1606
+field — `_plugin_permission_codes` / `_service_entitled_permission_codes` in
+`routers/internal_scopes.py`). The reasoning was issue #744's recurring class
+(seven prior instances of a list drifting from what manifests already state):
+derive entitlement from a declaration every plugin already makes rather than
+add a second document. **What that reasoning missed** is that the plugin
+authors the manifest, so the derivation read a document the asking party
+controls — and that `permission_code` is precisely the field a portable
+plugin must leave empty, so the derived answer was "nothing" for every plugin
+in the estate. See below.
+
+**The finding above still stands in full.** Axis 1 alone genuinely does not
+refuse a cross-plugin ask, and the disclosure the prosecution demonstrated
+was real. Only the *source* of axis 2 changed.
 
 **Why not `scope_scoped_service.allowed_principals` (step 4)?** That field is
 explicitly deferred (see "4. Deliberately NOT built here" above) and, when
@@ -288,6 +331,76 @@ one-way-door commitment.
 (`resolved` vs `allowed`) and the `checked`/`unresolved` denominator are
 untouched — both were re-verified against the amended code and remain exactly
 as this document originally described.
+
+## Amendment 2026-08-18 (issue #1653) — entitlement was sourced from the one field a portable plugin must not use
+
+**Superseded by this amendment:** the previous amendment's "Fix" paragraph,
+and its claim that deriving entitlement from `PermissionRule.permission_code`
+"added no new hand-maintained ownership list". That was true and beside the
+point.
+
+**Finding.** `permission_code` is the DB-held, instance-specific half of
+`PermissionRule`; `required_role` is the portable half, and #1607's founding
+constraint is that a plugin must never learn the instance's vocabulary —
+"repeating the `founder` hardcoding mistake one layer deeper". So #1644
+derived entitlement from **the one field a portable plugin is designed not to
+use**. Two consequences, both measured against `origin/dev` at `85ae8c69`:
+
+- All **15** `biffo.plugin.json` manifests in the estate (this repo 3,
+  `biffo-platform` 5, `tabsii-platform` 4, one each in the three plugin
+  repos) declare **zero** `permission_code`s. Every plugin was therefore
+  entitled to nothing, and the seam was unusable rather than merely strict.
+  That is not an oversight anyone forgot to fix — it is #1606 working as
+  designed.
+- The only route to entitlement was for a plugin to name an instance-specific
+  code in its own manifest, i.e. to stop being portable in order to close a
+  security gap. `biffo-plugin-marketing#73` and #1607 step 3 were both blocked
+  behind that trade.
+
+And the trust direction was still wrong in the same way #1644 set out to fix:
+a plugin authors its own manifest, so a plugin could write **any** code into
+it — including another domain's — and entitle itself. #1644 moved the leak
+from "no check" to "a check over a document the attacker writes".
+
+**Fix.** Entitlement moved out of the plugin manifest and into
+`register_scope_authorizer(..., entitlements=...)` — see Decision §2 axis 2.
+`_plugin_permission_codes` and `_service_entitled_permission_codes` are
+deleted from `routers/internal_scopes.py`; `_require_permission_code` calls
+`scope_authz.service_is_entitled` instead. No manifest schema change, no CLI
+zod change, no Python SDK mirror change, no migration, and no existing
+declaration to migrate — there were none.
+
+**Why the instance, and why this was free this week.** The instance already
+owns the vocabulary: `caller.user.permissions` comes from
+`provider.resolve_permissions` (ADR-0012's identity seam,
+`middleware/auth.py`), resolving codes the instance's own DDL seeds. The
+instance also chose to install the plugin. It is the only party holding both
+halves of "which plugin may ask about which code". And
+`register_scope_authorizer` had **zero callers** estate-wide when this
+landed — verified by grep across all sixteen repos in the estate, hits only
+in this repo's own tests and this document — so changing its signature broke
+nothing. #1607 step 3 adds the first real caller; after that this is a
+breaking change to a security seam in every instance that has registered one.
+
+**A behaviour change worth stating.** Bare core (no authorizer registered)
+also entitles nobody, so both routes now answer `403` where they previously
+answered `200` with `resolved=false`. The `resolved` distinction (#1634) is
+untouched in `scope_authz` and still asserted in `tests/test_scope_authz.py`,
+but it is no longer reachable over HTTP. This is strictly more conservative —
+an unentitled plugin learns nothing, not even the instance's registration
+state — and the router docstring says so plainly rather than leaving a
+response field that looks exercised and is not.
+
+**Diagnosability.** The `403` detail stays generic on both refusal paths;
+that opacity is what keeps the seam unprobeable and it is deliberate. A
+client-visible hint was considered and **rejected**. `biffo plugin info
+<name>` carries the explanation instead, because that is where a plugin
+author looks: it states that entitlement is instance-declared, prints the
+exact `entitlements={"system:<name>": frozenset({"<code>"})}` line to ask an
+operator for, and says plainly that the CLI cannot read the live map — it is
+Python evaluated at the instance's import time, and a CLI-side re-derivation
+would be a second authority that drifts from the one that acts (class #1362,
+eleven recorded instances).
 
 ## Related Decisions
 

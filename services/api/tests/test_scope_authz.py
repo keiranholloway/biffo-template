@@ -10,6 +10,11 @@ asserted:
   answer (``resolved=False``, never conflated with "checked, clean")
 - the denominator: how many scopes were checked, how many could not be
   resolved
+
+Plus issue #1653's entitlement axis, which is a registry concern rather than
+a router one now that the INSTANCE declares it: which service may ask about
+which ``permission_code``, fail-closed by default, and never carried over
+from a previous registration.
 """
 
 from __future__ import annotations
@@ -37,6 +42,7 @@ def _reset_registry():
         authz._authorizer,  # noqa: SLF001
         authz._ancestry_resolver,  # noqa: SLF001
         authz._describer,  # noqa: SLF001
+        authz._entitlements,  # noqa: SLF001
         authz._registered,  # noqa: SLF001
     )
     yield
@@ -44,6 +50,7 @@ def _reset_registry():
         authz._authorizer,  # noqa: SLF001
         authz._ancestry_resolver,  # noqa: SLF001
         authz._describer,  # noqa: SLF001
+        authz._entitlements,  # noqa: SLF001
         authz._registered,  # noqa: SLF001
     ) = saved
 
@@ -56,6 +63,7 @@ def _force_unregistered() -> None:
     authz._authorizer = authz._default_authorizer  # noqa: SLF001
     authz._ancestry_resolver = authz._default_ancestry  # noqa: SLF001
     authz._describer = authz._default_describer  # noqa: SLF001
+    authz._entitlements = {}  # noqa: SLF001
     authz._registered = False  # noqa: SLF001
 
 
@@ -268,3 +276,120 @@ async def test_listing_never_leaks_instance_vocabulary_field_names():
     assert vars(option).keys() == {"ref", "label", "depth", "parent_ref"}
     assert option.depth == 2  # brand(0) -> region(1) -> unit(2), never named
     assert option.parent_ref == "region-3"  # opaque — the caller never learns "region"
+
+
+# ── entitlement: the INSTANCE declares who may ask (issue #1653) ────────────
+
+
+def test_bare_core_entitles_nobody():
+    """The fail-closed default, and the reason moving entitlement here does
+    not weaken anything: an instance that registered nothing has entitled
+    nobody, so no service may ask about any code."""
+    _force_unregistered()
+
+    assert authz.service_is_entitled({"system:marketing"}, "marketing.links.manage") is False
+    assert authz.service_is_entitled(frozenset(), "marketing.links.manage") is False
+    assert authz.scope_entitlements() == {}
+
+
+def test_registering_without_entitlements_entitles_nobody():
+    """Registering an authorizer is not itself a grant — an instance that
+    wants a plugin to reach this seam has to say so."""
+
+    async def authorizer(caller, db, permission_code):  # noqa: ANN001, ARG001
+        return authz.ScopeGrant(unrestricted=True)
+
+    authz.register_scope_authorizer(authorizer)
+
+    assert authz.service_is_entitled({"system:marketing"}, "marketing.links.manage") is False
+
+
+def test_instance_declared_entitlement_is_honoured_per_service_and_per_code():
+    """The shape from the issue's own worked example. `system:marketing` may
+    ask about the code the instance entitled it to, and about nothing else —
+    and another service is not entitled by marketing's entry."""
+
+    async def authorizer(caller, db, permission_code):  # noqa: ANN001, ARG001
+        return authz.ScopeGrant(unrestricted=True)
+
+    authz.register_scope_authorizer(
+        authorizer,
+        entitlements={
+            "system:marketing": frozenset({"marketing.links.manage"}),
+            "system:orchestrator": frozenset({"workflows.manage"}),
+        },
+    )
+
+    assert authz.service_is_entitled({"system:marketing"}, "marketing.links.manage") is True
+    # The cross-domain ask issue #1644 found — still refused, now because the
+    # instance never entitled marketing to it.
+    assert authz.service_is_entitled({"system:marketing"}, "workflows.manage") is False
+    assert authz.service_is_entitled({"system:orchestrator"}, "workflows.manage") is True
+    # A service the map does not mention at all.
+    assert authz.service_is_entitled({"system:idea-scout"}, "marketing.links.manage") is False
+    # No logical name at all (a principal carrying no service identity).
+    assert authz.service_is_entitled(frozenset(), "marketing.links.manage") is False
+
+
+def test_entitlements_accept_any_iterable_of_codes_not_only_frozenset():
+    """An instance writing a plain list or set is not a mistake — the values
+    are normalised at registration, so the map's shape cannot depend on which
+    container an author happened to reach for."""
+
+    async def authorizer(caller, db, permission_code):  # noqa: ANN001, ARG001
+        return authz.ScopeGrant()
+
+    authz.register_scope_authorizer(
+        authorizer,
+        entitlements={"system:marketing": ["marketing.links.manage", "marketing.links.read"]},
+    )
+
+    assert authz.service_is_entitled({"system:marketing"}, "marketing.links.read") is True
+    assert authz.scope_entitlements() == {
+        "system:marketing": frozenset({"marketing.links.manage", "marketing.links.read"})
+    }
+
+
+def test_registering_a_new_authorizer_resets_entitlements_to_none():
+    """The no-carry-over rule (issue #1653), matching what
+    ancestry_resolver/describer already do. Omitting `entitlements` on a
+    re-registration means "this instance entitles nobody" — never "reuse the
+    previous registration's". A grant that survives a registration its author
+    did not write is a grant nobody can audit."""
+
+    async def authorizer_v1(caller, db, permission_code):  # noqa: ANN001, ARG001
+        return authz.ScopeGrant()
+
+    authz.register_scope_authorizer(
+        authorizer_v1, entitlements={"system:marketing": frozenset({"marketing.links.manage"})}
+    )
+    assert authz.service_is_entitled({"system:marketing"}, "marketing.links.manage") is True
+
+    async def authorizer_v2(caller, db, permission_code):  # noqa: ANN001, ARG001
+        return authz.ScopeGrant()
+
+    authz.register_scope_authorizer(authorizer_v2)  # no entitlements this time
+
+    assert authz.service_is_entitled({"system:marketing"}, "marketing.links.manage") is False
+    assert authz.scope_entitlements() == {}
+
+
+def test_scope_entitlements_returns_a_copy_the_caller_cannot_grant_through():
+    """`scope_entitlements()` exists for diagnostics. Mutating what it hands
+    back must not become a way to grant an entitlement the instance never
+    declared."""
+
+    async def authorizer(caller, db, permission_code):  # noqa: ANN001, ARG001
+        return authz.ScopeGrant()
+
+    authz.register_scope_authorizer(
+        authorizer, entitlements={"system:marketing": frozenset({"marketing.links.manage"})}
+    )
+
+    # Cast to escape the declared Mapping return type on purpose: the point is
+    # that even a caller who ignores the read-only contract cannot grant
+    # through it, because what came back is a copy.
+    snapshot = cast(dict[str, frozenset[str]], authz.scope_entitlements())
+    snapshot["system:attacker"] = frozenset({"workflows.manage"})
+
+    assert authz.service_is_entitled({"system:attacker"}, "workflows.manage") is False

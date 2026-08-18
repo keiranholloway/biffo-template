@@ -346,12 +346,16 @@ constraint is that a plugin must never learn the instance's vocabulary —
 derived entitlement from **the one field a portable plugin is designed not to
 use**. Two consequences, both measured against `origin/dev` at `85ae8c69`:
 
-- All **15** `biffo.plugin.json` manifests in the estate (this repo 3,
-  `biffo-platform` 5, `tabsii-platform` 4, one each in the three plugin
-  repos) declare **zero** `permission_code`s. Every plugin was therefore
-  entitled to nothing, and the seam was unusable rather than merely strict.
-  That is not an oversight anyone forgot to fix — it is #1606 working as
-  designed.
+- **No** `biffo.plugin.json` in the estate declares a non-empty
+  `permission_code`. Two independent counts agree on the zero and differ on
+  the denominator, which is worth stating rather than papering over: the
+  issue's review counted **15** shipped manifests over `origin/dev` (this
+  repo 3, `biffo-platform` 5, `tabsii-platform` 4, one each in the three
+  plugin repos); this PR's own re-measurement swept every local repository
+  checkout including `_skeletons/` and found **28** files. Both found zero.
+  Every plugin was therefore entitled to nothing, and the seam was unusable
+  rather than merely strict. That is not an oversight anyone forgot to fix —
+  it is #1606 working as designed.
 - The only route to entitlement was for a plugin to name an instance-specific
   code in its own manifest, i.e. to stop being portable in order to close a
   security gap. `biffo-plugin-marketing#73` and #1607 step 3 were both blocked

@@ -43,8 +43,9 @@ instance is who says so: ``register_scope_authorizer(..., entitlements={
 (``PermissionRule``, #1606). #1653 found that self-contradictory rather than
 merely loose: ``permission_code`` is the instance-specific, DB-held gate a
 portable plugin is designed **not** to use (``required_role`` is the portable
-one), so every manifest in the estate declared zero codes and the only route
-to entitlement was to make the plugin non-portable. It also read a document
+one), so no manifest in the estate declares one (0 of 28 ``biffo.plugin.json``
+files across every local repository checkout, skeletons included) and the only
+route to entitlement was to make the plugin non-portable. It also read a document
 the asking plugin writes — captured live against ``origin/dev`` at
 ``85ae8c69``, a marketing manifest declaring ``workflows.manage`` on its own
 ``tracked_links`` table returned ``200`` with the caller's full workflows

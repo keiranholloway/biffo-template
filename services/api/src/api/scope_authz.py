@@ -52,9 +52,10 @@ no part of this registration.
 in a plugin's own ``biffo.plugin.json``. That contradicted #1606's
 portability rule outright: ``permission_code`` is the DB-held,
 instance-specific gate a *portable* plugin is designed not to use
-(``required_role`` is the portable one), so all 15 manifests in the estate
-declared zero codes and the only way to become entitled was to stop being
-portable. It also read a document the asking plugin writes, so a plugin
+(``required_role`` is the portable one), so **no** ``biffo.plugin.json`` in
+the estate declares one — 0 of 28 files, measured across every local
+repository checkout including skeletons — and the only way to become entitled
+was to stop being portable. It also read a document the asking plugin writes, so a plugin
 could name any code it liked and thereby entitle itself. Entitlement is not
 the plugin's statement to make.
 

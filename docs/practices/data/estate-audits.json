@@ -1,5 +1,5 @@
 {
-  "collectedAt": "2026-08-17T03:43:27Z",
+  "collectedAt": "2026-08-18T03:42:48Z",
   "audits": [
     {
       "name": "coverage",
@@ -17,13 +17,13 @@
       "name": "drift",
       "ok": false,
       "exit": 1,
-      "summary": "2 current, 18 drifted"
+      "summary": "13 current, 1 drifted"
     },
     {
       "name": "protection",
       "ok": false,
       "exit": 1,
-      "summary": "28 branches checked, 1 unprotected or ungated"
+      "summary": "34 branches checked, 1 unprotected or ungated"
     },
     {
       "name": "wiring",
@@ -33,15 +33,15 @@
     },
     {
       "name": "classification",
-      "ok": false,
-      "exit": 1,
-      "summary": "BLIND  2026-08-17.json: 9 of 15 failing steps unclassified (60.0%) — add patterns to STEP_KINDS for: Report the result (7), CI wiring audit (2)"
+      "ok": true,
+      "exit": 0,
+      "summary": "OK  2026-08-18.json: 1 of 13 failing steps unclassified (7.7%)"
     },
     {
       "name": "checkout",
       "ok": false,
       "exit": 1,
-      "summary": "26 primary checkouts — $11 clean$, $5 unsafe to read$, 2 behind only, 8 not evaluated"
+      "summary": "19 primary checkouts — $11 clean$, $3 unsafe to read$, 2 behind only, 3 not evaluated"
     },
     {
       "name": "deploy",

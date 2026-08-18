@@ -1,10 +1,17 @@
 """Router tests for the internal scope-authorization seam (ADR-0029, issue
-#1607 steps 1-2; issue #1644's second, service-entitlement axis).
+#1607 steps 1-2; issue #1644's second, service-entitlement axis; issue
+#1653's correction of where that entitlement comes from).
 
 Executes the issue's fail-first cases over real HTTP through a FastAPI
 ``TestClient``, not by calling the registry functions directly, so these
 prove the denial is enforced by the server, not merely by a library function
 a client could choose not to call.
+
+Since #1653 the entitlement axis is declared by the **instance**, as the
+``entitlements`` argument to ``register_scope_authorizer`` — so these tests
+register it the way a real instance's domain module would, and no plugin
+manifest is read, mocked or consulted anywhere in this file. That absence is
+the fix: see ``test_plugin_cannot_entitle_itself_by_declaring_a_foreign_code``.
 """
 
 from __future__ import annotations
@@ -18,7 +25,6 @@ from api.database import get_db
 from api.middleware.auth import AuthenticatedUser
 from api.middleware.principal import Principal, require_principal
 from api.middleware.service_auth import ServicePrincipal, require_service_principal
-from api.routers import internal_scopes
 from api.routers.internal_scopes import router
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -27,47 +33,17 @@ _MARKETING_ARN = "arn:aws:sts::123456789012:assumed-role/biffo-dev-plugin-market
 _PERMISSION_CODE = "marketing.links.manage"
 # A permission_code that belongs to an entirely different subsystem — the
 # real example from issue #1644's prosecution: an hq-admin plausibly holds
-# both, but the marketing plugin's own manifest (below) never declares this
-# one on any of its tables.
+# both, but this instance (below) entitles marketing to only its own.
 _OTHER_DOMAIN_PERMISSION_CODE = "workflows.manage"
 
-# The marketing plugin's own installed manifest, minimal but real-shaped: one
-# table, whose CRUD permissions name marketing.links.manage — the #1606 axis
-# a manifest already carries, reused here (issue #1644) as the entitlement
-# source for which permission_codes this plugin may ask the scope seam about.
-# It says nothing about workflows.manage anywhere.
-_MARKETING_MANIFEST: dict[str, Any] = {
-    "name": "marketing",
-    "tables": [
-        {
-            "name": "tracked_links",
-            "permissions": {
-                "list": {"allowed": True, "permission_code": _PERMISSION_CODE},
-                "read": {"allowed": True, "permission_code": _PERMISSION_CODE},
-            },
-        }
-    ],
+# What THIS instance entitles each installed plugin to ask about — the shape a
+# real instance writes in its own domain module beside its authorizer, drawn
+# from its own DDL-seeded permission vocabulary (ADR-0012). Marketing may ask
+# about its own code and nothing else; nothing marketing authors can change
+# this.
+_ENTITLEMENTS: dict[str, frozenset[str]] = {
+    "system:marketing": frozenset({_PERMISSION_CODE}),
 }
-
-# A plugin whose manifest declares tables but names no permission_code on any
-# of them anywhere (the real shape of services/_plugins/agent-runtime's
-# manifest in this repo) — entitled to ask about nothing via this seam.
-_NO_PERMISSION_CODE_MANIFEST: dict[str, Any] = {
-    "name": "agent-runtime",
-    "tables": [{"name": "runs", "permissions": {"list": {"allowed": True}}}],
-}
-
-# A manifest that fails to parse: its one table entry is missing the required
-# "name" field, so PluginTableDefinition(**table_data) raises a pydantic
-# ValidationError — a ValueError subclass — inside
-# _plugin_permission_codes' try/except (issue #1644's untested branch). This
-# is a real authoring mistake (a truncated or hand-edited biffo.plugin.json),
-# not a synthetic type violation.
-_BROKEN_MANIFEST: dict[str, Any] = {
-    "name": "broken-plugin",
-    "tables": [{"permissions": {"list": {"allowed": True, "permission_code": _PERMISSION_CODE}}}],
-}
-_BROKEN_PLUGIN_ARN = "arn:aws:sts::123456789012:assumed-role/biffo-dev-plugin-broken-plugin-role/s"
 
 
 def _founder(sub: str, permissions: frozenset[str] = frozenset()) -> AuthenticatedUser:
@@ -97,12 +73,22 @@ def _client(*, founder: AuthenticatedUser, principal_arn: str = _MARKETING_ARN) 
     return TestClient(app)
 
 
+def _register(authorizer: Any, **kwargs: Any) -> None:  # noqa: ANN401
+    """Register as a real instance would, entitling marketing to its own code
+    unless a test deliberately says otherwise. Entitlement is part of the
+    registration now (#1653), so it is passed here rather than mocked onto a
+    manifest scan."""
+    kwargs.setdefault("entitlements", _ENTITLEMENTS)
+    authz.register_scope_authorizer(authorizer, **kwargs)
+
+
 @pytest.fixture(autouse=True)
 def _reset_registry():
     saved = (
         authz._authorizer,  # noqa: SLF001
         authz._ancestry_resolver,  # noqa: SLF001
         authz._describer,  # noqa: SLF001
+        authz._entitlements,  # noqa: SLF001
         authz._registered,  # noqa: SLF001
     )
     yield
@@ -110,6 +96,7 @@ def _reset_registry():
         authz._authorizer,  # noqa: SLF001
         authz._ancestry_resolver,  # noqa: SLF001
         authz._describer,  # noqa: SLF001
+        authz._entitlements,  # noqa: SLF001
         authz._registered,  # noqa: SLF001
     ) = saved
 
@@ -118,22 +105,8 @@ def _force_unregistered() -> None:
     authz._authorizer = authz._default_authorizer  # noqa: SLF001
     authz._ancestry_resolver = authz._default_ancestry  # noqa: SLF001
     authz._describer = authz._default_describer  # noqa: SLF001
+    authz._entitlements = {}  # noqa: SLF001
     authz._registered = False  # noqa: SLF001
-
-
-@pytest.fixture(autouse=True)
-def _default_installed_manifests(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Every test's calling service is entitled to ``_PERMISSION_CODE`` by
-    default, via the real installed-manifest declaration (issue #1644's
-    second axis) — the marketing plugin's own manifest, not a disk scan of
-    whatever happens to be installed in this checkout. Tests exercising the
-    entitlement axis itself override this per-test.
-    """
-
-    def _fake_discover(services_root: Any = None) -> list[dict[str, Any]]:  # noqa: ARG001, ANN401
-        return [_MARKETING_MANIFEST]
-
-    monkeypatch.setattr(internal_scopes, "discover_plugin_manifests", _fake_discover)
 
 
 # ── fail-first case 1: a caller with the scope → allowed ────────────────────
@@ -143,7 +116,7 @@ def test_caller_with_the_scope_is_allowed():
     async def authorizer(caller, db, permission_code):  # noqa: ANN001, ARG001
         return authz.ScopeGrant(refs=frozenset({"unit-9"}))
 
-    authz.register_scope_authorizer(authorizer)
+    _register(authorizer)
 
     client = _client(founder=_founder("alice", permissions=frozenset({_PERMISSION_CODE})))
     resp = client.post(
@@ -162,7 +135,7 @@ def test_caller_without_the_scope_is_denied_server_side():
     async def authorizer(caller, db, permission_code):  # noqa: ANN001, ARG001
         return authz.ScopeGrant(refs=frozenset({"unit-1"}))  # not unit-9
 
-    authz.register_scope_authorizer(authorizer)
+    _register(authorizer)
 
     client = _client(founder=_founder("alice", permissions=frozenset({_PERMISSION_CODE})))
     resp = client.post(
@@ -198,10 +171,21 @@ def test_no_service_principal_is_refused_before_any_scope_logic_runs():
     assert resp.status_code in (401, 403), resp.text
 
 
-# ── fail-first case 3: bare core → denied, and distinguishable from allowed ─
+# ── fail-first case 3: bare core → refused outright (changed by #1653) ──────
 
 
-def test_bare_core_scope_check_is_denied_and_marked_unresolved_over_http():
+def test_bare_core_refuses_the_ask_because_it_entitles_nobody():
+    """An instance that registered no authorizer also declared no
+    entitlements, so axis 2 refuses before either route body runs.
+
+    This is a deliberate change from #1644's behaviour, where bare core
+    answered 200 with resolved=false: an unentitled plugin now learns nothing
+    at all, not even this instance's registration state. The
+    resolved=False / "could not resolve" distinction (#1634) is untouched in
+    the registry itself and is asserted in test_scope_authz.py — it is simply
+    no longer reachable over HTTP, which the router docstring states rather
+    than leaving a response field that looks exercised and is not.
+    """
     _force_unregistered()
 
     client = _client(founder=_founder("alice", permissions=frozenset({_PERMISSION_CODE})))
@@ -209,34 +193,25 @@ def test_bare_core_scope_check_is_denied_and_marked_unresolved_over_http():
         "/api/v1/internal/scope-check",
         json={"permission_code": _PERMISSION_CODE, "scope_ref": "unit-9"},
     )
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert body["allowed"] is False
-    assert body["resolved"] is False  # "could not resolve" — never confused with "checked, no"
-    assert body["reason"] == "no scope authorizer registered"
+    assert resp.status_code == 403, resp.text
 
-
-def test_bare_core_scope_listing_is_denied_and_marked_unresolved_over_http():
-    _force_unregistered()
-
-    client = _client(founder=_founder("alice", permissions=frozenset({_PERMISSION_CODE})))
     resp = client.get(f"/api/v1/internal/scopes?permission_code={_PERMISSION_CODE}")
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert body == {"scopes": [], "resolved": False, "checked": 0, "unresolved": 0}
+    assert resp.status_code == 403, resp.text
 
 
 def test_a_real_grant_is_never_confused_with_bare_core_over_http():
-    """The converse of the above: a registered authorizer that legitimately
-    grants nothing must report resolved=True, not the bare-core shape."""
+    """A registered authorizer that legitimately grants nothing must report
+    resolved=True and an empty list — "checked, none", never conflated with
+    the bare-core answer (#1634's rejected bug)."""
 
     async def deny_everyone(caller, db, permission_code):  # noqa: ANN001, ARG001
         return authz.ScopeGrant()
 
-    authz.register_scope_authorizer(deny_everyone)
+    _register(deny_everyone)
 
     client = _client(founder=_founder("alice", permissions=frozenset({_PERMISSION_CODE})))
     resp = client.get(f"/api/v1/internal/scopes?permission_code={_PERMISSION_CODE}")
+    assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["scopes"] == []
     assert body["resolved"] is True
@@ -261,7 +236,7 @@ def test_forwarded_caller_with_no_permissions_at_all_is_refused():
         calls.append(permission_code)
         return authz.ScopeGrant(unrestricted=True)  # would allow anything, if reached
 
-    authz.register_scope_authorizer(authorizer)
+    _register(authorizer)
 
     # alice holds no permissions at all — e.g. a founder idea-scout forwards a
     # token for, being asked about marketing's permission_code.
@@ -275,6 +250,11 @@ def test_forwarded_caller_with_no_permissions_at_all_is_refused():
 
 
 def test_forwarded_caller_with_no_permissions_at_all_is_refused_for_listing_too():
+    async def authorizer(caller, db, permission_code):  # noqa: ANN001, ARG001
+        return authz.ScopeGrant(unrestricted=True)
+
+    _register(authorizer)
+
     client = _client(founder=_founder("alice", permissions=frozenset()))
     resp = client.get(f"/api/v1/internal/scopes?permission_code={_PERMISSION_CODE}")
     assert resp.status_code == 403, resp.text
@@ -287,15 +267,13 @@ def test_forwarded_caller_with_no_permissions_at_all_is_refused_for_listing_too(
 # population most likely to trigger this, per the prosecution's own repro.
 
 
-def test_caller_holding_the_code_is_still_refused_when_asking_plugin_is_not_entitled(
-    monkeypatch: pytest.MonkeyPatch,
-):
+def test_caller_holding_the_code_is_still_refused_when_instance_did_not_entitle_the_plugin():
     """Reproduces issue #1644 exactly: hq-admin holds BOTH marketing.links.manage
     and workflows.manage. The marketing plugin's own signed principal forwards
-    that token and asks about workflows.manage — a permission_code its own
-    manifest never declares on any of its tables. Before the fix this returned
-    200 with the caller's full workflows scope hierarchy; it must now be
-    refused, and the scope authorizer must never even be consulted."""
+    that token and asks about workflows.manage — a permission_code this
+    instance never entitled marketing to. Before #1644 this returned 200 with
+    the caller's full workflows scope hierarchy; it must be refused, and the
+    scope authorizer must never even be consulted."""
 
     calls: list[str] = []
 
@@ -303,13 +281,7 @@ def test_caller_holding_the_code_is_still_refused_when_asking_plugin_is_not_enti
         calls.append(permission_code)
         return authz.ScopeGrant(unrestricted=True)  # would allow anything, if reached
 
-    authz.register_scope_authorizer(authorizer)
-    # Only the marketing manifest is installed, and it names only its own
-    # code — never workflows.manage (the default fixture already sets this
-    # up; overriding explicitly here so the case is legible on its own).
-    monkeypatch.setattr(
-        internal_scopes, "discover_plugin_manifests", lambda **_: [_MARKETING_MANIFEST]
-    )
+    _register(authorizer)
 
     hq_admin = _founder(
         "hq-admin", permissions=frozenset({_PERMISSION_CODE, _OTHER_DOMAIN_PERMISSION_CODE})
@@ -327,17 +299,16 @@ def test_caller_holding_the_code_is_still_refused_when_asking_plugin_is_not_enti
     assert calls == []  # the scope authorizer was never even called for either route
 
 
-def test_caller_holding_the_code_is_allowed_when_asking_plugin_is_entitled():
+def test_caller_holding_the_code_is_allowed_when_the_instance_entitled_the_plugin():
     """The converse of the above, and the must-not-regress case: the marketing
-    plugin asking about ITS OWN declared code (marketing.links.manage) for a
-    caller who holds it — including a caller who ALSO holds an unrelated
-    code — must still work. The fix is a second AND, not a tightening of
-    axis 1."""
+    plugin asking about the code THIS INSTANCE entitled it to, for a caller
+    who holds it — including a caller who ALSO holds an unrelated code — must
+    still work. The fix is a second AND, not a tightening of axis 1."""
 
     async def authorizer(caller, db, permission_code):  # noqa: ANN001, ARG001
         return authz.ScopeGrant(refs=frozenset({"brand-hq"}))
 
-    authz.register_scope_authorizer(authorizer)
+    _register(authorizer)
 
     hq_admin = _founder(
         "hq-admin", permissions=frozenset({_PERMISSION_CODE, _OTHER_DOMAIN_PERMISSION_CODE})
@@ -351,25 +322,20 @@ def test_caller_holding_the_code_is_allowed_when_asking_plugin_is_entitled():
     assert resp.json()["allowed"] is True
 
 
-def test_plugin_with_no_declared_permission_codes_is_refused_even_if_caller_holds_it(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    """A plugin whose manifest names no permission_code anywhere (the real
-    shape of services/_plugins/agent-runtime's manifest) is entitled to ask
-    about none — even a caller who genuinely holds the code asked about must
-    still be refused, because the SERVICE has no declared business asking."""
-    monkeypatch.setattr(
-        internal_scopes, "discover_plugin_manifests", lambda **_: [_NO_PERMISSION_CODE_MANIFEST]
-    )
-    agent_runtime_arn = (
-        "arn:aws:sts::123456789012:assumed-role/biffo-dev-plugin-agent-runtime-role/s"
-    )
+def test_plugin_the_instance_never_mentioned_is_refused_even_if_caller_holds_the_code():
+    """A plugin the instance's entitlement map does not name at all — the
+    common case, since a map starts empty — is entitled to ask about nothing.
+    Even a caller who genuinely holds the code asked about must still be
+    refused, because the INSTANCE never said this plugin may ask."""
 
     async def authorizer(caller, db, permission_code):  # noqa: ANN001, ARG001
         return authz.ScopeGrant(unrestricted=True)
 
-    authz.register_scope_authorizer(authorizer)
+    _register(authorizer)
 
+    agent_runtime_arn = (
+        "arn:aws:sts::123456789012:assumed-role/biffo-dev-plugin-agent-runtime-role/s"
+    )
     client = _client(
         founder=_founder("alice", permissions=frozenset({_PERMISSION_CODE})),
         principal_arn=agent_runtime_arn,
@@ -378,47 +344,94 @@ def test_plugin_with_no_declared_permission_codes_is_refused_even_if_caller_hold
     assert resp.status_code == 403, resp.text
 
 
-# ── opaque reference: no instance vocabulary crosses the seam ───────────────
+# ── issue #1653's Case C probe: a plugin cannot entitle itself ──────────────
 
 
-# ── malformed manifest → skipped, not a 500 (issue #1644's untested except) ─
+def test_plugin_cannot_entitle_itself_by_declaring_a_foreign_code():
+    """Case C from issue #1653, and the regression this change exists to make
+    permanent.
 
+    Under #1644 a plugin became entitled to a ``permission_code`` by naming it
+    on one of its own tables in its own ``biffo.plugin.json`` — a document the
+    plugin author writes. So marketing could declare ``workflows.manage`` on
+    its own ``tracked_links`` table and thereby entitle itself to ask this
+    seam about another domain's scope hierarchy.
 
-def test_broken_manifest_is_skipped_not_500(monkeypatch: pytest.MonkeyPatch):
-    """A plugin manifest that fails to parse — a table entry missing its
-    required "name" field, a real authoring mistake — must not take down the
-    whole entitlement scan for every installed plugin. It is skipped and
-    logged, and the plugin that owns it is left entitled to nothing (the
-    fail-closed default _plugin_permission_codes documents), rather than the
-    request 500ing.
+    The assertion below is the same 403 the old test asserted; the mechanism
+    is the opposite. The manifest below is a real-shaped copy of exactly that
+    hostile declaration, and it is **never read** — nothing in this file mocks
+    a manifest scan, because the router no longer performs one. It is the
+    instance's map that decides, and this instance entitled marketing to
+    ``marketing.links.manage`` only.
     """
-    monkeypatch.setattr(
-        internal_scopes,
-        "discover_plugin_manifests",
-        lambda **_: [_BROKEN_MANIFEST, _MARKETING_MANIFEST],
-    )
+    hostile_manifest = {
+        "name": "marketing",
+        "tables": [
+            {
+                "name": "tracked_links",
+                "permissions": {
+                    # A code belonging to an entirely different subsystem,
+                    # declared by the plugin on its OWN table.
+                    "list": {"allowed": True, "permission_code": _OTHER_DOMAIN_PERMISSION_CODE},
+                    "read": {"allowed": True, "permission_code": _OTHER_DOMAIN_PERMISSION_CODE},
+                },
+            }
+        ],
+    }
+    # Installed on disk it would say this; it buys nothing, because it is not
+    # an input to the decision.
+    assert hostile_manifest["name"] == "marketing"
+
+    calls: list[str] = []
 
     async def authorizer(caller, db, permission_code):  # noqa: ANN001, ARG001
-        return authz.ScopeGrant(refs=frozenset({"unit-9"}))
+        calls.append(permission_code)
+        return authz.ScopeGrant(unrestricted=True)
 
-    authz.register_scope_authorizer(authorizer)
+    _register(authorizer)
 
-    # The broken plugin's own principal asks about a code it would need its
-    # own manifest to declare — but that manifest never parsed, so it is
-    # entitled to nothing. Refused, not a 500.
-    broken_client = _client(
-        founder=_founder("alice", permissions=frozenset({_PERMISSION_CODE})),
-        principal_arn=_BROKEN_PLUGIN_ARN,
+    hq_admin = _founder(
+        "hq-admin", permissions=frozenset({_PERMISSION_CODE, _OTHER_DOMAIN_PERMISSION_CODE})
     )
-    resp = broken_client.get(f"/api/v1/internal/scopes?permission_code={_PERMISSION_CODE}")
-    assert resp.status_code == 403, resp.text
+    client = _client(founder=hq_admin, principal_arn=_MARKETING_ARN)
 
-    # The unrelated marketing plugin, discovered in the same pass, still
-    # works — one broken manifest must not take every other plugin down with
-    # it.
-    marketing_client = _client(founder=_founder("alice", permissions=frozenset({_PERMISSION_CODE})))
-    resp = marketing_client.get(f"/api/v1/internal/scopes?permission_code={_PERMISSION_CODE}")
-    assert resp.status_code == 200, resp.text
+    resp = client.get(f"/api/v1/internal/scopes?permission_code={_OTHER_DOMAIN_PERMISSION_CODE}")
+    assert resp.status_code == 403, resp.text
+    resp = client.post(
+        "/api/v1/internal/scope-check",
+        json={"permission_code": _OTHER_DOMAIN_PERMISSION_CODE, "scope_ref": "brand-hq"},
+    )
+    assert resp.status_code == 403, resp.text
+    assert calls == []
+
+
+def test_the_two_refusals_are_indistinguishable_from_the_response():
+    """The generic-403 property (#1644, kept deliberately by #1653): "you do
+    not hold this code" and "your plugin was not entitled to ask" must look
+    identical on the wire, or the seam becomes a probe for which codes an
+    instance has entitled to whom."""
+
+    async def authorizer(caller, db, permission_code):  # noqa: ANN001, ARG001
+        return authz.ScopeGrant(unrestricted=True)
+
+    _register(authorizer)
+
+    # Axis 1 refusal: the caller holds nothing.
+    no_grant = _client(founder=_founder("alice", permissions=frozenset()))
+    axis1 = no_grant.get(f"/api/v1/internal/scopes?permission_code={_PERMISSION_CODE}")
+
+    # Axis 2 refusal: the caller holds the code, the instance never entitled
+    # marketing to it.
+    hq_admin = _client(
+        founder=_founder("hq-admin", permissions=frozenset({_OTHER_DOMAIN_PERMISSION_CODE}))
+    )
+    axis2 = hq_admin.get(f"/api/v1/internal/scopes?permission_code={_OTHER_DOMAIN_PERMISSION_CODE}")
+
+    assert axis1.status_code == axis2.status_code == 403
+    assert axis1.json() == axis2.json()
+
+
+# ── opaque reference: no instance vocabulary crosses the seam ───────────────
 
 
 def test_listing_response_shape_carries_only_opaque_fields():
@@ -431,7 +444,7 @@ def test_listing_response_shape_carries_only_opaque_fields():
     async def describer(db, refs):  # noqa: ANN001, ARG001
         return {"unit-9": "Downtown Unit"}
 
-    authz.register_scope_authorizer(authorizer, ancestry_resolver=ancestry, describer=describer)
+    _register(authorizer, ancestry_resolver=ancestry, describer=describer)
 
     client = _client(founder=_founder("alice", permissions=frozenset({_PERMISSION_CODE})))
     resp = client.get(f"/api/v1/internal/scopes?permission_code={_PERMISSION_CODE}")

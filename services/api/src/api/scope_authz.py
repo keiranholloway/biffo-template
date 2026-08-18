@@ -37,6 +37,28 @@ authorizer directly, only ever the HTTP seam in ``routers/internal_scopes.py``,
 which is itself dual-authenticated (``require_signed_principal``) so a plugin
 cannot even reach it without a re-verified user token.
 
+## The instance entitles plugins, never the plugin itself (#1653)
+
+The seam has a second axis (``routers/internal_scopes.py``): the forwarded
+caller must hold ``permission_code``, AND the *asking plugin* must be
+entitled to ask about it. **The instance declares that entitlement**, as the
+``entitlements`` argument to ``register_scope_authorizer`` — the same party
+that already owns the ``permission_code`` vocabulary (ADR-0012's identity
+seam: ``provider.resolve_permissions`` resolves codes the instance's own DDL
+seeds and grants). A plugin cannot entitle itself, because a plugin authors
+no part of this registration.
+
+#1644 originally derived entitlement from ``PermissionRule.permission_code``
+in a plugin's own ``biffo.plugin.json``. That contradicted #1606's
+portability rule outright: ``permission_code`` is the DB-held,
+instance-specific gate a *portable* plugin is designed not to use
+(``required_role`` is the portable one), so **no** ``biffo.plugin.json`` in
+the estate declares one — 0 of 28 files, measured across every local
+repository checkout including skeletons — and the only way to become entitled
+was to stop being portable. It also read a document the asking plugin writes, so a plugin
+could name any code it liked and thereby entitle itself. Entitlement is not
+the plugin's statement to make.
+
 ## Fail-closed, and distinguishable from "checked and allowed" (#1606, #1634)
 
 Two different callers get "no" here for two different reasons, and the two
@@ -54,7 +76,7 @@ not place — a stale assignment pointing at something since removed is
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -143,6 +165,15 @@ ScopeAncestryResolver = Callable[[AsyncSession, str], Awaitable[tuple[str, ...]]
 # resends the ref; it renders the label. Never consulted for authorization.
 ScopeDescriber = Callable[[AsyncSession, Sequence[str]], Awaitable[Mapping[str, str]]]
 
+# {service logical name -> the permission_codes that service may ASK about}.
+#
+# Keys are ``ServicePrincipal.logical_names`` values — ``system:<plugin-name>``
+# for a plugin's own signed principal. Values are codes drawn from the
+# INSTANCE's own permission vocabulary, which is why only the instance can
+# write this: it is the one party that knows both the vocabulary and which
+# plugins it trusts with which part of it (#1653).
+ScopeEntitlements = Mapping[str, Collection[str]]
+
 
 async def _default_authorizer(
     caller: AuthenticatedUser, db: AsyncSession, permission_code: str
@@ -164,6 +195,7 @@ async def _default_describer(db: AsyncSession, refs: Sequence[str]) -> Mapping[s
 _authorizer: ScopeAuthorizer = _default_authorizer
 _ancestry_resolver: ScopeAncestryResolver = _default_ancestry
 _describer: ScopeDescriber = _default_describer
+_entitlements: Mapping[str, frozenset[str]] = {}
 _registered: bool = False
 
 
@@ -172,6 +204,7 @@ def register_scope_authorizer(
     *,
     ancestry_resolver: ScopeAncestryResolver | None = None,
     describer: ScopeDescriber | None = None,
+    entitlements: ScopeEntitlements | None = None,
 ) -> None:
     """Declare the instance's scope-authorization model.
 
@@ -179,17 +212,62 @@ def register_scope_authorizer(
     ``register_scope_resolver``: a later call replaces the earlier one
     wholesale — there is exactly one active authorizer (an instance has
     exactly one authorization model), not a registry keyed by anything.
-    ``ancestry_resolver``/``describer`` default to the no-op fallbacks when
-    omitted, rather than silently keeping a previous registration's — a
-    caller registering a new authorizer without new resolvers almost always
-    means "this instance has no ancestry concept" (flat scopes), not "reuse
-    whatever was there before".
+    ``ancestry_resolver``/``describer``/``entitlements`` default to the no-op
+    fallbacks when omitted, rather than silently keeping a previous
+    registration's — a caller registering a new authorizer without new
+    resolvers almost always means "this instance has no ancestry concept"
+    (flat scopes), not "reuse whatever was there before". The same
+    no-carry-over rule is what makes ``entitlements`` safe: omitting it says
+    "this instance entitles nobody", never "keep the last map", so a
+    re-registration can never leave behind a grant its author did not write
+    down.
+
+    ``entitlements`` is the instance's answer to "which plugin may ASK this
+    seam about which ``permission_code``" (#1653) — see ``ScopeEntitlements``
+    and ``service_is_entitled``. It is deliberately a parameter here rather
+    than anything a plugin declares: the instance owns the code vocabulary
+    and chose to install the plugin, so it is the only party holding both
+    halves of that decision.
+
+    A malformed ``entitlements`` (values that are not iterables of strings)
+    raises at registration time — import time for a domain module, so an
+    instance fails to boot rather than serving an authorization map nobody
+    can read. Deliberately not caught: there is no safe partial answer to
+    "which plugins does this instance trust".
     """
-    global _authorizer, _ancestry_resolver, _describer, _registered
+    global _authorizer, _ancestry_resolver, _describer, _entitlements, _registered
     _authorizer = authorizer
     _ancestry_resolver = ancestry_resolver or _default_ancestry
     _describer = describer or _default_describer
+    _entitlements = (
+        {name: frozenset(codes) for name, codes in entitlements.items()} if entitlements else {}
+    )
     _registered = True
+
+
+def service_is_entitled(logical_names: Iterable[str], permission_code: str) -> bool:
+    """May a service calling under ``logical_names`` ask about
+    ``permission_code``?
+
+    Fail-closed and unconditional: an instance that registered no
+    entitlements — including bare core, which registered nothing at all —
+    entitles nobody, so every ask is refused. There is no path by which a
+    calling plugin's own declarations reach this answer.
+
+    ``logical_names`` is normally a single ``{"system:<name>"}``
+    (``ServicePrincipal.logical_names``); iterating is defensive, not a claim
+    that a principal ever carries more than one.
+    """
+    return any(permission_code in _entitlements.get(name, frozenset()) for name in logical_names)
+
+
+def scope_entitlements() -> Mapping[str, frozenset[str]]:
+    """The registered entitlement map, read-only — for diagnostics and tests.
+
+    Returns a copy so a caller cannot mutate the live map into a grant the
+    instance never declared.
+    """
+    return dict(_entitlements)
 
 
 def scope_authz_registered() -> bool:

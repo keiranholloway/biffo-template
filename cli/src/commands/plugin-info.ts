@@ -65,5 +65,52 @@ function printEntry(entry: RegistryPluginEntry): void {
     const summary = entry.ui_components.map((c) => `${c.label} (${c.type})`).join(', ')
     console.log(`  UI components:          ${summary}`)
   }
+  printScopeSeamEntitlement(entry.name)
   console.log('')
+}
+
+/**
+ * Where scope-seam entitlement comes from, printed here because this is where
+ * a plugin author looks when `/internal/scopes` or `/internal/scope-check`
+ * returns 403 (issue #1653).
+ *
+ * That 403 carries a deliberately generic detail and always will — the two
+ * refusal reasons ("you do not hold this code" and "this instance did not
+ * entitle your plugin") must stay indistinguishable, or the seam becomes a
+ * probe for which codes an instance has entitled to whom. So the explanation
+ * belongs on this side of the wire, not in the response.
+ *
+ * It states the mechanism and the remedy, and deliberately does NOT claim to
+ * report the live map. The map is a Python argument evaluated at the
+ * instance's domain-module import time; a CLI-side re-derivation (scraping
+ * `register_scope_authorizer(` out of instance source) would be a second
+ * authority that can disagree with the one that actually acts — the estate's
+ * most-recurrent defect class (#1362, eleven recorded instances). Saying
+ * plainly that this command cannot read it is more useful than a number that
+ * might be wrong.
+ */
+function printScopeSeamEntitlement(name: string): void {
+  console.log('')
+  console.log(chalk.bold('  Scope-seam entitlement'))
+  console.log('    Declared by the INSTANCE, never by this plugin (ADR-0029, #1653).')
+  console.log('    A plugin manifest cannot grant it — biffo.plugin.json is not consulted.')
+  console.log('    To let this plugin call GET /internal/scopes or POST /internal/scope-check,')
+  console.log('    the instance operator adds it beside their own scope authorizer:')
+  console.log('')
+  console.log(chalk.dim('      register_scope_authorizer('))
+  console.log(chalk.dim('          authorizer,'))
+  console.log(
+    chalk.dim(`          entitlements={"system:${name}": frozenset({"<permission_code>"})},`),
+  )
+  console.log(chalk.dim('      )'))
+  console.log('')
+  console.log(
+    chalk.dim(
+      "    <permission_code> is one of the INSTANCE's own codes, so ask the operator which\n" +
+        "    one covers this plugin's surface. This command cannot report what an instance\n" +
+        "    has actually entitled: the map is evaluated in the instance's API at import\n" +
+        '    time, and re-deriving it here would be a second authority that can drift from\n' +
+        '    the one enforcing the 403.',
+    ),
+  )
 }

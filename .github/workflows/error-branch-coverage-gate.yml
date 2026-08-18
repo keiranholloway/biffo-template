@@ -104,6 +104,13 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       REPO: ${{ github.repository }}
       SHA: ${{ github.event.workflow_run.head_sha }}
+      # LOG CONTEXT ONLY — nothing branches on these, deliberately. They are
+      # dumped into every step's env block, which is how a firing can be
+      # traced back to the completion that woke it. Do NOT reintroduce logic
+      # keyed off them: the event is a snapshot a later re-run invalidates,
+      # and branching on it here is what made this gate's answer depend on
+      # which workflow happened to fire it (class #1362). The Actions run
+      # listing is the single authority; see "Can this commit be asserted yet?".
       TRIGGERING_NAME: ${{ github.event.workflow_run.name }}
       TRIGGERING_RUN_ID: ${{ github.event.workflow_run.id }}
     steps:
@@ -303,9 +310,9 @@ jobs:
             reason="CI run ${{ steps.runs.outputs.ci_run_id }} completed but its python-coverage artefact could not be downloaded (missing or expired)."
           fi
 
-          if ! gh run download "${{ steps.runs.outputs.rls_run_id }}" --repo "$REPO" --name rls-coverage --dir cov-rls; then
+          if ! gh run download "${{ steps.runs.outputs.lane_run_id }}" --repo "$REPO" --name rls-coverage --dir cov-rls; then
             ok=false
-            reason="${reason:+$reason }Lane run ${{ steps.runs.outputs.rls_run_id }} (${{ steps.lane.outputs.name }}) completed but its rls-coverage artefact could not be downloaded — a repo WITH a second lane must not silently fall back to Python-only coverage."
+            reason="${reason:+$reason }Lane run ${{ steps.runs.outputs.lane_run_id }} (${{ steps.lane.outputs.name }}) completed but its rls-coverage artefact could not be downloaded — a repo WITH a second lane must not silently fall back to Python-only coverage."
           fi
 
           echo "ok=$ok" >> "$GITHUB_OUTPUT"
@@ -329,7 +336,7 @@ jobs:
               --coverage cov-ci/coverage.json --coverage cov-rls/rls-coverage.json \
               | tee check-output.txt; then
             echo "state=success" >> "$GITHUB_OUTPUT"
-            echo "description=combined CI run ${{ steps.runs.outputs.ci_run_id }} + RLS Tests run ${{ steps.runs.outputs.rls_run_id }}" >> "$GITHUB_OUTPUT"
+            echo "description=combined CI run ${{ steps.runs.outputs.ci_run_id }} + ${{ steps.lane.outputs.name }} run ${{ steps.runs.outputs.lane_run_id }}" >> "$GITHUB_OUTPUT"
           else
             echo "state=failure" >> "$GITHUB_OUTPUT"
             echo "description=new unexecuted error branch(es) — see this run's log" >> "$GITHUB_OUTPUT"

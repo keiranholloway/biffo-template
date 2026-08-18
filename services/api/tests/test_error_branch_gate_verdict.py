@@ -359,13 +359,41 @@ def test_the_reporting_step_takes_its_inputs_from_env() -> None:
     assert "${{" not in poster["run"], "no expression splicing inside the reporting shell"
 
 
-def test_every_step_condition_names_an_output_something_sets() -> None:
-    """A step gated on an output nothing produces silently skips all of them.
+def _resolver_output_keys() -> set[str]:
+    """The keys the verdict resolver actually emits, taken from real runs.
 
-    That is how a whole tail of the job disappears without anything going red —
-    the same shape as the reporting step's own dead conjunct.
+    Derived rather than restated. The `runs` step pipes this script's stdout
+    straight into `$GITHUB_OUTPUT`, so its key names ARE that step's outputs and
+    a hand-maintained second list of them would be free to drift from the thing
+    it describes — which is the defect this whole file is about, one level up.
     """
-    produced = {"steps.lane.outputs.present", "steps.runs.outputs.verdict"}
+    keys: set[str] = set()
+    for fixture in (RUNS_985_BOTH_GREEN, RUNS_952_CI_CANCELLED, []):
+        proc = _run_script(json.dumps({"workflow_runs": fixture}))
+        assert proc.returncode == 0, proc.stderr
+        keys.update(line.split("=", 1)[0] for line in proc.stdout.splitlines() if "=" in line)
+    return keys
+
+
+def test_every_step_reference_names_an_output_something_sets() -> None:
+    """Scans `if:`, `env:` AND `run:` — a dangling reference in any is silent.
+
+    Two distinct failure modes, both of which have now actually happened here:
+
+    - in an `if:`, a reference nothing sets makes the condition false, so the
+      step and everything gated behind it silently vanish. That is the shipped
+      `both_found` defect.
+    - in a `run:` or `env:`, it expands to the empty string. Caught while
+      writing this change: the resolver was renamed to emit `lane_run_id` while
+      three consumers still said `rls_run_id`, which would have made the gate
+      run `gh run download ""` and post a wrong failure on every commit. The
+      YAML was valid, the shell parsed, and nothing else would have noticed.
+    """
+    produced = {f"steps.runs.outputs.{k}" for k in _resolver_output_keys()}
+    produced.add("steps.lane.outputs.present")
+    produced.add("steps.lane.outputs.name")
+    produced.add("steps.lane.outputs.path")
+
     for step in _gate_steps():
         if not step.get("id"):
             continue
@@ -373,11 +401,11 @@ def test_every_step_condition_names_an_output_something_sets() -> None:
             produced.add(f"steps.{step['id']}.outputs.{key}")
 
     for step in _gate_steps():
-        cond = str(step.get("if") or "")
-        if not cond or cond.strip() == "always()":
-            continue
-        for ref in re.findall(r"steps\.[a-z_]+\.outputs\.[a-z_]+", cond):
-            assert ref in produced, f"{step.get('name')} gates on {ref}, which nothing sets"
+        surfaces = [str(step.get("if") or ""), step.get("run") or ""]
+        surfaces += [str(v) for v in (step.get("env") or {}).values()]
+        for surface in surfaces:
+            for ref in re.findall(r"steps\.[a-z_]+\.outputs\.[a-z_]+", surface):
+                assert ref in produced, f"{step.get('name')} references {ref}, which nothing sets"
 
 
 def test_the_runs_listing_is_not_pre_filtered_on_status() -> None:

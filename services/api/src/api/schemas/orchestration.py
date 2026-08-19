@@ -239,6 +239,21 @@ WORKFLOW_ACTIONS: list[dict[str, Any]] = [
                 "required": True,
                 "payload_template": True,
             },
+            # Whether `body` is plain text (escaped into the HTML part) or
+            # already-authored HTML markup (sent through as-is; issue #1659).
+            # See `send_email`'s docstring for the trust boundary this opts
+            # into — `body_format: "html"` skips escaping `body`.
+            {
+                "name": "body_format",
+                "label": "Body format",
+                "type": "select",
+                "required": False,
+                "default": "text",
+                "options": [
+                    {"value": "text", "label": "Plain text"},
+                    {"value": "html", "label": "HTML"},
+                ],
+            },
             {
                 "name": "body",
                 "label": "Body",

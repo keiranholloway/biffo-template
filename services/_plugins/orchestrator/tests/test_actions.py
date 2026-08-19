@@ -6,10 +6,12 @@ from typing import Any
 
 import pytest
 from orchestrator.actions import (
+    _LOOKS_LIKE_HTML_RE,
     ACTION_HANDLERS,
     ActionError,
     TransientActionError,
     WhatsAppSettings,
+    _html_to_text,
     fan_in_agent_runs,
     prepare_delivery,
     request_agent_run,
@@ -192,6 +194,272 @@ def test_send_email_body_templated_html_escapes_payload_content():
     # the plain-text part is untouched — templating, not escaping, is its job
     text_body = ses.calls[0]["Content"]["Simple"]["Body"]["Text"]["Data"]
     assert text_body == "Hi <script>alert(1)</script>"
+
+
+# ── _LOOKS_LIKE_HTML_RE case matrix (issue #1659) ────────────────────────────
+#
+# Real markup captured from the actual body that shipped broken
+# (tabsii-platform's `services/api/src/api/domains/tabsii/
+# scheduled_reports.py:272-280`, `dev` sha as of 2026-08-19), plus the
+# plausible near-miss punctuation an ordinary business-report body can
+# contain that must NOT be mistaken for a tag.
+_MUST_CATCH = [
+    "<h2>Demo Brand — weekly network summary</h2>",
+    "<p>Week ending 2026-08-19.</p>",
+    "<ul><li><strong>8</strong> active units</li></ul>",
+    "Some text<br>more text",
+    'See our <a href="https://example.com">site</a> for details',
+]
+_MUST_NOT_CATCH = [
+    "Report processed: < 10 items remaining, > 95% done",
+    "Use rate < 5% or > 95%",
+    "5 < 10 and 10 > 5",
+    "I love this <3",
+    "Renewal window: 2026-08-19 -> 2026-08-26",
+    "Week ending 2026-08-19.",
+    "Hi {name}, your invoice is due.",
+]
+
+
+@pytest.mark.parametrize("text", _MUST_CATCH)
+def test_looks_like_html_re_catches_real_markup(text: str):
+    assert _LOOKS_LIKE_HTML_RE.search(text)
+
+
+@pytest.mark.parametrize("text", _MUST_NOT_CATCH)
+def test_looks_like_html_re_ignores_plain_text_punctuation(text: str):
+    assert not _LOOKS_LIKE_HTML_RE.search(text)
+
+
+def test_looks_like_html_re_known_false_positive_on_generic_type_syntax():
+    """Documented limitation, not a target for this fix: a body that
+    legitimately mentions a bracketed generic type (`List<Item>`) reads as a
+    tag by this heuristic. No real workflow body in this estate does this —
+    every real case is a business-report or notification body — and the
+    workaround is one line (`body_format: "html"`, or rephrase), so this is
+    accepted rather than chased with a more elaborate parser.
+    """
+    assert _LOOKS_LIKE_HTML_RE.search("Use the generic type List<Item> here")
+
+
+def test_html_to_text_strips_tags_and_breaks_blocks():
+    markup = (
+        "<h2>Demo Brand — weekly network summary</h2>"
+        "<p>Week ending 2026-08-19.</p>"
+        "<ul><li><strong>8</strong> active units</li></ul>"
+    )
+
+    text = _html_to_text(markup)
+
+    assert "<" not in text
+    assert ">" not in text
+    lines = text.splitlines()
+    assert "Demo Brand — weekly network summary" in lines
+    assert "Week ending 2026-08-19." in lines
+    assert "8 active units" in lines
+
+
+def test_html_to_text_unescapes_entities():
+    assert _html_to_text("<p>Smith &amp; Sons</p>") == "Smith & Sons"
+
+
+# ── body_format: "html" (issue #1659) ────────────────────────────────────────
+#
+# `_REPORT_BODY` is the exact shape of the body tabsii-platform's weekly
+# network summary sends (`services/api/src/api/domains/tabsii/
+# scheduled_reports.py:272-280`, captured 2026-08-19 against
+# tabsii-platform's `dev` branch) — this is the body that shipped in the
+# recipient's inbox as literal, visible markup, reported in #1659.
+_REPORT_BODY = (
+    "<h2>Demo Brand — weekly network summary</h2>"
+    "<p>Week ending 2026-08-19.</p>"
+    "<ul>"
+    "<li><strong>8</strong> active units</li>"
+    "<li><strong>3</strong> new leads in the last 7 days</li>"
+    "<li><strong>£1,250.00</strong> outstanding on unpaid invoices</li>"
+    "</ul>"
+)
+
+
+def test_send_email_default_body_format_still_escapes_a_report_shaped_body():
+    """Baseline: `body_format` defaults to "text", and text mode's behaviour
+    is completely unchanged by this feature — a real HTML-shaped body still
+    comes out as literal escaped text unless the caller opts in. This is the
+    exact bug #1659 reported: tabsii-platform module 144's `action_config` is
+    `{"body": "{body}"}`, so the markup arrives entirely through payload
+    substitution and there is nothing in the static template for the
+    fail-closed guard below to catch — `body_format: "html"` is what fixes
+    this shape, not a guard.
+    """
+    ses = FakeSes()
+
+    send_email(
+        {"from": "f@x", "to": "t@x", "subject": "s", "body": "{body}"},
+        {"body": _REPORT_BODY},
+        ses_client=ses,
+    )
+
+    html_body = ses.calls[0]["Content"]["Simple"]["Body"]["Html"]["Data"]
+    # Broken exactly as reported: the heading tag is visible, escaped text,
+    # not rendered markup.
+    assert "&lt;h2&gt;Demo Brand" in html_body
+    assert "<h2>Demo Brand" not in html_body
+
+
+def test_send_email_body_format_html_renders_the_reported_body_correctly():
+    """The fix: the same report body, the same payload shape, with
+    `body_format: "html"` declared. This is the fail-first proof for #1659 —
+    reverting the `body_format` handling in `actions.py`/`email_branding.py`
+    while keeping this test makes it fail exactly like the test above (the
+    heading arrives as `&lt;h2&gt;...`), because a plain dict `.get(
+    "body_format", "text")` on a config carrying no such key silently
+    defaults to the old, only path.
+    """
+    ses = FakeSes()
+
+    send_email(
+        {
+            "from": "f@x",
+            "to": "t@x",
+            "subject": "s",
+            "body": "{body}",
+            "body_format": "html",
+        },
+        {"body": _REPORT_BODY},
+        ses_client=ses,
+    )
+
+    html_body = ses.calls[0]["Content"]["Simple"]["Body"]["Html"]["Data"]
+    text_body = ses.calls[0]["Content"]["Simple"]["Body"]["Text"]["Data"]
+
+    # The actual rendered output a recipient's client would show: real tags,
+    # not escaped entities.
+    assert "<h2>Demo Brand — weekly network summary</h2>" in html_body
+    assert "<li><strong>8</strong> active units</li>" in html_body
+    assert "&lt;h2&gt;" not in html_body
+
+    # The derived plain-text alternative a text-only client/spam filter sees:
+    # readable lines, no leftover markup.
+    assert "<" not in text_body
+    assert ">" not in text_body
+    assert "Demo Brand — weekly network summary" in text_body
+    assert "8 active units" in text_body
+    assert "£1,250.00 outstanding on unpaid invoices" in text_body
+
+
+def test_send_email_body_format_html_does_not_escape_literal_template_markup():
+    """A workflow author who writes HTML directly into `body` (no payload
+    substitution involved at all) gets it rendered as-is under
+    `body_format: "html"` — the trust the docstring describes is in the
+    config author, not conditional on where the markup came from.
+    """
+    ses = FakeSes()
+
+    send_email(
+        {
+            "from": "f@x",
+            "to": "t@x",
+            "subject": "s",
+            "body": "<h2>Static heading</h2><p>Static paragraph.</p>",
+            "body_format": "html",
+        },
+        {},
+        ses_client=ses,
+    )
+
+    html_body = ses.calls[0]["Content"]["Simple"]["Body"]["Html"]["Data"]
+    assert "<h2>Static heading</h2>" in html_body
+    assert "<p>Static paragraph.</p>" in html_body
+
+
+def test_send_email_body_format_html_still_escapes_payload_substitutions():
+    """`body_format: "html"` trusts the config author's own literal markup,
+    but a `{field}` substituted from the triggering event's payload into that
+    markup is templated exactly as `_render` always does — `send_email`
+    introduces no new escaping for it, so a workflow author who interpolates
+    payload-sourced text into an HTML body is responsible for that text being
+    safe to embed (documented in the docstring's trust-boundary section).
+    This test pins the *current* behaviour (no escaping added) rather than
+    asserting it is safe in general — see the PR body for what that implies.
+    """
+    ses = FakeSes()
+
+    send_email(
+        {
+            "from": "f@x",
+            "to": "t@x",
+            "subject": "s",
+            "body": "<h2>Hello {name}</h2>",
+            "body_format": "html",
+        },
+        {"name": "<script>alert(1)</script>"},
+        ses_client=ses,
+    )
+
+    html_body = ses.calls[0]["Content"]["Simple"]["Body"]["Html"]["Data"]
+    assert "<h2>Hello <script>alert(1)</script></h2>" in html_body
+
+
+def test_send_email_body_format_text_default_rejects_literal_html_in_config():
+    """Fail closed on the ambiguous case (#1659's proposed fix, item 2): an
+    author who typed real markup straight into a text-mode `body` gets a
+    loud `ActionError` at send time, not a silently broken delivery. Checked
+    against the RAW template, not the rendered payload — see the comment in
+    `send_email` for why (this is what keeps
+    `test_send_email_body_templated_html_escapes_payload_content` passing).
+    """
+    ses = FakeSes()
+
+    with pytest.raises(ActionError, match="looks like it contains HTML markup"):
+        send_email(
+            {"from": "f@x", "to": "t@x", "subject": "s", "body": "<h2>Oops</h2>"},
+            {},
+            ses_client=ses,
+        )
+
+    assert ses.calls == []
+
+
+def test_send_email_body_format_invalid_value_raises_action_error():
+    ses = FakeSes()
+
+    with pytest.raises(ActionError, match="body_format' must be 'text' or 'html'"):
+        send_email(
+            {
+                "from": "f@x",
+                "to": "t@x",
+                "subject": "s",
+                "body": "b",
+                "body_format": "markdown",
+            },
+            {},
+            ses_client=ses,
+        )
+
+    assert ses.calls == []
+
+
+def test_send_email_body_format_html_unsubscribe_url_in_derived_text_and_html():
+    ses = FakeSes()
+
+    send_email(
+        {
+            "from": "f@x",
+            "to": "t@x",
+            "subject": "s",
+            "body": "<p>Hello there.</p>",
+            "body_format": "html",
+        },
+        {"unsubscribe_url": "https://example.com/u/abc123"},
+        ses_client=ses,
+    )
+
+    call = ses.calls[0]
+    html_body = call["Content"]["Simple"]["Body"]["Html"]["Data"]
+    text_body = call["Content"]["Simple"]["Body"]["Text"]["Data"]
+    assert 'href="https://example.com/u/abc123"' in html_body
+    assert "https://example.com/u/abc123" in text_body
+    assert "Hello there." in text_body
 
 
 # ── One-click unsubscribe (RFC 8058, tabsii-platform#378 follow-on) ─────────

@@ -24,8 +24,49 @@
 # under the runner's actual /bin/sh can (the same lesson interpreter-audit.sh
 # itself exists to enforce, one level up).
 #
+# ## Fifth-pass fix: a missing `dash` was silently read as a regression (#1652)
+#
+# Every comparison below runs the audit under `dash` by literally invoking
+# `"$shell" "$AUDIT"` with shell=dash (see run_audit). If no `dash` binary
+# exists, that is not a shell disagreement -- it is bash's real output being
+# diffed against `dash: command not found` (exit 127), and assert_case's own
+# "bash and dash disagree" wording could not tell the two apart. That is
+# exactly what happened on `tabsii-com/tabsii-platform` PR #952: its
+# self-hosted fleet is Amazon Linux 2023, which carries neither a `dash`
+# package (`dnf install -y dash` -> "No match for argument: dash") nor a
+# usable EPEL9 dash, no `busybox`, nothing else POSIX-compatible enough to
+# stand in. Every dash-side comparison failed with exit 127, and this
+# self-test reported it as "bash and dash disagree" -- a false positive
+# indistinguishable in its own output from a genuine regression in
+# interpreter-audit.sh, on an environment where dash had never actually run.
+#
+# Fix, in two parts, matching AGENTS.md section 6's own convention
+# ("'Could not determine' is a different fact from 'found a real advisory'"):
+#
+#   1. `require_real_dash()` below refuses to run a single case unless `dash`
+#      genuinely exists AND executes -- distinct wording, distinct exit code
+#      (2), so this can never again be misread as a caught regression. This
+#      holds regardless of where the fix in part 2 is deployed or how it
+#      later changes -- the self-test protects its own denominator itself.
+#   2. `release-guards.yml`'s self-test step now runs this script inside a
+#      `debian:stable` container, which ships a real `dash` as `/bin/sh` by
+#      default -- so on the runner fleets that actually invoke this (both
+#      `ubuntu-latest` and the self-hosted AL2023 fleet), part 1's guard is
+#      normally a no-op that never fires, and the comparisons below are
+#      against a genuine second shell everywhere, not just on Debian-family
+#      hosts. See that workflow's own comment for why a container instead of
+#      a package-manager install attempt (the AL2023 fleet has no dash in any
+#      of its repos to install from).
+#
+# Exit 0 = every case behaves as specified, and at least one comparison ran.
+# Exit 1 = a regression was found in a comparison that DID run.
+# Exit 2 = could not verify: no working `dash` in this environment, or (as a
+#          structural belt-and-suspenders) zero comparisons ran for any other
+#          reason. Never treat 2 as a pass -- it means this self-test proved
+#          nothing, the same distinction interpreter-audit.sh itself already
+#          makes for "could not examine" vs. "examined, matching" (#1413).
+#
 # Run: sh scripts/interpreter-audit.test.sh
-# Exit 0 = every case behaves as specified. Exit 1 = a regression.
 
 set -u
 (set -o pipefail) 2>/dev/null && set -o pipefail || true
@@ -34,10 +75,35 @@ SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 REPO_ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
 AUDIT="$REPO_ROOT/scripts/interpreter-audit.sh"
 
+# require_real_dash -- fail loudly and distinctly (exit 2, not 1) if this
+# environment has no dash a comparison can actually run against. See the
+# header above (#1652): the alternative is every "$shell"=dash invocation
+# below hitting `command not found` and being read as a real disagreement.
+require_real_dash() {
+  if ! command -v dash >/dev/null 2>&1; then
+    printf 'interpreter-audit.test.sh: CANNOT VERIFY -- no "dash" binary in this environment.\n' >&2
+    printf 'This is NOT "bash and dash disagree" (a regression) -- it is this self-test\n' >&2
+    printf 'having no real second shell to compare bash against at all. Do not read the\n' >&2
+    printf 'CI wiring as broken from this alone; read whether it is running where a real\n' >&2
+    printf 'dash exists (#1652 -- release-guards.yml runs this inside a debian:stable\n' >&2
+    printf 'container for exactly this reason). Locally: apt-get/brew install dash, or\n' >&2
+    printf 'run this inside such a container.\n' >&2
+    exit 2
+  fi
+  if ! dash -c 'exit 0' >/dev/null 2>&1; then
+    printf 'interpreter-audit.test.sh: CANNOT VERIFY -- "dash" exists but does not run\n' >&2
+    printf '`dash -c '"'"'exit 0'"'"'` successfully. Same class as a missing binary (#1652) --\n' >&2
+    printf 'this is not a caught regression, it is an unusable second shell.\n' >&2
+    exit 2
+  fi
+}
+require_real_dash
+
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 
 FAILURES=0
+CASES_RUN=0
 
 # make_fixture <dir> <script-name> <run-line> [<second-run-line>]
 #
@@ -97,6 +163,8 @@ assert_case() {
   expected_count=$4
   must_contain=$5
   must_not_contain=$6
+
+  CASES_RUN=$((CASES_RUN + 1))
 
   bash_result=$(run_audit "$dir" bash)
   bash_code=$(printf '%s' "$bash_result" | head -n1)
@@ -183,6 +251,7 @@ assert_case "unparseable: sh -c \"...\" and a shell-variable interpreter" "$d" 1
 # Not pinned to a fixed count (that grows as this repo's workflows do) —
 # only to the properties #1625 cares about: nothing mismatched, nothing
 # left unexamined, exit 0.
+CASES_RUN=$((CASES_RUN + 1))
 real_result=$(run_audit "$REPO_ROOT" bash)
 real_code=$(printf '%s' "$real_result" | head -n1)
 real_out=$(printf '%s' "$real_result" | tail -n +2)
@@ -203,11 +272,26 @@ else
   echo "PASS: real repo — clean (exit $real_code, bash == dash)"
 fi
 
+# The denominator, printed unconditionally before any verdict -- same
+# discipline interpreter-audit.sh's own header requires of itself (#1413): a
+# guard about a check that never ran must not itself report a pass having
+# run zero comparisons. require_real_dash() above should make CASES_RUN=0
+# unreachable, but that is a claim worth checking rather than trusting, so
+# it is enforced here structurally too rather than only by that earlier exit.
 echo
+printf 'interpreter-audit.test.sh: %s comparison(s) actually run (bash vs. real dash)\n' "$CASES_RUN"
+
+if [ "$CASES_RUN" -eq 0 ]; then
+  echo "interpreter-audit.test.sh: CANNOT VERIFY -- zero comparisons ran. A denominator" >&2
+  echo "of zero is not a pass; something above returned before any assert_case (or the" >&2
+  echo "real-repo check) executed." >&2
+  exit 2
+fi
+
 if [ "$FAILURES" -ne 0 ]; then
-  echo "interpreter-audit.test.sh: $FAILURES check(s) failed."
+  echo "interpreter-audit.test.sh: $FAILURES of $CASES_RUN check(s) failed."
   exit 1
 fi
 
-echo "interpreter-audit.test.sh: all checks passed."
+echo "interpreter-audit.test.sh: all $CASES_RUN check(s) passed."
 exit 0

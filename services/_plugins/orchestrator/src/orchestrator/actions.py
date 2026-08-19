@@ -20,6 +20,7 @@ registered identically.
 
 from __future__ import annotations
 
+import html
 import json
 import os
 import re
@@ -206,6 +207,41 @@ def _render(template: str, payload: dict[str, Any]) -> str:
     return template.format_map(defaultdict(str, payload))
 
 
+# A rendered ``body`` that looks like it carries HTML markup but wasn't
+# declared as such (issue #1659). Matches an opening or closing tag whose
+# name starts with a letter, with or without attributes -- ``<h2>``, ``</p>``,
+# ``<a href="...">`` -- and deliberately does not match bare angle brackets
+# used as punctuation (``5 < 10``, ``<3``) or a URL wrapped in angle brackets
+# per RFC 3986 (``<https://example.com>``), because neither has a letter
+# immediately after ``<`` followed by a space or ``>``. See the
+# ``test_looks_like_html_re_*`` tests in ``test_actions.py`` for the corpus
+# this was built and checked against, captured from the real body that
+# shipped broken (tabsii-platform's
+# `services/api/src/api/domains/tabsii/scheduled_reports.py`).
+_LOOKS_LIKE_HTML_RE = re.compile(r"<\s*/?\s*[a-zA-Z][a-zA-Z0-9]*(?:\s[^<>]*)?>")
+
+
+def _html_to_text(markup: str) -> str:
+    """Derive a readable plain-text fallback from a trusted HTML body.
+
+    Not a general HTML-to-text engine -- good enough for the block/list
+    markup a workflow's ``body_format: "html"`` accepts (headings,
+    paragraphs, lists), which is the only shape ``send_email`` ever passes
+    in here. Block-level closing tags and ``<br>`` become line breaks so the
+    SES ``Text`` alternative a spam filter or text-only client sees reads as
+    separated lines rather than one run-on sentence; every other tag is
+    stripped and entities are unescaped back to plain characters.
+    """
+    with_breaks = re.sub(r"<br\s*/?>", "\n", markup, flags=re.IGNORECASE)
+    with_breaks = re.sub(
+        r"</(p|div|h[1-6]|li|tr|table|ul|ol)\s*>", "\n", with_breaks, flags=re.IGNORECASE
+    )
+    text_only = re.sub(r"<[^>]+>", "", with_breaks)
+    unescaped = html.unescape(text_only)
+    lines = [line.strip() for line in unescaped.splitlines()]
+    return "\n".join(line for line in lines if line)
+
+
 def _require(config: dict[str, Any], action: str, key: str) -> Any:
     try:
         return config[key]
@@ -247,19 +283,58 @@ def send_email(
     ``config`` keys: ``from`` (verified SES sender, required), ``to`` (address,
     address list, or a ``{field}`` template filled from the event payload —
     e.g. ``{email}`` to notify whoever triggered the run — required), ``subject``
-    and ``body`` (optional ``{field}`` templates filled from the event payload).
+    and ``body`` (optional ``{field}`` templates filled from the event payload),
+    and ``body_format`` (``"text"``, the default, or ``"html"`` — see below).
 
     Sends ``multipart/alternative`` — SESv2's ``send_email`` builds that MIME
     structure automatically whenever ``Content.Simple.Body`` carries both
-    ``Text`` and ``Html`` keys, so no separate raw-MIME path is needed. The
-    ``Text`` part is exactly ``body`` rendered (plus, only when an unsubscribe
-    link is present, one short appended line — see below) — the plain-text
-    fallback a spam filter or text-only client sees is never a stripped-down
-    version of the HTML, it is the same string the HTML is *built from*.
+    ``Text`` and ``Html`` keys, so no separate raw-MIME path is needed.
     ``branding`` (the shared, instance-configurable layout — see
     ``email_branding.py``) supplies the header/footer/colours/sender/subject
     conventions; a caller that passes none gets ``EmailBranding()``'s generic
     defaults rather than an unbranded or broken email.
+
+    **``body_format`` (issue #1659).** ``send_email`` used to have exactly one
+    contract for ``body``: plain text, always escaped into the HTML part. That
+    left no way to send a genuinely rich body (a generated report with
+    headings and lists, say) without either losing the formatting or — what
+    tabsii-platform's module 144 actually did — putting raw HTML in ``body``
+    and having it arrive in the recipient's inbox as literal, visible markup.
+    Nothing enforced the contract, so that shipped as a *successful* send.
+
+    - ``"text"`` (the default, and everything before this existed): ``body``
+      is plain text. Templated, then escaped and paragraph-wrapped for the
+      HTML part exactly as before — no behaviour change for any existing
+      caller.
+    - ``"html"``: ``body`` is trusted HTML markup, not escaped. The ``Text``
+      part is *derived* from it (tags stripped, block boundaries turned into
+      line breaks — see ``_html_to_text``) rather than being the same string
+      the HTML is built from, because the same string is no longer safe to
+      send as literal text.
+
+      **Trust boundary.** ``action_config`` — including ``body`` — is
+      authored by whoever creates the WorkflowDefinition: a platform/brand
+      admin composing automation, or internal report-generation code (e.g.
+      ``tabsii-platform``'s weekly summary), not an external or anonymous
+      caller. That surface is already privileged — it can already send
+      arbitrary emails to arbitrary addresses and POST to arbitrary webhooks —
+      so trusting its ``body`` to actually be the markup it claims to be adds
+      no new capability. What it *can* introduce is markup injection through
+      an untrusted ``{field}`` substituted into that body from the triggering
+      event's payload (a public lead-capture form's freeform name, say):
+      ``body_format: "html"`` does **not** escape substituted payload values,
+      so a workflow author who interpolates payload-sourced text into an HTML
+      body is responsible for that text being safe to embed, the same way any
+      code that hand-builds an HTML string is. Numeric or already-vetted
+      fields (counts, internal ids) are fine; free-text fields a member of the
+      public can influence are not, unless escaped before they reach the
+      payload.
+
+    **Fail closed on the ambiguous case.** A ``body`` that looks like it
+    contains HTML tags (``<h2>``, ``<p>``, …) while ``body_format`` is left at
+    its ``"text"`` default raises ``ActionError`` rather than sending broken
+    markup silently — this is the exact shape that produced #1659. Set
+    ``body_format: "html"`` explicitly if the markup is intentional.
 
     **One-click unsubscribe (RFC 8058).** When the triggering event's payload
     carries a truthy ``unsubscribe_url``, the send gets both the
@@ -277,19 +352,64 @@ def send_email(
 
     recipients = [to] if isinstance(to, str) else list(to)
     subject = _render(config.get("subject", "Notification"), payload)
-    body = _render(config.get("body", ""), payload)
-    unsubscribe_url = payload.get("unsubscribe_url") or None
 
+    body_format = config.get("body_format", "text")
+    if body_format not in ("text", "html"):
+        raise ActionError(
+            f"email action_config 'body_format' must be 'text' or 'html', got {body_format!r}"
+        )
+
+    raw_body = config.get("body", "")
+
+    # Checked against the RAW, un-rendered template — never the rendered
+    # result. Rendering fills in `{field}` placeholders from the triggering
+    # event's payload, which can carry attacker-influenced text (a lead's
+    # freeform name); `test_send_email_body_templated_html_escapes_payload_content`
+    # deliberately sends a payload value that *looks* like a <script> tag and
+    # asserts it comes out safely escaped, which is the correct, intended
+    # behaviour of "text" mode — not a misconfiguration to reject. Checking
+    # the raw template instead only fires when the *workflow author* typed
+    # literal markup into `body` themselves, which is the actual mistake this
+    # guards against. It does not catch a body that is a bare `{field}`
+    # passthrough whose payload value happens to be HTML at runtime (e.g.
+    # tabsii-platform module 144's `"body": "{body}"`) — that shape carries no
+    # markup in the template itself, so there is nothing here to detect
+    # before the event fires; body_format is the fix for that shape.
+    if body_format == "text" and _LOOKS_LIKE_HTML_RE.search(raw_body):
+        raise ActionError(
+            "email action_config 'body' looks like it contains HTML markup (e.g. "
+            "<h2>, <p>, <ul>) but body_format is 'text' (the default) — it would be "
+            "sent as literal escaped text, not rendered markup. Set body_format: "
+            "'html' if this body is meant to render as HTML, or remove the markup "
+            "if the literal characters are intentional."
+        )
+
+    rendered_body = _render(raw_body, payload)
+
+    unsubscribe_url = payload.get("unsubscribe_url") or None
     active_branding = branding or EmailBranding()
     full_subject = build_subject(active_branding, subject)
     full_source = build_source(active_branding, source)
-    html_body = render_email_html(
-        active_branding,
-        subject=full_subject,
-        text_body=body,
-        unsubscribe_url=unsubscribe_url,
-    )
-    text_body = f"{body}\n\nUnsubscribe: {unsubscribe_url}" if unsubscribe_url else body
+
+    if body_format == "html":
+        plain_body = _html_to_text(rendered_body)
+        html_body = render_email_html(
+            active_branding,
+            subject=full_subject,
+            text_body=plain_body,
+            html_content=rendered_body,
+            unsubscribe_url=unsubscribe_url,
+        )
+    else:
+        plain_body = rendered_body
+        html_body = render_email_html(
+            active_branding,
+            subject=full_subject,
+            text_body=plain_body,
+            unsubscribe_url=unsubscribe_url,
+        )
+
+    text_body = f"{plain_body}\n\nUnsubscribe: {unsubscribe_url}" if unsubscribe_url else plain_body
 
     content: dict[str, Any] = {
         "Subject": {"Data": full_subject},

@@ -24,13 +24,19 @@ Rendering choices, made for a real inbox rather than a browser:
 - **the logo, if configured, is an ``<img>`` with alt text** referenced by an
   absolute URL — SES does not host attachments, so any image must already be
   reachable from wherever the recipient's client fetches it.
-- **content is escaped**, never interpreted as markup. The text this module
-  renders has already been through the event-payload ``{field}`` templating
-  in :mod:`orchestrator.actions` (``_render``) before it reaches here, and
-  that payload can carry attacker-influenced strings (a lead's freeform
-  name, say) — so every value this module places into the HTML goes through
+- **content is escaped**, never interpreted as markup, **unless the caller
+  explicitly opts out.** The text this module renders has already been
+  through the event-payload ``{field}`` templating in
+  :mod:`orchestrator.actions` (``_render``) before it reaches here, and that
+  payload can carry attacker-influenced strings (a lead's freeform name,
+  say) — so every value this module places into the HTML goes through
   :func:`html.escape` first. This module does not introduce a second
-  templating mechanism: it renders the *result* of the existing one.
+  templating mechanism: it renders the *result* of the existing one. The one
+  exception is ``render_email_html``'s ``html_content`` parameter (issue
+  #1659): a caller that has already decided its own body is trusted markup
+  (see ``send_email``'s ``body_format: "html"``) may pass it through
+  unescaped — that decision is made, and its trust boundary documented, at
+  the call site, not here.
 """
 
 from __future__ import annotations
@@ -157,6 +163,7 @@ def render_email_html(
     subject: str,
     text_body: str,
     unsubscribe_url: str | None = None,
+    html_content: str | None = None,
 ) -> str:
     """Render ``text_body`` into the shared branded HTML layout.
 
@@ -164,6 +171,16 @@ def render_email_html(
     payload ``{field}`` templates already filled in by
     ``orchestrator.actions._render``) — this function only escapes and lays
     them out, it does not template.
+
+    ``html_content`` (issue #1659, ``send_email``'s ``body_format: "html"``
+    path) is the escape hatch from that rule: when given, it is dropped into
+    the body slot **as-is**, not escaped and not paragraph-wrapped, because
+    the caller has already declared it to be trusted markup rather than plain
+    text needing conversion — see ``orchestrator.actions.send_email`` for who
+    is trusted to set it and why. ``text_body`` is still required in that
+    case (SES needs *some* plain-text alternative, kept in sync by the
+    caller) but is not used to build the HTML part. ``None`` (the default)
+    is the original behaviour: escape and paragraph-wrap ``text_body``.
 
     ``unsubscribe_url`` (RFC 8058 one-click unsubscribe, tabsii-platform#378
     follow-on) is optional and, when given, rendered through
@@ -173,7 +190,7 @@ def render_email_html(
     before this parameter existed.
     """
     header_html = _logo_block(branding) if branding.logo_url else _title_block(branding)
-    body_html = _text_to_html_paragraphs(text_body)
+    body_html = html_content if html_content is not None else _text_to_html_paragraphs(text_body)
     footer_html = _footer_block(branding, unsubscribe_url=unsubscribe_url)
     escaped_subject = html.escape(subject)
     primary = html.escape(branding.primary_color, quote=True)

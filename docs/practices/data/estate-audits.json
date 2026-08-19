@@ -1,5 +1,5 @@
 {
-  "collectedAt": "2026-08-18T03:42:48Z",
+  "collectedAt": "2026-08-19T03:42:59Z",
   "audits": [
     {
       "name": "coverage",
@@ -17,13 +17,13 @@
       "name": "drift",
       "ok": false,
       "exit": 1,
-      "summary": "13 current, 1 drifted"
+      "summary": "13 current, 2 drifted"
     },
     {
       "name": "protection",
       "ok": false,
       "exit": 1,
-      "summary": "34 branches checked, 1 unprotected or ungated"
+      "summary": "35 branches checked, 1 unprotected or ungated, 1 not binding admins"
     },
     {
       "name": "wiring",
@@ -33,15 +33,15 @@
     },
     {
       "name": "classification",
-      "ok": true,
-      "exit": 0,
-      "summary": "OK  2026-08-18.json: 1 of 13 failing steps unclassified (7.7%)"
+      "ok": false,
+      "exit": 1,
+      "summary": "BLIND  2026-08-19.json: 18 of 35 failing steps unclassified (51.4%) — add patterns to STEP_KINDS for: Report the result (13), Run pnpm install --frozen-lockfile (2), Closing keywords (1), Divergence declaration derivation (live template diff) (1), Report the denominator, and open/update a tracking issue on any failure (1)"
     },
     {
       "name": "checkout",
       "ok": false,
       "exit": 1,
-      "summary": "19 primary checkouts — $11 clean$, $3 unsafe to read$, 2 behind only, 3 not evaluated"
+      "summary": "20 primary checkouts — $11 clean$, $4 unsafe to read$, 2 behind only, 3 not evaluated"
     },
     {
       "name": "deploy",

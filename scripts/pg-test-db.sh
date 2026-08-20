@@ -275,7 +275,18 @@ if [ "$BIFFO_PG_REAP_HOURS" -gt 0 ] 2>/dev/null && command -v docker >/dev/null 
       # Both are UTC ISO-8601 to the second, so a string compare IS a time
       # compare -- no epoch conversion, and portable across date(1) flavours.
       if awk -v a="$_made" -v b="$_reap_cutoff" 'BEGIN { exit !(a < b) }'; then
-        docker rm -f "$_c" >/dev/null 2>&1 && _reaped=$((_reaped + 1))
+        # `-v` REMOVES THE CONTAINER'S ANONYMOUS VOLUME WITH IT.
+        #
+        # Without it every reap orphans a full Postgres data directory. Measured on one
+        # workstation 2026-08-20: 413 dangling volumes holding 104.8GB -- 95% of all local
+        # volume space -- against 11 live containers totalling 2.5MB. The containers were
+        # tidied and their data was not, so the leak grew by roughly a database per reap
+        # and nothing pointed at it.
+        #
+        # It is invisible by construction: `docker ps` looks clean, the reaper reports how
+        # many it removed, and the space is only findable with `docker volume ls -qf
+        # dangling=true`. The first symptom is a full disk somewhere unrelated.
+        docker rm -f -v "$_c" >/dev/null 2>&1 && _reaped=$((_reaped + 1))
       fi
     done
     [ "$_reaped" -gt 0 ] &&
@@ -330,7 +341,8 @@ if [ "$BIFFO_PG_REAP_HOURS" -gt 0 ] 2>/dev/null && command -v docker >/dev/null 
         say "NOT reaped -- Postgres containers over ${BIFFO_PG_REAP_HOURS}h old that this script did not create:"
         for _u in $_unclaimed; do say "  $_u"; done
         say "  A stale one costs test failures that belong to nobody (#1383). Remove by hand"
-        say "  (docker rm -f <name>), or start it with --label biffo.ephemeral=1 to have it reaped."
+        say "  (docker rm -f -v <name> -- the -v matters, or its data volume is orphaned),"
+        say "  or start it with --label biffo.ephemeral=1 to have it reaped."
       fi
     }
   fi

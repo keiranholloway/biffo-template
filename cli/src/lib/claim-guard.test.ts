@@ -250,6 +250,74 @@ describe('claim.sh --guard', () => {
   })
 })
 
+describe('claim.sh --guard: a batch branch names a sequence, not an issue, and zero-padding must not defeat the boundary anchor (#1672)', () => {
+  it('skips a batch branch before any derivation, even one shaped like a real collision', () => {
+    // `batch/04-stale-reconverge` fits `<type>/<number>-<slug>` exactly, and a
+    // branch naming issue 4 (zero-padded) genuinely exists on the remote --
+    // proving the skip is structural (before derivation), not incidental
+    // (derivation just happening not to find a collision this time).
+    const { dir, callLog } = stubBins({ remoteBranches: ['feat/04-thing'] })
+    const { code, out } = run(dir, 'batch/04-stale-reconverge')
+
+    expect(code).toBe(0)
+    expect(out).toBe('')
+    expect(readFileSync(callLog, 'utf8')).toBe('')
+  })
+
+  it('a zero-padded branch collides with an identically zero-padded branch', () => {
+    // The prosecutor's exact repro: both branches spell the issue number
+    // "0010". Stripping the SEARCH side to "10" and leaving the CANDIDATE
+    // text zero-padded made this go blind (10 cannot match inside literal
+    // 0010 at a boundary, since the preceding "0" is alphanumeric).
+    const { dir } = stubBins({
+      remoteBranches: ['feat/0010-unsub-m3plugin'],
+    })
+    const { code, out } = run(dir, 'feat/0010-second-attempt')
+
+    expect(code).toBe(1)
+    expect(out).toContain('claimed by someone else')
+    expect(out).toContain('feat/0010-unsub-m3plugin')
+  })
+
+  it('a zero-padded branch collides with an identically zero-padded OPEN PR', () => {
+    // Same defect, the other collision path: `claim_select_expr`'s jq test
+    // over `headRefName` went blind the same way the ls-remote branch check
+    // did, because both used the same stripped-search/padded-candidate
+    // mismatch.
+    const { dir } = stubBins({
+      openPrs: [{ number: 200, headRefName: 'feat/0010-unsub-m3plugin', title: '', body: '' }],
+    })
+    const { code, out } = run(dir, 'feat/0010-second-attempt')
+
+    expect(code).toBe(1)
+    expect(out).toContain('#200')
+  })
+
+  it('a bare "4" does not collide with "104" or "dm-04" — no `/` means nothing is derived', () => {
+    const { dir } = stubBins({
+      remoteBranches: ['104', 'dm-04'],
+    })
+    const { code, out } = run(dir, 'feat/04-thing')
+
+    expect(code).toBe(0)
+    expect(out).not.toContain('claimed by someone else')
+  })
+
+  it('a bare "4" does not collide with a PR headRefName of "104" or "dm-04"', () => {
+    const { dir } = stubBins({
+      openPrs: [
+        { number: 201, headRefName: '104', title: '', body: '' },
+        { number: 202, headRefName: 'dm-04', title: '', body: '' },
+      ],
+    })
+    const { code, out } = run(dir, 'feat/04-thing')
+
+    expect(code).toBe(0)
+    expect(out).not.toContain('#201')
+    expect(out).not.toContain('#202')
+  })
+})
+
 describe('claim.sh --guard disagreement: `Refs #N` must read as a claim (#1411, class #1362)', () => {
   // Same defect, same fix, as `claim-structured-refs.test.ts`'s disagreement
   // block — repeated here because `--guard` is a SEPARATE call site with its

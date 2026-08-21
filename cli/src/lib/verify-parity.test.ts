@@ -107,10 +107,33 @@ const EXCLUDED: Record<string, { kind: 'network' | 'pr-time' | 'history' | 'slow
       kind: 'slow',
       why: 'measured 51.2s in this repo on 2026-07-29, against a 15s budget. Included automatically wherever it measures faster — 1.7-2.7s in every sibling',
     },
-    'uv run python scripts/error_branch_coverage.py --check --coverage coverage.json': {
-      kind: 'slow',
-      why: "measured 0.19s itself — it is excluded for what it DEPENDS on, not its own cost: it reads coverage.json, produced only by the `pytest --cov` above, which is measured at 51.2s and excluded as slow for that reason. Including this in the push gate would mean paying that run locally. Since #637's deterministic gate (`error-branch-coverage-gate.yml`), this step also only runs at all in a repo with no RLS lane — this repo has none, so it is unconditional here, same single file it always read",
-    },
+    // REMOVED IN #1666, deliberately, and this note is here so the removal is not
+    // read later as an oversight.
+    //
+    // The excluded command used to be a standalone `run:` line:
+    //   uv run python scripts/error_branch_coverage.py --check --coverage coverage.json
+    // It is now a few lines inside the multi-line `run: |` block of ci.yml's
+    // `Error-branch coverage` step, wrapped in shell conditionals, so
+    // `ciCheckCommands()` cannot see it at all — its prefix match needs a command
+    // at the start of a line.
+    //
+    // There is no exclusion to write, because there is no extracted command to key
+    // one to, and a key that matches nothing is exactly the stale exclusion the
+    // assertion below rejects.
+    //
+    // The step is also CI-ONLY BY CONSTRUCTION now, which the old one was not: it
+    // needs GH_TOKEN, network access, and another workflow run's coverage artefact.
+    // It could not run in a local push gate whatever this file said about it.
+    //
+    // What asserts it instead: services/api/tests/test_second_coverage_lane.py's
+    // TestTheGateIsWiredAndTrusted, which checks the step exists, runs the trusted
+    // scripts, fails closed on a timeout, and always posts its required status.
+    //
+    // The blind spot this exposes is REAL, PRE-EXISTING and WIDER than this step:
+    // `ciCheckCommands()` reads single-line `run:` only, so four commands in this
+    // repo's own ci.yml (terraform validate/init/fmt, gitleaks version) are already
+    // invisible to it — in neither EXCLUDED nor `missing`. That is #897's shape
+    // recurring one level down and is filed separately rather than widened here.
   }
 
 /**

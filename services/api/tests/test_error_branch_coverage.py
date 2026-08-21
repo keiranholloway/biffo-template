@@ -445,3 +445,108 @@ def test_the_analyser_refuses_to_pass_without_coverage_data(tmp_path, monkeypatc
         raise SystemExit(ebc.main())
     assert exc.value.code == 2
     assert "No coverage data" in capsys.readouterr().err
+
+
+class TestEmptyCoverageReportFailsClosed:
+    """#1657 — a coverage.json that describes zero files must not read as clean.
+
+    A present, parseable ``coverage.json`` whose ``files`` map is empty (or
+    absent) is indistinguishable, to the pre-fix logic, from "everything is
+    covered": ``unexecuted()`` iterates ``coverage.get("files", {})``, finds
+    nothing to walk, so ``found`` and ``keys`` are both ``[]`` and ``--check``
+    exits 0. That is a fail-open in the gate that exists specifically to catch
+    fail-opens — a denominator of zero must never look the same as a clean
+    pass (AGENTS.md's "metric denominator blindness" class, #1363).
+
+    This can arise from more than one misconfigured ``coverage.json`` (a
+    ``[tool.coverage.run] source`` pointed at the wrong tree, a truncated or
+    hand-staged artefact, a stale placeholder) and the analyser has no way to
+    tell those apart from "genuinely nothing to check" — so it must refuse
+    all of them rather than guess.
+    """
+
+    def _write(self, tmp_path: Path, name: str, coverage: dict) -> Path:
+        p = tmp_path / name
+        p.write_text(json.dumps(coverage))
+        return p
+
+    def test_check_fails_closed_on_an_explicitly_empty_files_map(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        monkeypatch.setattr(ebc, "REPO_ROOT", tmp_path)
+        monkeypatch.setattr(ebc, "BASELINE", tmp_path / "absent-baseline.json")
+        cov = self._write(tmp_path, "coverage.json", {"files": {}})
+        monkeypatch.setattr("sys.argv", ["x", "--check", "--coverage", str(cov)])
+        assert ebc.main() == 2
+        err = capsys.readouterr().err.lower()
+        assert "0 file" in err
+        assert "refus" in err  # "refuses"/"refusing" — fails closed, not a pass
+
+    def test_check_fails_closed_when_the_files_key_is_absent_entirely(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        monkeypatch.setattr(ebc, "REPO_ROOT", tmp_path)
+        monkeypatch.setattr(ebc, "BASELINE", tmp_path / "absent-baseline.json")
+        cov = self._write(tmp_path, "coverage.json", {})
+        monkeypatch.setattr("sys.argv", ["x", "--check", "--coverage", str(cov)])
+        assert ebc.main() == 2
+
+    def test_merging_two_present_but_empty_artefacts_still_fails_closed(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        # Both --coverage paths exist (so this is NOT the "artefact not
+        # found" warning path) but neither describes a single file — e.g.
+        # two lanes that both ran against the wrong source root.
+        monkeypatch.setattr(ebc, "REPO_ROOT", tmp_path)
+        monkeypatch.setattr(ebc, "BASELINE", tmp_path / "absent-baseline.json")
+        a = self._write(tmp_path, "a.json", {"files": {}})
+        b = self._write(tmp_path, "b.json", {"files": {}})
+        monkeypatch.setattr(
+            "sys.argv", ["x", "--check", "--coverage", str(a), "--coverage", str(b)]
+        )
+        assert ebc.main() == 2
+
+    def test_a_real_non_empty_report_is_unaffected(self, tmp_path, monkeypatch, capsys):
+        # Control: the new guard must not fire on an ordinary, genuinely
+        # measured report — only on zero files examined.
+        monkeypatch.setattr(ebc, "REPO_ROOT", tmp_path)
+        monkeypatch.setattr(ebc, "BASELINE", tmp_path / "absent-baseline.json")
+        (tmp_path / "m.py").write_text("try:\n    f()\nexcept OSError:\n    g()\n")
+        cov = self._write(
+            tmp_path,
+            "coverage.json",
+            {"files": {"m.py": {"executed_lines": [2, 4], "missing_lines": []}}},
+        )
+        monkeypatch.setattr("sys.argv", ["x", "--check", "--coverage", str(cov)])
+        assert ebc.main() == 0
+
+    def test_write_also_refuses_to_baseline_an_empty_report(self, tmp_path, monkeypatch, capsys):
+        # --write must not silently record "0 unexecuted branches" as a
+        # committed baseline when the report examined nothing — that would
+        # poison the ratchet with a baseline nobody can trust.
+        monkeypatch.setattr(ebc, "REPO_ROOT", tmp_path)
+        baseline = tmp_path / "baseline.json"
+        monkeypatch.setattr(ebc, "BASELINE", baseline)
+        cov = self._write(tmp_path, "coverage.json", {"files": {}})
+        monkeypatch.setattr("sys.argv", ["x", "--write", "--coverage", str(cov)])
+        assert ebc.main() == 2
+        assert not baseline.exists()
+
+    def test_the_denominator_is_printed_on_an_ordinary_passing_run(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        # "Print the denominator" — a normal, non-empty, non-failing run must
+        # still state how many files it examined, not only the failure path,
+        # so a denominator quietly dropping to a suspiciously small number is
+        # visible on every run rather than only when it hits exactly zero.
+        monkeypatch.setattr(ebc, "REPO_ROOT", tmp_path)
+        monkeypatch.setattr(ebc, "BASELINE", tmp_path / "absent-baseline.json")
+        (tmp_path / "m.py").write_text("try:\n    f()\nexcept OSError:\n    g()\n")
+        cov = self._write(
+            tmp_path,
+            "coverage.json",
+            {"files": {"m.py": {"executed_lines": [2, 4], "missing_lines": []}}},
+        )
+        monkeypatch.setattr("sys.argv", ["x", "--check", "--coverage", str(cov)])
+        assert ebc.main() == 0
+        assert "1 file" in capsys.readouterr().out

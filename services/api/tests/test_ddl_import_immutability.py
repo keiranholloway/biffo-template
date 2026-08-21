@@ -82,6 +82,24 @@ def _git(*args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
+def _fetch_base() -> None:
+    """Try to make a base ref exist. CI checks out shallow, so none does by default.
+
+    `actions/checkout` defaults to depth 1 and the Python job sets no `fetch-depth`, so
+    `origin/dev` is simply absent in CI -- and this guard then SKIPPED. Measured
+    2026-08-21: noisy where it does not matter (locally, on false positives) and silent
+    where it does (CI, the only place it gates anything).
+
+    A shallow fetch is not enough: `A...B` needs a common ancestor, and two depth-1
+    histories have none. So this deepens rather than adds a single commit. It is best
+    effort -- no network, no token, no remote all leave the ref unresolved, and the caller
+    decides what that means.
+    """
+    for branch in ("dev", "main"):
+        _git("fetch", "--no-tags", "--quiet", "--deepen=200",
+             "origin", f"+refs/heads/{branch}:refs/remotes/origin/{branch}")
+
+
 def _resolve_base() -> str | None:
     for ref in BASE_REFS:
         if _git("rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}").returncode == 0:
@@ -103,7 +121,21 @@ def _modified_against(ref: str) -> list[str]:
         return []
     # --name-only over the *intersection*: a file absent from the base is new
     # and legitimately unconstrained, so it must not be reported here.
-    out = _git("diff", "--name-only", ref, "--", *sorted(on_base))
+    #
+    # THREE DOTS, NOT TWO, AND THE DIFFERENCE IS THE WHOLE TEST.
+    #
+    # `git diff <ref> -- <paths>` compares the working tree against the TIP of the base, so
+    # it reports changes in EITHER direction: a branch merely BEHIND dev on a DDL file is
+    # accused of modifying it, having touched no DDL at all. Measured on tabsii-platform's
+    # #1016 branch (2026-08-21): it named 152_finance_marketing_fund.sql and
+    # 155_finance_fx_rates.sql, both of which arrived on dev AFTER that branch was cut, and
+    # `git diff origin/dev...branch -- db/imports/` was empty.
+    #
+    # `<ref>...HEAD` diffs from the MERGE BASE, which asks the only question that matters:
+    # what did THIS branch change. The builder's workaround for the false positive was to
+    # verify by hand with the three-dot form and proceed past the local failure -- so the
+    # guard was already training people to ignore it, which is how a real hit gets missed.
+    out = _git("diff", "--name-only", f"{ref}...HEAD", "--", *sorted(on_base))
     if out.returncode != 0:
         pytest.skip(f"could not diff against {ref}: {out.stderr.strip()}")
     return [p for p in out.stdout.split("\n") if p.endswith(".sql")]
@@ -115,7 +147,24 @@ class TestAppliedDdlIsNeverModified:
             pytest.skip("no db/imports/ in this repo")
         base = _resolve_base()
         if base is None:
-            pytest.skip(f"none of {BASE_REFS} resolves; cannot establish what is applied")
+            _fetch_base()
+            base = _resolve_base()
+        if base is None:
+            _fetch_base()
+            base = _resolve_base()
+        # A GUARD THAT CANNOT RUN MUST NOT PASS.
+        #
+        # This skipped here, which reads as green. In CI that was the ONLY outcome, because
+        # the checkout is shallow -- so the check that exists to stop a deploy hard-failing
+        # on a DDL checksum mismatch has never actually run there. `db/imports/` existing is
+        # the signal that this repo has applied DDL to protect; if it does and the base
+        # cannot be established even after a fetch, that is a failure to report, not a pass.
+        assert base is not None, (
+            f"none of {BASE_REFS} resolves even after fetching, so what is already applied "
+            "cannot be established and this guard cannot run. It is NOT passing.\n\n"
+            "In CI this usually means the checkout is shallow: add `fetch-depth: 0` to the "
+            "actions/checkout step for the job that runs this test."
+        )
 
         modified = _modified_against(base)
         assert not modified, (

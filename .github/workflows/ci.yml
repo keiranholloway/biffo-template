@@ -285,11 +285,18 @@ jobs:
     timeout-minutes: 20
     # `contents: read` is restated explicitly rather than left to the ambient
     # default, matching the `security-secrets` job's own pattern in this file.
-    # The cross-workflow `actions: read` this job used to need for #637's
-    # best-effort artefact fetch moved with that logic to
-    # `error-branch-coverage-gate.yml`, which now owns it.
+    #
+    # `actions: read` and `statuses: write` came BACK here in #1666, when the
+    # error-branch gate folded in from `error-branch-coverage-gate.yml`. They
+    # are the two the gate genuinely needs and no more: `actions: read` to list
+    # this commit's runs and download the second lane's coverage artefact, and
+    # `statuses: write` to post the `Error-branch coverage` context that branch
+    # protection requires on some instances. The gate never pushes, never
+    # comments, and never touches contents.
     permissions:
       contents: read
+      actions: read
+      statuses: write
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       - uses: astral-sh/setup-uv@v6
@@ -353,47 +360,240 @@ jobs:
           name: python-coverage
           path: coverage.json
           if-no-files-found: error
+      # ── Error-branch coverage ──────────────────────────────────────────
+      #
       # Fails only when error handling is ADDED with nothing exercising it
       # (#956). An unexecuted `except` is unverified, and that is where every
       # fail-open this estate has found actually lived.
       #
-      # This asserts over coverage.json ALONE, and is skipped entirely in a
-      # repo that has a second coverage lane — decided by
-      # `scripts/second_coverage_lane.py`, the SAME resolver
-      # `error-branch-coverage-gate.yml` calls, because the two must stay in
-      # agreement. Disagree one way and a commit is asserted twice; disagree
-      # the other and it is asserted NOWHERE, green, with each file believing
-      # the other did it. That used to be two hand-written `hashFiles(...)`
-      # tests on an RLS-specific filename, which is a second copy of a
-      # decision and therefore drifts (#1597). That is a deliberate narrowing, not the pre-#637 gate
-      # brought back: a repo WITH the lane has error branches reachable only
-      # under real Postgres (an RLS refusal, a constraint violation), which
-      # this job structurally cannot execute — asserting here regardless would
-      # flag every one of them as newly unexecuted on every PR that touches
-      # them, which is exactly the false-positive #637 was filed over (PR
-      # #750, `except StaleDataError`, both measured in #637's own comments).
-      # The combined assertion for a repo with the lane happens exactly once,
-      # deterministically, in `error-branch-coverage-gate.yml` — see that
-      # file for why splitting enforcement out of this racy, best-effort spot
-      # closes the gap rather than papering over it.
+      # THIS RAN AS ITS OWN `workflow_run` WORKFLOW UNTIL #1666, AND THE
+      # REASONS IT LEFT ARE WHY THE STEP BELOW IS SHAPED THE WAY IT IS.
       #
-      # A repo with NO lane (this template, and most instances) sees no
-      # change at all: this is byte-for-byte the assertion that ran here
-      # before the #637 best-effort combine existed.
-      # Resolved in its own step because a GitHub Actions `if:` expression
-      # cannot run a script — `hashFiles()` can only match paths, which is what
-      # forced the RLS-specific filename test this replaces.
-      - name: Does this repo have a second coverage lane?
-        id: lane
-        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        run: |
-          set -euo pipefail
-          python3 scripts/second_coverage_lane.py --github-output > lane.env
-          cat lane.env
-          cat lane.env >> "$GITHUB_OUTPUT"
+      # #637 moved it out because the version that lived here was
+      # BEST-EFFORT: it read the second lane's coverage artefact if that
+      # artefact happened to already exist, and silently fell back to
+      # Python-only coverage when it did not. Measurement at the time showed
+      # the second lane finishing AFTER `CI` in 3 of 4 same-commit pairs, so
+      # on a typical first push the fallback is what actually ran -- and
+      # Python-only coverage flags every Postgres-only error branch (an RLS
+      # refusal, a constraint violation) as newly unexecuted. That fallback is
+      # a fail-open, and `ci.yml` carried a duplicate weaker stub test purely
+      # to survive it (#831).
+      #
+      # What #1666 changes is the WAITING, not the assertion. This step does
+      # not read-if-present; it BLOCKS until the second lane's run for this
+      # commit reaches a conclusion, and on timeout it reports `failure` --
+      # never success, never silence. A gate that cannot run must not pass.
+      #
+      # Why it is worth coming back at all: a `workflow_run` workflow is a
+      # separate JOB, so it allocates its own runner. Measured on
+      # tabsii-platform 2026-08-21 -- 38 runs and ~8 hours of wall-clock in
+      # 24h for ~4 minutes of execution, because a 6-second API-only job was
+      # waiting on an EC2 spot boot every time. It could not simply move to
+      # `ubuntu-latest`: hosted runners are refused in that org on billing.
+      # Here the step runs on an instance this job has ALREADY allocated, so
+      # the marginal cost is the wait, and the wait is usually zero: re-measured
+      # over same-push pairs on 2026-08-21, `CI` now finishes LAST about two
+      # thirds of the time (the second lane was the one dying on 20-minute
+      # timeouts before the runner-fleet change of 2026-08-20), and the worst
+      # observed wait was 166s.
+      #
+      # TWO PROPERTIES FROM THE `workflow_run` VERSION MUST NOT BE LOST, AND
+      # ARE THE ONLY REASON THIS STEP IS MORE THAN THREE LINES:
+      #
+      # 1. IT RUNS THE DEFAULT BRANCH'S SCRIPTS, NOT THE CHECKED-OUT ONES.
+      #    `workflow_run` got this for free by construction: it always ran the
+      #    default branch's copy of the workflow and its scripts, so a commit
+      #    under test could never edit the thing judging it. Inline, the
+      #    checkout IS the commit under test, so the trusted copies are
+      #    fetched explicitly below. Without this the gate becomes
+      #    self-verifying -- a PR could edit `error_branch_coverage.py` to
+      #    always pass -- which is a worse defect than the cost #1666 fixed.
+      #    The danger is EXECUTING the commit's code, not reading it: the
+      #    trusted scripts are run against this working tree, which is exactly
+      #    what the `workflow_run` version did with its source tarball.
+      #
+      # 2. THE LANE QUESTION IS ANSWERED ONCE. There used to be two callers of
+      #    `second_coverage_lane.py` -- one here deciding whether to assert
+      #    inline, one in the gate deciding whether to assert at all. The
+      #    comment they both carried said it plainly: disagree one way and a
+      #    commit is asserted twice, disagree the other and it is asserted
+      #    NOWHERE, green, with each file believing the other did it. They are
+      #    one call now, in one step, and the answer is used for both branches
+      #    of the decision.
+      #
+      # A repo with NO second lane still gets the plain single-coverage
+      # assertion, and still gets the `Error-branch coverage` commit status
+      # posted -- that context is REQUIRED on some instances, so a repo that
+      # never posts it would block every PR forever.
       - name: Error-branch coverage
-        if: ${{ !cancelled() && steps.install.outcome == 'success' && steps.lane.outputs.present == 'false' }}
-        run: uv run python scripts/error_branch_coverage.py --check --coverage coverage.json
+        id: errorbranch
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          # The status must land on the commit branch protection is judging,
+          # which for a `pull_request` event is the PR HEAD -- `github.sha` is
+          # the ephemeral merge commit and no protection rule ever sees it.
+          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          # Bounded deliberately. The job's own `timeout-minutes` is the
+          # backstop, but a wait that runs into it reports the job as timed
+          # out rather than reporting WHY the gate could not assert.
+          LANE_WAIT_SECONDS: '480'
+          LANE_POLL_SECONDS: '15'
+        run: |
+          set -uo pipefail
+
+          # --- the trusted copies (property 1 above) -----------------------
+          default_branch=$(gh api "repos/$REPO" --jq .default_branch)
+          if [ -z "$default_branch" ]; then
+            echo "::error::error-branch coverage: could not resolve the default branch — refusing to run the commit's own copy of the gate."
+            echo "state=failure" >> "$GITHUB_OUTPUT"
+            echo "description=could not resolve the default branch to fetch a trusted gate script" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git fetch --depth=1 --no-tags origin "$default_branch" || {
+            echo "::error::error-branch coverage: could not fetch $default_branch for the trusted gate scripts."
+            echo "state=failure" >> "$GITHUB_OUTPUT"
+            echo "description=could not fetch the default branch to obtain a trusted gate script" >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+          mkdir -p .gate-trusted
+          for f in error_branch_coverage.py second_coverage_lane.py; do
+            if ! git show "FETCH_HEAD:scripts/$f" > ".gate-trusted/$f"; then
+              echo "::error::error-branch coverage: $f is missing from $default_branch — cannot run a trusted gate."
+              echo "state=failure" >> "$GITHUB_OUTPUT"
+              echo "description=trusted gate script $f missing from $default_branch" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+          echo "Using $default_branch copies of the gate scripts (commit $(git rev-parse --short FETCH_HEAD))."
+
+          # --- the lane question, answered once (property 2 above) ---------
+          if ! python3 .gate-trusted/second_coverage_lane.py --github-output > lane.env; then
+            echo "::error::error-branch coverage: the second-lane resolver failed."
+            echo "state=failure" >> "$GITHUB_OUTPUT"
+            echo "description=the second-coverage-lane resolver failed — see this run's log" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          cat lane.env
+
+          # NEVER `.` THIS FILE. It is GitHub Actions KEY=VALUE output, which is
+          # deliberately NOT shell-quoted, and its `name` is read from the workflow file
+          # in the CHECKOUT UNDER TEST.
+          #
+          # Sourcing it was wrong twice over (biffo-fleet, 2026-08-21):
+          #
+          #   name=RLS Tests   -> assignment plus a command `Tests` -> exit 127, the step
+          #                       dies before setting state, and the REQUIRED
+          #                       'Error-branch coverage' check reports no verdict at all.
+          #                       Reproduced: `sh: ./lane.env: Tests: not found`.
+          #   name=$(id -u)    -> ARBITRARY CODE EXECUTION inside the trusted gate.
+          #                       Reproduced: it printed the uid.
+          #
+          # The second is the one that matters. This step exists to run the DEFAULT
+          # BRANCH's scripts precisely so a pull request cannot influence the thing judging
+          # it -- and sourcing a value derived from the PR's own workflow name handed that
+          # back. It is the "pwn request" shape the workflow this replaced warned about in
+          # its own header, reintroduced by the change that removed it.
+          #
+          # sed extracts the values without a shell ever evaluating them.
+          present=$(sed -n 's/^present=//p' lane.env | head -1)
+          name=$(sed -n 's/^name=//p' lane.env | head -1)
+
+          if [ "${present:-false}" != "true" ]; then
+            # Byte-for-byte the assertion this file ran before #637, now with
+            # the trusted script rather than the checked-out one.
+            if python3 .gate-trusted/error_branch_coverage.py --check --coverage coverage.json; then
+              echo "state=success" >> "$GITHUB_OUTPUT"
+              echo "description=no second coverage lane — asserted over coverage.json alone" >> "$GITHUB_OUTPUT"
+            else
+              echo "state=failure" >> "$GITHUB_OUTPUT"
+              echo "description=new unexecuted error branch(es) — see this run's log" >> "$GITHUB_OUTPUT"
+            fi
+            exit 0
+          fi
+
+          # --- wait for the second lane, do not read-if-present ------------
+          echo "Second coverage lane is '$name'. Waiting up to ${LANE_WAIT_SECONDS}s for its run on $SHA to conclude."
+          deadline=$(( $(date +%s) + LANE_WAIT_SECONDS ))
+          lane_run_id=""
+          lane_conclusion=""
+          while :; do
+            runs_json=$(gh api "repos/$REPO/actions/runs?head_sha=$SHA&per_page=100" 2>/dev/null || echo "")
+            if [ -n "$runs_json" ]; then
+              lane_run_id=$(printf '%s' "$runs_json" | jq -r --arg n "$name" \
+                '[.workflow_runs[] | select(.name == $n)] | sort_by(.created_at) | last | .id // empty')
+              lane_conclusion=$(printf '%s' "$runs_json" | jq -r --arg n "$name" \
+                '[.workflow_runs[] | select(.name == $n)] | sort_by(.created_at) | last
+                 | if .status == "completed" then (.conclusion // "completed") else "" end')
+            fi
+            [ -n "$lane_conclusion" ] && break
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "::error::error-branch coverage: '$name' did not conclude for $SHA within ${LANE_WAIT_SECONDS}s."
+              echo "state=failure" >> "$GITHUB_OUTPUT"
+              echo "description=the $name lane did not finish within ${LANE_WAIT_SECONDS}s — the gate cannot assert combined coverage" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep "$LANE_POLL_SECONDS"
+          done
+          echo "Lane run $lane_run_id concluded: $lane_conclusion"
+
+          # A red lane may have produced partial or no coverage. Asserting over
+          # it would flag its unreached branches as newly unexecuted, so this
+          # reports failure with the reason rather than a misleading verdict.
+          if [ "$lane_conclusion" != "success" ]; then
+            echo "state=failure" >> "$GITHUB_OUTPUT"
+            echo "description=the $name lane concluded '$lane_conclusion' — combined coverage cannot be asserted over a lane that did not pass" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if ! gh run download "$lane_run_id" --repo "$REPO" --name rls-coverage --dir cov-lane; then
+            echo "::error::error-branch coverage: lane run $lane_run_id passed but its rls-coverage artefact could not be downloaded."
+            echo "state=failure" >> "$GITHUB_OUTPUT"
+            echo "description=the $name lane's coverage artefact could not be downloaded — a repo WITH a second lane must not fall back to Python-only coverage" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if python3 .gate-trusted/error_branch_coverage.py --check \
+              --coverage coverage.json --coverage cov-lane/rls-coverage.json; then
+            echo "state=success" >> "$GITHUB_OUTPUT"
+            echo "description=combined this run + $name run $lane_run_id" >> "$GITHUB_OUTPUT"
+          else
+            echo "state=failure" >> "$GITHUB_OUTPUT"
+            echo "description=new unexecuted error branch(es) — see this run's log" >> "$GITHUB_OUTPUT"
+          fi
+      # Separate from the step above and `always()`, so a crash in the gate
+      # still reports a verdict. `Error-branch coverage` is a REQUIRED context
+      # on some instances: a run that posts nothing leaves the PR blocked with
+      # no explanation, which is the failure mode this split exists to prevent.
+      # An empty state means the gate did not reach a verdict, and that is a
+      # failure -- never an absence.
+      - name: Report Error-branch coverage
+        if: ${{ always() && steps.errorbranch.conclusion != 'skipped' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          STATE: ${{ steps.errorbranch.outputs.state }}
+          DESCRIPTION: ${{ steps.errorbranch.outputs.description }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          state="${STATE:-}"
+          description="${DESCRIPTION:-}"
+          if [ -z "$state" ]; then
+            state=failure
+            description="the gate did not reach a verdict — see this run's log"
+          fi
+          description=$(printf '%s' "$description" | cut -c1-140)
+          gh api "repos/$REPO/statuses/$SHA" \
+            -f state="$state" \
+            -f context="Error-branch coverage" \
+            -f description="$description" \
+            -f target_url="$RUN_URL"
+          echo "Posted commit status '$state' for Error-branch coverage on $SHA."
+          [ "$state" = "success" ]
       - name: Core-revision preflight — self-test
         if: ${{ !cancelled() }}
         # scripts/core-revision-preflight.sh (#1604) is distributed here too,

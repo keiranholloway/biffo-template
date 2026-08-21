@@ -15,7 +15,6 @@ import importlib.util
 import sys
 from pathlib import Path
 
-import pytest
 import yaml
 
 _ROOT = Path(__file__).resolve().parents[3]
@@ -79,14 +78,31 @@ class TestFindingTheLane:
         # The gate DOWNLOADS `rls-coverage`. A text search for the artefact
         # name would match it and make the gate detect itself — which is why
         # `_publishes_artefact` walks the step structure instead of grepping.
+        #
+        # SHARPER SINCE #1666: the consumer is now a step inside `ci.yml`
+        # itself. If the detector grepped, `ci.yml` would detect ITSELF as the
+        # second lane, and the gate would sit waiting for a run named "CI" to
+        # conclude — from inside the run named "CI". A self-deadlock until the
+        # wait times out, on every commit in every repo.
         _workflow(
             tmp_path,
-            "error-branch-coverage-gate.yml",
-            "name: Error-branch coverage gate\non:\n  workflow_run:\n"
-            "    workflows: ['CI']\njobs:\n  gate:\n    runs-on: ubuntu-latest\n"
+            "ci.yml",
+            "name: CI\non:\n  push:\njobs:\n  python:\n    runs-on: ubuntu-latest\n"
             "    steps:\n      - run: gh run download --name rls-coverage\n",
         )
         assert lane_mod.find_lane(tmp_path) is None
+
+    def test_the_real_ci_yml_is_not_detected_as_the_lane(self):
+        # The same thing against the actual tree, because the test above
+        # proves the RULE and this proves THIS REPO obeys it. #1666 put a
+        # `gh run download --name rls-coverage` into ci.yml for real.
+        doc = lane_mod._load(_ROOT / ".github" / "workflows" / "ci.yml")
+        assert doc is not None
+        assert not lane_mod._publishes_artefact(doc, lane_mod.LANE_ARTEFACT), (
+            "ci.yml is being detected as the second coverage lane. The gate step "
+            "inside it would then wait for CI to conclude from inside CI, "
+            "deadlocking until the wait times out on every commit."
+        )
 
     def test_a_workflow_with_no_name_falls_back_to_its_filename(self, tmp_path):
         # Mirrors GitHub: an unnamed workflow is displayed, and matched by
@@ -123,68 +139,111 @@ class TestTheOnKeyTrap:
     def test_pyyaml_really_does_coerce_on_to_true(self):
         assert list(yaml.safe_load("name: X\non:\n  push:\n")) == ["name", True]
 
-    def test_the_trigger_list_is_read_despite_it(self, tmp_path):
-        _workflow(
-            tmp_path,
-            "error-branch-coverage-gate.yml",
-            "name: G\non:\n  workflow_run:\n    workflows: ['CI', 'Lane']\n"
-            "jobs:\n  g:\n    runs-on: ubuntu-latest\n    steps:\n      - run: 'true'\n",
-        )
-        assert lane_mod.trigger_workflow_names(tmp_path) == ["CI", "Lane"]
 
-    def test_a_gate_without_a_workflow_run_trigger_reports_no_names(self, tmp_path):
-        _workflow(tmp_path, "error-branch-coverage-gate.yml", "name: G\non:\n  push:\njobs: {}\n")
-        assert lane_mod.trigger_workflow_names(tmp_path) == []
+class TestTheGateIsWiredAndTrusted:
+    """#1666 folded the gate from its own `workflow_run` workflow into a step.
 
-
-class TestThisRepoAgrees:
-    """Run against the real tree — the disagreement tests (#1362).
-
-    These are what stop the two callers drifting apart again. They are cheap,
-    and their absence is the entire finding in every previous instance of this
-    class.
+    The two-callers-drift class these tests used to guard (#1362) is designed
+    out — there is one caller now, so there is nothing to disagree. What
+    replaced it is a set of properties the fold could silently lose, and
+    losing any of them leaves a gate that looks configured and gates nothing.
     """
 
-    def test_the_gate_still_triggers_on_ci(self):
-        names = lane_mod.trigger_workflow_names(_ROOT)
-        assert "CI" in names, (
-            "The gate's workflow_run trigger no longer lists 'CI'. It fires on the "
-            "completion of CI and the lane; without CI it can never see the Python "
-            "job's coverage, and the combine can never happen."
+    @staticmethod
+    def _ci() -> str:
+        return (_ROOT / ".github" / "workflows" / "ci.yml").read_text()
+
+    def test_the_separate_gate_workflow_is_gone(self):
+        assert not (_ROOT / ".github" / "workflows" / "error-branch-coverage-gate.yml").exists(), (
+            "The workflow_run gate is back alongside the inline step. Both post the "
+            "'Error-branch coverage' context, so the commit is asserted twice and "
+            "whichever finishes last wins — including a stale one overwriting a real "
+            "failure with success."
         )
 
-    def test_a_lane_in_this_repo_can_actually_trigger_the_gate(self):
-        lane = lane_mod.find_lane(_ROOT)
-        if lane is None:
-            pytest.skip("this repo has no second coverage lane — nothing to agree about")
-        names = lane_mod.trigger_workflow_names(_ROOT)
-        assert lane.workflow_name in names, (
-            f"{lane.path} publishes {lane_mod.LANE_ARTEFACT!r} from a workflow named "
-            f"{lane.workflow_name!r}, which is not in the gate's workflow_run trigger "
-            f"list {names}. `workflow_run.workflows` matches exact names with no "
-            "globbing, so the gate would NEVER fire for this lane: its coverage is "
-            "never combined and error-branch coverage is asserted over the Python job "
-            "alone, while the repo looks fully configured. Rename the workflow to one "
-            "of the accepted names, or add this one upstream in biffo-template."
+    def test_the_only_caller_invokes_the_shared_resolver(self):
+        assert "second_coverage_lane.py" in self._ci(), (
+            "ci.yml no longer asks the shared resolver whether this repo has a second "
+            "lane, so it is deciding by some other means — which is the RLS-filename "
+            "bug this module exists to have ended."
         )
 
-    def test_neither_caller_still_decides_by_the_rls_filename(self):
-        # The bug this file exists to prevent recurring: two hand-written
-        # `hashFiles('.github/workflows/rls-tests.yml')` tests, one per caller,
-        # which is a second copy of a decision and therefore drifts.
-        for wf in ("ci.yml", "error-branch-coverage-gate.yml"):
-            text = (_ROOT / ".github" / "workflows" / wf).read_text()
-            assert "hashFiles('.github/workflows/rls-tests.yml')" not in text, (
-                f"{wf} decides whether a lane exists by matching an RLS-specific "
-                "filename again. Both callers must ask "
-                "scripts/second_coverage_lane.py instead, or they will disagree — "
-                "and a disagreement means the commit is asserted twice, or nowhere."
+    def test_it_does_not_decide_by_the_rls_filename(self):
+        assert "hashFiles('.github/workflows/rls-tests.yml')" not in self._ci(), (
+            "ci.yml decides whether a lane exists by matching an RLS-specific "
+            "filename again, instead of asking scripts/second_coverage_lane.py."
+        )
+
+    def test_the_gate_never_sources_the_lane_output(self):
+        # `lane.env` is GitHub Actions KEY=VALUE output -- deliberately unquoted -- and its
+        # `name` comes from the workflow file in the COMMIT UNDER TEST. Sourcing it with
+        # `.` was both a parse bug and a command injection, reproduced 2026-08-21:
+        #
+        #   name=RLS Tests -> `sh: ./lane.env: Tests: not found`, exit 127, so the REQUIRED
+        #                     'Error-branch coverage' check got no verdict at all.
+        #   name=$(id -u)  -> the uid was printed. Arbitrary code, inside the step whose
+        #                     whole purpose is running only the default branch's scripts.
+        ci = self._ci()
+        assert ". ./lane.env" not in ci and "source ./lane.env" not in ci, (
+            "ci.yml sources lane.env. A workflow name containing $(...) or backticks then "
+            "executes inside the trusted gate -- the pwn-request shape this step exists to "
+            "prevent. Parse it with sed instead."
+        )
+        assert "sed -n 's/^name=//p' lane.env" in ci, (
+            "lane.env values must be extracted without a shell evaluating them."
+        )
+
+    def test_the_gate_runs_the_trusted_copies_not_the_commits_own(self):
+        # THE property `workflow_run` used to provide by construction: it ran
+        # the DEFAULT BRANCH's copy of everything, so a commit could never edit
+        # the thing judging it. Inline, the checkout IS the commit under test,
+        # so this has to be explicit — and if it is ever lost, a PR can edit
+        # error_branch_coverage.py to `sys.exit(0)` and gate itself green.
+        ci = self._ci()
+        gate_step = ci[ci.index("- name: Error-branch coverage") :]
+        gate_step = gate_step[: gate_step.index("- name: Report Error-branch coverage")]
+        for script in ("error_branch_coverage.py", "second_coverage_lane.py"):
+            assert f".gate-trusted/{script}" in gate_step, (
+                f"The gate step does not run a trusted copy of {script}. It must fetch "
+                "the default branch's copy and run that; running the checked-out one "
+                "lets a PR edit its own gate to pass."
+            )
+            assert f"python3 scripts/{script}" not in gate_step, (
+                f"The gate step runs the CHECKED-OUT scripts/{script} — i.e. the commit "
+                "under test's own copy of the thing judging it."
             )
 
-    def test_both_callers_invoke_the_shared_resolver(self):
-        for wf in ("ci.yml", "error-branch-coverage-gate.yml"):
-            text = (_ROOT / ".github" / "workflows" / wf).read_text()
-            assert "second_coverage_lane.py" in text, (
-                f"{wf} no longer calls the shared resolver, so the two callers are "
-                "free to disagree about whether this repo has a second lane."
-            )
+    def test_a_gate_that_cannot_run_reports_failure_not_success(self):
+        # Every bail-out in the step must set `state=failure`. The pre-#637
+        # inline version's defect was falling back to Python-only coverage when
+        # the lane artefact was not there, silently — a fail-open. `state=` is
+        # only ever written as success on an assertion that actually ran.
+        ci = self._ci()
+        gate_step = ci[ci.index("- name: Error-branch coverage") :]
+        gate_step = gate_step[: gate_step.index("- name: Report Error-branch coverage")]
+        successes = gate_step.count('echo "state=success"')
+        assert successes == 2, (
+            f"Expected exactly two success paths in the gate step (no-lane assertion "
+            f"passed, combined assertion passed); found {successes}. A new success path "
+            "is a new way for the gate to pass without having asserted anything."
+        )
+        assert "did not conclude for" in gate_step, (
+            "The wait for the second lane no longer reports a timeout. A gate that "
+            "cannot assert must say so; timing out silently is the fail-open that "
+            "moved this logic out of ci.yml in the first place (#637)."
+        )
+
+    def test_the_required_context_is_posted_even_when_the_gate_crashes(self):
+        # 'Error-branch coverage' is a REQUIRED context on some instances. A run
+        # that posts nothing leaves every PR blocked with no explanation, which
+        # is worse than a red gate because there is nothing to read.
+        ci = self._ci()
+        report = ci[ci.index("- name: Report Error-branch coverage") :]
+        assert "if: ${{ always() &&" in report, (
+            "The status-reporting step is not always(), so a crash in the gate step "
+            "posts no status at all and the required context never arrives."
+        )
+        assert "state=failure" in report and "did not reach a verdict" in report, (
+            "The reporting step does not default a missing verdict to failure. An "
+            "empty state must be a failure, never an absence."
+        )

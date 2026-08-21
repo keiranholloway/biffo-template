@@ -18,7 +18,7 @@ before asking for it to be captured as a test.
 reads ``coverage.json`` from the plain ``uv run pytest --cov`` run in
 ``ci.yml``'s `python` job, which provisions no Postgres — `test_*_pg.py` modules
 skip there via ``pytest.mark.skipif`` below, exactly as this repo's other
-`test_*_pg.py` files already do. `scripts/second_coverage_lane.py --check`
+`test_*_pg.py` files already do. `scripts/second_coverage_lane.py`
 confirms this repo declares no second coverage lane (no workflow here publishes
 the `rls-coverage` artefact the gate would otherwise combine), so the sqlite
 suite's coverage is what the gate actually judges. This file exists for the

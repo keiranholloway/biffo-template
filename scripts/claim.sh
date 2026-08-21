@@ -186,12 +186,25 @@ while [ $# -gt 0 ]; do
       # is a definite "no", not a malformed invocation), not this generic
       # "$flag requires a value" message.
       RELEASE=1
-      if [ $# -ge 2 ]; then
-        HOLDER="$2"
-        shift 2
-      else
-        shift
-      fi
+      # A FLAG IS NOT A TOKEN. This swallowed `$2` unconditionally, so the natural
+      # `--release --as <token>` set HOLDER to the literal string `--as`, and the real
+      # token then fell through to the positional slot and OVERWROTE THE ISSUE NUMBER.
+      #
+      # The result was the message `#<token> is not held by '--as'` -- which reads as "the
+      # holder does not match", not "you wrote the flags in the wrong order". Measured
+      # consequence, from the fleet's own journal: agents concluded no claim could ever be
+      # released, fell back to removing `in-progress` by hand, and mostly stopped bothering.
+      # Claims then accumulated for days -- tabsii-platform#567 sat claimed from 08-17 to
+      # 08-21 -- and every claimed issue is undispatchable, so the queue drained itself.
+      #
+      # `--release <token>` was always correct and always worked. The defect is that the
+      # WRONG form was accepted and mangled instead of refused. Accepting both is better
+      # than refusing one: `--as` already sets HOLDER, so simply not eating a flag makes
+      # `--release --as <token>` work too, and neither form can misparse.
+      case "${2:-}" in
+        -*|'') shift ;;
+        *) HOLDER="$2"; shift 2 ;;
+      esac
       ;;
     --guard)
       [ $# -ge 2 ] || missing_value "$1"

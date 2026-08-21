@@ -5,10 +5,10 @@ One question, asked in two places, answered here once (#1597).
 
 ## What was wrong
 
-`.github/workflows/error-branch-coverage-gate.yml` combines the Python job's
-coverage with a second lane's before asserting. To do that it has to know
-whether this repo HAS such a lane — and it decided by matching an
-**RLS-specific filename and workflow name**:
+`ci.yml`'s error-branch gate combines the Python job's coverage with a second
+lane's before asserting. To do that it has to know whether this repo HAS such a
+lane — and it decided by matching an **RLS-specific filename and workflow
+name**:
 
     workflows: ['CI', 'RLS Tests']
     gh api ".../contents/.github/workflows/rls-tests.yml?ref=$SHA"
@@ -18,6 +18,21 @@ whether this repo HAS such a lane — and it decided by matching an
 `hashFiles('.github/workflows/rls-tests.yml')`.
 
 Row-level security is one reason to want a real-Postgres lane, not the only one.
+
+## The trigger-list check, and why it is gone (#1666)
+
+This module used to carry a `--check` mode asserting that the lane's workflow
+name appeared in the gate's `workflow_run.workflows` list. That list was an
+unavoidable constant — `workflow_run` matches exact names and supports no
+globbing — so a lane named anything else NEVER TRIGGERED THE GATE, and the repo
+looked fully configured while error-branch coverage was asserted over the Python
+job alone.
+
+#1666 folded the gate into `ci.yml` as a step, which deletes the constant rather
+than checking it: the step asks THIS module for the lane's name and waits for a
+run with exactly that name. There is no second list for the answer to drift
+against, so there is nothing left to assert. A check whose failure mode has been
+designed out is not a safety net, it is a `#1413` zero-caller waiting to happen.
 `biffo-platform` has **zero** RLS policies and four `test_*_pg.py` modules that
 had never run in CI; adding a lane there was plainly right, and naming it
 honestly (`postgres-tests.yml`) would have left the gate on its "no lane" path
@@ -50,7 +65,6 @@ resolver over shared discipline where the same question is asked twice.
 from __future__ import annotations
 
 import argparse
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -60,9 +74,6 @@ import yaml
 #: This is THE interface — see the module docstring for why it keeps its
 #: historical, RLS-flavoured name.
 LANE_ARTEFACT = "rls-coverage"
-
-#: Where the gate lives, so the trigger-list check can read its own `on:` block.
-GATE_WORKFLOW = Path(".github/workflows/error-branch-coverage-gate.yml")
 
 WORKFLOW_DIR = Path(".github/workflows")
 
@@ -162,36 +173,9 @@ def lane_candidates(root: Path) -> list[Path]:
     return [p for p in workflows.iterdir() if p.suffix in {".yml", ".yaml"} and p.is_file()]
 
 
-def trigger_workflow_names(root: Path) -> list[str]:
-    """The workflow names the gate's `workflow_run` trigger will fire for.
-
-    `workflow_run.workflows` takes exact names — GitHub supports no globbing
-    there — so this list is an unavoidable constant, and a lane whose name is
-    absent from it NEVER TRIGGERS THE GATE. That is the failure this function
-    exists to make visible; see `--check`.
-    """
-    doc = _load(root / GATE_WORKFLOW)
-    if doc is None:
-        return []
-    run = _on_block(doc).get("workflow_run")
-    if not isinstance(run, dict):
-        return []
-    names = run.get("workflows")
-    return [n for n in names if isinstance(n, str)] if isinstance(names, list) else []
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="tree to inspect")
-    parser.add_argument(
-        "--check",
-        action="store_true",
-        help=(
-            "also assert the lane's workflow name appears in the gate's "
-            "workflow_run trigger list — a lane the gate can never be triggered "
-            "by is worse than no lane, because the repo believes it is covered"
-        ),
-    )
     parser.add_argument(
         "--github-output",
         action="store_true",
@@ -220,31 +204,6 @@ def main() -> int:
         return 1
 
     print(f"lane: {lane.path} (workflow name: {lane.workflow_name!r})")
-
-    if args.check:
-        names = trigger_workflow_names(root)
-        if not names:
-            print(
-                f"could not read a workflow_run trigger list from {GATE_WORKFLOW} — "
-                "cannot confirm this lane would ever trigger the gate.",
-                file=sys.stderr,
-            )
-            return 2
-        if lane.workflow_name not in names:
-            print(
-                f"\nThis repo publishes {LANE_ARTEFACT!r} from a workflow named "
-                f"{lane.workflow_name!r}, which is NOT in the gate's trigger list:\n"
-                f"  {names}\n\n"
-                "`workflow_run.workflows` matches exact names and supports no\n"
-                "globbing, so the gate will never fire for this lane: its coverage\n"
-                "is never combined, and error-branch coverage is asserted over the\n"
-                "Python job alone while looking fully configured.\n\n"
-                f"Rename the workflow to one of {names[1:]}, or add its name to\n"
-                f"{GATE_WORKFLOW} upstream in biffo-template.",
-                file=sys.stderr,
-            )
-            return 1
-        print(f"trigger list contains {lane.workflow_name!r} — the gate will fire for it")
 
     return 0
 

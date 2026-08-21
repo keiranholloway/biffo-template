@@ -478,8 +478,8 @@ class TestEmptyCoverageReportFailsClosed:
         cov = self._write(tmp_path, "coverage.json", {"files": {}})
         monkeypatch.setattr("sys.argv", ["x", "--check", "--coverage", str(cov)])
         assert ebc.main() == 2
-        err = capsys.readouterr().err
-        assert "0 files" in err
+        err = capsys.readouterr().err.lower()
+        assert "0 file" in err
         assert "refus" in err  # "refuses"/"refusing" — fails closed, not a pass
 
     def test_check_fails_closed_when_the_files_key_is_absent_entirely(

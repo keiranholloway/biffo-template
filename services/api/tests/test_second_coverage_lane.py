@@ -15,7 +15,6 @@ import importlib.util
 import sys
 from pathlib import Path
 
-import pytest
 import yaml
 
 _ROOT = Path(__file__).resolve().parents[3]
@@ -225,7 +224,7 @@ class TestTheGateIsWiredAndTrusted:
             "The status-reporting step is not always(), so a crash in the gate step "
             "posts no status at all and the required context never arrives."
         )
-        assert 'state=failure' in report and "did not reach a verdict" in report, (
+        assert "state=failure" in report and "did not reach a verdict" in report, (
             "The reporting step does not default a missing verdict to failure. An "
             "empty state must be a failure, never an absence."
         )

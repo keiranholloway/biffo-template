@@ -285,6 +285,29 @@ remote_branches() {
   fi
 }
 
+# What issue does $1 derive, per the `<type>/<number>-<slug>` convention,
+# with leading zeros stripped -- or empty if $1 names no issue at all (#1672).
+#
+# ONE place both sides of a collision check go through. `--guard`'s own
+# derivation used to run this pattern once for its own branch and then match
+# CANDIDATE branches with a completely different technique -- a boundary-
+# anchored substring search over the raw, unstripped candidate text. That
+# let a zero-padded branch (`feat/0010-x`) go unmatched against an identical
+# zero-padded sibling (`feat/0010-y`), because the search side had been
+# stripped to `10` and `10` cannot match inside literal `0010` at a boundary
+# (the character before it is `0`, itself alphanumeric). Deriving BOTH sides
+# through this one function and comparing the two normalised numbers, rather
+# than searching for one inside the other's text, removes the asymmetry
+# structurally: whatever stripping happens to the target happens identically
+# to the candidate. It is also deliberately narrower than a bare substring
+# search -- `dm-04` and `104` carry no `/`, so nothing is derived from them,
+# which is what keeps a bare `4` from colliding with either.
+derive_branch_issue() {
+  _dbi_n=$(printf '%s' "$1" | sed -n 's#^[^/]*/\([0-9][0-9]*\)-.*#\1#p')
+  [ -n "$_dbi_n" ] || return 0
+  printf '%s' "$_dbi_n" | sed 's/^0*\([0-9]\)/\1/'
+}
+
 # --- the structural claim predicate (#1411, class #1362 instance 8) ---------
 #
 # "Does this open PR claim issue $1?" used to be answered independently at
@@ -304,8 +327,24 @@ remote_branches() {
 #   1. `closingIssuesReferences` -- GitHub's OWN parse of a recognised closing
 #      keyword (Closes/Fixes/Resolves and their inflections). Authoritative;
 #      never re-derived by a regex here.
-#   2. the branch name (`<type>/<number>-slug`), the same test used
-#      elsewhere in this file.
+#   2. the branch name (`<type>/<number>-slug`) -- DERIVED the same way on
+#      BOTH sides (#1672), not matched as a substring of one. A boundary
+#      regex over the raw `headRefName` text, tested against a search number
+#      already stripped of leading zeros, is how a zero-padded PR went blind:
+#      `0010` strips to `10`, and `(^|[^0-9A-Za-z])10([^0-9A-Za-z]|$)` cannot
+#      match literal `0010`, because the preceding `0` is alphanumeric. Fixed
+#      by extracting the headRefName's OWN `<type>/<number>-` prefix via a jq
+#      capture, stripping ITS leading zeros the same way `guard_issue` is
+#      stripped below, and comparing the two normalised numbers for equality
+#      -- rather than searching for one inside the literal text of the other.
+#      This is deliberately narrower than a bare boundary-anchored substring
+#      search: `dm-04` and `104` carry no `/`, so nothing is derived from
+#      them at all, and a bare digit run that merely CONTAINS the target
+#      (`fix/13520-thing` vs issue 1352) still does not equal it once both
+#      are normalised. `capture()` produces NO output (not `false`) when the
+#      pattern does not match, which would silently drop the whole `or`
+#      chain for a PR like `chore/rename` if used bare -- wrapped in `[...]`
+#      first so a non-match becomes an empty array (one output), never zero.
 #   3. the PR body, but ONLY AGENTS.md's own `Refs #N` convention -- the form
 #      this estate mandates for a PR that must reference an issue WITHOUT
 #      closing it (DDL PRs, "instance of a class" PRs like this one). A
@@ -319,12 +358,17 @@ remote_branches() {
 #      NOT claim #N" carries no claiming keyword adjacent to the `#N` and so
 #      correctly does not match either (#1327, #1311's exact shape).
 #
+# $1 is normalised (leading zeros stripped) HERE, once, rather than trusting
+# every caller to have done it -- the plain (non-`--guard`) path passes the
+# raw `$ISSUE` a caller typed, which may itself be zero-padded and was never
+# stripped before reaching this function.
+#
 # $2 is the repo slug (`owner/name`) the closing-reference check compares
 # against -- callers already resolve this via `repo_slug()` before calling.
 claim_select_expr() {
-  _n="$1"
+  _n=$(printf '%s' "$1" | sed 's/^0*\([0-9]\)/\1/')
   _slug="$2"
-  printf '(([.closingIssuesReferences[]? | select(.number == %s and ((.repository.owner.login + "/" + .repository.name) == "%s"))] | length > 0) or (.headRefName | test("(^|[^0-9A-Za-z])%s([^0-9A-Za-z]|$)")) or ((.body // "") | test("(^|[^0-9A-Za-z])(refs?|references?)[ \\t]*:?[ \\t]*#%s([^0-9A-Za-z]|$)"; "i")))' \
+  printf '(([.closingIssuesReferences[]? | select(.number == %s and ((.repository.owner.login + "/" + .repository.name) == "%s"))] | length > 0) or (([.headRefName | capture("^[^/]*/(?<n>[0-9]+)-")] | if length > 0 then ((.[0].n | sub("^0+";"")) as $s | if $s == "" then "0" else $s end) else "" end) == "%s") or ((.body // "") | test("(^|[^0-9A-Za-z])(refs?|references?)[ \\t]*:?[ \\t]*#%s([^0-9A-Za-z]|$)"; "i")))' \
     "$_n" "$_slug" "$_n" "$_n"
 }
 
@@ -399,7 +443,18 @@ fi
 # question ("would this push collide with someone else's live work?" rather
 # than "is this issue free to claim?").
 if [ -n "$GUARD_BRANCH" ]; then
-  guard_issue=$(printf '%s' "$GUARD_BRANCH" | sed -n 's#^[^/]*/\([0-9][0-9]*\)-.*#\1#p')
+  # A BATCH BRANCH NAMES A SEQUENCE, NOT AN ISSUE.
+  #
+  # `batch/04-stale-reconverge` fits `<type>/<number>-<slug>` exactly, so this read `04` as
+  # an issue and refused the push. Measured 2026-08-21: it blocked the FIRST reconverge the
+  # Lander ever attempted -- and batching is the remedy `fleet-land` prescribes for a strict
+  # branch, so this defect blocks the strategy meant to fix landing. `batch/02-gated-trio`
+  # escaped only because no open branch happened to contain `-02-`.
+  case "$GUARD_BRANCH" in
+    batch/*) exit 0 ;;
+  esac
+
+  guard_issue=$(derive_branch_issue "$GUARD_BRANCH")
 
   # No issue named by the branch — most branches, e.g.
   # `security/brace-expansion-5-0-9`. Skip silently, and — this is the point —
@@ -443,10 +498,20 @@ if [ -n "$GUARD_BRANCH" ]; then
     cannot_tell=1
     cannot_tell_reasons="${cannot_tell_reasons}${branch_err_text} "
   else
+    # Derive each CANDIDATE branch's issue the same way $guard_issue was
+    # derived (#1672), and compare the two normalised numbers -- not a
+    # substring search for $guard_issue inside the candidate's raw text. See
+    # `derive_branch_issue` above for why that asymmetry was the defect.
     other_branch=$(printf '%s\n' "$raw_branches" |
       sed 's|.*refs/heads/||' |
-      grep -E "(^|[^0-9A-Za-z])$guard_issue([^0-9A-Za-z]|$)" |
-      grep -v -x "$GUARD_BRANCH" | head -1)
+      grep -v -x "$GUARD_BRANCH" |
+      while IFS= read -r _cand; do
+        [ -n "$_cand" ] || continue
+        _cand_issue=$(derive_branch_issue "$_cand")
+        if [ -n "$_cand_issue" ] && [ "$_cand_issue" = "$guard_issue" ]; then
+          printf '%s\n' "$_cand"
+        fi
+      done | head -1)
     if [ -n "$other_branch" ]; then
       conflict=1
       findings="${findings}  ${RED}branch${OFF}     $other_branch\n"

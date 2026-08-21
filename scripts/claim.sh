@@ -386,7 +386,25 @@ fi
 # question ("would this push collide with someone else's live work?" rather
 # than "is this issue free to claim?").
 if [ -n "$GUARD_BRANCH" ]; then
+  # A BATCH BRANCH NAMES A SEQUENCE, NOT AN ISSUE.
+  #
+  # `batch/04-stale-reconverge` fits `<type>/<number>-<slug>` exactly, so this read `04` as
+  # an issue and refused the push. Measured 2026-08-21: it blocked the FIRST reconverge the
+  # Lander ever attempted -- and batching is the remedy `fleet-land` prescribes for a strict
+  # branch, so this defect blocks the strategy meant to fix landing. `batch/02-gated-trio`
+  # escaped only because no open branch happened to contain `-02-`.
+  case "$GUARD_BRANCH" in
+    batch/*) exit 0 ;;
+  esac
+
   guard_issue=$(printf '%s' "$GUARD_BRANCH" | sed -n 's#^[^/]*/\([0-9][0-9]*\)-.*#\1#p')
+
+  # STRIP LEADING ZEROS before matching. The headRefName test is boundary-anchored, which
+  # correctly stops `4` matching `104` or `dm-04` -- but only if the number is `4`. A derived
+  # `04` matches `fr-dm-04-data-model-view` at the `-04-`, because the boundaries are the
+  # hyphens. The zeros come from sequence-shaped branches, which is the same root as the
+  # `batch/` case above; this is the belt to that brace.
+  guard_issue=$(printf '%s' "$guard_issue" | sed 's/^0*\([0-9]\)/\1/')
 
   # No issue named by the branch — most branches, e.g.
   # `security/brace-expansion-5-0-9`. Skip silently, and — this is the point —

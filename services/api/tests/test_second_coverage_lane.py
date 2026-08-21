@@ -174,6 +174,25 @@ class TestTheGateIsWiredAndTrusted:
             "filename again, instead of asking scripts/second_coverage_lane.py."
         )
 
+    def test_the_gate_never_sources_the_lane_output(self):
+        # `lane.env` is GitHub Actions KEY=VALUE output -- deliberately unquoted -- and its
+        # `name` comes from the workflow file in the COMMIT UNDER TEST. Sourcing it with
+        # `.` was both a parse bug and a command injection, reproduced 2026-08-21:
+        #
+        #   name=RLS Tests -> `sh: ./lane.env: Tests: not found`, exit 127, so the REQUIRED
+        #                     'Error-branch coverage' check got no verdict at all.
+        #   name=$(id -u)  -> the uid was printed. Arbitrary code, inside the step whose
+        #                     whole purpose is running only the default branch's scripts.
+        ci = self._ci()
+        assert ". ./lane.env" not in ci and "source ./lane.env" not in ci, (
+            "ci.yml sources lane.env. A workflow name containing $(...) or backticks then "
+            "executes inside the trusted gate -- the pwn-request shape this step exists to "
+            "prevent. Parse it with sed instead."
+        )
+        assert "sed -n 's/^name=//p' lane.env" in ci, (
+            "lane.env values must be extracted without a shell evaluating them."
+        )
+
     def test_the_gate_runs_the_trusted_copies_not_the_commits_own(self):
         # THE property `workflow_run` used to provide by construction: it ran
         # the DEFAULT BRANCH's copy of everything, so a commit could never edit

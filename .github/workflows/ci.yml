@@ -477,8 +477,29 @@ jobs:
             exit 0
           fi
           cat lane.env
-          # shellcheck disable=SC1091
-          . ./lane.env
+
+          # NEVER `.` THIS FILE. It is GitHub Actions KEY=VALUE output, which is
+          # deliberately NOT shell-quoted, and its `name` is read from the workflow file
+          # in the CHECKOUT UNDER TEST.
+          #
+          # Sourcing it was wrong twice over (biffo-fleet, 2026-08-21):
+          #
+          #   name=RLS Tests   -> assignment plus a command `Tests` -> exit 127, the step
+          #                       dies before setting state, and the REQUIRED
+          #                       'Error-branch coverage' check reports no verdict at all.
+          #                       Reproduced: `sh: ./lane.env: Tests: not found`.
+          #   name=$(id -u)    -> ARBITRARY CODE EXECUTION inside the trusted gate.
+          #                       Reproduced: it printed the uid.
+          #
+          # The second is the one that matters. This step exists to run the DEFAULT
+          # BRANCH's scripts precisely so a pull request cannot influence the thing judging
+          # it -- and sourcing a value derived from the PR's own workflow name handed that
+          # back. It is the "pwn request" shape the workflow this replaced warned about in
+          # its own header, reintroduced by the change that removed it.
+          #
+          # sed extracts the values without a shell ever evaluating them.
+          present=$(sed -n 's/^present=//p' lane.env | head -1)
+          name=$(sed -n 's/^name=//p' lane.env | head -1)
 
           if [ "${present:-false}" != "true" ]; then
             # Byte-for-byte the assertion this file ran before #637, now with

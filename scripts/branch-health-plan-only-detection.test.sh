@@ -57,8 +57,20 @@ STUB
 chmod +x "$STUB_DIR/gh"
 
 # --- Run branch-health.sh with the stub on PATH -----------------------------
-
-raw_output=$(PATH="$STUB_DIR:$PATH" BRANCH_HEALTH_NO_DESKTOP_ALERT=1 sh "$REPO_ROOT/scripts/branch-health.sh" --branch dev 2>&1)
+#
+# Invoked as an executable, not `sh <path>` — branch-health.sh declares
+# `#!/usr/bin/env bash` and genuinely needs it (`set -uo pipefail`). Forcing
+# it through an explicit `sh` prefix throws away its own shebang and hands it
+# to whatever `sh` resolves to instead, which is dash on both this
+# workstation and the CI runner. The two dash builds disagree on `set -o
+# pipefail`: this workstation's (Ubuntu 26.04) silently tolerates it, so this
+# test previously passed here while dying on the runner's dash 0.5.12
+# (`Illegal option -o pipefail`) with no output for the assertions below to
+# read — the exact "dropped the workflow entirely" failure this test is
+# supposed to catch, misattributed to branch-health.sh's own logic. Direct
+# invocation lets the OS dispatch to bash per the shebang, matching how the
+# script is written and how `dash -n`/`bash -n` treat it, on both machines.
+raw_output=$(PATH="$STUB_DIR:$PATH" BRANCH_HEALTH_NO_DESKTOP_ALERT=1 "$REPO_ROOT/scripts/branch-health.sh" --branch dev 2>&1)
 status=$?
 
 # Strip ANSI colour codes before matching — the real output wraps every

@@ -26,6 +26,28 @@ class CreateAgentRunRequest(BaseModel):
     ``causation_id``/``depth`` carry the §8 loop-prevention chain: a run created
     in reaction to another agent's completion increments ``depth``, and the
     create route refuses past the configured ceiling.
+
+    ``definition_snapshot`` may carry an optional ``web_search`` key configuring
+    OpenRouter's **provider-side** web plugin (issue #903):
+
+    .. code-block:: json
+
+        {"web_search": {"max_results": 8}}
+
+    The runtime (``agent_runtime/openrouter.py``) translates a present, non-empty
+    ``web_search`` dict into the request body's ``"plugins": [{"id": "web", ...}]``
+    — OpenRouter bills ``max_results`` per result, so this is a cost lever as much
+    as a quality one. A missing or empty ``web_search`` key produces a request
+    with no ``plugins`` key at all, byte-identical to a snapshot that predates
+    this field.
+
+    This is **not** the tool-callable ``web_search`` a worker can declare in its
+    ``tools`` list (``agent_runtime/search.py``, Brave-backed, gated on
+    ``BRAVE_SEARCH_API_KEY``) — that is a tool the model chooses to invoke mid-run.
+    ``web_search`` here is retrieval OpenRouter performs *before* the model
+    answers, configured once for the whole request. The two share a name because
+    each was named for what a definition author would call it, not because they
+    are related; do not route one through the other.
     """
 
     agent_name: str = Field(min_length=1, max_length=200)

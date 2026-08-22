@@ -365,8 +365,17 @@ class AgentLoop:
         tools: Sequence[ToolDefinition] = (),
         output_tools: Sequence[OutputTool] = (),
         goals: str | None = None,
+        web_search: dict[str, Any] | None = None,
     ) -> AsyncIterator[TurnEvent]:
-        """Yield the run's turn events, ending with exactly one ``run.finished``."""
+        """Yield the run's turn events, ending with exactly one ``run.finished``.
+
+        ``web_search`` carries the definition snapshot's optional OpenRouter
+        web-plugin configuration (issue #903), passed straight through to every
+        turn's :meth:`~agent_runtime.openrouter.OpenRouterClient.complete` call
+        unexamined — this loop has no opinion on what it contains, the same
+        posture it takes toward ``model``. The provider-wire translation lives in
+        ``openrouter.py``, not here.
+        """
         messages = build_messages(instructions, input_payload, goals)
         offered = {tool.name: tool for tool in tools}
         # Output tools are offered to the model alongside executable tools, but the
@@ -436,6 +445,7 @@ class AgentLoop:
                         messages=list(messages),
                         timeout=remaining,
                         tools=schemas,
+                        web_search=web_search,
                     ),
                     timeout=remaining,
                 )

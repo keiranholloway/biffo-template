@@ -95,6 +95,41 @@ async def test_a_snapshot_without_goals_omits_the_goals_section():
     assert "Success criteria:" not in llm.calls[0]["messages"][0]["content"]
 
 
+async def test_web_search_from_the_snapshot_reaches_the_llm_call():
+    # web_search is read from the SAME snapshot source as goals (issue #903) and
+    # threaded through the loop to the provider call unexamined.
+    core = FakeCore(make_run(web_search={"max_results": 8}))
+    llm = FakeLLM()
+
+    await _plugin(core, llm).events.dispatch(_event())
+
+    assert llm.calls[0]["web_search"] == {"max_results": 8}
+
+
+async def test_a_snapshot_without_web_search_sends_none_the_same_as_before():
+    # The fail-closed default matters more than the positive case: every run
+    # that predates this field must call the provider exactly as it always did.
+    core = FakeCore(make_run())  # no web_search key at all
+    llm = FakeLLM()
+
+    await _plugin(core, llm).events.dispatch(_event())
+
+    assert llm.calls[0]["web_search"] is None
+
+
+async def test_a_non_dict_web_search_is_treated_as_unset_not_fatal():
+    # A malformed value (e.g. a stray string) must not fail the run — the same
+    # posture as an unparseable goals value, just typed differently.
+    core = FakeCore(make_run(web_search="online"))
+    llm = FakeLLM()
+
+    await _plugin(core, llm).events.dispatch(_event())
+
+    body = core.completions()[0]
+    assert body["status"] == "completed"
+    assert llm.calls[0]["web_search"] is None
+
+
 async def test_an_llm_failure_completes_the_run_as_failed_rather_than_abandoning_it():
     # ADR-0014 §5: a subscriber must be able to tell "failed" from "still
     # running". A silently abandoned run is the stranding gap the ADR records.

@@ -151,6 +151,7 @@ class LLMClient(Protocol):
         timeout: float,
         tools: list[dict[str, Any]] | None = None,
         max_tokens: int | None = None,
+        web_search: dict[str, Any] | None = None,
     ) -> LLMResponse: ...
 
 
@@ -221,6 +222,7 @@ class OpenRouterClient:
         timeout: float,
         tools: list[dict[str, Any]] | None = None,
         max_tokens: int | None = None,
+        web_search: dict[str, Any] | None = None,
     ) -> LLMResponse:
         """One chat completion. Raises :class:`LLMError` for anything non-2xx.
 
@@ -231,6 +233,13 @@ class OpenRouterClient:
         :class:`LLMClient` Protocol as an optional keyword so both consumers speak
         one client, and omitted from the request body when ``None`` so the worker
         path is unchanged.
+
+        ``web_search`` is the definition snapshot's optional OpenRouter web-plugin
+        configuration (issue #903), translated into the request body's
+        ``plugins`` key by :func:`_web_search_plugins`. Unset (``None`` or an
+        empty dict) produces a request with no ``plugins`` key at all — every
+        run that predates this field, and every run whose worker never asked for
+        it, is unaffected byte-for-byte.
         """
         headers = {
             "Authorization": f"Bearer {self._resolve_api_key()}",
@@ -250,6 +259,9 @@ class OpenRouterClient:
             body["tools"] = tools
         if max_tokens is not None:
             body["max_tokens"] = max_tokens
+        plugins = _web_search_plugins(web_search)
+        if plugins:
+            body["plugins"] = plugins
         try:
             response = await self._http.post(
                 f"{self._base_url}/chat/completions",
@@ -441,6 +453,33 @@ def _parse_annotations(raw: Any) -> tuple[Annotation, ...]:
         title = str(citation.get("title") or "").strip()
         annotations.append(Annotation(type=kind, url=url, title=title))
     return tuple(annotations)
+
+
+def _web_search_plugins(web_search: dict[str, Any] | None) -> list[dict[str, Any]] | None:
+    """Translate the definition snapshot's ``web_search`` field into OpenRouter's
+    ``plugins`` request-body parameter (issue #903).
+
+    ``None`` for anything that does not amount to "the worker asked for this":
+    not a dict, or an empty one. That is deliberately the same "unset" reading
+    :meth:`OpenRouterClient.complete` gives ``max_tokens=None`` — a request built
+    from a snapshot that never set the field must be indistinguishable from one
+    built before the field existed.
+
+    Only ``max_results`` is recognised. The issue's own proposal was a *named*
+    field precisely to avoid an arbitrary passthrough into the request body ("a
+    named field is probably safer than a passthrough, since the request body is
+    otherwise fully controlled") — so an unrecognised key in ``web_search`` is
+    silently dropped rather than forwarded, the same posture ``tools.py`` takes
+    toward an unregistered tool name, just non-fatal here since retrieval
+    breadth is a quality knob, not a correctness one.
+    """
+    if not isinstance(web_search, dict) or not web_search:
+        return None
+    plugin: dict[str, Any] = {"id": "web"}
+    max_results = web_search.get("max_results")
+    if isinstance(max_results, int) and not isinstance(max_results, bool) and max_results > 0:
+        plugin["max_results"] = max_results
+    return [plugin]
 
 
 def _as_int(value: Any) -> int | None:

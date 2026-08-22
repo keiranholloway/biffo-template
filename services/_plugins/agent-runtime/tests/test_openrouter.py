@@ -392,6 +392,61 @@ async def test_a_malformed_tool_call_is_skipped_rather_than_failing_the_turn(mon
     assert [(c.id, c.arguments) for c in response.tool_calls] == [("c3", {})]
 
 
+# ── OpenRouter web-plugin configuration on the wire (issue #903) ────────────
+
+
+async def test_plugins_key_is_absent_when_web_search_is_unset(monkeypatch):
+    # The fail-closed default: every run that predates this field, and every
+    # worker that never asks for it, must produce a request indistinguishable
+    # from before the field existed. This is the case that matters more, per
+    # the issue: every existing agent run goes through this path.
+    monkeypatch.setenv("OPENROUTER_API_KEY", _FAKE_KEY)
+    handler, seen = _ok()
+
+    await _client(handler).complete(model="m", messages=[], timeout=5.0)
+    await _client(handler).complete(model="m", messages=[], timeout=5.0, web_search=None)
+    await _client(handler).complete(model="m", messages=[], timeout=5.0, web_search={})
+
+    assert all("plugins" not in json.loads(request.content) for request in seen)
+
+
+async def test_plugins_key_carries_max_results_when_web_search_is_set(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", _FAKE_KEY)
+    handler, seen = _ok()
+
+    await _client(handler).complete(
+        model="m", messages=[], timeout=5.0, web_search={"max_results": 8}
+    )
+
+    assert json.loads(seen[0].content)["plugins"] == [{"id": "web", "max_results": 8}]
+
+
+async def test_plugins_key_omits_max_results_when_not_given(monkeypatch):
+    # A worker can ask for the web plugin at OpenRouter's own default depth
+    # without naming a `max_results` — the key is optional on the wire too.
+    monkeypatch.setenv("OPENROUTER_API_KEY", _FAKE_KEY)
+    handler, seen = _ok()
+
+    await _client(handler).complete(model="m", messages=[], timeout=5.0, web_search={"other": 1})
+
+    assert json.loads(seen[0].content)["plugins"] == [{"id": "web"}]
+
+
+async def test_a_non_positive_or_non_int_max_results_is_dropped_not_sent(monkeypatch):
+    # OpenRouter bills max_results per result (the issue's own cost-legibility
+    # concern) — a malformed value must never reach the wire as something the
+    # provider might interpret and bill against.
+    monkeypatch.setenv("OPENROUTER_API_KEY", _FAKE_KEY)
+    handler, seen = _ok()
+
+    for bad in (0, -3, "8", 1.5, True):
+        await _client(handler).complete(
+            model="m", messages=[], timeout=5.0, web_search={"max_results": bad}
+        )
+
+    assert all(json.loads(request.content)["plugins"] == [{"id": "web"}] for request in seen)
+
+
 # ── `:online` grounding citations (issue #1528) ──────────────────────────────
 
 

@@ -544,11 +544,20 @@ export async function runDeploy(
     const infraStep = hasGlobalInfra ? 3 : 2
     log.step(infraStep, totalSteps, `Triggering infrastructure deploy to ${environment}...`)
     const infraBaselineId = await github.getLatestWorkflowRunId(org, repo, 'deploy-infra.yml')
-    // biffo-template#1582: deploy-infra.yml's workflow_dispatch no longer
-    // takes an `action` input — dispatching it always applies, exactly like
-    // a push. Passing an undeclared input here would risk the API rejecting
-    // the dispatch outright rather than silently ignoring it.
-    await github.triggerWorkflow(org, repo, 'deploy-infra.yml', { environment }, branch)
+    // biffo-template#1582 / #1701: `action` is REQUIRED by deploy-infra.yml's
+    // workflow_dispatch and its only allowed value is 'apply' — there is no
+    // default, so omitting it here is an HTTP 422 rather than a silent apply.
+    // That is deliberate (a caller who meant to preview must not reach an
+    // apply), and it means this literal is load-bearing, not decoration.
+    // A preview dispatches deploy-infra-plan.yml instead; this command always
+    // applies, so it always says so.
+    await github.triggerWorkflow(
+      org,
+      repo,
+      'deploy-infra.yml',
+      { environment, action: 'apply' },
+      branch,
+    )
     log.info('  First run takes 20–40 minutes (VPC, RDS, Cognito, CloudFront all provisioning)...')
     log.info(`  Watch live: ${actionsUrl}`)
     const infraResult = await github.waitForWorkflowRun(

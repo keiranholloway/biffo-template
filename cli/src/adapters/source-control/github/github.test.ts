@@ -848,7 +848,10 @@ describe('triggerWorkflow', () => {
       'acme',
       'my-app',
       'deploy-infra.yml',
-      { environment: 'dev' },
+      // The real contract: `action` is required and only `apply` is allowed
+      // (#1701). An example dispatch here that omits it would be a 422 in
+      // life, and this file is where someone copies the shape from.
+      { environment: 'dev', action: 'apply' },
       'dev',
     )
 
@@ -857,7 +860,7 @@ describe('triggerWorkflow', () => {
       repo: 'my-app',
       workflow_id: 'deploy-infra.yml',
       ref: 'dev',
-      inputs: { environment: 'dev' },
+      inputs: { environment: 'dev', action: 'apply' },
     })
   })
 

@@ -16,9 +16,11 @@ name: Deploy Infrastructure Plan
 # applied" — the two states this workflow could be confused between simply do
 # not both exist here, which is the point.
 #
-# `deploy-infra.yml`'s workflow_dispatch now takes only `environment` and
-# always applies, exactly like a push. An operator who wants to preview a
-# change without committing to it dispatches THIS workflow instead.
+# `deploy-infra.yml`'s workflow_dispatch always applies, exactly like a push,
+# and fails closed: its `action` input is required, has no default, and accepts
+# only `apply`, so a dispatch that omits it or asks for `plan` is refused with
+# an HTTP 422 instead of being run as an apply (#1701). An operator who wants
+# to preview a change without committing to it dispatches THIS workflow.
 run-name: >-
   Deploy Infrastructure Plan — ${{ github.event.inputs.environment }} (preview only)
 

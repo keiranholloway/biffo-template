@@ -1,28 +1,66 @@
 name: Deploy Infrastructure
 
-# biffo-template#1582: this workflow used to accept a workflow_dispatch
-# `action` input (`plan` or `apply`, defaulting to `plan`). Left at its
-# default, it applied nothing — but every job that WOULD have applied was
-# skipped rather than failed, so the run's own `conclusion` was `success`
-# either way. `conclusion` is the one field every external consumer of this
-# workflow reads (the Actions list, branch-health.sh, a script, a dashboard),
-# so a plan-only dispatch and a real apply were indistinguishable to anything
-# that did not open the job list. Two mitigations shipped first — a run-name
-# spelling out PLAN ONLY vs APPLY (#1678), and a `deploy-outcome` job that
-# posted a warning (#1582's own fix commit) — but neither could touch
-# `conclusion` itself: the warning job was deliberately `continue-on-error:
-# true` so a legitimate dry run would not read as a branch break, which is
-# exactly what made the run-level rollup stay `success` regardless.
+# biffo-template#1582 / #1701: a workflow_dispatch of THIS workflow always
+# applies, and the dispatch API refuses any call that does not say so
+# explicitly. Both of those are load-bearing; neither is sufficient alone.
 #
-# The actual fix is structural: **this workflow no longer has a plan-only
-# path.** `workflow_dispatch` now takes only `environment` — dispatching it
-# always means apply, exactly like a push always did. `conclusion: success`
-# on THIS workflow can now only mean "applied", because there is no longer
-# an input that produces anything else. A plan-only preview lives in the
-# separate `deploy-infra-plan.yml` workflow instead, which can never apply
-# anything by construction, so its own `conclusion: success` is equally
-# unambiguous ("planned" is all it ever claims). See that file's header for
-# why splitting rather than a fail-closed `deploy-outcome` was chosen.
+# ## The original defect (#1582)
+#
+# This workflow accepted an `action` input (`plan` or `apply`) that
+# **defaulted to `plan`**. Left at its default it applied nothing — but every
+# job that WOULD have applied was `skipped` rather than `failed`, so the run's
+# own `conclusion` was `success` either way. `conclusion` is the one field
+# every external consumer of this workflow reads (the Actions list,
+# branch-health.sh, a script, a dashboard), so a plan-only dispatch and a real
+# apply were indistinguishable to anything that did not open the job list.
+# Two mitigations shipped first — a run-name spelling out PLAN ONLY vs APPLY
+# (#1678), and a `deploy-outcome` job posting a warning — and neither could
+# touch `conclusion`: the warning job was deliberately `continue-on-error:
+# true` so a legitimate dry run would not read as a branch break, which is
+# exactly what left the run-level rollup `success` regardless.
+#
+# ## Why the input is not simply deleted (#1701)
+#
+# Deleting it outright does fix #1582, and introduces its mirror image. The
+# *old* dispatch shape — `gh workflow run deploy-infra.yml -f environment=dev`,
+# relying on the removed `plan` default — was then silently accepted and run as
+# an unconditional apply (measured: run 32601969875, `displayTitle: "Deploy
+# Infrastructure — APPLY dev"`). "Meant to preview, actually applied" is a
+# one-way door against live infrastructure and is strictly worse than the bug
+# it replaced.
+#
+# ## The contract: fail closed at the API
+#
+#   action:  required: true, type: choice, options: [apply], and NO default
+#
+# GitHub enforces both halves of that when the dispatch is created, before a
+# run exists. Measured against this repo on 2026-08-22:
+#
+#   gh workflow run deploy-infra.yml -f environment=dev
+#     -> HTTP 422: Required input 'action' not provided
+#   gh workflow run deploy-infra.yml -f environment=dev -f action=plan
+#     -> HTTP 422: Provided value 'plan' for input 'action' not in the list of
+#        allowed values
+#
+# So a caller who meant to preview gets a hard error and no run — never an
+# apply. A caller who means to apply passes `action=apply`, exactly as before,
+# and nothing changes for them. There is still no input value that produces a
+# plan-only run of THIS workflow, so `conclusion: success` here can still only
+# mean "applied". Both properties hold at once, which is the whole point.
+#
+# ## Deliberately NOT done
+#
+# No job below carries `if: ... inputs.action == 'apply'`. That would reinstate
+# #1582 exactly: a dispatch carrying the wrong value would SKIP every job and
+# the run would conclude `success` having applied nothing. Fail-closed here
+# means "no run at all", or "a run that FAILED" — never "a green run that
+# skipped". `deploy-infra-dispatch-contract.test.ts` asserts that absence, and
+# asserts the input keeps `required: true`, no `default:`, and `[apply]` as its
+# only option, because those three lines are the entire enforcement.
+#
+# A plan-only preview lives in the separate `deploy-infra-plan.yml`, which can
+# never apply anything by construction, so its own `conclusion: success` is
+# equally unambiguous ("planned" is all it ever claims).
 run-name: >-
   Deploy Infrastructure —
   ${{
@@ -51,6 +89,17 @@ on:
         required: true
         type: choice
         options: [dev, staging, prod]
+      action:
+        # Fail closed — see this file's header. `required: true` with NO
+        # `default:` makes an omitted value a 422; `options: [apply]` makes any
+        # other value a 422. Both are enforced by the dispatch API before a run
+        # exists, so a caller who meant to preview cannot reach an apply.
+        # Do not add a `default:`, do not add a second option, and do not gate
+        # any job on this value with an `if:`.
+        description: Must be `apply` — this workflow only applies. For a preview that applies nothing, run "Deploy Infrastructure Plan".
+        required: true
+        type: choice
+        options: [apply]
 
 # Never cancel-in-progress here (unlike ci.yml) — this workflow runs
 # `terraform apply`. Cancelling mid-apply can leave real infrastructure

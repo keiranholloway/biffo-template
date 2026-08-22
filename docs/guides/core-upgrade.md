@@ -253,6 +253,60 @@ An instance forked the module to add a `local.app_db_user` computing exactly tha
 
 ## Breaking changes by version
 
+### 0.298.0 — dispatching Deploy Infrastructure requires `action=apply`
+
+`.github/workflows/deploy-infra.yml`'s `workflow_dispatch` used to take
+`action: plan | apply`, **defaulting to `plan`**. Dispatching it with only an
+environment therefore ran a plan and applied nothing — and because the apply
+jobs were `skipped` rather than `failed`, the run still concluded `success`. A
+green "Deploy Infrastructure" that had deployed nothing was indistinguishable
+from one that had (#1582).
+
+Two things change:
+
+1. **`action` is now required, has no default, and its only allowed value is
+   `apply`.** GitHub rejects the dispatch at the API — before any run exists —
+   if it is missing or set to anything else.
+2. **A new `Deploy Infrastructure Plan` workflow
+   (`.github/workflows/deploy-infra-plan.yml`) carries the preview path.** It
+   has no apply job at all, so its own `success` can only mean "planned".
+
+**What breaks, and what it looks like.** Anything that dispatched
+`deploy-infra.yml` without `action`, or with `action=plan`, now fails loudly
+instead of running:
+
+```
+$ gh workflow run deploy-infra.yml --ref dev -f environment=dev
+HTTP 422: Required input 'action' not provided
+
+$ gh workflow run deploy-infra.yml --ref dev -f environment=dev -f action=plan
+HTTP 422: Provided value 'plan' for input 'action' not in the list of allowed values
+```
+
+Failing is the point. The alternative considered — dropping the input entirely
+so any dispatch applies — would have converted exactly those two commands into
+a real `terraform apply` against the named environment, with no confirmation
+and no reviewer approval unless you have configured one on the GitHub
+Environment. "Meant to preview, actually applied" is a one-way door, so the
+input fails closed instead (#1701).
+
+**What you must do**, per shape of caller:
+
+| You currently run | Now run |
+| --- | --- |
+| `gh workflow run deploy-infra.yml -f environment=X` (expecting a plan) | `gh workflow run deploy-infra-plan.yml -f environment=X` |
+| `... -f action=plan` | `gh workflow run deploy-infra-plan.yml -f environment=X` |
+| `... -f action=apply` | unchanged — still correct |
+| `biffo deploy <env>` | unchanged — the CLI was updated with the workflow |
+
+Check your own runbooks, scripts, bookmarked dispatch URLs and any external
+automation. A saved "Run workflow" form in the GitHub UI is not affected: the
+new input is a single-option dropdown, so the UI cannot submit anything else.
+
+Nothing about a **push**-triggered deploy changes. Pushes to `dev`/`staging`/
+`main` touching `infra/**`, `modules/**` or `services/_plugins/*/terraform/**`
+applied before and apply now.
+
 ### 0.54.0 — first-party plugin Terraform is referenced in place
 
 `orchestrator` and `agent-runtime` are **first-party** plugins: their Terraform lives in the template-owned `services/_plugins/<name>/terraform/` and rides `biffo core upgrade` like any other core file.

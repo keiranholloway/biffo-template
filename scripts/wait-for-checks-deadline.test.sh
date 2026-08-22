@@ -31,6 +31,15 @@ set -u
 
 HERE=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 WFC="$HERE/wait-for-checks.sh"
+# RUN UNDER bash, never `sh`. wait-for-checks.sh declares `#!/usr/bin/env bash` and
+# uses `set -o pipefail`, which dash does not implement.
+#
+# The first cut ran it under `sh` and PASSED LOCALLY, because this workstation's dash
+# is new enough to support pipefail; the CI runner's is not, and five of eight cases
+# failed there with "Illegal option -o pipefail". Executing the file directly to
+# honour its shebang would be tidier and would keep one document instead of two, but
+# it is mode 100644 in git and that gives exit 126 -- so the interpreter is named
+# here, exactly as cli/src/lib/wait-for-checks.test.ts already names it.
 CASES_RUN=0
 FAILURES=0
 
@@ -73,7 +82,7 @@ calls() { c=$(grep -c . "$GH_LOG" 2>/dev/null); echo "${c:-0}"; }
 # Bounded for the same reason as case 2: WITHOUT the fix this case does not exit
 # at all -- it falls through to the default 1800s wait, so an unguarded assertion
 # hangs CI rather than failing it.
-out=$(WAIT_FOR_CHECKS_DEADLINE=$(date +%s) timeout 20 sh "$WFC" 1 -R a/b 2>&1); rc=$?
+out=$(WAIT_FOR_CHECKS_DEADLINE=$(date +%s) timeout 20 bash "$WFC" 1 -R a/b 2>&1); rc=$?
 # The property is that it never POLLS, not that it makes no call at all: the
 # cheap state read has to happen first so an already-merged PR still gets the
 # exit 0 it has earned (see the MERGED case below, which this got wrong once).
@@ -102,7 +111,7 @@ start=$(date +%s)
 # the fix was reverted to prove these assertions catch its absence. A guard that
 # hangs on regression is not a guard.
 out=$(WAIT_FOR_CHECKS_DEADLINE=$(( $(date +%s) + 64 )) WAIT_FOR_CHECKS_INTERVAL=1 \
-      WAIT_FOR_CHECKS_TIMEOUT=600 timeout 45 sh "$WFC" 1 -R a/b 2>&1); rc=$?
+      WAIT_FOR_CHECKS_TIMEOUT=600 timeout 45 bash "$WFC" 1 -R a/b 2>&1); rc=$?
 elapsed=$(( $(date +%s) - start ))
 if [ "$rc" -eq 124 ]; then
   bad "deadline mid-wait: stops early rather than running to its own timeout" \
@@ -124,7 +133,7 @@ esac
 # script exists to prevent.
 : > "$GH_LOG"
 WAIT_FOR_CHECKS_DEADLINE="not-a-number" WAIT_FOR_CHECKS_INTERVAL=1 \
-  WAIT_FOR_CHECKS_TIMEOUT=3 sh "$WFC" 1 -R a/b >/dev/null 2>&1
+  WAIT_FOR_CHECKS_TIMEOUT=3 bash "$WFC" 1 -R a/b >/dev/null 2>&1
 n=$(calls)
 if [ "$n" -gt 0 ]; then
   ok "control: a non-numeric bound is ignored, not read as zero"
@@ -136,7 +145,7 @@ fi
 # Without this the three assertions above are satisfied by a script that has
 # stopped waiting under every condition.
 : > "$GH_LOG"
-WAIT_FOR_CHECKS_INTERVAL=1 WAIT_FOR_CHECKS_TIMEOUT=3 sh "$WFC" 1 -R a/b >/dev/null 2>&1
+WAIT_FOR_CHECKS_INTERVAL=1 WAIT_FOR_CHECKS_TIMEOUT=3 bash "$WFC" 1 -R a/b >/dev/null 2>&1
 n=$(calls)
 if [ "$n" -gt 0 ]; then
   ok "control: with no bound set, it waits exactly as before"
@@ -150,7 +159,7 @@ fi
 # refused to run at all -- caught by cli/src/lib/wait-for-checks.test.ts, not by
 # the first version of this file, which is why it is now asserted here too.
 : > "$GH_LOG"
-out=$(timeout 20 sh "$WFC" 1 -R a/b --timeout 0 --interval 0 2>&1); rc=$?
+out=$(timeout 20 bash "$WFC" 1 -R a/b --timeout 0 --interval 0 2>&1); rc=$?
 case "$out" in
   *"not enough time left"*)
     bad "control: a short own timeout is not a short caller life" \
@@ -162,7 +171,7 @@ esac
 # Placed before the MERGED fast path, the bound turned an exit 0 it had already
 # earned into "cannot tell".
 : > "$GH_LOG"
-out=$(STUB_STATE=MERGED WAIT_FOR_CHECKS_DEADLINE=$(date +%s) timeout 20 sh "$WFC" 1 -R a/b 2>&1); rc=$?
+out=$(STUB_STATE=MERGED WAIT_FOR_CHECKS_DEADLINE=$(date +%s) timeout 20 bash "$WFC" 1 -R a/b 2>&1); rc=$?
 if [ "$rc" -eq 0 ]; then
   ok "an already-merged PR still exits 0 even with no time left"
 else

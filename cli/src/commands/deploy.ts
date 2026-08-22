@@ -544,13 +544,11 @@ export async function runDeploy(
     const infraStep = hasGlobalInfra ? 3 : 2
     log.step(infraStep, totalSteps, `Triggering infrastructure deploy to ${environment}...`)
     const infraBaselineId = await github.getLatestWorkflowRunId(org, repo, 'deploy-infra.yml')
-    await github.triggerWorkflow(
-      org,
-      repo,
-      'deploy-infra.yml',
-      { environment, action: 'apply' },
-      branch,
-    )
+    // biffo-template#1582: deploy-infra.yml's workflow_dispatch no longer
+    // takes an `action` input — dispatching it always applies, exactly like
+    // a push. Passing an undeclared input here would risk the API rejecting
+    // the dispatch outright rather than silently ignoring it.
+    await github.triggerWorkflow(org, repo, 'deploy-infra.yml', { environment }, branch)
     log.info('  First run takes 20–40 minutes (VPC, RDS, Cognito, CloudFront all provisioning)...')
     log.info(`  Watch live: ${actionsUrl}`)
     const infraResult = await github.waitForWorkflowRun(

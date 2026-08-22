@@ -1,0 +1,224 @@
+name: Deploy Infrastructure Plan
+
+# biffo-template#1582. `deploy-infra.yml` used to let a workflow_dispatch pick
+# `action: plan`, which ran a real `terraform plan` and applied nothing — but
+# every apply-* job was skipped rather than failed, so the run's own
+# `conclusion` was `success`, identical to a real apply. `conclusion` is the
+# one field every external consumer of a workflow run reads, so nothing short
+# of removing the ambiguous state actually fixed it (see deploy-infra.yml's
+# header for the two mitigations that tried and could not).
+#
+# This workflow is that removal: a plan-only preview that has NO apply job at
+# all, ever. It cannot apply infrastructure by construction — there is no
+# `terraform apply` anywhere in this file, no saved-plan artifact, no
+# downstream job that could consume one. Its `conclusion: success` therefore
+# only ever means "the plan itself computed cleanly", never "something was
+# applied" — the two states this workflow could be confused between simply do
+# not both exist here, which is the point.
+#
+# `deploy-infra.yml`'s workflow_dispatch now takes only `environment` and
+# always applies, exactly like a push. An operator who wants to preview a
+# change without committing to it dispatches THIS workflow instead.
+run-name: >-
+  Deploy Infrastructure Plan — ${{ github.event.inputs.environment }} (preview only)
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        required: true
+        type: choice
+        options: [dev, staging, prod]
+
+# No apply here, so nothing to protect from a half-applied cancellation — but
+# still one plan per (workflow, ref) at a time, so two operators previewing
+# the same environment don't race the same remote state lock.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  TERRAFORM_VERSION: '~> 1.9'
+  # Defence in depth for the class of bug in #322: an interactive Terraform
+  # prompt on a CI runner has no stdin to read and blocks until the job is
+  # killed. Every invocation also passes -input=false explicitly and a drift
+  # guard enforces that; this is the backstop for one added without it.
+  TF_INPUT: '0'
+
+permissions:
+  id-token: write
+  contents: read
+
+# Deploy jobs only run in repos where BIFFO_DEPLOY_ENABLED=true has been set.
+# The template repo itself has this unset, so all jobs are skipped there.
+
+jobs:
+  plan-dev:
+    name: Plan (dev)
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    environment: dev
+    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && github.event.inputs.environment == 'dev'
+    defaults:
+      run:
+        working-directory: infra/environments/dev
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.BIFFO_OIDC_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+      - name: Generate backend config
+        run: |
+          cat > backend.hcl << 'EOF'
+          bucket = "${{ vars.TF_STATE_BUCKET }}"
+          key    = "dev/terraform.tfstate"
+          region = "${{ vars.AWS_REGION || 'us-east-1' }}"
+          EOF
+      - run: terraform init -input=false -backend-config=backend.hcl
+        timeout-minutes: 10
+      - run: terraform plan -input=false -no-color -out=tfplan 2>&1 | tee plan.txt
+        timeout-minutes: 20
+        env:
+          TF_VAR_project_name: ${{ vars.PROJECT_NAME }}
+          TF_VAR_aws_region: ${{ vars.AWS_REGION || 'us-east-1' }}
+          TF_VAR_admin_email: ${{ vars.BIFFO_ADMIN_EMAIL }}
+          TF_VAR_admin_username: ${{ vars.BIFFO_ADMIN_USERNAME }}
+          TF_VAR_domain: ${{ vars.DOMAIN }}
+          TF_VAR_custom_domain: ${{ vars.CUSTOM_DOMAIN }}
+          TF_VAR_acm_certificate_arn: ${{ vars.ACM_CERTIFICATE_ARN }}
+          TF_VAR_hosted_zone_id: ${{ vars.HOSTED_ZONE_ID }}
+          # See deploy-infra.yml's plan-dev job for why this is wired —
+          # identical rationale, kept in step so a plan preview never diverges
+          # from what the real apply would compute.
+          TF_VAR_error_status_restore_lambda_arn: ${{ vars.ERROR_STATUS_RESTORE_LAMBDA_ARN }}
+          TF_VAR_enable_pr_signer: ${{ vars.ENABLE_PR_SIGNER || 'false' }}
+          TF_VAR_pr_signer_github_app_id: ${{ vars.PR_SIGNER_GITHUB_APP_ID }}
+          TF_VAR_pr_signer_github_installation_id: ${{ vars.PR_SIGNER_GITHUB_INSTALLATION_ID }}
+          TF_VAR_pr_signer_repo_owner: ${{ vars.PR_SIGNER_REPO_OWNER }}
+          TF_VAR_pr_signer_repo_name: ${{ vars.PR_SIGNER_REPO_NAME }}
+          TF_VAR_pr_signer_base_branch: ${{ vars.PR_SIGNER_BASE_BRANCH || 'dev' }}
+
+      # Same guard as the real plan job (#387) — a preview that would destroy
+      # stateful infrastructure should say so just as loudly as one about to
+      # be applied. Bare node, no pnpm/uv install, for the same reason as
+      # deploy-infra.yml: this job sets up Terraform and AWS and nothing else.
+      - name: Destructive-plan guard
+        run: |
+          terraform show -json tfplan > plan.json
+          node "$GITHUB_WORKSPACE/scripts/check-destructive-plan.mjs" plan.json
+        env:
+          GITHUB_EVENT_BEFORE: ${{ github.event.before }}
+
+  plan-staging:
+    name: Plan (staging)
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    environment: staging
+    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && github.event.inputs.environment == 'staging'
+    defaults:
+      run:
+        working-directory: infra/environments/staging
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.BIFFO_OIDC_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+      - name: Generate backend config
+        run: |
+          cat > backend.hcl << 'EOF'
+          bucket = "${{ vars.TF_STATE_BUCKET }}"
+          key    = "staging/terraform.tfstate"
+          region = "${{ vars.AWS_REGION || 'us-east-1' }}"
+          EOF
+      - run: terraform init -input=false -backend-config=backend.hcl
+        timeout-minutes: 10
+      - run: terraform plan -input=false -no-color -out=tfplan 2>&1 | tee plan.txt
+        timeout-minutes: 20
+        env:
+          TF_VAR_project_name: ${{ vars.PROJECT_NAME }}
+          TF_VAR_aws_region: ${{ vars.AWS_REGION || 'us-east-1' }}
+          TF_VAR_admin_email: ${{ vars.BIFFO_ADMIN_EMAIL }}
+          TF_VAR_admin_username: ${{ vars.BIFFO_ADMIN_USERNAME }}
+          TF_VAR_domain: ${{ vars.DOMAIN }}
+          TF_VAR_custom_domain: ${{ vars.CUSTOM_DOMAIN }}
+          TF_VAR_acm_certificate_arn: ${{ vars.ACM_CERTIFICATE_ARN }}
+          TF_VAR_hosted_zone_id: ${{ vars.HOSTED_ZONE_ID }}
+          # See deploy-infra.yml's plan-staging job for why this is wired —
+          # identical rationale, kept in step so a plan preview never diverges
+          # from what the real apply would compute.
+          TF_VAR_error_status_restore_lambda_arn: ${{ vars.ERROR_STATUS_RESTORE_LAMBDA_ARN }}
+          TF_VAR_enable_pr_signer: ${{ vars.ENABLE_PR_SIGNER || 'false' }}
+          TF_VAR_pr_signer_github_app_id: ${{ vars.PR_SIGNER_GITHUB_APP_ID }}
+          TF_VAR_pr_signer_github_installation_id: ${{ vars.PR_SIGNER_GITHUB_INSTALLATION_ID }}
+          TF_VAR_pr_signer_repo_owner: ${{ vars.PR_SIGNER_REPO_OWNER }}
+          TF_VAR_pr_signer_repo_name: ${{ vars.PR_SIGNER_REPO_NAME }}
+          TF_VAR_pr_signer_base_branch: ${{ vars.PR_SIGNER_BASE_BRANCH || 'dev' }}
+
+      - name: Destructive-plan guard
+        run: |
+          terraform show -json tfplan > plan.json
+          node "$GITHUB_WORKSPACE/scripts/check-destructive-plan.mjs" plan.json
+        env:
+          GITHUB_EVENT_BEFORE: ${{ github.event.before }}
+
+  plan-prod:
+    name: Plan (prod)
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    environment: prod
+    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && github.event.inputs.environment == 'prod'
+    defaults:
+      run:
+        working-directory: infra/environments/prod
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.BIFFO_OIDC_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+      - name: Generate backend config
+        run: |
+          cat > backend.hcl << 'EOF'
+          bucket = "${{ vars.TF_STATE_BUCKET }}"
+          key    = "prod/terraform.tfstate"
+          region = "${{ vars.AWS_REGION || 'us-east-1' }}"
+          EOF
+      - run: terraform init -input=false -backend-config=backend.hcl
+        timeout-minutes: 10
+      - run: terraform plan -input=false -no-color -out=tfplan 2>&1 | tee plan.txt
+        timeout-minutes: 20
+        env:
+          TF_VAR_project_name: ${{ vars.PROJECT_NAME }}
+          TF_VAR_aws_region: ${{ vars.AWS_REGION || 'us-east-1' }}
+          TF_VAR_admin_email: ${{ vars.BIFFO_ADMIN_EMAIL }}
+          TF_VAR_admin_username: ${{ vars.BIFFO_ADMIN_USERNAME }}
+          TF_VAR_domain: ${{ vars.DOMAIN }}
+          TF_VAR_custom_domain: ${{ vars.CUSTOM_DOMAIN }}
+          TF_VAR_acm_certificate_arn: ${{ vars.ACM_CERTIFICATE_ARN }}
+          TF_VAR_hosted_zone_id: ${{ vars.HOSTED_ZONE_ID }}
+          # See deploy-infra.yml's plan-prod job for why this is wired —
+          # identical rationale, kept in step so a plan preview never diverges
+          # from what the real apply would compute.
+          TF_VAR_error_status_restore_lambda_arn: ${{ vars.ERROR_STATUS_RESTORE_LAMBDA_ARN }}
+          TF_VAR_enable_pr_signer: ${{ vars.ENABLE_PR_SIGNER || 'false' }}
+          TF_VAR_pr_signer_github_app_id: ${{ vars.PR_SIGNER_GITHUB_APP_ID }}
+          TF_VAR_pr_signer_github_installation_id: ${{ vars.PR_SIGNER_GITHUB_INSTALLATION_ID }}
+          TF_VAR_pr_signer_repo_owner: ${{ vars.PR_SIGNER_REPO_OWNER }}
+          TF_VAR_pr_signer_repo_name: ${{ vars.PR_SIGNER_REPO_NAME }}
+          TF_VAR_pr_signer_base_branch: ${{ vars.PR_SIGNER_BASE_BRANCH || 'dev' }}
+
+      - name: Destructive-plan guard
+        run: |
+          terraform show -json tfplan > plan.json
+          node "$GITHUB_WORKSPACE/scripts/check-destructive-plan.mjs" plan.json
+        env:
+          GITHUB_EVENT_BEFORE: ${{ github.event.before }}

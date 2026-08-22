@@ -622,6 +622,22 @@ jobs:
         # production, so a regression that only breaks under `sh` (not
         # `bash`) is caught here rather than in the field.
         run: sh scripts/branch-health-plan-only-detection.test.sh
+      - name: wait-for-checks caller-deadline — self-test
+        if: ${{ !cancelled() }}
+        # A test with no caller is not a guard (#1413/#1629), and this one guards
+        # a property that only shows up under a caller that dies: wait-for-checks
+        # bounded its own timeout and nothing else, so a Foreman running under
+        # `timeout 3300` started an 11-minute wait with 5 minutes left, was
+        # SIGKILLed mid-wait, and lost the turn with no verdict and no cost
+        # record. Eleven such kills in three days.
+        #
+        # Behavioural, with a stubbed `gh` whose checks never conclude: anything
+        # that returns did so because a deadline fired, not because CI finished.
+        # Both controls (bound unset, bound unreadable) assert the waiting still
+        # happens, so this cannot pass against a script that stopped waiting.
+        # Every case is `timeout`-bounded because WITHOUT the fix they do not
+        # exit at all -- an unguarded regression would hang CI rather than fail.
+        run: sh scripts/wait-for-checks-deadline.test.sh
       - name: Coverage upload
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         uses: codecov/codecov-action@v5

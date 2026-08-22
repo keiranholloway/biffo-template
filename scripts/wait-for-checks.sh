@@ -98,10 +98,37 @@
 #   anything     keep waiting on the checks as before. An unreadable field
 #   else         (old gh, missing scope) must never become a verdict.
 #
+# ## A wait that outlives its caller is worse than no wait
+#
+# This script's timeout says how long IT will wait. It said nothing about how
+# long its CALLER has left, and that gap loses whole sessions.
+#
+# Measured 2026-08-22, biffo-fleet Foreman `7d362ba7`, which runs under
+# `timeout 3300`. It pushed a commit at 05:37:03 and started this script at
+# 05:37:04 with about five minutes of its 55-minute budget left. CI was
+# genuinely in flight and would have concluded at 05:48:18 — a correct ~11
+# minute wait. The session was SIGKILLed at 05:42:45, this script returned
+# **137**, and the turn was lost mid-flight: no verdict, no cost record, the
+# tick reporting `cost=UNKNOWN tokens=UNKNOWN`. Nothing was wrong with the
+# checks or with the waiting; the wait could not fit in the time left and
+# neither side knew it. It was the eleventh such kill in three days.
+#
+# So a caller that knows when it dies can say so:
+#
+#   WAIT_FOR_CHECKS_DEADLINE  absolute unix epoch the CALLER dies at
+#   WAIT_FOR_CHECKS_MARGIN    seconds to leave it to react (default 60)
+#
+# The effective deadline becomes the EARLIER of its own timeout and that bound,
+# and if not even one poll fits it exits 2 immediately — before any API call —
+# rather than starting a wait it cannot finish. Both remain exit 2, "cannot
+# tell", never a pass: "ran out of time" and "checks are green" must never be
+# the same answer. Unset, nothing changes.
+#
 # ## Usage
 #
 #   sh scripts/wait-for-checks.sh <pr-number> [-R owner/repo]
 #                                 [--timeout SECONDS] [--interval SECONDS]
+#                                 [--deadline EPOCH]
 #
 # Requires `gh`, authenticated. Uses gh's embedded jq, so no jq binary is needed.
 
@@ -111,6 +138,8 @@ PR=""
 REPO=""
 TIMEOUT="${WAIT_FOR_CHECKS_TIMEOUT:-1800}"
 INTERVAL="${WAIT_FOR_CHECKS_INTERVAL:-30}"
+SESSION_DEADLINE="${WAIT_FOR_CHECKS_DEADLINE:-}"
+MARGIN="${WAIT_FOR_CHECKS_MARGIN:-60}"
 
 usage() {
   # Print the whole header block, however long it grows: from line 2 up to the
@@ -134,6 +163,10 @@ while [ $# -gt 0 ]; do
       INTERVAL="${2:-}"
       shift 2
       ;;
+    --deadline)
+      SESSION_DEADLINE="${2:-}"
+      shift 2
+      ;;
     -h | --help) usage ;;
     *)
       PR="$1"
@@ -151,6 +184,38 @@ RED=$(printf '\033[31m')
 GREEN=$(printf '\033[32m')
 DIM=$(printf '\033[90m')
 OFF=$(printf '\033[0m')
+
+# --- Bound the wait by the CALLER's life, not only by our own timeout ----------
+#
+# A non-numeric or empty bound is IGNORED rather than read as zero: an unreadable
+# value must never become "no time left", which would turn a caller's typo into a
+# script that refuses to wait for anything.
+deadline=$(($(date +%s) + TIMEOUT))
+bounded_by_caller=0
+case "$SESSION_DEADLINE" in
+  '' | *[!0-9]*) : ;;
+  *)
+    caller_limit=$((SESSION_DEADLINE - MARGIN))
+    if [ "$caller_limit" -lt "$deadline" ]; then
+      deadline=$caller_limit
+      bounded_by_caller=1
+    fi
+    ;;
+esac
+
+# Not even one poll fits. Say so BEFORE any API call: being killed mid-wait costs
+# the caller its whole turn, while exiting now leaves it time to record what it
+# already knows. This is deliberately the first thing that can exit.
+if [ "$deadline" -le "$(( $(date +%s) + INTERVAL ))" ]; then
+  left=$(( deadline - $(date +%s) ))
+  [ "$left" -lt 0 ] && left=0
+  echo "${RED}wait-for-checks: not enough time left to wait for PR $PR.${OFF}" >&2
+  echo "The caller dies in ${left}s (margin ${MARGIN}s) and one poll takes ${INTERVAL}s," >&2
+  echo "so this would be killed mid-wait, losing the turn without a verdict." >&2
+  echo "Re-run with more time, or raise the caller's budget." >&2
+  echo "Not a failure and not a pass: this is 'cannot tell'." >&2
+  exit 2
+fi
 
 gh_pr() {
   if [ -n "$REPO" ]; then gh pr "$@" --repo "$REPO"; else gh pr "$@"; fi
@@ -198,7 +263,7 @@ fi
 
 # --- Poll ---------------------------------------------------------------------
 
-deadline=$(($(date +%s) + TIMEOUT))
+# `deadline` and `bounded_by_caller` were settled above, before any API call.
 prev_count=-1
 rollup=""
 
@@ -298,7 +363,15 @@ EOF
 
   now=$(date +%s)
   if [ "$now" -ge "$deadline" ]; then
-    echo "${RED}wait-for-checks: timed out after ${TIMEOUT}s.${OFF}" >&2
+    if [ "$bounded_by_caller" = "1" ]; then
+      # Distinct wording on purpose: "the caller ran out" sends you to its budget,
+      # "we ran out" sends you to CI. Same exit code, different fix.
+      echo "${RED}wait-for-checks: stopped early — the caller's deadline arrived.${OFF}" >&2
+      echo "Checks had not concluded. Waiting longer would have been killed" >&2
+      echo "mid-wait instead of returning this. Raise the caller's budget." >&2
+    else
+      echo "${RED}wait-for-checks: timed out after ${TIMEOUT}s.${OFF}" >&2
+    fi
     if [ "$count" = "0" ]; then
       # The exact case the naive loop gets wrong, so name it explicitly.
       echo "No checks ever appeared on PR $PR. That is 'cannot tell', not 'green'." >&2

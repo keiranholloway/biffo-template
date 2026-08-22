@@ -203,20 +203,6 @@ case "$SESSION_DEADLINE" in
     ;;
 esac
 
-# Not even one poll fits. Say so BEFORE any API call: being killed mid-wait costs
-# the caller its whole turn, while exiting now leaves it time to record what it
-# already knows. This is deliberately the first thing that can exit.
-if [ "$deadline" -le "$(( $(date +%s) + INTERVAL ))" ]; then
-  left=$(( deadline - $(date +%s) ))
-  [ "$left" -lt 0 ] && left=0
-  echo "${RED}wait-for-checks: not enough time left to wait for PR $PR.${OFF}" >&2
-  echo "The caller dies in ${left}s (margin ${MARGIN}s) and one poll takes ${INTERVAL}s," >&2
-  echo "so this would be killed mid-wait, losing the turn without a verdict." >&2
-  echo "Re-run with more time, or raise the caller's budget." >&2
-  echo "Not a failure and not a pass: this is 'cannot tell'." >&2
-  exit 2
-fi
-
 gh_pr() {
   if [ -n "$REPO" ]; then gh pr "$@" --repo "$REPO"; else gh pr "$@"; fi
 }
@@ -240,6 +226,33 @@ case "$state" in
     exit 0
     ;;
 esac
+
+# Not even one poll fits in what the CALLER has left. Refuse BEFORE the polling
+# starts: being killed mid-wait costs the caller its whole turn, while exiting now
+# leaves it time to record what it already knows.
+#
+# TWO PLACEMENT RULES, both learned by getting them wrong (cli/src/lib/
+# wait-for-checks.test.ts caught both):
+#
+#   1. ONLY when a caller bound is actually in force. Keyed on the effective
+#      deadline alone, `--timeout 0` -- a deliberate, tested "one pass then
+#      report" -- started refusing to run at all. A caller's own short timeout is
+#      its own business; this bound is about the caller's LIFE, not its patience.
+#
+#   2. AFTER the MERGED/CLOSED fast path. Placed before it, an already-merged PR
+#      with no time left returned "cannot tell" instead of the exit 0 it had
+#      already earned. There is nothing to wait for there, so there is nothing to
+#      refuse. One state read is a cost worth paying to answer correctly.
+if [ "$bounded_by_caller" = "1" ] && [ "$deadline" -le "$(( $(date +%s) + INTERVAL ))" ]; then
+  left=$(( deadline - $(date +%s) ))
+  [ "$left" -lt 0 ] && left=0
+  echo "${RED}wait-for-checks: not enough time left to wait for PR $PR.${OFF}" >&2
+  echo "The caller dies in ${left}s (margin ${MARGIN}s) and one poll takes ${INTERVAL}s," >&2
+  echo "so this would be killed mid-wait, losing the turn without a verdict." >&2
+  echo "Re-run with more time, or raise the caller's budget." >&2
+  echo "Not a failure and not a pass: this is 'cannot tell'." >&2
+  exit 2
+fi
 
 # --- Signal 1: the checks branch protection says MUST report ------------------
 

@@ -51,7 +51,7 @@ cat > "$TMP/bin/gh" <<'GHEOF'
 echo "$*" >> "$GH_LOG"
 for a in "$@"; do
   case "$a" in
-    state,baseRefName) echo "OPEN	dev"; exit 0 ;;
+    state,baseRefName) printf '%s\tdev\n' "${STUB_STATE:-OPEN}"; exit 0 ;;
     mergeable)         echo "MERGEABLE"; exit 0 ;;
     statusCheckRollup) echo "CI	PENDING	1"; exit 0 ;;
   esac
@@ -74,14 +74,17 @@ calls() { c=$(grep -c . "$GH_LOG" 2>/dev/null); echo "${c:-0}"; }
 # at all -- it falls through to the default 1800s wait, so an unguarded assertion
 # hangs CI rather than failing it.
 out=$(WAIT_FOR_CHECKS_DEADLINE=$(date +%s) timeout 20 sh "$WFC" 1 -R a/b 2>&1); rc=$?
-n=$(calls)
+# The property is that it never POLLS, not that it makes no call at all: the
+# cheap state read has to happen first so an already-merged PR still gets the
+# exit 0 it has earned (see the MERGED case below, which this got wrong once).
+polls=$(grep -c statusCheckRollup "$GH_LOG" 2>/dev/null); polls=${polls:-0}
 if [ "$rc" -eq 124 ]; then
-  bad "no time left: exits 2 before any API call" \
+  bad "no time left: refuses before polling" \
       "did not exit at all — it started a wait it cannot finish"
-elif [ "$rc" -eq 2 ] && [ "$n" -eq 0 ]; then
-  ok "no time left: exits 2 before any API call"
+elif [ "$rc" -eq 2 ] && [ "$polls" -eq 0 ]; then
+  ok "no time left: refuses before polling"
 else
-  bad "no time left: exits 2 before any API call" "exit=$rc api_calls=$n (wanted 2 and 0)"
+  bad "no time left: refuses before polling" "exit=$rc polls=$polls (wanted 2 and 0)"
 fi
 case "$out" in
   *"not enough time left"*) ok "no time left: the message names the cause" ;;
@@ -139,6 +142,32 @@ if [ "$n" -gt 0 ]; then
   ok "control: with no bound set, it waits exactly as before"
 else
   bad "control: with no bound set, it waits exactly as before" "made no API call"
+fi
+
+# --- CONTROL: a short OWN timeout is not a short caller life --------------------
+# `--timeout 0` is a deliberate, tested "one pass then report". Keyed on the
+# effective deadline alone rather than on whether a caller bound is in force, this
+# refused to run at all -- caught by cli/src/lib/wait-for-checks.test.ts, not by
+# the first version of this file, which is why it is now asserted here too.
+: > "$GH_LOG"
+out=$(timeout 20 sh "$WFC" 1 -R a/b --timeout 0 --interval 0 2>&1); rc=$?
+case "$out" in
+  *"not enough time left"*)
+    bad "control: a short own timeout is not a short caller life" \
+        "refused to run on --timeout 0 with no caller bound set" ;;
+  *) ok "control: a short own timeout is not a short caller life" ;;
+esac
+
+# --- An already-merged PR needs no time, so there is nothing to refuse ----------
+# Placed before the MERGED fast path, the bound turned an exit 0 it had already
+# earned into "cannot tell".
+: > "$GH_LOG"
+out=$(STUB_STATE=MERGED WAIT_FOR_CHECKS_DEADLINE=$(date +%s) timeout 20 sh "$WFC" 1 -R a/b 2>&1); rc=$?
+if [ "$rc" -eq 0 ]; then
+  ok "an already-merged PR still exits 0 even with no time left"
+else
+  bad "an already-merged PR still exits 0 even with no time left" \
+      "exit=$rc — refused to answer a question that needed no waiting"
 fi
 
 # The denominator, printed unconditionally (#1413): a guard about a check that

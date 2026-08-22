@@ -36,6 +36,45 @@
  * back, or a second option, would restore #1582 silently and no suite would
  * notice. This test guards the declaration the API acts on.
  *
+ * ## The case matrix, captured live
+ *
+ * Every line below is real output from a real `gh workflow run` against
+ * `keiranholloway/biffo-template`, branch `fix/deploy-infra-split-plan-apply`,
+ * on 2026-08-22. `BIFFO_DEPLOY_ENABLED` is unset in this repo (confirmed: the
+ * variable API returns 404), so every job skips and nothing is ever applied —
+ * that is what makes dispatching the applying workflow safe to test here.
+ *
+ * MUST NOT APPLY:
+ *
+ *   $ gh workflow run deploy-infra.yml --ref <branch> -f environment=dev
+ *   HTTP 422: Required input 'action' not provided
+ *
+ *   $ gh workflow run deploy-infra.yml --ref <branch> -f environment=dev \
+ *       -f action=plan
+ *   HTTP 422: Provided value 'plan' for input 'action' not in the list of
+ *   allowed values
+ *
+ * MUST APPLY (i.e. must be accepted and routed as an apply):
+ *
+ *   $ gh workflow run deploy-infra.yml --ref <branch> -f environment=dev \
+ *       -f action=apply
+ *   -> run 32602721640
+ *   $ gh run view 32602721640 --json conclusion,displayTitle,event
+ *   {"conclusion":"skipped",
+ *    "displayTitle":"Deploy Infrastructure — APPLY dev",
+ *    "event":"workflow_dispatch"}
+ *
+ * The first row is the decisive one: it is verbatim the command #1582's
+ * reporter used, and before this change it produced run 32601969875 titled
+ * "Deploy Infrastructure — APPLY dev" — accepted, and routed as an apply.
+ *
+ * NOT CAPTURED, and why: a live dispatch of `deploy-infra-plan.yml`. GitHub
+ * refuses to dispatch a workflow that does not yet exist on the default branch
+ * (`HTTP 404: workflow deploy-infra-plan.yml not found on the default branch`),
+ * so the preview path can only be exercised after this merges. Its structure is
+ * asserted statically below and by `workflow-apply-guard.test.ts`; its
+ * execution is not.
+ *
  * ## The one fix shape that must NOT be used
  *
  * Gating a job on `if: github.event.inputs.action == 'apply'` looks like the

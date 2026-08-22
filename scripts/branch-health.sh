@@ -54,6 +54,18 @@
 # merges landing seconds apart cancel the first run by design. It is called out
 # by name so nobody debugs a phantom.
 #
+# `plan-only` (#1582) is likewise reported but does not fail the branch — a
+# `Deploy Infrastructure` dispatch left at the default `action: plan` really did
+# succeed at planning, and that can be entirely deliberate (an operator running
+# a dry run). What it must never do is share the plain `ok` label a real apply
+# gets: `conclusion` is "success" either way, so the ONLY signal that tells them
+# apart is the run's own title (`displayTitle`), which #1678 made carry a
+# `PLAN ONLY ... (nothing applied)` marker for exactly this. This script fails
+# CLOSED on that signal going missing — see the summary query below, where
+# `displayTitle`'s absence collapses the whole `gh run list` call to empty
+# output, which is already handled as exit 2 ("cannot tell"), not as a silent
+# `ok`.
+#
 # ## Usage
 #
 #   sh scripts/branch-health.sh [-R owner/repo] [--branch dev] [--quiet]
@@ -67,7 +79,7 @@ BRANCH=""
 QUIET=""
 
 usage() {
-  sed -n '2,60p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,73p' "$0" | sed 's/^# \{0,1\}//'
   exit 2
 }
 
@@ -144,13 +156,24 @@ label=${REPO:-$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")}
 # list": the ordering is gh's to change, and a status tool that quietly reports
 # an older run because an API changed its sort is the same class of defect as the
 # truncated list this replaces. Ask for the newest explicitly.
+#
+# `displayTitle` is requested here for #1582's second half: a `workflow_dispatch`
+# left at the default `action: plan` runs its plan step for real and concludes
+# "success" — conclusion alone can never tell that apart from a real apply, by
+# design (#1582's whole point). #1678 fixed the Actions-UI half by giving such a
+# run a `run-name` that says "PLAN ONLY ... (nothing applied)"; this line is what
+# lets branch-health.sh see that same marker instead of rendering the run as a
+# plain, indistinguishable "ok". The per-workflow history query further below
+# already requests this field for a different reason (naming who broke a
+# failure) — same field, independent reason to want it here.
 summary=$(gh_run list --branch "$BRANCH" --limit 200 \
-  --json workflowName,status,conclusion,headSha,createdAt,url,event \
+  --json workflowName,status,conclusion,headSha,createdAt,url,event,displayTitle \
   --jq 'group_by(.workflowName)
         | map(max_by(.createdAt))
         | .[]
         | [ (if .status == "completed" then (.conclusion // "unknown") else .status end),
-            .workflowName, .headSha[0:8], .createdAt[0:16], .url, .event ]
+            .workflowName, .headSha[0:8], .createdAt[0:16], .url, .event,
+            (.displayTitle // "") ]
         | @tsv' 2>/dev/null)
 
 if [ -z "$summary" ]; then
@@ -164,11 +187,24 @@ pending=""
 cancelled=""
 skipped=""
 ok=""
+planonly=""
 
-while IFS="$TAB" read -r state name sha when url event; do
+while IFS="$TAB" read -r state name sha when url event title; do
   [ -n "$name" ] || continue
   case "$state" in
-    success) ok="${ok}${name}\n" ;;
+    success)
+      # A literal, upper-case "PLAN ONLY" is the #1678 run-name marker
+      # (`format('PLAN ONLY {0} (nothing applied)', ...)`) — never something a
+      # commit-subject-derived title produces by coincidence (this repo's own
+      # history has "plan-only" and "plan-time" in commit subjects, always
+      # lower-case, and grep confirms zero for the exact upper-case phrase).
+      # A "success" run whose title carries it applied nothing and must not
+      # collapse into the same "ok" bucket as a real apply.
+      case "$title" in
+        *"PLAN ONLY"*) planonly="${planonly}${name}\n" ;;
+        *) ok="${ok}${name}\n" ;;
+      esac
+      ;;
     failure | timed_out | startup_failure)
       failed="${failed}${state}\t${name}\t${sha}\t${when}\t${url}\t${event}\n"
       ;;
@@ -193,6 +229,10 @@ echo
 [ -n "$ok" ] && printf '%b' "$ok" | sed "s/^/  ${GREEN}ok${OFF}         /"
 [ -n "$skipped" ] && printf '%b' "$skipped" | sed "s/^/  ${DIM}skipped${OFF}    /"
 [ -n "$cancelled" ] && printf '%b' "$cancelled" | sed "s/^/  ${YELLOW}cancelled${OFF}  /"
+# Own label, not "ok" — #1582's second half. A skim-reader tells rows apart by
+# this left-hand column, not by reading every run's title, so the row itself
+# has to say "nothing applied" rather than reusing the label a real apply gets.
+[ -n "$planonly" ] && printf '%b' "$planonly" | sed "s/^/  ${YELLOW}plan-only${OFF}  /" | sed "s/\$/ — nothing applied/"
 
 if [ -n "$pending" ]; then
   printf '%b' "$pending" | awk -F'\t' -v d="$YELLOW" -v o="$OFF" 'NF{printf "  %srunning%s    %s (%s)\n", d, o, $2, $1}'
@@ -203,6 +243,11 @@ if [ -z "$failed" ]; then
     echo
     echo "${DIM}A cancelled run is usually spot reclamation or a superseded concurrency${OFF}"
     echo "${DIM}group, not the code. Re-run it rather than debugging it.${OFF}"
+  fi
+  if [ -n "$planonly" ]; then
+    echo
+    echo "${DIM}A plan-only dispatch did not apply anything — Terraform state is${OFF}"
+    echo "${DIM}unchanged for that environment. Not a failure, but not a deploy either.${OFF}"
   fi
   echo
   echo "${GREEN}Nothing on '$BRANCH' is failing.${OFF}"

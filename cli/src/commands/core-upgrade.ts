@@ -1770,11 +1770,47 @@ async function refreshInstanceLockfiles(
   return outcomes
 }
 
+/**
+ * How long any dependency-install subprocess may take before it is killed.
+ *
+ * A bound that cannot be raised gets removed by the first person it inconveniences, so
+ * this is overridable -- but it defaults to finite, because the failure it exists to stop
+ * is an upgrade that never returns and never says why.
+ */
+export const runCommandTimeoutMs = (): number => {
+  const raw = process.env.BIFFO_RUN_TIMEOUT_MS
+  const parsed = raw === undefined ? Number.NaN : Number(raw)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 600_000
+}
+
 const defaultRunCommand: RunCommandFn = async (command, cwd) => {
   const [bin, ...args] = command
   if (!bin) return { ok: false, error: 'empty command' }
   try {
-    await execa(bin, args, { cwd })
+    await execa(bin, args, {
+      cwd,
+      // TWO REASONS THIS HUNG FOR 29 HOURS, AND THE FIX NEEDS BOTH.
+      //
+      // Measured 2026-08-22: `biffo core upgrade --apply` on tabsii-platform sat for
+      // 29 hours on `pnpm install` having done NOTHING -- node_modules untouched since
+      // two days earlier, git tree clean, no network connections, main thread idle in
+      // ep_poll. It was waiting on stdin for input that could never arrive.
+      //
+      // 1. `stdin: 'ignore'`. execa 9 gives the child a PIPE for stdin by default
+      //    (verified directly: the child reports `socket:[...]`, not the parent's fd).
+      //    This process's own stdin was /dev/null -- it runs headless -- so had the pipe
+      //    not been created the child would have read EOF at once and either carried on
+      //    or failed fast. Instead pnpm got a live socket nothing would ever write to.
+      //    Closing it turns a silent forever-wait into an immediate, legible outcome.
+      //
+      // 2. `timeout`. Nothing bounded the wait: 0 of 38 execa call sites in this CLI
+      //    passed one. A subprocess that blocks blocks the whole upgrade, unattended and
+      //    unreported -- the same class as wait-for-checks outliving its caller. Ten
+      //    minutes is generous for a cold `pnpm install` and still finite; override with
+      //    BIFFO_RUN_TIMEOUT_MS where an instance genuinely needs longer.
+      stdin: 'ignore',
+      timeout: runCommandTimeoutMs(),
+    })
     return { ok: true }
   } catch (err) {
     const cause = err as { shortMessage?: string; stderr?: string; message?: string }

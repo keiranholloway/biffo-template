@@ -92,6 +92,41 @@ async def test_collect_folds_the_stream_into_one_outcome():
     assert outcome.error is None
 
 
+# ── web-plugin configuration (issue #903) ────────────────────────────────────
+
+
+async def test_web_search_is_passed_through_to_every_turns_llm_call():
+    # The loop has no opinion on the contents (see the stream() docstring) — it
+    # is the same pass-through posture as `model`. Two turns to prove it is not
+    # only the first call that carries it.
+    tool = RecordingTool("search")
+    llm = FakeLLM(
+        tool_call_response("search", {}),
+        LLMResponse(content="all done", model="m", finish_reason="stop"),
+    )
+    events = await _stream(
+        AgentLoop(llm),
+        limits=_limits(max_turns=2),
+        tools=[tool.definition],
+        web_search={"max_results": 8},
+    )
+
+    assert events[-1].data["status"] == COMPLETED
+    assert len(llm.calls) == 2
+    assert all(call["web_search"] == {"max_results": 8} for call in llm.calls)
+
+
+async def test_web_search_defaults_to_none_when_the_caller_does_not_set_it():
+    # The fail-closed default: a caller that never passes `web_search` (every
+    # AgentLoop.stream() caller before issue #903) must produce a request
+    # identical to before.
+    llm = FakeLLM()
+
+    await _stream(AgentLoop(llm))
+
+    assert llm.calls[0]["web_search"] is None
+
+
 # ── `:online` grounding citations (issue #1528) ──────────────────────────────
 
 

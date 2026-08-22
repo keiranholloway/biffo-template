@@ -160,6 +160,7 @@ class FakeLLM:
         timeout: float,
         tools: list[dict[str, Any]] | None = None,
         max_tokens: int | None = None,
+        web_search: dict[str, Any] | None = None,
     ) -> LLMResponse:
         self.calls.append(
             {
@@ -168,6 +169,7 @@ class FakeLLM:
                 "timeout": timeout,
                 "tools": tools,
                 "max_tokens": max_tokens,
+                "web_search": web_search,
             }
         )
         if self.on_call is not None:

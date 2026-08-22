@@ -323,6 +323,13 @@ class AgentRuntimePlugin(BiffoPluginBase):
         # (messages.py), so a missing key is byte-identical to the old behaviour.
         goals = str(snapshot.get("goals") or "").strip()
         model = str(snapshot.get("model") or "").strip()
+        # OpenRouter web-plugin configuration (issue #903) — provider-side
+        # retrieval, distinct from the tool-callable `web_search` in tools.py.
+        # Read the same way `goals` is: present-and-typed or treated as unset,
+        # never fatal, so a snapshot predating this field behaves exactly as
+        # before.
+        web_search = snapshot.get("web_search")
+        web_search = web_search if isinstance(web_search, dict) else None
         if not instructions:
             return failure("definition_snapshot carries no instructions for this run.")
         if not model:
@@ -368,6 +375,7 @@ class AgentRuntimePlugin(BiffoPluginBase):
                     tools=tools,
                     output_tools=submit_tools,
                     goals=goals,
+                    web_search=web_search,
                 )
             )
         except Exception as exc:  # noqa: BLE001 — an abandoned run is worse than a failed one

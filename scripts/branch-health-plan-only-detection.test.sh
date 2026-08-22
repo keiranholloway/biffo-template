@@ -23,7 +23,7 @@
 # Exit 0 = guard holds (a plan-only run is never rendered as plain `ok`).
 # Exit 1 = branch-health.sh regressed (or reproduces the pre-fix bug).
 
-set -uo pipefail
+set -u
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 REPO_ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
@@ -40,7 +40,7 @@ trap 'rm -rf "$STUB_DIR"' EXIT
 
 cat > "$STUB_DIR/gh" <<'STUB'
 #!/usr/bin/env sh
-set -uo pipefail
+set -u
 
 if [ "$1" = "run" ] && [ "$2" = "list" ]; then
   # One workflow, one run: a workflow_dispatch left at the default `action:

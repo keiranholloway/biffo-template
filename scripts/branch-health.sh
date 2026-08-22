@@ -79,7 +79,7 @@ BRANCH=""
 QUIET=""
 
 usage() {
-  sed -n '2,60p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,73p' "$0" | sed 's/^# \{0,1\}//'
   exit 2
 }
 

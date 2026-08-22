@@ -61,19 +61,30 @@ describe('every subprocess is bounded and cannot wait on stdin', () => {
   it('is the only non-test module that may import execa directly', async () => {
     const { execa: realExeca } = await import('execa')
     expect(typeof realExeca).toBe('function')
-    const { readFileSync, readdirSync, statSync } = await import('node:fs')
+    const { readFileSync, readdirSync } = await import('node:fs')
     const { join } = await import('node:path')
     const offenders: string[] = []
+    // `withFileTypes` rather than a separate statSync: checking a path and then reading it
+    // is a TOCTOU that CodeQL flags as js/file-system-race, and the directory entry already
+    // carries the answer. Reading is wrapped because a file can still vanish between the
+    // listing and the read -- a walker that throws on that is a guard that fails to run.
     const walk = (dir: string) => {
-      for (const e of readdirSync(dir)) {
-        const p = join(dir, e)
-        if (statSync(p).isDirectory()) {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const p = join(dir, entry.name)
+        if (entry.isDirectory()) {
           walk(p)
           continue
         }
+        if (!entry.isFile()) continue
         if (!p.endsWith('.ts') || p.endsWith('.test.ts')) continue
-        if (p.endsWith(`lib${'/'}exec.ts`)) continue
-        if (/from 'execa'/.test(readFileSync(p, 'utf8'))) offenders.push(p)
+        if (p.endsWith(join('lib', 'exec.ts'))) continue
+        let source = ''
+        try {
+          source = readFileSync(p, 'utf8')
+        } catch {
+          continue
+        }
+        if (/from 'execa'/.test(source)) offenders.push(p)
       }
     }
     walk(new URL('..', import.meta.url).pathname)

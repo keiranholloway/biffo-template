@@ -24,7 +24,7 @@
  * real input, checked on every push, exactly where a rename would otherwise
  * go unnoticed until a plugin's calls started silently 403ing.
  */
-import { execa } from 'execa'
+import { execa } from '../lib/exec.js'
 import { checkAllowlistConvention } from '../lib/plugin-allowlist-convention.js'
 
 export async function runPluginAllowlistConventionCheck(): Promise<void> {

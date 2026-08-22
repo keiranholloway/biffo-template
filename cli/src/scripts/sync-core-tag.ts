@@ -34,7 +34,7 @@
  */
 import { existsSync, appendFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { execa } from 'execa'
+import { execa } from '../lib/exec.js'
 import { readCoreManifest } from '../lib/core-manifest.js'
 import { coreVersionTag, releasePathspecs } from '../lib/core-tags.js'
 import { INSTANCE_CORE_FILE, latestCoreVersionFromTags } from '../lib/core-version.js'

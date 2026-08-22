@@ -18,7 +18,7 @@
  */
 import { readFileSync, readdirSync } from 'node:fs'
 import { join, relative } from 'node:path'
-import { execa } from 'execa'
+import { execa } from '../lib/exec.js'
 import { findPipeTraps } from '../lib/pipe-trap-guard.js'
 
 /** Same scope as the guard's own test sweep: packaged scripts and hooks. */

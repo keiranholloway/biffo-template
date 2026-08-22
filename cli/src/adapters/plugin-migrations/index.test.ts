@@ -32,7 +32,7 @@ describe('PluginMigrationsAdapter', () => {
         '--versions-dir',
         join(cwd, 'services', 'api', 'migrations', 'versions'),
       ],
-      { cwd: join(cwd, 'services', 'api') },
+      expect.objectContaining({ cwd: join(cwd, 'services', 'api') }),
     )
   })
 

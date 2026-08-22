@@ -18,7 +18,7 @@
  * (documented first-time setup) already installs uv unconditionally, so a
  * developer following the documented setup already has it.
  */
-import { execa } from 'execa'
+import { execa } from '../../lib/exec.js'
 import { join } from 'node:path'
 
 export class PluginMigrationsAdapter {

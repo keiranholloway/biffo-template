@@ -19,7 +19,7 @@
  * satellite is also not an instance, but unlike the template it holds no
  * `core-manifest.json` and no template-owned paths to guard at all.
  */
-import { execa } from 'execa'
+import { execa } from '../lib/exec.js'
 import {
   DIVERGENCE_FILE,
   checkCoreOwnership,

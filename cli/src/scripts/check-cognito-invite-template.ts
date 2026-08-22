@@ -17,7 +17,7 @@
  * its own `.test.ts` has exercised it against this repo's real `modules/`
  * tree on every `pnpm run test`.
  */
-import { execa } from 'execa'
+import { execa } from '../lib/exec.js'
 import {
   checkCognitoInviteTemplates,
   findModuleTerraformFiles,

@@ -10,7 +10,7 @@
  * *merge base*, which a pre-commit hook cannot see for a file the working
  * branch has already checked out over.
  */
-import { execa } from 'execa'
+import { execa } from '../lib/exec.js'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { INSTANCE_CORE_FILE, isInstanceRepo } from '../lib/core-version.js'

@@ -11,7 +11,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { execa } from 'execa'
+import { execa } from './exec.js'
 import { z } from 'zod'
 import { type CoreManifest, listTemplateOwnedFiles } from './core-manifest.js'
 import { readDivergenceConfig } from './core-ownership-guard.js'

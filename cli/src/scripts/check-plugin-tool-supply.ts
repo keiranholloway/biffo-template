@@ -34,7 +34,7 @@
  */
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { execa } from 'execa'
+import { execa } from '../lib/exec.js'
 import { auditDeclaredModelIds, auditPluginToolSupply } from '../lib/plugin-tool-supply-audit.js'
 
 export async function runPluginToolSupplyCheck(): Promise<void> {

@@ -37,6 +37,12 @@ interface FakeContainer {
   labelled?: boolean
   /** Container `Created` timestamp; the reaper's cutoff is 24h by default. */
   created: string
+  /**
+   * Value of the `biffo.checkout` label — the directory that owns the
+   * container. `undefined` reproduces a container created before the label
+   * existed, for which real `docker inspect` prints `<no value>`.
+   */
+  checkout?: string
 }
 
 const ANCIENT = '2000-01-01T00:00:00.000000000Z'
@@ -45,8 +51,10 @@ const NOW = '2999-01-01T00:00:00.000000000Z'
 interface ReaperRun {
   /** Everything the script said (it writes progress to stderr). */
   said: string
-  /** Container names the script actually issued `docker rm -f` for. */
+  /** Container names the script actually issued `docker rm -f -v` for. */
   removed: string[]
+  /** Raw `rm` argument lines, so the `-v` can be asserted rather than assumed. */
+  removeCalls: string[]
 }
 
 function runReaper(containers: FakeContainer[]): ReaperRun {
@@ -74,8 +82,16 @@ case "$1 $2" in
     esac ;;
   "inspect -f")
     case "$*" in
-${rows.map((c) => `      *" ${c.name}"*) echo ${JSON.stringify(c.created)} ;;`).join('\n')}
-      *) echo "" ;;
+      *"biffo.checkout"*)
+        case "$*" in
+${rows.map((c) => `          *" ${c.name}"*) echo ${JSON.stringify(c.checkout ?? '<no value>')} ;;`).join('\n')}
+          *) echo "<no value>" ;;
+        esac ;;
+      *)
+        case "$*" in
+${rows.map((c) => `          *" ${c.name}"*) echo ${JSON.stringify(c.created)} ;;`).join('\n')}
+          *) echo "" ;;
+        esac ;;
     esac ;;
 esac
 exit 0
@@ -100,11 +116,15 @@ exit 0
   })
   const said = String(result.stderr ?? '')
   const calls = readFileSync(log, 'utf8').split('\n')
+  const removeCalls = calls.filter((l) => l.startsWith('rm -f'))
   return {
     said,
-    removed: calls
-      .filter((l) => l.startsWith('rm -f '))
-      .map((l) => l.slice('rm -f '.length).trim()),
+    removeCalls,
+    // The NAME is whatever follows the flags. Parsed as "last field" rather
+    // than by slicing a fixed prefix, so a future flag cannot silently turn
+    // every assertion below into a comparison against a flag string — which is
+    // exactly what adding `-v` did to the previous version of this harness.
+    removed: removeCalls.map((l) => l.trim().split(/\s+/).pop() ?? ''),
   }
 }
 
@@ -163,6 +183,64 @@ describe('pg-test-db.sh container reaper', () => {
     const run = runReaper([{ name: 'some-redis', image: 'redis:7', created: ANCIENT }])
     expect(run.removed).toEqual([])
     expect(run.said).not.toContain('some-redis')
+  })
+
+  it('passes -v, because removing the container without its volume is the leak', () => {
+    // #1664. `docker rm -f` leaves the anonymous volume behind, so every tidy
+    // reap orphaned a whole Postgres data directory. Measured on one
+    // workstation: 413 dangling volumes holding 104.8GB — 95% of all local
+    // volume space — against 11 live containers totalling 2.5MB. Invisible by
+    // construction: `docker ps` looks clean and the reaper reports a healthy
+    // count, because containers were the only thing it was ever counting.
+    const run = runReaper([{ name: 'biffo-pg-test-old', image: 'postgres:16', created: ANCIENT }])
+    expect(run.removed).toContain('biffo-pg-test-old')
+    expect(run.removeCalls).toEqual(['rm -f -v biffo-pg-test-old'])
+  })
+
+  it('reaps a container whose checkout is GONE, however new it is', () => {
+    // Age was only ever a proxy for "nobody wants this any more". Once the
+    // checkout is deleted the container can never be reused by anything, so
+    // the 24h wait buys nothing and costs a running Postgres competing for the
+    // same page cache as the lane being timed (#703).
+    const run = runReaper([
+      {
+        name: 'biffo-pg-test-gone',
+        image: 'postgres:16',
+        created: NOW,
+        checkout: '/nonexistent/checkout/deleted-by-a-finished-worktree',
+      },
+    ])
+    expect(run.removed).toContain('biffo-pg-test-gone')
+    expect(run.said).toMatch(/1 whose checkout no longer exists/)
+  })
+
+  it('does NOT reap a fresh container whose checkout still exists', () => {
+    // The other half, and the one that makes the rule safe to run eagerly:
+    // `repoRoot` is this very checkout, so a rule that reaped it would kill a
+    // lane mid-run.
+    const run = runReaper([
+      { name: 'biffo-pg-test-live', image: 'postgres:16', created: NOW, checkout: repoRoot },
+    ])
+    expect(run.removed).toEqual([])
+  })
+
+  it('keeps a container whose checkout exists even when it is ancient', () => {
+    // Ownership decides, then age. An old container belonging to a live
+    // checkout is still subject to the age rule — this asserts the two rules
+    // compose rather than one shadowing the other.
+    const run = runReaper([
+      { name: 'biffo-pg-test-oldlive', image: 'postgres:16', created: ANCIENT, checkout: repoRoot },
+    ])
+    expect(run.removed).toContain('biffo-pg-test-oldlive')
+    expect(run.said).toMatch(/0 whose checkout no longer exists, 1 unused for over/)
+  })
+
+  it('falls back to age for a container created before the checkout label existed', () => {
+    // Real `docker inspect` prints `<no value>` for a missing label. Treating
+    // that string as a path would make `[ ! -d ]` true and reap every
+    // pre-label container on sight — the migration hazard this asserts against.
+    const run = runReaper([{ name: 'biffo-pg-test-legacy', image: 'postgres:16', created: NOW }])
+    expect(run.removed).toEqual([])
   })
 
   it('reports the denominator, not only the count removed', () => {

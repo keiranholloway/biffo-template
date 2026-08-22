@@ -43,6 +43,7 @@
 #   eval "$(sh scripts/pg-test-db.sh --export)"   # export BIFFO_TEST_PG_DSN and TABSII_TEST_PG_DSN
 #   sh scripts/pg-test-db.sh                      # print the DSN on stdout
 #   sh scripts/pg-test-db.sh --recreate           # force a rebuild
+#   sh scripts/pg-test-db.sh --reap               # housekeeping only: reap and exit
 #
 # Only the DSN reaches stdout, so it is safe to capture; progress goes to stderr.
 #
@@ -164,10 +165,12 @@ CONTAINER="${BIFFO_PG_CONTAINER:-biffo-pg-test-$_checkout_suffix}"
 
 RECREATE=0
 EXPORT=0
+REAP_ONLY=0
 for arg in "$@"; do
   case "$arg" in
     --recreate) RECREATE=1 ;;
     --export) EXPORT=1 ;;
+    --reap) REAP_ONLY=1 ;;
     -h | --help)
       sed -n '2,72p' "$0" | sed 's/^#\{1,2\} \{0,1\}//'
       exit 0
@@ -250,6 +253,7 @@ if [ "$BIFFO_PG_REAP_HOURS" -gt 0 ] 2>/dev/null && command -v docker >/dev/null 
     say "cannot compute a reap cutoff on this date(1); skipping container reaping"
   else
     _reaped=0
+    _reaped_gone=0
     _considered=0
     # TWO filters, not one literal name (#1383). The label is what containers
     # created from here now carry; the name prefix keeps covering every one
@@ -272,6 +276,41 @@ if [ "$BIFFO_PG_REAP_HOURS" -gt 0 ] 2>/dev/null && command -v docker >/dev/null 
       _made=$(docker inspect -f '{{.Created}}' "$_c" 2>/dev/null | cut -c1-19)
       [ -z "$_made" ] && continue
       _considered=$((_considered + 1))
+      # ── Ownership beats age, where ownership is knowable ─────────────────
+      #
+      # Age was only ever a PROXY. The container is keyed to a checkout
+      # (see `CONTAINER` above), so the honest question is not "is this old?"
+      # but "does the checkout that owns it still exist?" -- and once the
+      # worktree is deleted the answer is a fact, not an estimate. A container
+      # whose checkout is gone can never be reused by anything, so there is no
+      # 4-second-rebuild trade to weigh: it is pure garbage the moment the
+      # directory disappears.
+      #
+      # Measured 2026-08-22 on one workstation: 42 live containers, of which 19
+      # belonged to checkouts that no longer existed. Under the age rule alone
+      # those 19 each held a running Postgres and ~500MB for up to 24 more
+      # hours -- and #703's real complaint was never disk, it was that these
+      # compete for the same page cache and I/O as the lane being timed.
+      #
+      # The path is read from a LABEL SET AT CREATION, never derived from the
+      # container's name. Deriving it would mean hashing candidate paths to see
+      # which produces this suffix, and the `biffo-pg-test-` prefix is shared by
+      # every repo in the estate -- so a run in one repo, finding no matching
+      # worktree of its OWN, would confidently reap a container another repo's
+      # test lane was mid-run against. The label makes the claim self-describing
+      # and repo-independent.
+      #
+      # Containers created before this label existed report an empty value and
+      # fall through to the age rule below, exactly as `biffo.ephemeral=1`
+      # migrated in (#1383). Nothing is stranded; they simply age out once.
+      _owner=$(docker inspect -f '{{index .Config.Labels "biffo.checkout"}}' "$_c" 2>/dev/null)
+      if [ -n "$_owner" ] && [ "$_owner" != "<no value>" ] && [ ! -d "$_owner" ]; then
+        if docker rm -f -v "$_c" >/dev/null 2>&1; then
+          _reaped=$((_reaped + 1))
+          _reaped_gone=$((_reaped_gone + 1))
+        fi
+        continue
+      fi
       # Both are UTC ISO-8601 to the second, so a string compare IS a time
       # compare -- no epoch conversion, and portable across date(1) flavours.
       if awk -v a="$_made" -v b="$_reap_cutoff" 'BEGIN { exit !(a < b) }'; then
@@ -289,8 +328,13 @@ if [ "$BIFFO_PG_REAP_HOURS" -gt 0 ] 2>/dev/null && command -v docker >/dev/null 
         docker rm -f -v "$_c" >/dev/null 2>&1 && _reaped=$((_reaped + 1))
       fi
     done
-    [ "$_reaped" -gt 0 ] &&
-      say "reaped $_reaped of $_considered container(s) unused for over ${BIFFO_PG_REAP_HOURS}h (set BIFFO_PG_REAP_HOURS=0 to disable)"
+    # Two reasons, counted apart. A single total would let the cheap, certain
+    # rule and the age guess read as one number, and the whole point of the
+    # ownership rule is that it is NOT a guess -- if it ever reaps something
+    # still wanted, that total must say so on its own.
+    if [ "$_reaped" -gt 0 ]; then
+      say "reaped $_reaped of $_considered container(s): $_reaped_gone whose checkout no longer exists, $((_reaped - _reaped_gone)) unused for over ${BIFFO_PG_REAP_HOURS}h (set BIFFO_PG_REAP_HOURS=0 to disable)"
+    fi
 
     # ── What the reaper can SEE but must not touch ──────────────────────────
     #
@@ -346,6 +390,26 @@ if [ "$BIFFO_PG_REAP_HOURS" -gt 0 ] 2>/dev/null && command -v docker >/dev/null 
       fi
     }
   fi
+
+  # `--reap` is housekeeping ONLY: reap, report, and stop before starting or
+  # touching a server.
+  #
+  # The reaper is otherwise LAZY -- it runs only when something else runs the
+  # lane, so the moment the fleet goes quiet nothing reclaims anything and the
+  # mess sits until the next test. That is the opposite of what is wanted: idle
+  # is exactly when reclaiming is free. This flag is the callable form, so a
+  # worktree teardown or a periodic sweep can collect without standing up a
+  # Postgres nobody asked for.
+  if [ "$REAP_ONLY" -eq 1 ]; then
+    exit 0
+  fi
+fi
+
+# Guard the case above: with reaping disabled there is nothing for `--reap` to
+# do, and it must still not fall through into starting a server.
+if [ "$REAP_ONLY" -eq 1 ]; then
+  say "reaping is disabled (BIFFO_PG_REAP_HOURS=0); nothing to do"
+  exit 0
 fi
 
 if ! psql_admin -c 'SELECT 1' >/dev/null 2>&1; then
@@ -364,7 +428,11 @@ if ! psql_admin -c 'SELECT 1' >/dev/null 2>&1; then
     # is still scanned, but it only ever described containers this script named;
     # anything started under another name was outside the reaper's denominator
     # entirely. A label travels with the container whatever it is called.
+    # `biffo.checkout` is what makes the container's owner knowable after the
+    # fact. The reaper above uses it to remove a container the moment its
+    # checkout is deleted, rather than waiting out a 24-hour proxy.
     docker run -d --name "$CONTAINER" --label biffo.ephemeral=1 \
+      --label "biffo.checkout=$REPO_ROOT" \
       -e POSTGRES_PASSWORD="$PASS" -p "$PORT:5432" "$IMAGE" >/dev/null
   fi
   # Polled, not slept: a cold image pull and a warm restart differ by an order of

@@ -20,6 +20,17 @@ import { makeTmpDir } from '../test-utils/tmp.js'
  * whether an object is present in this clone at all. A stub could only restate
  * the answer the assertion is checking.
  *
+ * The second half of this file is the CASE MATRIX for the hole an independent
+ * prosecution found in the first attempt at that fix: `branch_is_absorbed`
+ * asked "does the candidate carry any work this push does not already have?",
+ * which is VACUOUSLY TRUE of a candidate with no commits of its own. A rival
+ * branch staked at `dev`'s tip — the shape AGENTS.md itself asks for, "push
+ * your branch as soon as it exists" — was therefore discounted and announced
+ * as "a superseded predecessor", at exit 0, while `origin/dev`'s own claim.sh
+ * blocked it. Every case below is derived from a real branch shape in this
+ * estate rather than invented: a pre-code reservation, the symmetric
+ * seconds-apart race of 2026-08-03, a cherry-pick, a revert, a force-push.
+ *
  * `GIT_DIR`/`GIT_WORK_TREE`/`GIT_INDEX_FILE` are stripped from every child's
  * environment. git EXPORTS those into hooks, and this suite can be run from
  * `.husky/pre-push`; leaving them set would make every `git` call below operate
@@ -297,5 +308,186 @@ describe('claim.sh --guard lineage (tabsii-com/tabsii-platform#1112)', () => {
     for (const sh of ['sh', 'dash', 'bash']) {
       expect(() => execFileSync(sh, ['-n', script])).not.toThrow()
     }
+  })
+})
+
+/**
+ * A candidate with no commits of its own is a RESERVATION, not a supersession.
+ *
+ * "Every commit on it is already carried by my branch" is trivially true of a
+ * branch that has no commits, so the content test discounted the most ordinary
+ * rival there is and called it a predecessor. These are the must-BLOCK rows;
+ * the two must-ALLOW rows (the rebased predecessor, above; the declared
+ * residual gap, below) are what stop the fix from being a revert of the bug it
+ * was written for.
+ */
+describe('claim.sh --guard: a commitless candidate is a reservation, not a predecessor', () => {
+  /** My branch, with real work on it, ready to push. */
+  function withMyWork(): Fixture {
+    const fx = makeFixture()
+    fx.git(fx.work, 'checkout', '-q', '-b', 'fix/1050-mine')
+    commit(fx, 'a.txt', 'one\n')
+    commit(fx, 'b.txt', 'two\n')
+    return fx
+  }
+
+  it('BLOCKS a rival staked at the integration tip before writing any code', () => {
+    // AGENTS.md: "Push your branch as soon as it exists. The claim is a
+    // reservation; the branch is the evidence." An agent following that to the
+    // letter produces exactly this branch — and the first attempt discounted
+    // it, printing `discounted fix/1050-other-agent` at exit 0.
+    const fx = withMyWork()
+    fx.git(fx.work, 'push', '-q', 'origin', 'dev:refs/heads/fix/1050-other-agent')
+
+    const { code, out } = guard(fx, 'fix/1050-mine')
+    expect(code, out).toBe(1)
+    expect(out).toContain('fix/1050-other-agent')
+    expect(out).not.toContain('discounted')
+  })
+
+  it("BLOCKS a rival staked at the pushing branch's own tip", () => {
+    // The other direction of the same hole: the candidate is not merely
+    // reachable from this push, it IS this push. Nothing to supersede.
+    const fx = withMyWork()
+    fx.git(fx.work, 'push', '-q', 'origin', 'fix/1050-mine:refs/heads/fix/1050-other-agent')
+
+    const { code, out } = guard(fx, 'fix/1050-mine')
+    expect(code, out).toBe(1)
+    expect(out).toContain('fix/1050-other-agent')
+    expect(out).not.toContain('discounted')
+  })
+
+  it('BLOCKS the symmetric race — two sessions staking one issue seconds apart', () => {
+    // Both branches sit at the integration tip, so a discount granted on
+    // content alone is granted to BOTH and neither blocks the other. That is
+    // the 2026-08-03 collision shape, reintroduced by the first attempt.
+    const fx = makeFixture()
+    fx.git(fx.work, 'push', '-q', 'origin', 'dev:refs/heads/fix/1050-other-agent')
+    fx.git(fx.work, 'checkout', '-q', '-b', 'fix/1050-mine')
+
+    const { code, out } = guard(fx, 'fix/1050-mine')
+    expect(code, out).toBe(1)
+    expect(out).toContain('fix/1050-other-agent')
+  })
+
+  it('BLOCKS a rival left at an OLDER ancestor of the branch being pushed', () => {
+    // Not only the tip: any commit already reachable from this push carries
+    // nothing of its own. Counting "own commits" against the pushing branch
+    // rather than against `dev` is what makes this row fall out for free.
+    const fx = makeFixture()
+    const base = fx.git(fx.work, 'rev-parse', 'HEAD')
+    commit(fx, 'moved.txt', 'dev moves on\n')
+    fx.git(fx.work, 'push', '-q', 'origin', 'dev')
+    fx.git(fx.work, 'checkout', '-q', '-b', 'fix/1050-mine')
+    commit(fx, 'a.txt', 'one\n')
+    fx.git(fx.work, 'push', '-q', 'origin', `${base}:refs/heads/fix/1050-other-agent`)
+
+    const { code, out } = guard(fx, 'fix/1050-mine')
+    expect(code, out).toBe(1)
+    expect(out).toContain('fix/1050-other-agent')
+  })
+
+  it('BLOCKS a rival that cherry-picked this work AND added its own', () => {
+    const fx = withMyWork()
+    fx.git(fx.work, 'checkout', '-q', '-b', 'fix/1050-other-agent', 'dev')
+    fx.git(fx.work, 'cherry-pick', '--no-edit', 'fix/1050-mine~1', 'fix/1050-mine')
+    commit(fx, 'rival.txt', 'theirs\n')
+    fx.git(fx.work, 'push', '-q', 'origin', 'fix/1050-other-agent')
+    fx.git(fx.work, 'checkout', '-q', 'fix/1050-mine')
+    fx.git(fx.work, 'branch', '-D', 'fix/1050-other-agent')
+
+    const { code, out } = guard(fx, 'fix/1050-mine')
+    expect(code, out).toBe(1)
+    expect(out).toContain('fix/1050-other-agent')
+  })
+
+  it('BLOCKS a rival whose own commits REVERT this work — an inverse patch id is not an equivalent one', () => {
+    const fx = withMyWork()
+    fx.git(fx.work, 'checkout', '-q', '-b', 'fix/1050-other-agent')
+    fx.git(fx.work, 'revert', '--no-edit', 'HEAD')
+    fx.git(fx.work, 'push', '-q', 'origin', 'fix/1050-other-agent')
+    fx.git(fx.work, 'checkout', '-q', 'fix/1050-mine')
+    fx.git(fx.work, 'branch', '-D', 'fix/1050-other-agent')
+
+    const { code, out } = guard(fx, 'fix/1050-mine')
+    expect(code, out).toBe(1)
+    expect(out).toContain('fix/1050-other-agent')
+  })
+
+  it('BLOCKS a rival that force-pushed to a commit this clone has never fetched', () => {
+    // `ls-remote` reports the NEW sha; this clone holds only the old one. The
+    // objects check must read the sha it was given, not any ref it happens to
+    // have locally, or a force-push would silently reuse a stale verdict.
+    const fx = withMyWork()
+    const originUrl = fx.git(fx.work, 'remote', 'get-url', 'origin')
+    const rival = join(makeTmpDir('claimlineage-rival'), 'clone')
+    execFileSync('git', ['clone', '-q', originUrl, rival], { env: CLEAN_ENV })
+    fx.git(rival, 'config', 'user.email', 'rival@example.test')
+    fx.git(rival, 'config', 'user.name', 'Rival')
+    fx.git(rival, 'checkout', '-q', '-b', 'fix/1050-other-agent', 'origin/dev')
+    writeFileSync(join(rival, 'v1.txt'), 'v1\n')
+    fx.git(rival, 'add', '-A')
+    fx.git(rival, 'commit', '-qm', 'rival v1')
+    fx.git(rival, 'push', '-q', 'origin', 'fix/1050-other-agent')
+
+    // This clone sees v1 — and then never looks again.
+    fx.git(fx.work, 'fetch', '-q', 'origin', 'fix/1050-other-agent')
+    fx.git(fx.work, 'reset', '-q', '--hard', 'HEAD')
+
+    fx.git(rival, 'reset', '-q', '--hard', 'origin/dev')
+    writeFileSync(join(rival, 'v2.txt'), 'v2\n')
+    fx.git(rival, 'add', '-A')
+    fx.git(rival, 'commit', '-qm', 'rival v2')
+    fx.git(rival, 'push', '-q', '--force', 'origin', 'fix/1050-other-agent')
+
+    const v2 = fx
+      .git(fx.work, 'ls-remote', '--heads', 'origin', 'fix/1050-other-agent')
+      .split('\t')[0]
+    let present = true
+    try {
+      fx.git(fx.work, 'cat-file', '-e', `${v2}^{commit}`)
+    } catch {
+      present = false
+    }
+    expect(present, 'the fixture must genuinely lack the force-pushed objects').toBe(false)
+
+    const { code, out } = guard(fx, 'fix/1050-mine')
+    expect(code, out).toBe(1)
+    expect(out).toContain('fix/1050-other-agent')
+  })
+
+  it('still DISCOUNTS a rival carrying only patch-identical work — the declared residual gap', () => {
+    // Executable, so the limit cannot be quietly widened or quietly forgotten.
+    // A claim reserves FUTURE work and this predicate can only see PAST work,
+    // so a content test cannot close this row: the rival's commits are all
+    // already in hand, and nothing in the object graph distinguishes that from
+    // a rebase. Declared in `branch_is_absorbed`'s header, not silent.
+    // Built as INDEPENDENT commits with their own messages, not as a
+    // cherry-pick: git is deterministic, so cherry-picking these two commits
+    // onto the same base reproduces their exact SHAs, and the branch would
+    // then be the "candidate at the pusher's tip" row above wearing a
+    // disguise. That is worth stating because the first prosecution's
+    // equivalent fixture was that disguise, and it is now blocked for the
+    // ordinary reason rather than tolerated for this one.
+    const fx = withMyWork()
+    fx.git(fx.work, 'checkout', '-q', '-b', 'fix/1050-other-agent', 'dev')
+    writeFileSync(join(fx.work, 'a.txt'), 'one\n')
+    fx.git(fx.work, 'add', '-A')
+    fx.git(fx.work, 'commit', '-qm', 'rival: the same first change')
+    writeFileSync(join(fx.work, 'b.txt'), 'two\n')
+    fx.git(fx.work, 'add', '-A')
+    fx.git(fx.work, 'commit', '-qm', 'rival: the same second change')
+    fx.git(fx.work, 'push', '-q', 'origin', 'fix/1050-other-agent')
+    const cand = fx.git(fx.work, 'rev-parse', 'fix/1050-other-agent')
+    fx.git(fx.work, 'checkout', '-q', 'fix/1050-mine')
+    fx.git(fx.work, 'branch', '-D', 'fix/1050-other-agent')
+
+    // Distinct commits, carrying nothing this push lacks.
+    expect(cand).not.toBe(fx.git(fx.work, 'rev-parse', 'fix/1050-mine'))
+    expect(fx.git(fx.work, 'rev-list', '--count', cand, '--not', 'fix/1050-mine')).toBe('2')
+
+    const { code, out } = guard(fx, 'fix/1050-mine')
+    expect(code, out).toBe(0)
+    expect(out).toContain('discounted fix/1050-other-agent')
   })
 })

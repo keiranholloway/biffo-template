@@ -7,6 +7,7 @@ import {
   buildPrBody,
   printMigrationBodyDrift,
   resolveTemplateRepoFlag,
+  runCommandTimeoutMs,
   runCoreUpgrade,
 } from './core-upgrade.js'
 import type { MergeEntry, MergeStatus, UpgradePlan } from '../lib/core-upgrade.js'
@@ -1524,5 +1525,65 @@ describe('printMigrationBodyDrift — renders the #751 declaration (#751)', () =
     expect(handPort).toContain('rules out')
     expect(handPort).toContain('already-wrong schema')
     expect(followOn).not.toContain('rules out')
+  })
+})
+
+// A SUBPROCESS THAT WAITS ON STDIN WAITS FOREVER, AND NOTHING BOUNDED IT.
+//
+// Measured 2026-08-22: `biffo core upgrade --apply` on tabsii-platform sat for 29 HOURS on
+// `pnpm install` having done nothing at all -- node_modules untouched since two days
+// earlier, git tree clean, no network connections, main thread idle in ep_poll, nine libuv
+// workers parked in futex_do_wait. It was waiting on stdin for input that could never
+// arrive, and no timeout existed to end it: 0 of 38 execa call sites in this CLI passed one.
+//
+// Proven in isolation before the fix was written -- a child running `read x` under execa's
+// default stdio hung until killed, and exited in 8ms with `stdin: 'ignore'`.
+describe('subprocesses cannot outlive the upgrade that started them', () => {
+  it('bounds a dependency install by default, and lets an instance raise it', () => {
+    const original = process.env.BIFFO_RUN_TIMEOUT_MS
+    try {
+      delete process.env.BIFFO_RUN_TIMEOUT_MS
+      expect(runCommandTimeoutMs()).toBe(600_000)
+
+      process.env.BIFFO_RUN_TIMEOUT_MS = '900000'
+      expect(runCommandTimeoutMs()).toBe(900_000)
+    } finally {
+      if (original === undefined) delete process.env.BIFFO_RUN_TIMEOUT_MS
+      else process.env.BIFFO_RUN_TIMEOUT_MS = original
+    }
+  })
+
+  // A bound that can be set to zero or to nonsense is not a bound. The failure this exists
+  // to stop is an upgrade that never returns, so an unreadable override must fall back to
+  // finite rather than to "wait forever".
+  it.each([['0'], ['-1'], ['not-a-number'], ['']])(
+    'ignores an unusable BIFFO_RUN_TIMEOUT_MS of %j and stays finite',
+    (value) => {
+      const original = process.env.BIFFO_RUN_TIMEOUT_MS
+      try {
+        process.env.BIFFO_RUN_TIMEOUT_MS = value
+        const ms = runCommandTimeoutMs()
+        expect(Number.isFinite(ms)).toBe(true)
+        expect(ms).toBeGreaterThan(0)
+      } finally {
+        if (original === undefined) delete process.env.BIFFO_RUN_TIMEOUT_MS
+        else process.env.BIFFO_RUN_TIMEOUT_MS = original
+      }
+    },
+  )
+
+  // STRUCTURAL, and deliberately so: the property is what execa is CALLED with, and a
+  // behavioural test would have to actually hang for some interval to prove the negative.
+  // Both call sites are asserted -- plugin-upgrade.ts carries its own copy of this helper,
+  // and fixing only the one that was measured is how the other becomes the next 29 hours.
+  it.each([
+    ['core-upgrade.ts', 'commands/core-upgrade.ts'],
+    ['plugin-upgrade.ts', 'commands/plugin-upgrade.ts'],
+  ])('%s closes the child stdin and bounds it', (_name, rel) => {
+    const src = readFileSync(new URL(`../${rel}`, import.meta.url), 'utf8')
+    const call = src.slice(src.indexOf('const defaultRunCommand'))
+    const body = call.slice(0, call.indexOf('} catch'))
+    expect(body).toContain("stdin: 'ignore'")
+    expect(body).toContain('timeout: runCommandTimeoutMs()')
   })
 })

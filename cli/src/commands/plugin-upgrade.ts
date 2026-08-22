@@ -772,11 +772,38 @@ async function relockIfDependenciesChanged(
   return outcomes
 }
 
+// Timeout shared with core-upgrade, so the two copies of this helper cannot
+// drift into disagreeing about how long an install may take.
+import { runCommandTimeoutMs } from './core-upgrade.js'
+
 const defaultRunCommand: RunCommandFn = async (command, cwd) => {
   const [bin, ...args] = command
   if (!bin) return { ok: false, error: 'empty command' }
   try {
-    await execa(bin, args, { cwd })
+    await execa(bin, args, {
+      cwd,
+      // TWO REASONS THIS HUNG FOR 29 HOURS, AND THE FIX NEEDS BOTH.
+      //
+      // Measured 2026-08-22: `biffo core upgrade --apply` on tabsii-platform sat for
+      // 29 hours on `pnpm install` having done NOTHING -- node_modules untouched since
+      // two days earlier, git tree clean, no network connections, main thread idle in
+      // ep_poll. It was waiting on stdin for input that could never arrive.
+      //
+      // 1. `stdin: 'ignore'`. execa 9 gives the child a PIPE for stdin by default
+      //    (verified directly: the child reports `socket:[...]`, not the parent's fd).
+      //    This process's own stdin was /dev/null -- it runs headless -- so had the pipe
+      //    not been created the child would have read EOF at once and either carried on
+      //    or failed fast. Instead pnpm got a live socket nothing would ever write to.
+      //    Closing it turns a silent forever-wait into an immediate, legible outcome.
+      //
+      // 2. `timeout`. Nothing bounded the wait: 0 of 38 execa call sites in this CLI
+      //    passed one. A subprocess that blocks blocks the whole upgrade, unattended and
+      //    unreported -- the same class as wait-for-checks outliving its caller. Ten
+      //    minutes is generous for a cold `pnpm install` and still finite; override with
+      //    BIFFO_RUN_TIMEOUT_MS where an instance genuinely needs longer.
+      stdin: 'ignore',
+      timeout: runCommandTimeoutMs(),
+    })
     return { ok: true }
   } catch (err) {
     const cause = err as { shortMessage?: string; stderr?: string; message?: string }

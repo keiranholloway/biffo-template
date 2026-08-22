@@ -16,7 +16,7 @@
  * its own `.test.ts` has exercised it against this repo's real workflow tree
  * on every `pnpm run test`.
  */
-import { execa } from 'execa'
+import { execa } from '../lib/exec.js'
 import { checkLambdaOutput } from '../lib/lambda-output-guard.js'
 import { findWorkflowFiles } from '../lib/terraform-input-guard.js'
 

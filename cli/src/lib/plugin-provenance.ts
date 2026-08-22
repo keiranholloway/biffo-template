@@ -33,7 +33,7 @@
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { execa } from 'execa'
+import { execa } from './exec.js'
 
 export const PLUGIN_PROVENANCE_FILENAME = '.biffo-plugin-provenance.json'
 

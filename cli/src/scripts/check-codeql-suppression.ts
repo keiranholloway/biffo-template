@@ -8,7 +8,7 @@
  */
 import { existsSync } from 'node:fs'
 import { join, relative } from 'node:path'
-import { execa } from 'execa'
+import { execa } from '../lib/exec.js'
 import {
   countSourceFiles,
   sweepCodeqlSuppressionComments,

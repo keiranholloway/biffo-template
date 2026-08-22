@@ -49,7 +49,7 @@
  * `core-direct-paths-audit.ts`'s own module doc comment).
  */
 import { join } from 'node:path'
-import { execa } from 'execa'
+import { execa } from '../lib/exec.js'
 import {
   auditSiblingCoreDirectPaths,
   resolveSiblingCoreSrc,

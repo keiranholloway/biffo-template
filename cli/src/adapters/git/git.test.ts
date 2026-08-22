@@ -24,9 +24,13 @@ describe('GitAdapter', () => {
     it('returns true when git rev-parse succeeds', async () => {
       execaMock.mockResolvedValue({} as never)
       await expect(adapter.isGitRepo('/some/repo')).resolves.toBe(true)
-      expect(execaMock).toHaveBeenCalledWith('git', ['rev-parse', '--is-inside-work-tree'], {
-        cwd: '/some/repo',
-      })
+      expect(execaMock).toHaveBeenCalledWith(
+        'git',
+        ['rev-parse', '--is-inside-work-tree'],
+        expect.objectContaining({
+          cwd: '/some/repo',
+        }),
+      )
     })
 
     it('returns false when git rev-parse fails', async () => {
@@ -51,13 +55,11 @@ describe('GitAdapter', () => {
 
       expect(existsSync(join(dir, '.git'))).toBe(false)
       expect(existsSync(join(dir, 'biffo.plugin.json'))).toBe(true)
-      expect(execaMock).toHaveBeenCalledWith('git', [
-        'clone',
-        '--depth',
-        '1',
-        'https://example.com/plugin.git',
-        dir,
-      ])
+      expect(execaMock).toHaveBeenCalledWith(
+        'git',
+        ['clone', '--depth', '1', 'https://example.com/plugin.git', dir],
+        expect.objectContaining({ stdin: 'ignore' }),
+      )
 
       adapter.cleanup(dir)
     })
@@ -85,13 +87,17 @@ describe('GitAdapter', () => {
         'ghp_supersecrettoken123',
       )
 
-      expect(execaMock).toHaveBeenCalledWith('git', [
-        'clone',
-        '--depth',
-        '1',
-        'https://x-access-token:ghp_supersecrettoken123@github.com/acme/private-repo.git',
-        dir,
-      ])
+      expect(execaMock).toHaveBeenCalledWith(
+        'git',
+        [
+          'clone',
+          '--depth',
+          '1',
+          'https://x-access-token:ghp_supersecrettoken123@github.com/acme/private-repo.git',
+          dir,
+        ],
+        expect.objectContaining({ stdin: 'ignore' }),
+      )
 
       adapter.cleanup(dir)
     })
@@ -123,13 +129,11 @@ describe('GitAdapter', () => {
         'ghp_supersecrettoken123',
       )
 
-      expect(execaMock).toHaveBeenCalledWith('git', [
-        'clone',
-        '--depth',
-        '1',
-        'git@github.com:acme/private-repo.git',
-        dir,
-      ])
+      expect(execaMock).toHaveBeenCalledWith(
+        'git',
+        ['clone', '--depth', '1', 'git@github.com:acme/private-repo.git', dir],
+        expect.objectContaining({ stdin: 'ignore' }),
+      )
 
       adapter.cleanup(dir)
     })
@@ -139,7 +143,11 @@ describe('GitAdapter', () => {
     it('initializes a repo with an explicit initial branch', async () => {
       execaMock.mockResolvedValue({} as never)
       await adapter.init('/repo', 'main')
-      expect(execaMock).toHaveBeenCalledWith('git', ['init', '-b', 'main'], { cwd: '/repo' })
+      expect(execaMock).toHaveBeenCalledWith(
+        'git',
+        ['init', '-b', 'main'],
+        expect.objectContaining({ cwd: '/repo' }),
+      )
     })
 
     it('adds a named remote', async () => {
@@ -148,7 +156,7 @@ describe('GitAdapter', () => {
       expect(execaMock).toHaveBeenCalledWith(
         'git',
         ['remote', 'add', 'origin', 'https://github.com/acme/reports.git'],
-        { cwd: '/repo' },
+        expect.objectContaining({ cwd: '/repo' }),
       )
     })
 
@@ -158,7 +166,7 @@ describe('GitAdapter', () => {
       expect(execaMock).toHaveBeenCalledWith(
         'git',
         ['add', 'services/widgets', 'modules/plugins/widgets'],
-        { cwd: '/repo' },
+        expect.objectContaining({ cwd: '/repo' }),
       )
     })
 
@@ -168,7 +176,7 @@ describe('GitAdapter', () => {
       expect(execaMock).toHaveBeenCalledWith(
         'git',
         ['commit', '-m', 'feat(plugins): install widgets@1.0.0'],
-        { cwd: '/repo' },
+        expect.objectContaining({ cwd: '/repo' }),
       )
     })
   })
@@ -184,9 +192,13 @@ describe('GitAdapter core-upgrade ops (ADR-0006 Phase 3b)', () => {
   it('currentBranch returns the trimmed branch name', async () => {
     execaMock.mockResolvedValue({ stdout: 'main\n' } as never)
     await expect(adapter.currentBranch('/r')).resolves.toBe('main')
-    expect(execaMock).toHaveBeenCalledWith('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
-      cwd: '/r',
-    })
+    expect(execaMock).toHaveBeenCalledWith(
+      'git',
+      ['rev-parse', '--abbrev-ref', 'HEAD'],
+      expect.objectContaining({
+        cwd: '/r',
+      }),
+    )
   })
 
   it('hasUncommittedChanges reflects porcelain output', async () => {
@@ -199,7 +211,11 @@ describe('GitAdapter core-upgrade ops (ADR-0006 Phase 3b)', () => {
   it('createBranch switches to a new branch', async () => {
     execaMock.mockResolvedValue({} as never)
     await adapter.createBranch('/r', 'biffo/x')
-    expect(execaMock).toHaveBeenCalledWith('git', ['switch', '-c', 'biffo/x'], { cwd: '/r' })
+    expect(execaMock).toHaveBeenCalledWith(
+      'git',
+      ['switch', '-c', 'biffo/x'],
+      expect.objectContaining({ cwd: '/r' }),
+    )
   })
 
   it('switchBranch switches to an existing branch, without -c or --force (#984)', async () => {
@@ -207,7 +223,11 @@ describe('GitAdapter core-upgrade ops (ADR-0006 Phase 3b)', () => {
     await adapter.switchBranch('/r', 'dev')
     // No `-c`: the branch already exists. No `--force`/`--discard-changes`: this
     // is the restore path, so it must fail rather than destroy uncommitted work.
-    expect(execaMock).toHaveBeenCalledWith('git', ['switch', 'dev'], { cwd: '/r' })
+    expect(execaMock).toHaveBeenCalledWith(
+      'git',
+      ['switch', 'dev'],
+      expect.objectContaining({ cwd: '/r' }),
+    )
   })
 
   it('push injects the token into an HTTPS remote URL', async () => {

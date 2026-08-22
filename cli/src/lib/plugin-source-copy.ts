@@ -39,7 +39,7 @@
  */
 import { copyFileSync, cpSync, mkdirSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
-import { execa } from 'execa'
+import { execa } from './exec.js'
 import { log } from './logger.js'
 
 /**

@@ -45,7 +45,7 @@
  */
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { execa } from 'execa'
+import { execa } from '../lib/exec.js'
 import { checkInstanceAdoption } from '../lib/instance-adoption.js'
 
 export interface InstanceAdoptionCheckOptions {

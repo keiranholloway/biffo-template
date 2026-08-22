@@ -13,7 +13,7 @@
  */
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { execa } from 'execa'
+import { execa } from '../lib/exec.js'
 import {
   ALLOWLIST_FILENAME,
   findAdrNumberCollisions,

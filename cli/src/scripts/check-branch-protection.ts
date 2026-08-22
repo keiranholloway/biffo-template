@@ -19,7 +19,7 @@
  * gap.
  */
 import { Octokit } from '@octokit/rest'
-import { execa } from 'execa'
+import { execa } from '../lib/exec.js'
 import {
   type ObservedCheck,
   formatPlans,

@@ -12,7 +12,7 @@
  */
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { execa } from 'execa'
+import { execa } from '../lib/exec.js'
 import { findCollisions, formatCollisions } from '../lib/plugin-collision-guard.js'
 
 export async function runPluginCollisionCheck(): Promise<void> {

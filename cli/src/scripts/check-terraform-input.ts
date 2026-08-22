@@ -14,7 +14,7 @@
  * it against this repo's real workflow tree on every `pnpm run test`, but
  * nothing ran it from `cli/src/commands/` or a named workflow step.
  */
-import { execa } from 'execa'
+import { execa } from '../lib/exec.js'
 import { checkTerraformInput, findWorkflowFiles } from '../lib/terraform-input-guard.js'
 
 export async function runTerraformInputCheck(): Promise<void> {

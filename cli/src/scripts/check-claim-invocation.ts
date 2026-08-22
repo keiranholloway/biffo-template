@@ -13,7 +13,7 @@
  * pass — a guard whose input set is empty reports success against the exact bug
  * it exists to catch (#695).
  */
-import { execa } from 'execa'
+import { execa } from '../lib/exec.js'
 import {
   auditClaimInvocationParity,
   distributedAgentsDocs,

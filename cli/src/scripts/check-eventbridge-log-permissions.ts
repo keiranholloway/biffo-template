@@ -14,7 +14,7 @@
  * #1408 and had zero callers until #1413 wired it — the estate's first real
  * run happens in this PR's own CI.
  */
-import { execa } from 'execa'
+import { execa } from '../lib/exec.js'
 import { auditEventBridgeLogPermissions } from '../lib/eventbridge-log-permission-guard.js'
 
 export async function runEventBridgeLogPermissionCheck(): Promise<void> {

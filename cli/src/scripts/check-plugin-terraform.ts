@@ -11,7 +11,7 @@
  * so a guard scoped to workspace packages would not have run against the very
  * artifact this defect landed in. Walking the tree is the point.
  */
-import { execa } from 'execa'
+import { execa } from '../lib/exec.js'
 import { checkPluginTerraform, formatViolations } from '../lib/plugin-terraform-guard.js'
 
 export async function runPluginTerraformCheck(): Promise<void> {

@@ -29,7 +29,7 @@
  * `scripts/check-closing-keywords.mjs` deliberately, including its fail-closed
  * posture on an unreadable fetch.
  */
-import { execa } from 'execa'
+import { execa } from '../lib/exec.js'
 import { readCoreManifest } from '../lib/core-manifest.js'
 import { INSTANCE_CORE_FILE, isInstanceRepo } from '../lib/core-version.js'
 import { checkReleaseSubject } from '../lib/release-subject-guard.js'

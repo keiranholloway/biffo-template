@@ -60,8 +60,9 @@ Three shapes are excluded, each for a reason rather than to quieten the output
 
 At the time this file was added, this skeleton's own `example_plugin` package
 holds **zero** consolidation-helper-shaped functions — `on_install()` and
-`on_uninstall()` are no-ops returning a bare `None`, which is far below
-`_MIN_TEMPLATE_NODES`. That is the right starting state, not a gap: a fresh
+`on_uninstall()` (**not invoked** by anything, biffo-template#709) are no-ops
+returning a bare `None`, which is far below `_MIN_TEMPLATE_NODES`. That is the
+right starting state, not a gap: a fresh
 plugin has not yet had the chance to duplicate anything. The guard exists so
 that when the first real helper — and later, the first hand-copy of its
 expression — is written, this file catches it without anyone having to add a

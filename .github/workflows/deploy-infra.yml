@@ -1,20 +1,71 @@
 name: Deploy Infrastructure
 
-# biffo-template#1582: a workflow_dispatch left at its default `action: plan`
-# applies nothing, but every job that WOULD have applied is skipped rather
-# than failed, so the run's own conclusion is `success` either way. The run
-# list and notifications show only this title and the green check — nobody
-# has to open the job list to misread a plan as a completed deploy. Stating
-# what actually happened directly in the run's own displayed name attacks the
-# point where that misreading happens, rather than requiring a click-through.
-# It is deliberately not the whole fix — see the deploy-outcome job below.
+# biffo-template#1582 / #1701: a workflow_dispatch of THIS workflow always
+# applies, and the dispatch API refuses any call that does not say so
+# explicitly. Both of those are load-bearing; neither is sufficient alone.
+#
+# ## The original defect (#1582)
+#
+# This workflow accepted an `action` input (`plan` or `apply`) that
+# **defaulted to `plan`**. Left at its default it applied nothing — but every
+# job that WOULD have applied was `skipped` rather than `failed`, so the run's
+# own `conclusion` was `success` either way. `conclusion` is the one field
+# every external consumer of this workflow reads (the Actions list,
+# branch-health.sh, a script, a dashboard), so a plan-only dispatch and a real
+# apply were indistinguishable to anything that did not open the job list.
+# Two mitigations shipped first — a run-name spelling out PLAN ONLY vs APPLY
+# (#1678), and a `deploy-outcome` job posting a warning — and neither could
+# touch `conclusion`: the warning job was deliberately `continue-on-error:
+# true` so a legitimate dry run would not read as a branch break, which is
+# exactly what left the run-level rollup `success` regardless.
+#
+# ## Why the input is not simply deleted (#1701)
+#
+# Deleting it outright does fix #1582, and introduces its mirror image. The
+# *old* dispatch shape — `gh workflow run deploy-infra.yml -f environment=dev`,
+# relying on the removed `plan` default — was then silently accepted and run as
+# an unconditional apply (measured: run 32601969875, `displayTitle: "Deploy
+# Infrastructure — APPLY dev"`). "Meant to preview, actually applied" is a
+# one-way door against live infrastructure and is strictly worse than the bug
+# it replaced.
+#
+# ## The contract: fail closed at the API
+#
+#   action:  required: true, type: choice, options: [apply], and NO default
+#
+# GitHub enforces both halves of that when the dispatch is created, before a
+# run exists. Measured against this repo on 2026-08-22:
+#
+#   gh workflow run deploy-infra.yml -f environment=dev
+#     -> HTTP 422: Required input 'action' not provided
+#   gh workflow run deploy-infra.yml -f environment=dev -f action=plan
+#     -> HTTP 422: Provided value 'plan' for input 'action' not in the list of
+#        allowed values
+#
+# So a caller who meant to preview gets a hard error and no run — never an
+# apply. A caller who means to apply passes `action=apply`, exactly as before,
+# and nothing changes for them. There is still no input value that produces a
+# plan-only run of THIS workflow, so `conclusion: success` here can still only
+# mean "applied". Both properties hold at once, which is the whole point.
+#
+# ## Deliberately NOT done
+#
+# No job below carries `if: ... inputs.action == 'apply'`. That would reinstate
+# #1582 exactly: a dispatch carrying the wrong value would SKIP every job and
+# the run would conclude `success` having applied nothing. Fail-closed here
+# means "no run at all", or "a run that FAILED" — never "a green run that
+# skipped". `deploy-infra-dispatch-contract.test.ts` asserts that absence, and
+# asserts the input keeps `required: true`, no `default:`, and `[apply]` as its
+# only option, because those three lines are the entire enforcement.
+#
+# A plan-only preview lives in the separate `deploy-infra-plan.yml`, which can
+# never apply anything by construction, so its own `conclusion: success` is
+# equally unambiguous ("planned" is all it ever claims).
 run-name: >-
   Deploy Infrastructure —
   ${{
     github.event_name == 'workflow_dispatch'
-      && (github.event.inputs.action == 'apply'
-          && format('APPLY {0}', github.event.inputs.environment)
-          || format('PLAN ONLY {0} (nothing applied)', github.event.inputs.environment))
+      && format('APPLY {0}', github.event.inputs.environment)
       || 'apply (push-triggered)'
   }}
 
@@ -39,17 +90,23 @@ on:
         type: choice
         options: [dev, staging, prod]
       action:
-        description: Terraform action
+        # Fail closed — see this file's header. `required: true` with NO
+        # `default:` makes an omitted value a 422; `options: [apply]` makes any
+        # other value a 422. Both are enforced by the dispatch API before a run
+        # exists, so a caller who meant to preview cannot reach an apply.
+        # Do not add a `default:`, do not add a second option, and do not gate
+        # any job on this value with an `if:`.
+        description: Must be `apply` — this workflow only applies. For a preview that applies nothing, run "Deploy Infrastructure Plan".
         required: true
         type: choice
-        options: [plan, apply]
-        default: plan
+        options: [apply]
 
 # Never cancel-in-progress here (unlike ci.yml) — this workflow runs
 # `terraform apply`. Cancelling mid-apply can leave real infrastructure
 # half-applied, which is worse than just queuing a second trigger behind
 # the first (e.g. a push landing right after a manual re-run for the same
-# environment).
+# environment). Every dispatch of this workflow now applies (see above), so
+# that is true of every run it produces, not just push-triggered ones.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
@@ -177,7 +234,7 @@ jobs:
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     environment: dev
     needs: plan-dev
-    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && ((github.event_name == 'push' && github.ref == 'refs/heads/dev') || (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'dev' && github.event.inputs.action == 'apply'))
+    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && ((github.event_name == 'push' && github.ref == 'refs/heads/dev') || (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'dev'))
     defaults:
       run:
         working-directory: infra/environments/dev
@@ -373,7 +430,7 @@ jobs:
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     environment: staging
     needs: plan-staging
-    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && ((github.event_name == 'push' && github.ref == 'refs/heads/staging') || (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'staging' && github.event.inputs.action == 'apply'))
+    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && ((github.event_name == 'push' && github.ref == 'refs/heads/staging') || (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'staging'))
     defaults:
       run:
         working-directory: infra/environments/staging
@@ -572,7 +629,7 @@ jobs:
     environment: prod
     needs: plan-prod
     # See plan-prod above — prod always requires an explicit workflow_dispatch.
-    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'prod' && github.event.inputs.action == 'apply'
+    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'prod'
     defaults:
       run:
         working-directory: infra/environments/prod
@@ -662,54 +719,3 @@ jobs:
             "s3://$(terraform output -raw portal_bucket_name)/.well-known/biffo-identity.json" \
             --content-type application/json \
             --cache-control "max-age=60"
-
-  # biffo-template#1582: a workflow_dispatch left at the default `action:
-  # plan` (or dispatched against an environment whose apply never actually
-  # ran, e.g. `BIFFO_DEPLOY_ENABLED` off) produces a run where every apply-*
-  # job is `skipped` and the overall run conclusion is still `success` —
-  # identical to a real apply. `run-name` above fixes the label a person
-  # reads; this job is the fail-closed half: it makes the run's own job graph
-  # visibly abnormal (a red "failed" job, not a routine grey "skipped" one)
-  # whenever a manually-dispatched run did not apply, without failing the
-  # workflow itself — `continue-on-error: true` means this can never block a
-  # legitimate plan-only dispatch or any other consumer of this workflow's
-  # overall conclusion.
-  #
-  # Deliberately scoped to workflow_dispatch only: a push always means
-  # "apply", with no operator choice to misread, so there is nothing here for
-  # push-triggered runs to warn about.
-  deploy-outcome:
-    name: Deploy Outcome
-    needs: [plan-dev, apply-dev, plan-staging, apply-staging, plan-prod, apply-prod]
-    if: always() && github.event_name == 'workflow_dispatch'
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
-    continue-on-error: true
-    steps:
-      - name: Confirm infrastructure was actually applied
-        env:
-          TARGET_ENV: ${{ github.event.inputs.environment }}
-          ACTION: ${{ github.event.inputs.action }}
-          APPLY_DEV_RESULT: ${{ needs.apply-dev.result }}
-          APPLY_STAGING_RESULT: ${{ needs.apply-staging.result }}
-          APPLY_PROD_RESULT: ${{ needs.apply-prod.result }}
-        run: |
-          case "$TARGET_ENV" in
-            dev) applied_result="$APPLY_DEV_RESULT" ;;
-            staging) applied_result="$APPLY_STAGING_RESULT" ;;
-            prod) applied_result="$APPLY_PROD_RESULT" ;;
-            *) echo "::error::Unrecognised environment '$TARGET_ENV'"; exit 1 ;;
-          esac
-
-          if [ "$applied_result" != "success" ]; then
-            {
-              echo "## :warning: Nothing was applied"
-              echo
-              echo "This run targeted **$TARGET_ENV** with \`action=$ACTION\` and did"
-              echo "not apply any infrastructure change (apply job result:"
-              echo "\`$applied_result\`). Terraform state for $TARGET_ENV is unchanged."
-            } >> "$GITHUB_STEP_SUMMARY"
-            echo "::warning::Deploy Infrastructure ($TARGET_ENV) did not apply — action='$ACTION', apply result='$applied_result'. This was a plan-only run, not a completed deploy."
-            exit 1
-          fi
-
-          echo "Applied to $TARGET_ENV." >> "$GITHUB_STEP_SUMMARY"

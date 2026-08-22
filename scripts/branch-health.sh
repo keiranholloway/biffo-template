@@ -66,6 +66,19 @@
 # output, which is already handled as exit 2 ("cannot tell"), not as a silent
 # `ok`.
 #
+# **This bucket is transitional, and is deliberately kept.** From core 0.298.0
+# `deploy-infra.yml` can no longer produce a plan-only run at all: its `action`
+# input is required, defaults to nothing, and accepts only `apply`, so the
+# dispatch that used to yield this title is now an HTTP 422 and previews live in
+# a separate `Deploy Infrastructure Plan` workflow whose own name says so. The
+# bucket is therefore permanently unreachable **for any repo past 0.298.0** —
+# but this script is run with `-R owner/repo` against arbitrary repos in the
+# estate, and an instance that has not yet taken that upgrade still emits
+# exactly this title for exactly the ambiguous run. Deleting the bucket now
+# would fail open on those repos. Retire it once every instance is past
+# 0.298.0, and check the `Instance Adoption Report` workflow
+# (`.github/workflows/instance-adoption-report.yml`) rather than assuming.
+#
 # ## Usage
 #
 #   sh scripts/branch-health.sh [-R owner/repo] [--branch dev] [--quiet]

@@ -1,0 +1,20 @@
+# Checks for `verify-deployed.sh`. INSTANCE-OWNED — the mechanism is the same across
+# the estate, the checks are not. This file is seeded, never overwritten by a sync.
+#
+#   <name>  <persona-id>  <method>  <path>  <expect>
+#
+# `expect` is `non-empty` or `status:<code>`.
+#
+# The template ships no real checks: an instance's routes and personas are its own.
+# `verify-deployed.sh --list` over an empty file correctly reports zero, which is the
+# honest answer and not a pass.
+#
+# Example, from the instance that motivated this (biffo-fleet#167). A known-enrolled
+# learner must still receive a NON-EMPTY list; a `200 []` means the tenant GUC did not
+# bind and is a REVERT signal, because the route degrades silently rather than 500ing:
+#
+#   enrollments-nonempty  unit-staff  GET  /api/v1/lms/my/enrollments  non-empty
+#
+# Pick the persona deliberately. `unit-staff` is correct there only because the dev
+# seed gives it a real enrolment; an admin persona would return empty for an entirely
+# innocent reason and the check would read as a REVERT signal when nothing is wrong.

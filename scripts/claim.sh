@@ -107,6 +107,21 @@
 #   - **Excludes the branch being pushed, and any PR whose head IS that
 #     branch**, from counting as a conflict. Without this, pushing your own
 #     branch a second time blocks you on your own work.
+#   - **Excludes a SUPERSEDED PREDECESSOR** — a remote branch naming the same
+#     issue whose every commit is already carried by the branch being pushed,
+#     which is what a rebase leaves behind. An issue number has no lineage, so
+#     the number-only comparison could not tell that branch from a rival
+#     session's, and a dead predecessor blocked every later push naming the
+#     issue (tabsii-com/tabsii-platform#1112). Decided from the object graph by
+#     `branch_is_absorbed` below, which fails CLOSED — anything it cannot
+#     positively demonstrate stays a conflict, INCLUDING a candidate carrying
+#     no commits of its own. A branch sitting at `dev`'s tip is a reservation
+#     (AGENTS.md asks for exactly that: "push your branch as soon as it
+#     exists"), and "every commit on it is already carried" is vacuously true
+#     of a branch with no commits — so without that requirement the discount
+#     waved through the most ordinary rival there is. Note the discount applies
+#     to the BRANCH signal only: an OPEN PR is a live claim regardless of
+#     lineage and is never discounted.
 #   - **A real conflict — another branch or another open PR naming the same
 #     issue — exits 1**, naming what was found. AGENTS.md permits stealing a
 #     claim that is over an hour stale, with a comment; the message points
@@ -308,6 +323,146 @@ derive_branch_issue() {
   printf '%s' "$_dbi_n" | sed 's/^0*\([0-9]\)/\1/'
 }
 
+# --- lineage: is remote branch tip $1 already carried by local branch $2? -----
+#
+# The branch check below compares ISSUE NUMBERS, and a number has no lineage.
+# So it could not tell a genuine RIVAL CLAIMANT -- another session working the
+# same issue -- from the pusher's OWN SUPERSEDED PREDECESSOR, the branch they
+# abandoned and rebased away from. Measured live on tabsii-platform:
+# `fix/1050-1033-1061-upstream-carry` is still on the remote at 5b1b8977 while
+# its successor `fix/1050-1033-1061-carry-rebased` was auto-deleted on merge,
+# so every future push naming 1050 is refused by a dead branch
+# (tabsii-com/tabsii-platform#1112).
+#
+# **`git merge-base --is-ancestor` is not the primitive.** A rebase rewrites
+# every commit, so the predecessor's tip stops being an ancestor of its own
+# successor -- verified by experiment (`is-ancestor` rc=1 on exactly the pair
+# `git cherry` reports as fully equivalent). Ancestry answers a strictly
+# narrower question and would have caught none of the reported case.
+#
+# So the question asked here is not "is this branch mine?" -- identity is not a
+# trustworthy signal in this estate and this script never compares it -- but the
+# stronger, decidable one:
+#
+#   **does the candidate carry any work the branch being pushed does not
+#   already have?**
+#
+# If it does not, there is nothing to collide over whoever made it: pushing
+# cannot duplicate or lose work that is already in hand. That is a property of
+# the object graph, not of a name, and it is what makes the discount safe to
+# grant automatically rather than via a hand-maintained skip list.
+#
+# **A claim reserves FUTURE work; a content test can only see PAST work.**
+# This is the predicate's structural limit, and the next reader should have it
+# rather than rediscover it. `git cherry` compares commits that exist; a claim
+# is about commits that do not exist yet. So no content-subset test can ever be
+# complete, and the only safe posture is the one taken here: discount ONLY on
+# positive evidence that the candidate is a replay of work already in hand, and
+# read everything else -- including its own silence -- as a rival.
+#
+# It FAILS CLOSED at every step -- each `return 1` means "conflict", and the
+# only route to `return 0` is positive evidence:
+#
+#   1. Both refs must be known. No local tip, no candidate sha, no discount.
+#   2. The candidate's objects must be present LOCALLY. A branch this machine
+#      has never fetched cannot be shown to be superseded, and absence of
+#      evidence is not evidence of supersession.
+#   3. The candidate must carry AT LEAST ONE COMMIT OF ITS OWN. Step 5 asks
+#      "does the candidate carry work this push does not already have?", and
+#      that question is VACUOUSLY TRUE of a candidate with no commits at all --
+#      a branch pointing at `dev`'s tip, or at anything else already reachable
+#      from the pusher. `git cherry` then emits nothing, no `+` line is found,
+#      and a LIVE RESERVATION is discounted while the notice calls it a
+#      superseded predecessor. Reproduced: with `fix/1050-other-agent` pushed
+#      at `dev`'s tip, `--guard fix/1050-mine` printed `discounted
+#      fix/1050-other-agent` and exited 0.
+#
+#      That is the LIKELY rival shape, not an exotic one. AGENTS.md asks for
+#      exactly it -- "push your branch as soon as it exists. The claim is a
+#      reservation; the branch is the evidence" -- so an agent that stakes an
+#      issue before writing code produces a commitless branch by following the
+#      documented protocol. It is also symmetric: two sessions staking one
+#      issue seconds apart both sit at `dev`'s tip and would each discount the
+#      other, which is the 2026-08-03 collision shape. Nothing else catches it
+#      either -- a commitless branch has no open PR to find, and `--guard`
+#      deliberately never reads the `in-progress` label.
+#
+#      **Own commits are counted against the branch being pushed, not against
+#      `dev`** -- `git rev-list <candidate> --not <local tip>`, i.e. the
+#      commits on the candidate's side of the merge base with this push. Three
+#      reasons that is the right base:
+#        - It is the SAME frame of reference steps 4 and 5 already use, so the
+#          three cannot disagree about what "beyond" means. A second base would
+#          be a second authority, which is this estate's most-repeated defect.
+#        - `dev` is not knowable here. `--guard` is handed one branch name by a
+#          pre-push hook, is never told the integration branch, and a candidate
+#          need not derive from it anyway.
+#        - It answers the question actually being asked. Every candidate that
+#          must not be discounted counts zero against it: at `dev`'s tip, at
+#          the pusher's own tip (the symmetric race), and at any older ancestor
+#          -- all are already reachable, so none carries anything of its own.
+#      A candidate whose only commits are MERGES counts non-zero here and is
+#      refused by step 4 instead; this step is deliberately not the one that
+#      decides that case.
+#   4. No unmerged MERGE COMMIT. `git cherry` compares non-merge commits by
+#      patch id and omits merges entirely -- verified: a candidate carrying one
+#      merge commit had that commit listed by neither `+` nor `-`, so an evil
+#      merge's own resolution would be invisible. Refuse rather than guess.
+#   5. `git cherry <local tip> <candidate>` must emit no `+` line. `-` means an
+#      equivalent patch is already present (what a rebase produces); `+` means
+#      the candidate carries something this push does not.
+#
+# Known FALSE POSITIVES (still blocks, conservatively):
+#   - a predecessor that was SQUASHED or amended rather than replayed -- the
+#     patch ids differ, so it reads as a rival. Verified: `git merge --squash`
+#     of the predecessor produces `+` on both of its commits.
+#   - a predecessor whose objects are not in this clone (fresh machine).
+#   - a candidate carrying a merge commit.
+#   - a predecessor left pointing at a commit already reachable from this push
+#     (someone reset it back onto `dev`). It carries nothing of its own, so
+#     step 3 refuses it -- correctly, because that branch is indistinguishable
+#     from a rival's fresh reservation.
+#
+# Known FALSE NEGATIVES (discounts something that was not ours):
+#   - a genuine rival that has committed real work, EVERY commit of which has
+#     a patch-id equivalent already in the pushed branch (a cherry-pick of
+#     exactly this work and nothing more), AND whose objects happen to be in
+#     this clone. Their work is then already fully in hand, so there is no
+#     duplicated effort left to warn about -- the discount is right for the
+#     wrong reason. This is the residual gap. Step 3 narrows it to rivals who
+#     have actually duplicated this push's content, rather than leaving it open
+#     to anyone who merely staked a branch, but it cannot close it: see the
+#     future/past limit at the top of this comment.
+#   - the reverse of (4) cannot happen: a merge is refused, never absorbed.
+branch_is_absorbed() {
+  _abs_cand="$1"
+  _abs_tip="$2"
+
+  [ -n "$_abs_cand" ] || return 1
+  [ -n "$_abs_tip" ] || return 1
+
+  git cat-file -e "${_abs_cand}^{commit}" 2>/dev/null || return 1
+
+  # Step 3 (see above): zero own commits is a RESERVATION, never a
+  # supersession. Counted against the branch being pushed, which is the same
+  # base the two checks below use. A count that cannot be computed, or that
+  # comes back non-numeric, is a cannot-tell and fails closed like everything
+  # else here -- `[` itself returns non-zero on a non-integer operand, so the
+  # `|| return 1` covers that without a second parse.
+  _abs_own=$(git rev-list --count "$_abs_cand" --not "$_abs_tip" 2>/dev/null) || return 1
+  [ -n "$_abs_own" ] || return 1
+  [ "$_abs_own" -gt 0 ] 2>/dev/null || return 1
+
+  _abs_merges=$(git rev-list --merges --count "$_abs_cand" --not "$_abs_tip" 2>/dev/null) || return 1
+  [ "$_abs_merges" = "0" ] || return 1
+
+  _abs_cherry=$(git cherry "$_abs_tip" "$_abs_cand" 2>/dev/null) || return 1
+  if printf '%s\n' "$_abs_cherry" | grep -q '^+'; then
+    return 1
+  fi
+  return 0
+}
+
 # --- the structural claim predicate (#1411, class #1362 instance 8) ---------
 #
 # "Does this open PR claim issue $1?" used to be answered independently at
@@ -467,6 +622,12 @@ if [ -n "$GUARD_BRANCH" ]; then
   conflict=0
   findings=""
   cannot_tell_reasons=""
+  absorbed_branches=""
+
+  # The local tip of the branch being pushed, resolved once. Empty when it
+  # cannot be resolved (the caller named a branch this repo does not have), and
+  # `branch_is_absorbed` then discounts nothing -- exactly today's behaviour.
+  guard_tip=$(git rev-parse --verify --quiet "refs/heads/$GUARD_BRANCH^{commit}" 2>/dev/null) || guard_tip=""
 
   # --- an open PR referencing the issue, excluding our own branch's PR --------
   slug=$(repo_slug)
@@ -502,20 +663,47 @@ if [ -n "$GUARD_BRANCH" ]; then
     # derived (#1672), and compare the two normalised numbers -- not a
     # substring search for $guard_issue inside the candidate's raw text. See
     # `derive_branch_issue` above for why that asymmetry was the defect.
-    other_branch=$(printf '%s\n' "$raw_branches" |
-      sed 's|.*refs/heads/||' |
-      grep -v -x "$GUARD_BRANCH" |
-      while IFS= read -r _cand; do
+    # Each candidate that names the same issue is then classified by LINEAGE
+    # (see `branch_is_absorbed`): `rival` is a conflict, `absorbed` is this
+    # pusher's own superseded predecessor and is reported but not blocked.
+    # The candidate's SHA -- `git ls-remote`'s first, tab-separated field -- is
+    # what makes that question answerable, so it is no longer thrown away by a
+    # `sed` that kept only the name.
+    _classified=$(printf '%s\n' "$raw_branches" |
+      while IFS= read -r _line; do
+        case "$_line" in
+          *"refs/heads/"*) ;;
+          *) continue ;;
+        esac
+        _cand=${_line##*refs/heads/}
         [ -n "$_cand" ] || continue
+        [ "$_cand" = "$GUARD_BRANCH" ] && continue
         _cand_issue=$(derive_branch_issue "$_cand")
-        if [ -n "$_cand_issue" ] && [ "$_cand_issue" = "$guard_issue" ]; then
-          printf '%s\n' "$_cand"
+        [ -n "$_cand_issue" ] || continue
+        [ "$_cand_issue" = "$guard_issue" ] || continue
+        _cand_sha=$(printf '%s\n' "$_line" | cut -f1)
+        if branch_is_absorbed "$_cand_sha" "$guard_tip"; then
+          printf 'absorbed %s\n' "$_cand"
+        else
+          printf 'rival %s\n' "$_cand"
         fi
-      done | head -1)
+      done)
+
+    other_branch=$(printf '%s\n' "$_classified" | sed -n 's/^rival //p' | head -1)
+    absorbed_branches=$(printf '%s\n' "$_classified" | sed -n 's/^absorbed //p')
     if [ -n "$other_branch" ]; then
       conflict=1
       findings="${findings}  ${RED}branch${OFF}     $other_branch\n"
     fi
+  fi
+
+  # A discount a guard grants silently is a guard nobody can audit, so say so
+  # -- on stderr, only when it actually fired, and whether or not a real rival
+  # was also found.
+  if [ -n "$absorbed_branches" ]; then
+    printf '%b' "${DIM}claim --guard: discounted $(printf '%s' "$absorbed_branches" | tr '\n' ' ') ${OFF}" >&2
+    echo "${DIM}-- every commit on it is already carried by $GUARD_BRANCH, so it is a${OFF}" >&2
+    echo "${DIM}superseded predecessor rather than a rival claim (#1112).${OFF}" >&2
   fi
 
   if [ "$conflict" -eq 1 ]; then

@@ -611,6 +611,13 @@ jobs:
         # py-dependency-audit.sh already carry as inert-but-verified copies
         # here too. See shared-files.json's note for the full trail.
         run: sh scripts/core-revision-preflight.test.sh
+
+      # A distributed check with no caller is only half a guard -- this repo already
+      # carries instances of that (routing-smoke-test.test.sh sits unwired in the
+      # plugin skeleton), so verify-deployed's tests are invoked by name here rather
+      # than left to a discovery that does not exist.
+      - name: verify-deployed self-test
+        run: sh scripts/verify-deployed.test.sh
       - name: Branch-health plan-only detection — self-test
         if: ${{ !cancelled() }}
         # scripts/branch-health-plan-only-detection.test.sh (#1582's second

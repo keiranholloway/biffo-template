@@ -114,9 +114,14 @@
 #     session's, and a dead predecessor blocked every later push naming the
 #     issue (tabsii-com/tabsii-platform#1112). Decided from the object graph by
 #     `branch_is_absorbed` below, which fails CLOSED — anything it cannot
-#     positively demonstrate stays a conflict. Note the discount applies to the
-#     BRANCH signal only: an OPEN PR is a live claim regardless of lineage and
-#     is never discounted.
+#     positively demonstrate stays a conflict, INCLUDING a candidate carrying
+#     no commits of its own. A branch sitting at `dev`'s tip is a reservation
+#     (AGENTS.md asks for exactly that: "push your branch as soon as it
+#     exists"), and "every commit on it is already carried" is vacuously true
+#     of a branch with no commits — so without that requirement the discount
+#     waved through the most ordinary rival there is. Note the discount applies
+#     to the BRANCH signal only: an OPEN PR is a live claim regardless of
+#     lineage and is never discounted.
 #   - **A real conflict — another branch or another open PR naming the same
 #     issue — exits 1**, naming what was found. AGENTS.md permits stealing a
 #     claim that is over an hour stale, with a comment; the message points
@@ -347,6 +352,14 @@ derive_branch_issue() {
 # the object graph, not of a name, and it is what makes the discount safe to
 # grant automatically rather than via a hand-maintained skip list.
 #
+# **A claim reserves FUTURE work; a content test can only see PAST work.**
+# This is the predicate's structural limit, and the next reader should have it
+# rather than rediscover it. `git cherry` compares commits that exist; a claim
+# is about commits that do not exist yet. So no content-subset test can ever be
+# complete, and the only safe posture is the one taken here: discount ONLY on
+# positive evidence that the candidate is a replay of work already in hand, and
+# read everything else -- including its own silence -- as a rival.
+#
 # It FAILS CLOSED at every step -- each `return 1` means "conflict", and the
 # only route to `return 0` is positive evidence:
 #
@@ -354,11 +367,48 @@ derive_branch_issue() {
 #   2. The candidate's objects must be present LOCALLY. A branch this machine
 #      has never fetched cannot be shown to be superseded, and absence of
 #      evidence is not evidence of supersession.
-#   3. No unmerged MERGE COMMIT. `git cherry` compares non-merge commits by
+#   3. The candidate must carry AT LEAST ONE COMMIT OF ITS OWN. Step 5 asks
+#      "does the candidate carry work this push does not already have?", and
+#      that question is VACUOUSLY TRUE of a candidate with no commits at all --
+#      a branch pointing at `dev`'s tip, or at anything else already reachable
+#      from the pusher. `git cherry` then emits nothing, no `+` line is found,
+#      and a LIVE RESERVATION is discounted while the notice calls it a
+#      superseded predecessor. Reproduced: with `fix/1050-other-agent` pushed
+#      at `dev`'s tip, `--guard fix/1050-mine` printed `discounted
+#      fix/1050-other-agent` and exited 0.
+#
+#      That is the LIKELY rival shape, not an exotic one. AGENTS.md asks for
+#      exactly it -- "push your branch as soon as it exists. The claim is a
+#      reservation; the branch is the evidence" -- so an agent that stakes an
+#      issue before writing code produces a commitless branch by following the
+#      documented protocol. It is also symmetric: two sessions staking one
+#      issue seconds apart both sit at `dev`'s tip and would each discount the
+#      other, which is the 2026-08-03 collision shape. Nothing else catches it
+#      either -- a commitless branch has no open PR to find, and `--guard`
+#      deliberately never reads the `in-progress` label.
+#
+#      **Own commits are counted against the branch being pushed, not against
+#      `dev`** -- `git rev-list <candidate> --not <local tip>`, i.e. the
+#      commits on the candidate's side of the merge base with this push. Three
+#      reasons that is the right base:
+#        - It is the SAME frame of reference steps 4 and 5 already use, so the
+#          three cannot disagree about what "beyond" means. A second base would
+#          be a second authority, which is this estate's most-repeated defect.
+#        - `dev` is not knowable here. `--guard` is handed one branch name by a
+#          pre-push hook, is never told the integration branch, and a candidate
+#          need not derive from it anyway.
+#        - It answers the question actually being asked. Every candidate that
+#          must not be discounted counts zero against it: at `dev`'s tip, at
+#          the pusher's own tip (the symmetric race), and at any older ancestor
+#          -- all are already reachable, so none carries anything of its own.
+#      A candidate whose only commits are MERGES counts non-zero here and is
+#      refused by step 4 instead; this step is deliberately not the one that
+#      decides that case.
+#   4. No unmerged MERGE COMMIT. `git cherry` compares non-merge commits by
 #      patch id and omits merges entirely -- verified: a candidate carrying one
 #      merge commit had that commit listed by neither `+` nor `-`, so an evil
 #      merge's own resolution would be invisible. Refuse rather than guess.
-#   4. `git cherry <local tip> <candidate>` must emit no `+` line. `-` means an
+#   5. `git cherry <local tip> <candidate>` must emit no `+` line. `-` means an
 #      equivalent patch is already present (what a rebase produces); `+` means
 #      the candidate carries something this push does not.
 #
@@ -368,13 +418,22 @@ derive_branch_issue() {
 #     of the predecessor produces `+` on both of its commits.
 #   - a predecessor whose objects are not in this clone (fresh machine).
 #   - a candidate carrying a merge commit.
+#   - a predecessor left pointing at a commit already reachable from this push
+#     (someone reset it back onto `dev`). It carries nothing of its own, so
+#     step 3 refuses it -- correctly, because that branch is indistinguishable
+#     from a rival's fresh reservation.
 #
 # Known FALSE NEGATIVES (discounts something that was not ours):
-#   - a genuine rival whose every commit has a patch-id equivalent already in
-#     the pushed branch AND whose objects happen to be in this clone. Their
-#     work is then already fully in hand, so there is no duplicated effort left
-#     to warn about -- the discount is right for the wrong reason.
-#   - the reverse of (3) cannot happen: a merge is refused, never absorbed.
+#   - a genuine rival that has committed real work, EVERY commit of which has
+#     a patch-id equivalent already in the pushed branch (a cherry-pick of
+#     exactly this work and nothing more), AND whose objects happen to be in
+#     this clone. Their work is then already fully in hand, so there is no
+#     duplicated effort left to warn about -- the discount is right for the
+#     wrong reason. This is the residual gap. Step 3 narrows it to rivals who
+#     have actually duplicated this push's content, rather than leaving it open
+#     to anyone who merely staked a branch, but it cannot close it: see the
+#     future/past limit at the top of this comment.
+#   - the reverse of (4) cannot happen: a merge is refused, never absorbed.
 branch_is_absorbed() {
   _abs_cand="$1"
   _abs_tip="$2"
@@ -383,6 +442,16 @@ branch_is_absorbed() {
   [ -n "$_abs_tip" ] || return 1
 
   git cat-file -e "${_abs_cand}^{commit}" 2>/dev/null || return 1
+
+  # Step 3 (see above): zero own commits is a RESERVATION, never a
+  # supersession. Counted against the branch being pushed, which is the same
+  # base the two checks below use. A count that cannot be computed, or that
+  # comes back non-numeric, is a cannot-tell and fails closed like everything
+  # else here -- `[` itself returns non-zero on a non-integer operand, so the
+  # `|| return 1` covers that without a second parse.
+  _abs_own=$(git rev-list --count "$_abs_cand" --not "$_abs_tip" 2>/dev/null) || return 1
+  [ -n "$_abs_own" ] || return 1
+  [ "$_abs_own" -gt 0 ] 2>/dev/null || return 1
 
   _abs_merges=$(git rev-list --merges --count "$_abs_cand" --not "$_abs_tip" 2>/dev/null) || return 1
   [ "$_abs_merges" = "0" ] || return 1

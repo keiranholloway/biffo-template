@@ -600,6 +600,49 @@ skip() {
 # inconclusive instead. So the check DOES run, and only a genuine
 # "the binary named in the script is not there" signature in its own output
 # is reclassified -- a real lint/type/format finding still reads as FAILED.
+#
+# ## Why the signature is pnpm's own diagnosis, not a generic shell phrase
+# (biffo-template#1712)
+#
+# The pattern used to also match a plain `sh: 1: <x>: not found$` / bare
+# `command not found` -- generic shell phrasing ANY subprocess a check shells
+# out to can print verbatim while the check itself fails for a real,
+# unrelated reason (a linter reporting on a missing optional plugin binary in
+# the same run where it also reports a genuine lint violation, say). Because
+# the grep runs over the check's WHOLE captured stdout+stderr, that unrelated
+# line was enough to reclassify a real FAILED as INCONCLUSIVE -- discarding
+# the actual finding (the FAILED branch is the only one that prints the
+# tail) and printing "run pnpm install" as the fix for a toolchain that was
+# never missing.
+#
+# It is tempting to narrow this to pnpm's OWN recursive-exec vocabulary --
+# `ERR_PNPM_RECURSIVE_EXEC_FIRST_FAIL` / `Command "<x>" not found` -- on the
+# theory that those strings are pnpm's, not a subprocess's. Measured directly
+# against the pnpm this repo actually pins (`packageManager` in
+# package.json, 9.15.9) that theory is false for the #1497 case this file
+# exists to catch: a plain `pnpm run format:check` in a fresh worktree with
+# no `node_modules` prints neither string. It prints `sh: 1: prettier: not
+# found` (the shell's own generic message, exactly the phrase this section
+# is otherwise removing) followed by a line pnpm itself always adds when a
+# script fails with no local `node_modules`:
+#
+#     WARN   Local package.json exists, but node_modules missing, did you mean to install?
+#
+# Confirmed by direct experiment, not by reading pnpm's source: this WARN
+# line appears whenever the invoked script exits non-zero AND node_modules
+# is absent -- regardless of *why* the script failed (a missing binary, or a
+# real assertion failure in a script that needed no installed binary at
+# all) -- and it never appears when node_modules is present, or when the
+# script succeeds. So within THIS elif (already gated on a non-zero exit) it
+# is the precise signal for "this failure happened in a directory this file
+# has already decided (see the `have_script` comment above) it will not
+# pre-flight-refuse to attempt" -- unlike `command not found`/`: not found$`,
+# it is pnpm's own text, never a phrase an unrelated subprocess can emit on
+# its own, so it cannot be tripped by noise elsewhere in the captured
+# output. `ERR_PNPM_RECURSIVE_EXEC_FIRST_FAIL` and pnpm's own
+# `Command "<x>" not found` are kept alongside it for the recursive-workspace
+# invocation shape neither this repo's checks nor a direct experiment could
+# exercise, but which the original #1497 report described.
 run_check_js() {
   name="$1"
   shift
@@ -612,7 +655,7 @@ run_check_js() {
     PASSED="$PASSED $name"
     LAST_CHECK_SECONDS=$(($(date +%s) - start))
     printf '  \033[32mOK\033[0m   %-16s %ss\n' "$name" "$LAST_CHECK_SECONDS"
-  elif grep -qE 'ERR_PNPM_RECURSIVE_EXEC_FIRST_FAIL|Command "[^"]*" not found|: not found$|command not found' \
+  elif grep -qE 'ERR_PNPM_RECURSIVE_EXEC_FIRST_FAIL|Command "[^"]*" not found|node_modules missing, did you mean to install' \
     "/tmp/biffo-verify.$$"; then
     INCONCLUSIVE="$INCONCLUSIVE $name"
     printf '  \033[33mINCONCLUSIVE\033[0m %-16s %ss - dependencies not installed\n' \

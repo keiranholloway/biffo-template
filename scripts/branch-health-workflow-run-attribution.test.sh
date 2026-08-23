@@ -23,8 +23,31 @@
 # Run: sh scripts/branch-health-workflow-run-attribution.test.sh
 # Exit 0 = guard holds. Exit 1 = branch-health.sh regressed (or the fixture
 # itself is broken — read the diff printed on failure).
+#
+# `set -uo pipefail` (both here and in the stub `gh` below) was dropped to
+# `set -u` for #1705's guard-wiring audit: this file went eight-plus cycles
+# with zero callers, so nothing ever executed it under a real dash, and
+# this workstation's own dash (Ubuntu 26.04, 0.5.12-12ubuntu3) silently
+# accepts `set -o pipefail` where the CI runner's (ubuntu-24.04,
+# 0.5.12-6ubuntu5) rejects it at RUNTIME with "Illegal option -o pipefail"
+# -- a syntax check (`dash -n`) cannot catch this, only real execution can.
+# Neither pipeline in this file (`printf ... | grep -q ...`, twice below)
+# depends on pipefail: in both, the final command (grep) already determines
+# the `if`'s result and printf cannot itself fail, so dropping pipefail
+# loses no coverage. Verified by executing this file under a genuine
+# ubuntu-24.04 dash (`docker run ubuntu:24.04`, dash 0.5.12-6ubuntu5), not
+# just `dash -n`.
+#
+# The `branch-health.sh` invocation below was also changed from
+# `sh "$REPO_ROOT/scripts/branch-health.sh"` to invoking it directly as an
+# executable -- the same fix branch-health-plan-only-detection.test.sh
+# already carries and explains at more length. branch-health.sh declares
+# `#!/usr/bin/env bash` and needs it (it has its own `set -uo pipefail`);
+# forcing it through `sh` hands it to dash instead of its own shebang and
+# hits the identical "Illegal option -o pipefail" death, before the fixture
+# proves anything.
 
-set -uo pipefail
+set -u
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 REPO_ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
@@ -41,7 +64,7 @@ trap 'rm -rf "$STUB_DIR"' EXIT
 
 cat > "$STUB_DIR/gh" <<'STUB'
 #!/usr/bin/env sh
-set -uo pipefail
+set -u
 
 case "$1 $2" in
   "repo view")
@@ -86,7 +109,7 @@ chmod +x "$STUB_DIR/gh"
 
 # --- Run branch-health.sh with the stub on PATH ---------------------------
 
-output=$(PATH="$STUB_DIR:$PATH" BRANCH_HEALTH_NO_DESKTOP_ALERT=1 sh "$REPO_ROOT/scripts/branch-health.sh" --branch dev 2>&1)
+output=$(PATH="$STUB_DIR:$PATH" BRANCH_HEALTH_NO_DESKTOP_ALERT=1 "$REPO_ROOT/scripts/branch-health.sh" --branch dev 2>&1)
 status=$?
 
 fail=0

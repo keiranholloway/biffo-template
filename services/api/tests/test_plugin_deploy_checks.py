@@ -56,13 +56,7 @@ class TestOpenMasterEngine:
         monkeypatch.setenv("BIFFO_DATABASE_URL", database_url)
         if "api.config" in sys.modules:
             monkeypatch.setattr(sys.modules["api.config"].settings, "database_url", database_url)
-        from api.database import resolve_master_database_url
-
-        resolve_master_database_url.cache_clear()
-        try:
-            engine, skip = await open_master_engine()
-        finally:
-            resolve_master_database_url.cache_clear()
+        engine, skip = await open_master_engine()
 
         assert engine is None
         assert skip == {"checked": 0, "reason": "not-postgres"}

@@ -218,9 +218,6 @@ class TestPostgresOnly:
     async def test_bootstrap_is_a_no_op_on_sqlite(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from src.api import database
 
-        monkeypatch.setattr(
-            database.resolve_master_database_url, "__wrapped__", lambda: "sqlite://"
-        )
         monkeypatch.setattr(database, "resolve_master_database_url", lambda: "sqlite://")
         monkeypatch.setattr(database, "app_role_credentials", lambda: None)
 
@@ -231,12 +228,6 @@ class TestPostgresOnly:
 
 class TestUrlResolution:
     """The whole point of the split: two credentials, used by different code."""
-
-    def _clear_caches(self) -> None:
-        from src.api import database
-
-        database.resolve_master_database_url.cache_clear()
-        database.resolve_app_database_url.cache_clear()
 
     def test_request_path_prefers_the_app_url_over_the_master_url(
         self, monkeypatch: pytest.MonkeyPatch
@@ -251,11 +242,9 @@ class TestUrlResolution:
             "app_database_url",
             "postgresql+asyncpg://biffo_app:apw@h/d",
         )
-        self._clear_caches()
 
         assert database.resolve_app_database_url() == ("postgresql+asyncpg://biffo_app:apw@h/d")
         assert database.resolve_master_database_url() == ("postgresql+asyncpg://master:pw@h/d")
-        self._clear_caches()
 
     def test_falls_back_to_master_when_no_app_credential_is_provisioned(
         self, monkeypatch: pytest.MonkeyPatch
@@ -269,11 +258,9 @@ class TestUrlResolution:
         monkeypatch.setattr(database.settings, "app_db_secret_arn", "")
         monkeypatch.setattr(database.settings, "app_database_url", "")
         monkeypatch.setattr(database.settings, "database_url", "postgresql+asyncpg://master:pw@h/d")
-        self._clear_caches()
 
         assert database.resolve_app_database_url() == (database.resolve_master_database_url())
         assert database.app_role_credentials() is None
-        self._clear_caches()
 
     def test_app_credentials_parse_passwords_containing_url_metacharacters(
         self, monkeypatch: pytest.MonkeyPatch
@@ -291,10 +278,8 @@ class TestUrlResolution:
             "app_database_url",
             f"postgresql+asyncpg://biffo_app:{password}@h:5432/d",
         )
-        self._clear_caches()
 
         assert database.app_role_credentials() == ("biffo_app", password)
-        self._clear_caches()
 
 
 class TestSecretShape:

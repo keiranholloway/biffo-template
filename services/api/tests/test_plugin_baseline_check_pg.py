@@ -55,20 +55,20 @@ pytestmark = [
 @pytest.fixture
 def pg_env(monkeypatch: pytest.MonkeyPatch):
     """Points the check at the real Postgres DSN, mirroring
-    test_ddl_import_environment_pg.py's guarded_seed_env fixture (same
-    lru_cache-clearing rationale — see that fixture's docstring) with one
+    test_ddl_import_environment_pg.py's guarded_seed_env fixture, with one
     correction: this repo's test lane can import the same file under TWO
     distinct module identities — `api.*` (this file's own `from
     api.plugin_baseline_check import ...`, matching test_plugin_baseline_
     check.py and test_crud_schema_guard.py) and `src.api.*` (what
     test_ddl_import_environment_pg.py imports through). Each identity gets
-    its OWN `Settings` singleton and its OWN `@lru_cache`d
-    `resolve_master_database_url`, so patching only one leaves the other
-    reading whatever it read at first import in this pytest session —
-    exactly what happened running this file after
-    test_ddl_import_environment_pg.py in the same session (proven: `git
-    blame`/PR history for biffo-template#1554 has the fail-first repro).
-    Patch both identities defensively rather than assume which one is live.
+    its OWN `Settings` singleton, so patching only one leaves the other
+    reading whatever it read at first import in this pytest session.
+    `resolve_master_database_url` is no longer `@lru_cache`d (#1725) — it
+    used to additionally need clearing per identity here, which is why this
+    fixture used to reach into `sys.modules["api.database"]` and
+    `sys.modules["src.api.database"]` directly; that reasoning no longer
+    applies, only the `Settings` patch below does. Patch both identities
+    defensively rather than assume which one is live.
     """
     import sys
 
@@ -77,25 +77,12 @@ def pg_env(monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setenv("BIFFO_DATABASE_URL", database_url)
 
-    cleared_caches = []
-    for module_name in ("api.database", "src.api.database"):
-        if module_name not in sys.modules:
-            continue
-        db_module = sys.modules[module_name]
-        db_module.resolve_master_database_url.cache_clear()
-        db_module.resolve_app_database_url.cache_clear()
-        cleared_caches.append(db_module)
     for module_name in ("api.config", "src.api.config"):
         if module_name in sys.modules:
             monkeypatch.setattr(sys.modules[module_name].settings, "database_url", database_url)
 
     monkeypatch.chdir(_SERVICES_API_DIR)
-    try:
-        yield database_url
-    finally:
-        for db_module in cleared_caches:
-            db_module.resolve_master_database_url.cache_clear()
-            db_module.resolve_app_database_url.cache_clear()
+    yield database_url
 
 
 async def _exec(database_url: str, sql: str, params: dict[str, object] | None = None) -> None:

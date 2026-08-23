@@ -85,24 +85,17 @@ def guarded_seed_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     fixture but against Postgres instead of sqlite — the one substitution
     that makes the guarded-SQL path reachable at all.
 
-    Also clears `api.database.resolve_master_database_url`'s
-    `@lru_cache(maxsize=1)` on both sides of the test. That cache is
-    process-wide and keyed on nothing, so the first caller anywhere in a
-    pytest session decides the URL for every caller after it — this repo had
-    no `test_*_pg.py` file to expose that before this one, and without the
-    clear, this fixture's real DSN survives into `test_main_ddl_import.py`'s
-    sqlite-backed tests when both run in the same session, reporting
-    `app_role: {"reason": "no-app-credential"}` where sqlite should report
-    `"not-postgres"`. Scoped narrowly here rather than fixed at the source,
-    which is a wider test-isolation change this PR does not otherwise touch.
+    `resolve_master_database_url`/`resolve_app_database_url` used to be
+    `@lru_cache(maxsize=1)`, process-wide and keyed on nothing, so the first
+    caller anywhere in a pytest session decided the URL for every caller
+    after it — this fixture's real DSN would otherwise survive into
+    `test_main_ddl_import.py`'s sqlite-backed tests when both ran in the same
+    session. They are no longer cached (#1725), so there is nothing left to
+    clear here; the `BIFFO_DATABASE_URL`/`Settings` patch below is what
+    actually scopes the DSN to this test.
     """
     database_url = _pg_dsn()
     assert database_url is not None  # narrows for pyright; skipif already checked
-
-    from src.api.database import resolve_app_database_url, resolve_master_database_url
-
-    resolve_master_database_url.cache_clear()
-    resolve_app_database_url.cache_clear()
 
     monkeypatch.setenv("BIFFO_DATABASE_URL", database_url)
     if "src.api.config" in sys.modules:
@@ -139,11 +132,7 @@ def guarded_seed_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     )
 
     monkeypatch.chdir(_SERVICES_API_DIR)
-    try:
-        yield {"database_url": database_url, "imports_root": imports_root}
-    finally:
-        resolve_master_database_url.cache_clear()
-        resolve_app_database_url.cache_clear()
+    yield {"database_url": database_url, "imports_root": imports_root}
 
 
 def _write_guarded_module(imports_root: Path, import_name: str, table: str, note: str) -> None:

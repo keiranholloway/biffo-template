@@ -242,15 +242,10 @@ class TestAssertPluginColumnsExistAsync:
         monkeypatch.setenv("BIFFO_DATABASE_URL", database_url)
         if "api.config" in sys.modules:
             monkeypatch.setattr(sys.modules["api.config"].settings, "database_url", database_url)
-        from api.database import resolve_master_database_url
 
-        resolve_master_database_url.cache_clear()
-        try:
-            result = await assert_plugin_columns_exist_async(
-                manifests=[_manifest("widgets", "widget_items")]
-            )
-        finally:
-            resolve_master_database_url.cache_clear()
+        result = await assert_plugin_columns_exist_async(
+            manifests=[_manifest("widgets", "widget_items")]
+        )
 
         assert result["reason"] == "not-postgres"
         assert result["gaps"] == []

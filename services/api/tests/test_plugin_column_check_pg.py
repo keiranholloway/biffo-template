@@ -59,9 +59,10 @@ def pg_env(monkeypatch: pytest.MonkeyPatch):
     Patches BOTH module identities (`api.*` and `src.api.*`) for the same
     reason `test_plugin_baseline_check_pg.py`'s fixture documents: this
     repo's test lane can import the same file twice under two names, each
-    with its own `Settings` singleton and its own `@lru_cache`d
-    `resolve_master_database_url`, so patching one leaves the other stale
-    when the files run in the same session.
+    with its own `Settings` singleton, so patching one leaves the other stale
+    when the files run in the same session. `resolve_master_database_url` and
+    `resolve_app_database_url` are no longer cached (#1725), so there is no
+    per-module-identity cache left to clear here.
     """
     import sys
 
@@ -70,25 +71,12 @@ def pg_env(monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setenv("BIFFO_DATABASE_URL", database_url)
 
-    cleared_caches = []
-    for module_name in ("api.database", "src.api.database"):
-        if module_name not in sys.modules:
-            continue
-        db_module = sys.modules[module_name]
-        db_module.resolve_master_database_url.cache_clear()
-        db_module.resolve_app_database_url.cache_clear()
-        cleared_caches.append(db_module)
     for module_name in ("api.config", "src.api.config"):
         if module_name in sys.modules:
             monkeypatch.setattr(sys.modules[module_name].settings, "database_url", database_url)
 
     monkeypatch.chdir(_SERVICES_API_DIR)
-    try:
-        yield database_url
-    finally:
-        for db_module in cleared_caches:
-            db_module.resolve_master_database_url.cache_clear()
-            db_module.resolve_app_database_url.cache_clear()
+    yield database_url
 
 
 async def _exec(database_url: str, sql: str) -> None:

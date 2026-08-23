@@ -1,6 +1,5 @@
 import json
 from collections.abc import AsyncGenerator
-from functools import lru_cache
 
 import boto3
 from sqlalchemy.engine import make_url
@@ -25,7 +24,6 @@ def _url_from_secret(secret: dict) -> str:
     )
 
 
-@lru_cache(maxsize=1)
 def resolve_master_database_url() -> str:
     """The owner/master connection URL.
 
@@ -37,13 +35,26 @@ def resolve_master_database_url() -> str:
     Built from Secrets Manager when running in AWS, or from the env var for
     local development and no-NAT dev environments where Terraform bakes the
     full URL in (the Lambda there has no route to Secrets Manager).
+
+    Deliberately uncached (#1725): this used to be `@lru_cache(maxsize=1)`,
+    which memoises process-wide and is never invalidated. Under pytest-xdist
+    every test in a worker shares that one process, so whichever test file a
+    worker happened to run first silently decided the URL for every other
+    test in it — including the module's own implicit first call at import
+    time, when `engine` below is constructed. Six test files worked around
+    that by reaching in and calling `.cache_clear()`; two others didn't know
+    to. Removing the cache removes the shared mutable state those workarounds
+    existed to reset, rather than adding another one that resets it for them.
+    Call sites here are import-time or deploy/admin-time (db-init, the CRUD
+    schema guard, plugin deploy checks) — none is a per-request hot path — so
+    the cost of an extra Secrets Manager round trip is negligible next to the
+    correctness this buys.
     """
     if not settings.db_secret_arn:
         return settings.database_url
     return _url_from_secret(_fetch_secret(settings.db_secret_arn))
 
 
-@lru_cache(maxsize=1)
 def resolve_app_database_url() -> str:
     """The least-privilege connection URL used by the HTTP request path (#253).
 

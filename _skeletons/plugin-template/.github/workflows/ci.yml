@@ -85,6 +85,25 @@ jobs:
       # measure.
       - name: Error-branch coverage
         run: uv run python scripts/error_branch_coverage.py --check --coverage coverage.json
+      - name: Routing smoke test — self-test
+        if: ${{ !cancelled() }}
+        # scripts/routing-smoke-test.sh is distributed here too, verbatim,
+        # via shared-files.json's `files` — but a plugin repo has no
+        # deploy.yml and no CDN of its own to smoke-test the way the sibling
+        # skeleton's deploy.yml does post-deploy. Until #1710, that meant
+        # this file had NO caller anywhere in this skeleton's CI, despite
+        # shipping 8 real scenarios (good deploy, CDN no-op, prefix
+        # mismatch, bare-path-broken, unreachable/fail-closed, unset-prefix
+        # fail-closed, unset-base-url fail-closed, root-sibling unproven) —
+        # exactly the #1413 zero-caller shape, invisible to
+        # scripts/guard-self-test-wiring.sh because that audit only reaches
+        # this template repo's own root-level scripts/, never
+        # _skeletons/**. This is that caller, same reasoning as the
+        # Core-revision preflight self-test below: it proves the script
+        # itself still catches the three recorded CDN routing failures and
+        # fails CLOSED when it cannot tell, against a stubbed curl, even
+        # though nothing in this repo ever runs it for a REAL deployment.
+        run: sh scripts/routing-smoke-test.test.sh
       - name: Core-revision preflight — self-test
         if: ${{ !cancelled() }}
         # scripts/core-revision-preflight.sh (biffo-template#1604) is
@@ -100,6 +119,53 @@ jobs:
         # py-dependency-audit.sh already carry as inert-but-verified copies
         # in a Python-only or JS-only sibling.
         run: sh scripts/core-revision-preflight.test.sh
+      - name: Guard self-test wiring — this repo's own scripts/*.test.sh
+        if: ${{ !cancelled() }}
+        # Level-3 self-audit (biffo-template#1710): the template repo's own
+        # scripts/guard-self-test-wiring.sh globs its OWN root-level
+        # scripts/*.test.sh with `find -maxdepth 1`, so it structurally
+        # cannot reach a skeleton's copy of that discipline — which is
+        # exactly how routing-smoke-test.test.sh sat in this file with zero
+        # callers, undetected, until #1710. Rather than teach that script to
+        # walk into _skeletons/** (which would require editing it, and would
+        # still only cover the TEMPLATE repo, never a repo already
+        # scaffolded from this skeleton), this repo checks ITSELF, so a
+        # plugin generated from this skeleton fails closed from birth if a
+        # future *.test.sh guard is added here with no run: line anywhere.
+        # Residual: this step protects repos generated FROM this skeleton
+        # going forward; it does not give biffo-template's own CI a way to
+        # verify a skeleton's wiring before it is ever scaffolded out — that
+        # remains scripts/guard-self-test-wiring.sh's gap, tracked as the
+        # named residual on #1710.
+        run: |
+          set -eu
+          guards=$(find scripts -maxdepth 1 -type f -name '*.test.sh' | sort)
+          if [ -z "$guards" ]; then
+            echo "FAIL: found 0 scripts/*.test.sh — an empty discovery is not a vacuous pass." >&2
+            exit 1
+          fi
+          missing=0
+          for g in $guards; do
+            name=$(basename "$g")
+            found=0
+            for wf in .github/workflows/*.yml .github/workflows/*.yaml; do
+              [ -f "$wf" ] || continue
+              if grep -v '^[[:space:]]*#' "$wf" | grep -q "$name"; then
+                found=1
+              fi
+            done
+            if [ "$found" -eq 1 ]; then
+              echo "OK: $name has a caller in .github/workflows/"
+            else
+              echo "MISSING CALLER: $name has no run: line anywhere in .github/workflows/" >&2
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "FAIL: at least one scripts/*.test.sh guard has zero callers." >&2
+            exit 1
+          fi
+          echo "PASS: every scripts/*.test.sh guard in this repo has a caller."
       - uses: codecov/codecov-action@v5
         if: always()
         with:

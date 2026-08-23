@@ -124,4 +124,61 @@ describe('verify.sh: a JS package with no node_modules is inconclusive, not fail
       rmSync(dir, { recursive: true, force: true })
     }
   })
+
+  it('reports a real lint failure as FAILED even when its own output happens to contain "command not found" (biffo-template#1712)', () => {
+    // The toolchain IS installed (node_modules present, so this is not the
+    // #1497 case above) and the check genuinely fails on its own assertion —
+    // but the failing tool's own diagnostic output happens to echo the exact
+    // phrase a shell prints for a missing binary, verbatim, about something
+    // that has nothing to do with the JS toolchain. This is an ordinary shape
+    // for a lint/format script: it shells out to a linter for one file, that
+    // subprocess reports its own unrelated `sh: 1: <tool>: command not found`
+    // failure, and the wrapping script still exits non-zero for its own
+    // real reason (a genuine assertion failure printed on the line before).
+    //
+    // Before the #1712 fix, run_check_js's unscoped grep for the generic,
+    // non-pnpm phrase "command not found" anywhere in the captured output
+    // matched this line and misclassified the whole check as INCONCLUSIVE,
+    // discarding the real failure and printing the wrong remedy ("run pnpm
+    // install") for a toolchain that was never missing.
+    const dir = makeTmpDir('biffo-verify-real-failure')
+    try {
+      execFileSync('git', ['init', '-q'], { cwd: dir })
+      writeFileSync(
+        join(dir, 'package.json'),
+        JSON.stringify({
+          name: 'p',
+          scripts: {
+            lint: 'node lint-with-unrelated-noise.cjs',
+          },
+        }),
+      )
+      writeFileSync(
+        join(dir, 'lint-with-unrelated-noise.cjs'),
+        [
+          "console.log('src/widget.ts:12:3 error  no-unused-vars: `foo` is defined but never used')",
+          "console.log('sh: 1: some-optional-formatter-plugin: command not found')",
+          'process.exit(1)',
+        ].join('\n'),
+      )
+      mkdirSync(join(dir, 'node_modules'), { recursive: true })
+
+      const opts: ExecFileSyncOptions = { cwd: dir, encoding: 'utf8', stdio: 'pipe' }
+      let run: Run
+      try {
+        run = { stdout: String(execFileSync('sh', [SCRIPT], opts)), status: 0 }
+      } catch (err) {
+        const e = err as { stdout?: string; status?: number }
+        run = { stdout: String(e.stdout ?? ''), status: e.status ?? -1 }
+      }
+
+      expect(run.stdout).toContain('verify failed')
+      expect(run.stdout).toContain('no-unused-vars')
+      expect(run.stdout).not.toContain('INCONCLUSIVE')
+      expect(run.stdout).not.toContain('dependencies not installed')
+      expect(run.status).toBe(1)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
 })

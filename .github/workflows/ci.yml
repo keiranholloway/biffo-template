@@ -629,22 +629,26 @@ jobs:
         # here too. See shared-files.json's note for the full trail.
         run: sh scripts/core-revision-preflight.test.sh
 
-      # A distributed check with no caller is only half a guard -- this repo already
-      # carries instances of that (routing-smoke-test.test.sh sits unwired in the
-      # plugin skeleton), so verify-deployed's tests are invoked by name here rather
-      # than left to a discovery that does not exist.
+      # A distributed check with no caller is only half a guard, so
+      # verify-deployed's tests are invoked by name here. (Until #1705, this
+      # comment said routing-smoke-test.test.sh sat unwired with "no
+      # discovery" to catch it -- that gap is closed now by the "Guard
+      # self-test wiring audit" step below, which discovers and runs any
+      # scripts/*.test.sh file nothing here names explicitly.)
       - name: verify-deployed self-test
         run: sh scripts/verify-deployed.test.sh
       - name: Branch-health plan-only detection — self-test
         if: ${{ !cancelled() }}
         # scripts/branch-health-plan-only-detection.test.sh (#1582's second
-        # half) had no caller when it was first written — the same #1413 gap
-        # scripts/branch-health-workflow-run-attribution.test.sh already sits
-        # in unwired. Wired here, beside its sibling self-test, using this
-        # runner's own `sh` — the same interpreter `scripts/biffo.sh
-        # branch-health` and `practices-daily.sh` actually invoke it with in
-        # production, so a regression that only breaks under `sh` (not
-        # `bash`) is caught here rather than in the field.
+        # half) had no caller when it was first written. Its sibling,
+        # scripts/branch-health-workflow-run-attribution.test.sh, sat
+        # unwired for longer -- until #1705's "Guard self-test wiring audit"
+        # step below started discovering and running it automatically. Wired
+        # here, beside its sibling self-test, using this runner's own `sh`
+        # — the same interpreter `scripts/biffo.sh branch-health` and
+        # `practices-daily.sh` actually invoke it with in production, so a
+        # regression that only breaks under `sh` (not `bash`) is caught here
+        # rather than in the field.
         run: sh scripts/branch-health-plan-only-detection.test.sh
       - name: wait-for-checks caller-deadline — self-test
         if: ${{ !cancelled() }}
@@ -662,6 +666,33 @@ jobs:
         # Every case is `timeout`-bounded because WITHOUT the fix they do not
         # exit at all -- an unguarded regression would hang CI rather than fail.
         run: sh scripts/wait-for-checks-deadline.test.sh
+      - name: Guard self-test wiring audit
+        if: ${{ !cancelled() }}
+        # #1705: three scripts/*.test.sh guards -- branch-health-workflow-run-
+        # attribution.test.sh, claim-comments-unreadable-tristate.test.sh and
+        # routing-smoke-test.test.sh -- sat with zero callers, some of them
+        # for multiple cycles of #1413 fixing the SAME class one file at a
+        # time. Each fix closed the instance found and left the class open:
+        # the next guard added tomorrow would sit unwired exactly the same
+        # way, silently, because nothing here ever asked "does the set of
+        # scripts/*.test.sh files on disk match the set anything actually
+        # runs?" -- the workflow file's own comments recorded the debt in
+        # prose ("already sits ... unwired") rather than closing it.
+        #
+        # scripts/guard-self-test-wiring.sh globs scripts/*.test.sh itself,
+        # so the denominator is derived rather than a second hand-maintained
+        # list that can drift from this file the same way the comments did.
+        # Anything already invoked by name elsewhere in .github/workflows/ is
+        # left alone (some, like interpreter-audit.test.sh, deliberately run
+        # inside a docker-wrapped real dash for #1652 and must not be re-run
+        # bare here); anything with no other caller is executed directly,
+        # right here, with plain `sh`. A brand-new guard with no `run:` line
+        # anywhere is therefore executed automatically instead of silently
+        # doing nothing, and fails this step by name if it fails. An empty
+        # glob, or a guard that is unreadable/non-executable, fails closed
+        # rather than reporting a vacuous pass -- see the script's own header
+        # for the full reasoning and the fail-first proof run against it.
+        run: sh scripts/guard-self-test-wiring.sh
       - name: Coverage upload
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         uses: codecov/codecov-action@v5

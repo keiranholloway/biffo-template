@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { type CoreManifest, readCoreManifest } from './core-manifest.js'
+import { isInstanceRepo } from './core-version.js'
 import {
   type MergeFileFn,
   type OrphanBaseline,
@@ -922,6 +923,110 @@ describe('planCoreUpgrade orphan report (#1026)', () => {
     )
   })
 })
+
+// Instance-invalid, gated per #384: scripts/verify-deployed.checks is now
+// user-owned (the whole point of this issue), so an instance's real copy is
+// EXPECTED to diverge from the template's stub — reading it against a
+// hardcoded STUB constant would red an instance's CI on a file it correctly
+// customised. This suite asserts on the TEMPLATE's own repo-root layout only.
+describe.skipIf(isInstanceRepo(repoRoot))(
+  'scripts/verify-deployed.checks survives an upgrade that ships the stub (#1706)',
+  () => {
+    // The exact shape the issue describes: a template version before this file
+    // existed (no base copy), an instance that populated it with real checks
+    // independently of any core upgrade (the "seeded" file the header promises),
+    // and a newer template that now ships the comment-only stub. That is
+    // `!inBase && inTheirs && inOurs` in classify() — the "add-conflict" branch —
+    // and add-conflict resolves to THEIRS verbatim with no skip in
+    // applyUpgradePlan. Before the #1706 manifest fix, this path is
+    // template-owned by the bare `scripts/` prefix and reaches classify() at
+    // all; the fix carves it into userOwned so it never does.
+    const STUB = readFileSync(join(repoRoot, 'scripts/verify-deployed.checks'), 'utf8')
+    const POPULATED = `${STUB}\nenrollments-nonempty  unit-staff  GET  /api/v1/lms/my/enrollments  non-empty\n`
+
+    let base: string
+    let ours: string
+    let theirs: string
+    let apply: string
+
+    function w(root: string, rel: string, content: string): void {
+      const p = join(root, rel)
+      mkdirSync(dirname(p), { recursive: true })
+      writeFileSync(p, content)
+    }
+
+    beforeEach(() => {
+      base = makeTmpDir('vdc-base')
+      ours = makeTmpDir('vdc-ours')
+      theirs = makeTmpDir('vdc-theirs')
+      apply = makeTmpDir('vdc-apply')
+    })
+    afterEach(() => {
+      for (const d of [base, ours, theirs, apply]) rmSync(d, { recursive: true, force: true })
+    })
+
+    it("preserves the instance's real checks (userOwned, via the real manifest)", async () => {
+      const manifest = readCoreManifest(repoRoot)
+      // No base copy: the template is only introducing the stub now.
+      w(ours, 'scripts/verify-deployed.checks', POPULATED)
+      w(theirs, 'scripts/verify-deployed.checks', STUB)
+      // `apply` stands in for the instance's real working tree — already
+      // holding the populated file, exactly as `ours` does.
+      w(apply, 'scripts/verify-deployed.checks', POPULATED)
+
+      const plan = await planCoreUpgrade({
+        baseDir: base,
+        oursDir: ours,
+        theirsDir: theirs,
+        manifest,
+        mergeFile: fakeMerge,
+      })
+      // User-owned means it never even reaches classify() as a template-owned
+      // path — no entry for it at all, so applyUpgradePlan has nothing to write.
+      expect(plan.entries.map((e) => e.path)).not.toContain('scripts/verify-deployed.checks')
+
+      applyUpgradePlan(apply, plan, theirs)
+      const written = readFileSync(join(apply, 'scripts/verify-deployed.checks'), 'utf8')
+      expect(written).toBe(POPULATED)
+    })
+
+    it('demonstrates the pre-#1706 defect against a manifest without the carve-out', async () => {
+      // Fail-first control: reconstruct the manifest as it stood before this
+      // issue's fix by dropping the one entry that carves the path out, the
+      // same technique #755's "was template-owned before the carve-out" test
+      // uses. Against that manifest, the real add-conflict/applyUpgradePlan
+      // path DOES overwrite the instance's populated checks with the stub —
+      // proving the defect is live in the mechanism, not merely in the
+      // manifest's current text.
+      const manifest = readCoreManifest(repoRoot)
+      const before: CoreManifest = {
+        ...manifest,
+        userOwned: manifest.userOwned.filter((p) => p !== 'scripts/verify-deployed.checks'),
+      }
+      expect(before.userOwned.length).toBe(manifest.userOwned.length - 1)
+
+      w(ours, 'scripts/verify-deployed.checks', POPULATED)
+      w(theirs, 'scripts/verify-deployed.checks', STUB)
+      w(apply, 'scripts/verify-deployed.checks', POPULATED)
+
+      const plan = await planCoreUpgrade({
+        baseDir: base,
+        oursDir: ours,
+        theirsDir: theirs,
+        manifest: before,
+        mergeFile: fakeMerge,
+      })
+      const entry = plan.entries.find((e) => e.path === 'scripts/verify-deployed.checks')
+      expect(entry?.status).toBe('add-conflict')
+
+      applyUpgradePlan(apply, plan, theirs)
+      const written = readFileSync(join(apply, 'scripts/verify-deployed.checks'), 'utf8')
+      // The instance's real checks are gone, replaced by the template's stub.
+      expect(written).toBe(STUB)
+      expect(written).not.toBe(POPULATED)
+    })
+  },
+)
 
 describe('orphan baseline (#1026)', () => {
   let instance: string

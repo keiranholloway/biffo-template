@@ -259,6 +259,59 @@ jobs:
         # is missing, against a stubbed curl. Without this caller the script
         # is the #1413 zero-caller class the instant it lands.
         run: sh ../../scripts/core-revision-preflight.test.sh
+      - name: Guard self-test wiring — this repo's own scripts/*.test.sh
+        if: ${{ !cancelled() }}
+        working-directory: .
+        # Level-3 self-audit (biffo-template#1710): the template repo's own
+        # scripts/guard-self-test-wiring.sh globs its OWN root-level
+        # scripts/*.test.sh with `find -maxdepth 1`, so it structurally
+        # cannot reach a skeleton's copy of that discipline — which is
+        # exactly how the plugin skeleton's routing-smoke-test.test.sh sat
+        # unwired, undetected, until #1710 (this skeleton's own copy IS
+        # correctly wired above; this step is what keeps the NEXT one from
+        # repeating that). Explicit `working-directory: .` overrides this
+        # job's `defaults.run.working-directory: services/api`, because the
+        # scripts and workflows being audited live at the repo root, not
+        # under services/api. Rather than teach the template's script to
+        # walk into _skeletons/** (which would still only cover the
+        # TEMPLATE repo, never a repo already scaffolded from this
+        # skeleton), this repo checks ITSELF, so a sibling generated from
+        # this skeleton fails closed from birth if a future *.test.sh guard
+        # is added with no run: line anywhere. Residual: this step protects
+        # repos generated FROM this skeleton going forward; it does not
+        # give biffo-template's own CI a way to verify a skeleton's wiring
+        # before it is ever scaffolded out — that remains
+        # scripts/guard-self-test-wiring.sh's gap, tracked as the named
+        # residual on #1710.
+        run: |
+          set -eu
+          guards=$(find scripts -maxdepth 1 -type f -name '*.test.sh' | sort)
+          if [ -z "$guards" ]; then
+            echo "FAIL: found 0 scripts/*.test.sh — an empty discovery is not a vacuous pass." >&2
+            exit 1
+          fi
+          missing=0
+          for g in $guards; do
+            name=$(basename "$g")
+            found=0
+            for wf in .github/workflows/*.yml .github/workflows/*.yaml; do
+              [ -f "$wf" ] || continue
+              if grep -v '^[[:space:]]*#' "$wf" | grep -q "$name"; then
+                found=1
+              fi
+            done
+            if [ "$found" -eq 1 ]; then
+              echo "OK: $name has a caller in .github/workflows/"
+            else
+              echo "MISSING CALLER: $name has no run: line anywhere in .github/workflows/" >&2
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "FAIL: at least one scripts/*.test.sh guard has zero callers." >&2
+            exit 1
+          fi
+          echo "PASS: every scripts/*.test.sh guard in this repo has a caller."
 
   security-secrets:
     name: Secret Scan

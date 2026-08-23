@@ -380,7 +380,15 @@ audit_json() {
   ' "$_name" "$_rc" "$_summary" >> "$AUDIT_LINES"
 }
 
-audit_json coverage "sh scripts/gate-coverage.sh --estate '$ESTATE'" 'covers its own CI|do not cover'
+# Invoked as a bare executable path, not `sh scripts/gate-coverage.sh` --
+# gate-coverage.sh declares `#!/usr/bin/env bash` and needs it (`set -uo
+# pipefail`). An explicit `sh` prefix throws that shebang away and hands the
+# script to whatever `sh` resolves to instead -- dash, which some builds
+# reject `set -o pipefail` on at runtime (#1709; see branch-health.sh below
+# for the reproduction). A bare path lets the kernel dispatch per the
+# shebang instead, the same fix already applied in
+# branch-health-plan-only-detection.test.sh.
+audit_json coverage "scripts/gate-coverage.sh --estate '$ESTATE'" 'covers its own CI|do not cover'
 # Anchored: hook-audit prints both "N working trees - ..." and a "DEAD working
 # trees:" header, and an unanchored match took the header, so a failing audit
 # reported a heading instead of the count.
@@ -389,13 +397,17 @@ audit_json drift "sh scripts/shared-sync.sh --check --estate '$ESTATE'" 'current
 # Fourth audit (#715). Branch protection drifted for ~3 weeks across three
 # repos -- including the live core platform -- because a scaffold-time 403 is
 # skipped permanently and nothing ever re-asks. This is the re-asking.
-audit_json protection "sh scripts/protection-audit.sh --estate '$ESTATE'" 'branches checked'
+# Bare path, not `sh scripts/...` -- same #1709 class as `coverage` above:
+# protection-audit.sh is also `#!/usr/bin/env bash` with `set -uo pipefail`.
+audit_json protection "scripts/protection-audit.sh --estate '$ESTATE'" 'branches checked'
 # Fifth audit (#884). `drift` above answers "did the file land"; this answers
 # "does anything call it". They went to zero and 7-of-13 respectively on the
 # same morning: eleven repos merged the shared audit scripts and every one
 # carried on running the raw command, so the distribution was complete and
 # the outcome had not moved. A proxy reported as the outcome, again.
-audit_json wiring "sh scripts/ci-wiring-audit.sh --estate '$ESTATE'" 'calls the shared scripts|still run the raw command'
+# Bare path, not `sh scripts/...` -- same #1709 class: ci-wiring-audit.sh is
+# also `#!/usr/bin/env bash` with `set -uo pipefail`.
+audit_json wiring "scripts/ci-wiring-audit.sh --estate '$ESTATE'" 'calls the shared scripts|still run the raw command'
 # Sixth audit (#1167). The five above ask whether the ESTATE is healthy; this
 # one asks whether the numbers on the page still mean what they say. H4's
 # primary metric is a share over CLASSIFIED steps, so an unmatched step name
@@ -421,7 +433,9 @@ audit_json classification "node scripts/classification-audit.mjs --data '$DATA_D
 # and cannot, cover the read-only case the issue was filed for". Nothing
 # invoked the standalone form, so it only ever fired if you already suspected
 # the problem. This is the part that looks without being asked.
-audit_json checkout "sh scripts/checkout-audit.sh --estate '$ESTATE'" 'primary checkouts'
+# Bare path, not `sh scripts/...` -- same #1709 class: checkout-audit.sh is
+# also `#!/usr/bin/env bash` with `set -uo pipefail`.
+audit_json checkout "scripts/checkout-audit.sh --estate '$ESTATE'" 'primary checkouts'
 # Eighth audit (#1133). A red post-merge deploy has no audience: the author
 # who broke it has moved on, and the next person finds out by merging into it.
 # On 2026-08-02 that cost 2h25m and four further failed deploys.
@@ -429,7 +443,22 @@ audit_json checkout "sh scripts/checkout-audit.sh --estate '$ESTATE'" 'primary c
 # nothing ran it -- the same "did the file land / does anything call it"
 # split #884 records. Looped here rather than teaching the script an
 # --estate mode, because it already takes -R and needs only `gh`.
-audit_json deploy "_bh=0; for _d in '$ESTATE'/*/; do [ -d \"\$_d/.git\" ] || continue; _slug=\$(git -C \"\$_d\" remote get-url origin 2>/dev/null | sed -e 's#.*github.com[:/]##' -e 's#\.git\$##'); [ -n \"\$_slug\" ] || continue; sh scripts/branch-health.sh -R \"\$_slug\" --quiet >/dev/null 2>&1; _rc=\$?; [ \$_rc -eq 0 ] || { _bh=1; echo \"  \$_slug rc=\$_rc\"; }; done; [ \$_bh -eq 0 ] && echo 'every integration branch green' || echo 'an integration branch is failing'; exit \$_bh" 'integration branch'
+#
+# Invoked below as a bare `scripts/branch-health.sh`, not `sh
+# scripts/branch-health.sh` (#1709). branch-health.sh declares
+# `#!/usr/bin/env bash` and needs it -- `set -uo pipefail` at its own top --
+# and an explicit `sh` prefix discards that shebang and hands the script to
+# whatever `sh` resolves to instead, which is dash. This workstation's dash
+# (Ubuntu 26.04, 0.5.12-12ubuntu3) happens to tolerate `set -o pipefail` at
+# runtime, so this ran "fine" here; the GitHub-hosted runner's dash on
+# ubuntu-24.04 does not (`Illegal option -o pipefail`, exit 2, before the
+# script reads a single instruction). Every integration branch in the loop
+# below then read as failing without one ever having been measured -- a
+# fail-open dressed as a red result. Invoking the bare path instead lets the
+# kernel dispatch per the shebang regardless of which `sh` a given machine
+# has, matching the fix already applied in
+# branch-health-plan-only-detection.test.sh.
+audit_json deploy "_bh=0; for _d in '$ESTATE'/*/; do [ -d \"\$_d/.git\" ] || continue; _slug=\$(git -C \"\$_d\" remote get-url origin 2>/dev/null | sed -e 's#.*github.com[:/]##' -e 's#\.git\$##'); [ -n \"\$_slug\" ] || continue; scripts/branch-health.sh -R \"\$_slug\" --quiet >/dev/null 2>&1; _rc=\$?; [ \$_rc -eq 0 ] || { _bh=1; echo \"  \$_slug rc=\$_rc\"; }; done; [ \$_bh -eq 0 ] && echo 'every integration branch green' || echo 'an integration branch is failing'; exit \$_bh" 'integration branch'
 # Ninth audit (#1110). Which Core API routes does nothing in the estate call?
 #
 # Plan 0013 recorded two milestones complete when only the CORE half had

@@ -126,7 +126,16 @@ export function findWorkflowFiles(repoRoot: string): string[] {
       return
     }
     for (const entry of entries) {
-      if (entry === 'node_modules' || entry === '.git' || entry === '.worktrees') continue
+      // .venv is a build artefact, not part of the tree, and (#1713) it
+      // churns under a concurrent `uv sync`/pip-audit — a concurrently
+      // mutated .venv, other repos' walks reach for the same convention.
+      if (
+        entry === 'node_modules' ||
+        entry === '.git' ||
+        entry === '.worktrees' ||
+        entry === '.venv'
+      )
+        continue
       if (
         entry === '.github' &&
         relative.startsWith('services/') &&
@@ -136,7 +145,18 @@ export function findWorkflowFiles(repoRoot: string): string[] {
       }
       const full = join(dir, entry)
       const rel = relative ? `${relative}/${entry}` : entry
-      if (statSync(full).isDirectory()) {
+      // (#1713) A concurrent process can remove `full` between the
+      // `readdirSync` above and this `statSync` — not just under `.venv`,
+      // which is only the one instance actually observed. Treat a
+      // now-vanished entry as nothing to descend into or collect, same as
+      // `skeleton-drift-guard.ts` / `plugin-collision-guard.ts`.
+      let isDir: boolean
+      try {
+        isDir = statSync(full).isDirectory()
+      } catch {
+        continue
+      }
+      if (isDir) {
         walk(full, rel)
       } else if (/\.ya?ml$/.test(entry) && relative.endsWith('.github/workflows')) {
         found.push(rel)

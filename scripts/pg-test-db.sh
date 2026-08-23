@@ -303,12 +303,31 @@ if [ "$BIFFO_PG_REAP_HOURS" -gt 0 ] 2>/dev/null && command -v docker >/dev/null 
       # Containers created before this label existed report an empty value and
       # fall through to the age rule below, exactly as `biffo.ephemeral=1`
       # migrated in (#1383). Nothing is stranded; they simply age out once.
+      #
+      # #1683: ownership must be checked BOTH ways, not just the GONE case.
+      # The original `if` only ever short-circuited (`continue`) when the
+      # checkout was gone -- a LIVE owner matched neither that condition nor
+      # any other, so it fell straight through into the unconditional age
+      # check below and was destroyed at 24h regardless. That is precisely
+      # the outcome this rule was written to prevent: ownership was only
+      # ever ACCELERATING reaping of dead checkouts, never protecting live
+      # ones. A container whose checkout still exists must never reach the
+      # age comparison at all, however old it is -- so that case gets its
+      # own explicit branch here rather than falling out of the bottom of
+      # this one by omission.
       _owner=$(docker inspect -f '{{index .Config.Labels "biffo.checkout"}}' "$_c" 2>/dev/null)
       if [ -n "$_owner" ] && [ "$_owner" != "<no value>" ] && [ ! -d "$_owner" ]; then
         if docker rm -f -v "$_c" >/dev/null 2>&1; then
           _reaped=$((_reaped + 1))
           _reaped_gone=$((_reaped_gone + 1))
         fi
+        continue
+      elif [ -n "$_owner" ] && [ "$_owner" != "<no value>" ] && [ -d "$_owner" ]; then
+        # Owner known and alive: ownership decides on its own, full stop.
+        # An UNLABELLED container (empty/`<no value>`) has no knowable
+        # owner and deliberately does NOT take this branch -- it falls
+        # through to the age rule below exactly as before, or this change
+        # would leak every pre-#1680 container forever.
         continue
       fi
       # Both are UTC ISO-8601 to the second, so a string compare IS a time

@@ -225,14 +225,17 @@ describe('pg-test-db.sh container reaper', () => {
   })
 
   it('keeps a container whose checkout exists even when it is ancient', () => {
-    // Ownership decides, then age. An old container belonging to a live
-    // checkout is still subject to the age rule — this asserts the two rules
-    // compose rather than one shadowing the other.
+    // Ownership beats age unconditionally, not merely accelerates reaping.
+    // #1683: the original ownership branch only ever short-circuited the
+    // GONE case (`continue` inside that one `if`); a LIVE owner fell through
+    // into the unconditional age check below and was destroyed at 24h
+    // anyway — exactly what the ownership rule was written to prevent. A
+    // container whose checkout still exists must never reach the age
+    // comparison at all, however old it is.
     const run = runReaper([
       { name: 'biffo-pg-test-oldlive', image: 'postgres:16', created: ANCIENT, checkout: repoRoot },
     ])
-    expect(run.removed).toContain('biffo-pg-test-oldlive')
-    expect(run.said).toMatch(/0 whose checkout no longer exists, 1 unused for over/)
+    expect(run.removed).not.toContain('biffo-pg-test-oldlive')
   })
 
   it('falls back to age for a container created before the checkout label existed', () => {

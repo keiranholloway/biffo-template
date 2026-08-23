@@ -58,26 +58,41 @@
 # `Deploy Infrastructure` dispatch left at the default `action: plan` really did
 # succeed at planning, and that can be entirely deliberate (an operator running
 # a dry run). What it must never do is share the plain `ok` label a real apply
-# gets: `conclusion` is "success" either way, so the ONLY signal that tells them
-# apart is the run's own title (`displayTitle`), which #1678 made carry a
-# `PLAN ONLY ... (nothing applied)` marker for exactly this. This script fails
-# CLOSED on that signal going missing — see the summary query below, where
-# `displayTitle`'s absence collapses the whole `gh run list` call to empty
-# output, which is already handled as exit 2 ("cannot tell"), not as a silent
-# `ok`.
+# gets: `conclusion` is "success" either way, so the ONLY signal that told them
+# apart, on the OLD `deploy-infra.yml`, was the run's own title (`displayTitle`),
+# which #1678 made carry a `PLAN ONLY ... (nothing applied)` marker for exactly
+# this. This script fails CLOSED on that signal going missing — see the summary
+# query below, where `displayTitle`'s absence collapses the whole `gh run list`
+# call to empty output, which is already handled as exit 2 ("cannot tell"), not
+# as a silent `ok`.
 #
-# **This bucket is transitional, and is deliberately kept.** From core 0.298.0
-# `deploy-infra.yml` can no longer produce a plan-only run at all: its `action`
-# input is required, defaults to nothing, and accepts only `apply`, so the
-# dispatch that used to yield this title is now an HTTP 422 and previews live in
-# a separate `Deploy Infrastructure Plan` workflow whose own name says so. The
-# bucket is therefore permanently unreachable **for any repo past 0.298.0** —
-# but this script is run with `-R owner/repo` against arbitrary repos in the
-# estate, and an instance that has not yet taken that upgrade still emits
-# exactly this title for exactly the ambiguous run. Deleting the bucket now
-# would fail open on those repos. Retire it once every instance is past
-# 0.298.0, and check the `Instance Adoption Report` workflow
-# (`.github/workflows/instance-adoption-report.yml`) rather than assuming.
+# **This bucket is transitional, and the title-marker half is deliberately
+# kept.** From core 0.298.0 `deploy-infra.yml` can no longer produce a
+# plan-only run at all: its `action` input is required, defaults to nothing,
+# and accepts only `apply` (#1700), so the dispatch that used to yield this
+# title is now an HTTP 422. The title-marker branch is therefore permanently
+# unreachable **for any repo past 0.298.0** — but this script is run with `-R
+# owner/repo` against arbitrary repos in the estate, and an instance that has
+# not yet taken that upgrade still emits exactly this title for exactly the
+# ambiguous run. Deleting it now would fail open on those repos. Retire it
+# once every instance is past 0.298.0, and check the `Instance Adoption
+# Report` workflow (`.github/workflows/instance-adoption-report.yml`) rather
+# than assuming.
+#
+# **Previews now live in their own workflow, and #1702 is that half.** A
+# preview dispatch is `deploy-infra-plan.yml` — a workflow with NO apply job
+# at all, ever, so its `conclusion: success` can only ever mean "the plan
+# computed cleanly", never "something was applied" (see that file's own
+# header). Its `run-name` says `... (preview only)`, not `PLAN ONLY`, so the
+# title-marker check above never fires for it — it would render as plain
+# `ok` otherwise, identical to a real apply, which is the exact ambiguity
+# #1582 exists to remove. Detected instead by `workflowName`, which is
+# structural: it is the workflow's own `name:` field, reported by every `gh
+# run list` call with no extra authoring effort, rather than a marker string
+# someone has to remember to keep embedded in one specific templated field. A
+# repo would have to rename the workflow itself — a change everyone touching
+# it would see in the Actions UI — to lose this signal, unlike a run-name
+# template that can silently stop emitting a substring nobody is watching for.
 #
 # ## Usage
 #
@@ -92,7 +107,13 @@ BRANCH=""
 QUIET=""
 
 usage() {
-  sed -n '2,73p' "$0" | sed 's/^# \{0,1\}//'
+  # #1582's own issue title warned "keep --help's line-range in step with the
+  # growing header" — and #1702's header growth immediately re-triggered it:
+  # this range was still '2,73p', 28 lines short of the header's real end
+  # (line 101, just above `set -uo pipefail`), so --help was truncating
+  # mid-sentence in the middle of the (now even longer) plan-only section.
+  # Fixed to the current end rather than left to drift again next time.
+  sed -n '2,101p' "$0" | sed 's/^# \{0,1\}//'
   exit 2
 }
 
@@ -206,16 +227,29 @@ while IFS="$TAB" read -r state name sha when url event title; do
   [ -n "$name" ] || continue
   case "$state" in
     success)
-      # A literal, upper-case "PLAN ONLY" is the #1678 run-name marker
-      # (`format('PLAN ONLY {0} (nothing applied)', ...)`) — never something a
-      # commit-subject-derived title produces by coincidence (this repo's own
-      # history has "plan-only" and "plan-time" in commit subjects, always
-      # lower-case, and grep confirms zero for the exact upper-case phrase).
-      # A "success" run whose title carries it applied nothing and must not
-      # collapse into the same "ok" bucket as a real apply.
-      case "$title" in
-        *"PLAN ONLY"*) planonly="${planonly}${name}\n" ;;
-        *) ok="${ok}${name}\n" ;;
+      # Two independent plan-only signals, checked in order — #1702's
+      # structural one first, then #1582's legacy title marker. Either one
+      # routes the run away from the plain "ok" bucket a real apply gets.
+      case "$name" in
+        "Deploy Infrastructure Plan")
+          # The workflow's own `name:` (deploy-infra-plan.yml line 1) — this
+          # workflow has no apply job at all, so a "success" here can only
+          # mean the plan computed cleanly, never that something applied.
+          planonly="${planonly}${name}\n"
+          ;;
+        *)
+          # A literal, upper-case "PLAN ONLY" is the #1678 run-name marker
+          # (`format('PLAN ONLY {0} (nothing applied)', ...)`) — never something
+          # a commit-subject-derived title produces by coincidence (this repo's
+          # own history has "plan-only" and "plan-time" in commit subjects,
+          # always lower-case, and grep confirms zero for the exact upper-case
+          # phrase). Kept for repos on `deploy-infra.yml` pre-#1700, which can
+          # still emit it — see the header for why this stays.
+          case "$title" in
+            *"PLAN ONLY"*) planonly="${planonly}${name}\n" ;;
+            *) ok="${ok}${name}\n" ;;
+          esac
+          ;;
       esac
       ;;
     failure | timed_out | startup_failure)

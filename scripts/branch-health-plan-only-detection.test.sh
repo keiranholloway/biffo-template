@@ -110,4 +110,83 @@ if [ "$fail" -ne 0 ]; then
 fi
 
 echo "PASS: a plan-only Deploy Infrastructure run is never rendered as plain 'ok'."
+
+# --- Scenario 2: the new `deploy-infra-plan.yml` workflow (#1702) ----------
+#
+# #1700 made `deploy-infra.yml`'s `action` input required, default-less and
+# `apply`-only (#1701's 422), so it can never again produce the scenario-1
+# ambiguous "success that applied nothing" run — a plan preview now lives in
+# its own workflow, `.github/workflows/deploy-infra-plan.yml`, which has NO
+# apply job at all. Its `run-name` is:
+#
+#   Deploy Infrastructure Plan — ${{ github.event.inputs.environment }} (preview only)
+#
+# and it does NOT contain the literal substring "PLAN ONLY" anywhere — the
+# scenario-1 marker was specific to `deploy-infra.yml`'s own run-name
+# template (`format('PLAN ONLY {0} (nothing applied)', ...)`), and this is a
+# different workflow with a different template. Pre-fix, branch-health.sh's
+# ONLY plan-only signal is that title substring, so this run falls straight
+# into the plain `ok` bucket — indistinguishable from a real apply, which is
+# the exact bug #1582 exists to prevent, now reopened by a workflow #1582
+# never saw.
+#
+# No live run of this workflow exists in this repo yet (BIFFO_DEPLOY_ENABLED
+# is unset in biffo-template itself, and `gh run list --workflow
+# deploy-infra-plan.yml` returns `[]` here as of 2026-08-23) — it is
+# workflow_dispatch-only and nobody has triggered it. So this fixture is NOT
+# a live capture like scenario 1's; it is built directly from the workflow
+# file's own literal `name:` (line 1) and `run-name:` template (line 25) in
+# `.github/workflows/deploy-infra-plan.yml`, with `environment: dev`
+# substituted for the input. If those literals ever change, copy the new
+# ones from the workflow file — do not reword this fixture by hand.
+
+cat > "$STUB_DIR/gh" <<'STUB'
+#!/usr/bin/env sh
+set -u
+
+if [ "$1" = "run" ] && [ "$2" = "list" ]; then
+  # workflowName is the workflow's own `name:` (structural, line 1 of
+  # deploy-infra-plan.yml). displayTitle is its run-name template rendered
+  # for `environment: dev` — no "PLAN ONLY" substring anywhere in either.
+  printf 'success\tDeploy Infrastructure Plan\t80ce6944\t2026-08-23T09:00\thttps://github.com/keiranholloway/biffo-template/actions/runs/99999999999\tworkflow_dispatch\tDeploy Infrastructure Plan — dev (preview only)\n'
+  exit 0
+fi
+
+echo "unexpected gh invocation: $*" >&2
+exit 1
+STUB
+chmod +x "$STUB_DIR/gh"
+
+raw_output2=$(PATH="$STUB_DIR:$PATH" BRANCH_HEALTH_NO_DESKTOP_ALERT=1 "$REPO_ROOT/scripts/branch-health.sh" --branch dev 2>&1)
+status2=$?
+output2=$(printf '%s' "$raw_output2" | sed 's/\x1b\[[0-9;]*m//g')
+
+fail2=0
+
+# The property under test: a successful `Deploy Infrastructure Plan` run
+# must never appear on a plain `ok` line either — same reasoning as scenario
+# 1, different workflow, no title marker to lean on this time.
+if printf '%s' "$output2" | grep -qE '^\s*ok\s+Deploy Infrastructure Plan\s*$'; then
+  echo "FAIL: branch-health.sh rendered a successful 'Deploy Infrastructure Plan' run as plain 'ok'." >&2
+  echo "  This workflow (#1702) has no apply job at all and never emits a 'PLAN ONLY' title." >&2
+  fail2=1
+fi
+
+if ! printf '%s' "$output2" | grep -qi "Deploy Infrastructure Plan"; then
+  echo "FAIL: branch-health.sh dropped the Deploy Infrastructure Plan workflow from its output entirely." >&2
+  fail2=1
+fi
+
+if [ "$status2" -eq 1 ]; then
+  echo "FAIL: expected a successful plan-only run to not be reported as a branch failure (exit 1)." >&2
+  fail2=1
+fi
+
+if [ "$fail2" -ne 0 ]; then
+  echo "--- full output (scenario 2) ---" >&2
+  printf '%s\n' "$output2" >&2
+  exit 1
+fi
+
+echo "PASS: a successful 'Deploy Infrastructure Plan' run is never rendered as plain 'ok'."
 exit 0

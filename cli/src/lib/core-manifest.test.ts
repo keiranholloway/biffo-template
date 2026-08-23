@@ -286,6 +286,22 @@ describe('real repo core-manifest.json', () => {
     ).toBe(true)
   })
 
+  it("carves out scripts/verify-deployed.checks so an upgrade never clobbers an instance's real checks (#1706)", () => {
+    // The file's own header claims "INSTANCE-OWNED ... seeded, never
+    // overwritten by a sync" — but that claim is a comment, enforced nowhere.
+    // scripts/ is template-owned as a bare prefix with no more specific
+    // override, so before the #1706 fix this resolved TEMPLATE, the exact
+    // opposite of the header. This is the same carve-out shape as #1026's
+    // services/api/tests/instance/: a single named exception inside an
+    // otherwise template-owned prefix.
+    const manifest = readCoreManifest(repoRoot)
+    expect(isTemplateOwned('scripts/verify-deployed.checks', manifest)).toBe(false)
+    // The carve-out is that one file, not the whole scripts/ tree — every
+    // other script the template ships stays template-owned.
+    expect(isTemplateOwned('scripts/verify-deployed.sh', manifest)).toBe(true)
+    expect(isTemplateOwned('scripts/biffo.sh', manifest)).toBe(true)
+  })
+
   it('carves out migrations/versions (append-only per-instance chain) but keeps the framework', () => {
     const manifest = readCoreManifest(repoRoot)
     // Instance-accumulated migration files must NOT be synced from the template.

@@ -94,6 +94,12 @@ export interface MergeEntry {
    * place. This flag is reused, not re-derived, by `planCoreUpgrade`'s
    * `orphaned` list — see there for the gitignore/untracked filter applied on
    * top of it.
+   *
+   * `false` when the path is instead declared in `biffo.divergence.json`
+   * (#1602): a `warnOnly` entry is the SAME acceptance the commit-time
+   * `checkCoreOwnership` guard already grants the path, so the ratchet
+   * treats it as sanctioned rather than re-deciding the question from a
+   * count nobody reads prose against.
    */
   orphaned?: boolean
 }
@@ -310,7 +316,20 @@ async function classify(
   // (e.g. an instance-specific ADR or a file the template never shipped). There
   // is no base or upstream version to merge against, so leave it untouched
   // rather than trying to read a non-existent base/theirs copy.
+  //
+  // Unsanctioned by default (#1026) — UNLESS this exact path is declared in
+  // `biffo.divergence.json` (#1602, class #1362): the commit-time ownership
+  // guard already accepts such a path via the same `warnOnly` prefixes
+  // (`checkCoreOwnership`, core-ownership-guard.ts), so counting it as an
+  // orphan here re-litigates, from a second document, a question the first
+  // document already answered. `isDeclaredDivergent` is the same closure the
+  // "instance deleted a template file" branch below already reads — reused,
+  // not re-derived, so the two branches cannot drift onto different sources
+  // of truth for the same declaration.
   if (!inBase && !inTheirs) {
+    if (isDeclaredDivergent(path)) {
+      return { path, status: 'keep-ours', conflicted: false, orphaned: false }
+    }
     return { path, status: 'keep-ours', conflicted: false, orphaned: true }
   }
 

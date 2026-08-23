@@ -127,8 +127,9 @@ export function findWorkflowFiles(repoRoot: string): string[] {
     }
     for (const entry of entries) {
       // .venv is a build artefact, not part of the tree, and (#1713) it
-      // churns under a concurrent `uv sync`/pip-audit — a concurrently
-      // mutated .venv, other repos' walks reach for the same convention.
+      // churns under a concurrent `uv sync`/pip-audit fixture, matching the
+      // skip already applied by `skeleton-drift-guard.ts` and
+      // `plugin-collision-guard.ts`.
       if (
         entry === 'node_modules' ||
         entry === '.git' ||

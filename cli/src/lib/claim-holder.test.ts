@@ -108,11 +108,26 @@ describe('claim holder identity (#1279)', () => {
     expect(code, out).toBe(1)
   })
 
-  it('an unreadable comment list is NOT treated as yours', () => {
-    // Otherwise the flag becomes a way to steal a claim by breaking the lookup.
+  /**
+   * #1691: an unreadable comment list must NOT be treated as yours (that half
+   * was always safe -- otherwise the flag becomes a way to steal a claim by
+   * breaking the lookup), and it must ALSO not be reported as a confident
+   * "Taken". Both facts used to collapse onto the same `claim_held_by`
+   * `return 1`, so `claim.sh` refused for the right reason (never grant a
+   * claim on an unreadable check) but told a false story about why: "Taken"
+   * implies the label's holder was actually determined and is someone else,
+   * when in fact the read simply failed. Distinguishing the two matters for
+   * anyone acting on the message, and this repo's own convention already
+   * reserves exit 2 for exactly this ("cannot tell", `wait-for-checks.sh`,
+   * `branch-health.sh`) -- `claim.sh` just never used it for this signal.
+   */
+  it('an unreadable comment list reports CANNOT TELL, not a confident Taken or yours', () => {
     const { dir } = stub({ comments: [], commentsExit: 1 })
     const { code, out } = run(dir, ['77', '--as', 'sess-abc', '--check'])
-    expect(code, out).toBe(1)
+    expect(code, out).toBe(2)
+    expect(out).toMatch(/cannot tell/i)
+    expect(out).not.toMatch(/that is you/i)
+    expect(out).not.toMatch(/^Taken\./m)
   })
 
   it('the newest claim wins, so a re-claim supersedes an older session', () => {

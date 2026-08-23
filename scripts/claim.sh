@@ -241,20 +241,38 @@ gh_label() { if [ -n "$REPO" ]; then gh label "$@" --repo "$REPO"; else gh label
 # Does the newest claim comment on $1 carry holder token $2? (#1279)
 #
 # Reads the LAST claim comment rather than any, so a re-claim by a different
-# session supersedes an older one rather than both matching for ever. Returns
-# non-zero when it cannot tell -- an unreadable comment list must never read as
-# "yours", or the flag becomes a way to steal a claim by guessing.
+# session supersedes an older one rather than both matching for ever.
+#
+# TRI-STATE return, not a boolean (#1691). `gh issue view --json comments`
+# failing (network, auth, wrong repo) and the comment list genuinely holding
+# no claim of $2's are NOT the same fact, and collapsing both onto a single
+# non-zero used to make every caller unable to tell "we don't know" from "we
+# checked and it's someone else's" -- with opposite costs depending which
+# side reads it: `--release` reported a definite-sounding "not held by you"
+# for a claim it simply could not read, and the claim path had no way to
+# refuse ONLY on genuine ambiguity without also refusing every ordinary
+# non-match.
+#
+#   0  held by $2
+#   1  determined NOT held by $2 -- the read succeeded, no match
+#   2  cannot tell -- the read itself failed
+#
+# An unreadable comment list must never read as "yours" (a caller could steal
+# a claim by guessing) and must never read as plain "not yours" either (a
+# caller on the CLAIM path would then treat "cannot tell" as "free", which is
+# exactly the fail-open this replaces). Every caller below must branch on all
+# three values, not just truthy/falsy.
 #
 # Requires $2 non-empty (#826): the match below is `*"$HOLDER_MARK$2"*`, and
 # with $2 empty that collapses to `*"claim-holder:"*` -- true of ANY comment
-# naming ANY holder at all, regardless of whose. An empty token must never
-# read as "matches every claim"; it is refused explicitly, before the network
-# call this would otherwise spend.
+# naming ANY holder at all, regardless of whose. An empty token is a caller
+# bug, not an unreadable issue, so it is refused as a definite non-match (1),
+# before the network call this would otherwise spend.
 claim_held_by() {
   [ -n "$2" ] || return 1
   _c=$(gh_issue view "$1" --json comments \
     --jq "[.comments[]? | select(.body | contains(\"$HOLDER_MARK\"))] | last | .body // \"\"" \
-    2>/dev/null) || return 1
+    2>/dev/null) || return 2
   [ -n "$_c" ] || return 1
   case "$_c" in
     *"$HOLDER_MARK$2"*) return 0 ;;
@@ -547,9 +565,18 @@ LABEL=in-progress
 # person, and appears in a public comment.
 
 TAKEN=0
+CANNOT_TELL=0
 REASONS=""
 
 note() { REASONS="${REASONS}  $1\n"; TAKEN=1; }
+
+# A DEFINITE signal (open PR, remote branch, someone else's label) always
+# outranks an ambiguous one: if anything sets TAKEN=1 the verdict is "Taken"
+# regardless of CANNOT_TELL, so an unreadable check downgrades the verdict
+# only when nothing conclusive was found either way (#1691). See
+# `claim_held_by` above for why "cannot tell" must never collapse into either
+# "free" or "taken" for certain.
+note_cannot_tell() { REASONS="${REASONS}  $1\n"; CANNOT_TELL=1; }
 
 # --- --release <token>: only the holder clears it (#1279) --------------------
 #
@@ -575,13 +602,27 @@ if [ -n "$RELEASE" ]; then
     echo "${DIM}    gh issue edit $ISSUE --remove-label $LABEL${OFF}" >&2
     exit 1
   fi
-  if claim_held_by "$ISSUE" "$HOLDER"; then
+  claim_held_by "$ISSUE" "$HOLDER"
+  _held_status=$?
+  if [ "$_held_status" -eq 0 ]; then
     gh_issue edit "$ISSUE" --remove-label "$LABEL" >/dev/null 2>&1 || {
       echo "${RED}claim: could not remove the '$LABEL' label.${OFF}" >&2
       exit 2
     }
     echo "${GREEN}Released.${OFF} ${DIM}(held by $HOLDER)${OFF}"
     exit 0
+  fi
+  # Cannot tell (#1691): the comment read itself failed, so this is NOT "we
+  # checked and it's not yours" -- it is "we could not check". Reporting the
+  # latter as the former is what used to make a genuinely-held claim
+  # unreleasable on nothing but a network blip. Refuse the same as a real
+  # mismatch (clearing on a guess is worse than a stuck label) but say so
+  # honestly and with the estate's own "cannot tell" exit code.
+  if [ "$_held_status" -eq 2 ]; then
+    echo "${RED}claim: cannot tell whether #$ISSUE is held by '$HOLDER'${OFF} — the issue's comments were unreadable." >&2
+    echo "${DIM}  Not releasing on an unreadable read: that could clear somebody else's claim.${OFF}" >&2
+    echo "${DIM}  Retry once gh/network is working, or check by hand before removing the label.${OFF}" >&2
+    exit 2
   fi
   echo "${RED}claim: #$ISSUE is not held by '$HOLDER' — refusing to release it.${OFF}" >&2
   echo "${DIM}  Clearing somebody else's claim is how two sessions end up on one issue.${OFF}" >&2
@@ -833,11 +874,26 @@ case ",$labels," in
     # it is the orchestrator that dispatched us. Without this a delegated agent
     # cannot tell its own reservation from a stranger's and correctly refuses to
     # start, which is the failure this flag exists to remove.
-    if [ -n "$HOLDER" ] && claim_held_by "$ISSUE" "$HOLDER"; then
-      echo "${DIM}label      carries '$LABEL', held by ${HOLDER} — that is you${OFF}"
-    else
-      note "${YELLOW}label${OFF}      carries '$LABEL' (issue last updated $updated)"
+    #
+    # Tri-state (#1691): a comment-read failure must not read as "not held by
+    # you" (label present + genuinely someone else's) OR as "held by you"
+    # (which would waive the label past the four-signal check entirely) --
+    # either reading lets a session claim over the top of a holder it simply
+    # failed to read. `note_cannot_tell` still blocks the claim (fail closed,
+    # same as an ordinary someone-else's-label), but reports the verdict
+    # honestly as "cannot tell" rather than a confident "Taken" it did not
+    # earn -- unless something else on the four signals IS conclusive, in
+    # which case that conclusive finding is what decides the verdict.
+    _held_status=1
+    if [ -n "$HOLDER" ]; then
+      claim_held_by "$ISSUE" "$HOLDER"
+      _held_status=$?
     fi
+    case "$_held_status" in
+      0) echo "${DIM}label      carries '$LABEL', held by ${HOLDER} — that is you${OFF}" ;;
+      2) note_cannot_tell "${YELLOW}label${OFF}      carries '$LABEL' — cannot tell who holds it (comments unreadable)" ;;
+      *) note "${YELLOW}label${OFF}      carries '$LABEL' (issue last updated $updated)" ;;
+    esac
     ;;
 esac
 
@@ -916,6 +972,18 @@ if [ "$TAKEN" -eq 1 ]; then
   echo "${DIM}If you believe it is abandoned, check how old the work is and say so in a${OFF}"
   echo "${DIM}comment before taking it. Never steal a fresh claim.${OFF}"
   exit 1
+fi
+
+# A DEFINITE signal above always wins (checked first), so this only fires when
+# nothing conclusive was found but at least one check genuinely could not run
+# (#1691). Refuse exactly like "Taken" -- an unreadable check must never grant
+# a claim -- but say so honestly instead of reporting certainty nobody has.
+if [ "$CANNOT_TELL" -eq 1 ]; then
+  printf '%b' "${RED}Cannot tell.${OFF} Signals:\n$REASONS"
+  echo
+  echo "${DIM}Refusing to claim over an unknown holder -- an unreadable check must never${OFF}"
+  echo "${DIM}read as free. Retry once gh/network is working.${OFF}"
+  exit 2
 fi
 
 if [ -n "$CHECK_ONLY" ]; then

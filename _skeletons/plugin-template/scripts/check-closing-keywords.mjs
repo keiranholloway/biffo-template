@@ -1,14 +1,19 @@
 #!/usr/bin/env node
 /**
- * Two guards over a PR's closing keywords, asking different questions — and,
- * since #1334, applied to every document GitHub actually honours, not just
- * the PR body.
+ * Three guards over a PR's closing keywords, asking different questions —
+ * and, since #1334, applied to every document GitHub actually honours, not
+ * just the PR body.
  *
  * 1. Refuse `Closes #N` on a change whose behaviour only shows up once
  *    deployed — a path-scoped check, documented immediately below.
  * 2. Refuse a NEGATED closing keyword anywhere, on any path — see
  *    `negatedClosingReferences`. GitHub's linker has no concept of negation,
  *    so `Does not close #N` closes #N.
+ * 3. Refuse a mismatch between GitHub's OWN `closingIssuesReferences` and
+ *    what this file's lexical scan calls "deliberate" — see
+ *    `deliberateClosingReferences` and the "3. Ground truth" section below
+ *    (#1686). This is the one that reconciles the guard's model against the
+ *    thing that actually acts, rather than trying to out-regex it.
  *
  * ── Three documents, not one (#1334, #1362) ──────────────────────────────
  *
@@ -96,6 +101,58 @@
  * stale payload. Verified stale on #1172. See `resolveBody` for the fallback
  * to a direct `PR_BODY` (local runs and every test in this suite) and why an
  * unreadable live body fails the guard rather than passing it.
+ *
+ * ── 3. Ground truth: reconciling against `closingIssuesReferences` (#1686) ──
+ *
+ * Checks 1 and 2 above both infer intent from a regex over prose — and a
+ * regex over prose can only ever be a MODEL of what GitHub's own linker does,
+ * never the thing itself. PR #1680's body read (in full context) "This is
+ * the one-word fix #1664 asked for" — ordinary mid-sentence prose, not a
+ * deliberate `Closes #N` trailer — alongside its own explicit `Refs #1664`
+ * elsewhere in the same body. GitHub's `closingIssuesReferences` nonetheless
+ * read `totalCount: 1 -> #1664` while the PR was in that state: the lexical
+ * shape GitHub's linker looks for does not care about sentence position, and
+ * this file's `closingReferences` (check 1's hit detector) doesn't either —
+ * so `assess` correctly recorded a hit, but `changedFiles` for that PR were
+ * `cli/src/lib/pg-test-db-reaper.test.ts` and `scripts/pg-test-db.sh` — no
+ * `DEPLOY_ONLY_PREFIXES` entry — so check 1 returned
+ * `{ ok: true, reason: 'no-deploy-only-paths' }`. Release Guards reported
+ * SUCCESS. Only a human rewording the body before merge kept #1664 open.
+ *
+ * The deploy-only-path scoping is not wrong and is NOT removed here: a
+ * genuinely deliberate `Closes #N` on a path whose correctness a green suite
+ * already proves is exactly the case it exists to let through. What was
+ * wrong is narrower — a hit was silently PASSED whenever the paths were
+ * ordinary, with nothing checking whether GitHub was actually about to act on
+ * it. `deliberateClosingReferences` narrows check 1's hit detector to
+ * keyword+reference pairs that read as a genuine directive — at the start of
+ * the document, a line, or a sentence, optionally after a list/heading/bold
+ * marker — as opposed to buried mid-sentence. If GitHub's own
+ * `closingIssuesReferences` is non-empty and NOTHING in the PR's documents
+ * carries a deliberate closing keyword, that is a closing-keyword hit GitHub
+ * will act on that this file cannot explain as intentional — fail regardless
+ * of path, because the path-scoped hazard this file was built to catch is a
+ * SUBSET of "GitHub is about to close something nobody asked for", not a
+ * replacement for it.
+ *
+ * This also happens to close a gap #1686 flagged but explicitly did NOT ask
+ * to be fixed here: a closing shape GitHub's linker recognises that this
+ * file's own regex does not (e.g. a reference before its keyword) would
+ * previously have returned `no-closing-keyword` — hits.length === 0 — with
+ * nothing to catch it. Asking GitHub directly, rather than trying to widen
+ * the regex to match its exact recognition rules, structurally covers that
+ * case too: `deliberateClosingReferences` would find nothing "deliberate"
+ * either, and the ground-truth check would still fire. This is a consequence
+ * of the design, not a claim that the widened-adjacency shape was reproduced
+ * — it was not, deliberately (see #1686's own "UNCONFIRMED SECONDARY CLAIM").
+ *
+ * Level of fix: 3 (fail closed), not 1 or 2. The invalid state cannot be made
+ * unrepresentable, because the closing keyword lives in prose an author
+ * legitimately writes and there is no way to derive intent from it with
+ * certainty — `deliberateClosingReferences` is a heuristic, not a parser of
+ * meaning. What IS achievable, and what this does, is refuse to let our own
+ * heuristic's blind spot silently diverge from GitHub's actual behaviour: the
+ * two are reconciled every time, and a mismatch fails rather than passing.
  */
 
 /** Closing keywords GitHub actually acts on, per its own documentation. */
@@ -157,6 +214,69 @@ export function closingReferences(body) {
   const withoutCode = stripCode(body)
   const pattern = new RegExp(`\\b(${CLOSING_KEYWORDS.join('|')})\\b:?\\s+(${REFERENCE})`, 'gi')
   return [...withoutCode.matchAll(pattern)].map((m) => m[2])
+}
+
+/**
+ * Markdown decoration a clause may legitimately start with before the
+ * keyword itself: a list marker (`-`, `*`, `1.`, `1)`), heading hashes, or
+ * bold (`**`). Real shapes from this repo's own history: `- tabsii-
+ * platform#511, today: \`Closes #511\`` (list item; the keyword itself was
+ * inside backticks there and so already blanked by `stripCode`, but plain
+ * `- Closes #42` is the same shape without the backticks) and `**Fixes
+ * #10**` (bold trailer).
+ */
+const CLAUSE_DECORATION = '(?:[-*•]\\s+|\\d+[.)]\\s+|#{1,6}\\s+|\\*{1,2})*'
+
+/**
+ * The closing-keyword references that read as a DELIBERATE directive rather
+ * than incidental prose — the keyword+reference sits at the start of the
+ * document, a line, or a sentence (optionally after `CLAUSE_DECORATION`),
+ * rather than buried mid-sentence.
+ *
+ * Real corpus evidence for both shapes, from this repo's own commit history
+ * (`git log --all --format='%B'`):
+ *
+ *   - Deliberate — hundreds of `Closes #1234` lines used as commit-message
+ *     trailers, plus `warnings on both commands. Closes #201.` (a trailer
+ *     sentence following prose on the SAME physical line, which is why this
+ *     splits on sentence-ending punctuation too, not only on newlines).
+ *   - NOT deliberate — `This is the one-word fix #1664 asked for` (PR
+ *     #1680's real, pre-reword text — the shape #1686 is filed over): `fix`
+ *     is a real closing keyword immediately followed by a real reference,
+ *     but it is the predicate of an ordinary sentence, not a directive.
+ *     Likewise `That closes #422 by construction rather than policing it`
+ *     and `` `--fix` exists to close #714 and #715 `` (both real lines from
+ *     this repo's own history) — mid-sentence, not clause-initial.
+ *
+ * This is intentionally a narrower, less permissive detector than
+ * `closingReferences` — it exists only to ask "does this file have a
+ * confident READING of author intent", not to replace the lexical scan
+ * `closingReferences` still does for checks 1 and 2 above.
+ *
+ * Known residual gap, accepted rather than solved: a trailer that starts
+ * mid-line without sentence-ending punctuation before it (no case found in
+ * this repo's history) reads as not-deliberate. That is the conservative
+ * direction — it can make the ground-truth check (below) ask for a
+ * clarifying reword it didn't strictly need, never the reverse.
+ */
+export function deliberateClosingReferences(text) {
+  if (!text) return []
+  const stripped = stripCode(text)
+  const starts = new Set([0])
+  const boundary = /\n|[.!?]\s+/g
+  let m
+  while ((m = boundary.exec(stripped))) starts.add(m.index + m[0].length)
+
+  const pattern = new RegExp(
+    `^${CLAUSE_DECORATION}\\s*(${CLOSING_KEYWORDS.join('|')})\\b:?\\s+(${REFERENCE})`,
+    'i',
+  )
+  const found = []
+  for (const start of starts) {
+    const mm = stripped.slice(start).match(pattern)
+    if (mm) found.push(mm[2])
+  }
+  return [...new Set(found)]
 }
 
 /**
@@ -291,14 +411,29 @@ export function documentsFor({ body, title, commits }) {
  * a special case of the deploy-path check: a `Verified-on-deploy:` trailer
  * cannot excuse it either, because the author is not claiming the issue is
  * verified, they are saying it is not being closed at all.
+ *
+ * The ground-truth check (#1686) runs SECOND, before the deploy-path check,
+ * and also ignores `changedFiles`: it is not asking "is this a hazard here",
+ * it is asking "is GitHub about to do something this file cannot explain as
+ * intentional" — see the module docstring's "3. Ground truth" section.
+ * `closingIssuesReferences` defaults to `[]` so every existing body-only
+ * caller (and every existing test) keeps working unchanged, the same reason
+ * `title`/`commits` are optional — see `documentsFor`.
  */
-export function assess({ body, title, commits, changedFiles }) {
+export function assess({ body, title, commits, changedFiles, closingIssuesReferences = [] }) {
   const docs = documentsFor({ body, title, commits })
 
   const negated = docs.flatMap((doc) =>
     negatedClosingReferences(doc.text).map((n) => ({ ...n, source: doc.source })),
   )
   if (negated.length > 0) return { ok: false, kind: 'negated-keyword', negated }
+
+  if (closingIssuesReferences.length > 0) {
+    const deliberate = docs.some((doc) => deliberateClosingReferences(doc.text).length > 0)
+    if (!deliberate) {
+      return { ok: false, kind: 'ground-truth-mismatch', closingIssuesReferences }
+    }
+  }
 
   const hits = docs
     .map((doc) => ({ source: doc.source, references: closingReferences(doc.text) }))
@@ -315,9 +450,9 @@ export function assess({ body, title, commits, changedFiles }) {
 }
 
 export function formatFailure(result) {
-  return result.kind === 'negated-keyword'
-    ? formatNegatedFailure(result)
-    : formatDeployOnlyFailure(result)
+  if (result.kind === 'negated-keyword') return formatNegatedFailure(result)
+  if (result.kind === 'ground-truth-mismatch') return formatGroundTruthFailure(result)
+  return formatDeployOnlyFailure(result)
 }
 
 function formatNegatedFailure({ negated }) {
@@ -343,6 +478,43 @@ function formatNegatedFailure({ negated }) {
     'must change (amend/reword and force-push) — the guard reads the commits',
     'live too, but the commit message that will actually reach the merge',
     'cannot be edited from the PR page.',
+  ].join('\n')
+}
+
+function formatGroundTruthFailure({ closingIssuesReferences }) {
+  const refs = closingIssuesReferences.map((r) =>
+    r?.number !== undefined ? `#${r.number}` : (r?.url ?? JSON.stringify(r)),
+  )
+  return [
+    `GitHub's own closingIssuesReferences says this PR will close ${refs.join(', ')} on`,
+    'merge — but nothing in the PR body, title or commit messages reads as a',
+    'DELIBERATE closing directive (a keyword+reference at the start of the',
+    'document, a line, or a sentence). GitHub\'s linker does not care about',
+    'paths or sentence position; it only needs the lexical shape, wherever it',
+    'sits.',
+    '',
+    'This is #1686: PR #1680\'s body read "This is the one-word fix #1664',
+    'asked for" — ordinary prose, not a directive — alongside its own',
+    'explicit `Refs #1664` elsewhere in the same body. closingIssuesReferences',
+    'nonetheless read #1664 while the PR was in that state, and Release Guards',
+    'reported SUCCESS: the deploy-only-path check only fires on a hazardous',
+    'PATH, and this PR touched none. Only a human rewording the body before',
+    'merge kept #1664 open.',
+    '',
+    'Either:',
+    '  - this close is NOT intended: reword the offending line so the keyword',
+    '    and reference are not adjacent (e.g. "the fix requested in #1664"',
+    '    rather than "fix #1664"), or move the reference into a `Refs #N`',
+    '    line; or',
+    '  - this close IS intended: make it a deliberate directive — its own',
+    '    line, its own sentence, or after a list/heading/bold marker, e.g.',
+    '    `Closes #1664` — so this file, and anyone reading the PR, can tell',
+    '    the difference.',
+    '',
+    'Re-run after editing — the body, title and commits are all read live, so',
+    'a re-run genuinely re-evaluates them (do not push an empty commit):',
+    '',
+    '    gh run rerun <run-id> --failed',
   ].join('\n')
 }
 
@@ -562,6 +734,82 @@ export async function resolveCommits({
   }
 }
 
+/**
+ * Fetch a PR's `closingIssuesReferences` via the GitHub CLI — GitHub's own
+ * ground truth for which issues this PR will close on merge (#1686). Same
+ * split as the other fetchers so tests can inject a fake. Each element is
+ * the shape `gh pr view --json closingIssuesReferences` returns:
+ * `{ id, number, repository: {...}, url }` (confirmed live against PR #1417,
+ * which genuinely closes an issue).
+ */
+export async function fetchPrClosingIssuesReferencesViaGh({ GH_TOKEN, PR_NUMBER, GH_REPO }) {
+  const { execFileSync } = await import('node:child_process')
+  const raw = execFileSync(
+    'gh',
+    [
+      'pr',
+      'view',
+      String(PR_NUMBER),
+      '--repo',
+      GH_REPO,
+      '--json',
+      'closingIssuesReferences',
+      '--jq',
+      '.closingIssuesReferences',
+    ],
+    { encoding: 'utf8', env: { ...process.env, GH_TOKEN } },
+  ).trim()
+  return raw ? JSON.parse(raw) : []
+}
+
+/**
+ * Resolve the PR's `closingIssuesReferences` to assess — the ground-truth
+ * check's own input, and the reason it needs no new CI wiring: it reads via
+ * the same `GH_TOKEN`/`PR_NUMBER`/`GH_REPO` trio `resolveTitle` and
+ * `resolveCommits` already use, already present wherever this script runs
+ * as a PR check.
+ *
+ * Same three-path shape as the other resolvers:
+ *
+ *   - `PR_CLOSING_ISSUES` set (including `''`, read as none): a JSON array,
+ *     used as-is, no network — the local-run and test path.
+ *   - `PR_CLOSING_ISSUES` unset, `GH_TOKEN`/`PR_NUMBER`/`GH_REPO` all set:
+ *     live fetch, so a re-run sees the current linkage, not the one at the
+ *     moment the workflow event fired (the exact staleness #1174 fixed for
+ *     the body).
+ *   - Neither: not a PR — nothing to reconcile against.
+ *
+ * Fails CLOSED on a half-configured trio or a failed fetch, same as the
+ * other resolvers: a silent empty-array fallback here would make an API
+ * outage read as "GitHub confirms nothing closes", which is the opposite of
+ * cautious for a check whose whole job is to catch what OUR OWN scan missed.
+ */
+export async function resolveClosingIssuesReferences({
+  env = process.env,
+  fetchLiveClosingIssuesReferences = fetchPrClosingIssuesReferencesViaGh,
+} = {}) {
+  if (env.PR_CLOSING_ISSUES !== undefined) {
+    return env.PR_CLOSING_ISSUES === '' ? [] : JSON.parse(env.PR_CLOSING_ISSUES)
+  }
+
+  const { GH_TOKEN, PR_NUMBER, GH_REPO } = env
+  const trio = [GH_TOKEN, PR_NUMBER, GH_REPO]
+  if (trio.some(Boolean) && !trio.every(Boolean)) {
+    throw new Error(
+      'GH_TOKEN, PR_NUMBER and GH_REPO must all be set together for the live closing-issues fetch; got only some of them.',
+    )
+  }
+  if (!trio.every(Boolean)) return []
+
+  try {
+    return await fetchLiveClosingIssuesReferences({ GH_TOKEN, PR_NUMBER, GH_REPO })
+  } catch (err) {
+    throw new Error(
+      `could not fetch the closing-issues references of PR #${PR_NUMBER} in ${GH_REPO}: ${err?.message ?? err}`,
+    )
+  }
+}
+
 // ── CLI ───────────────────────────────────────────────────────────────────
 // Bare node, no install, matching practices-monotonic.mjs — so this runs in
 // the Release Guards job without depending on the pnpm install step.
@@ -575,17 +823,19 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     process.exit(0)
   }
 
-  let body, title, commits
+  let body, title, commits, closingIssuesReferences
   try {
-    // All three read live where a token is available (#1174, and #1334 for
-    // commits specifically) — a re-run genuinely re-evaluates the PR/commits
-    // as they are now, not as they were when the workflow event fired.
+    // All four read live where a token is available (#1174, #1334 for
+    // commits, #1686 for closingIssuesReferences) — a re-run genuinely
+    // re-evaluates the PR/commits/linkage as they are now, not as they were
+    // when the workflow event fired.
     body = await resolveBody()
     title = await resolveTitle()
     commits = await resolveCommits()
+    closingIssuesReferences = await resolveClosingIssuesReferences()
   } catch (err) {
-    // Fail closed (#1174): an unreadable body/title/commits is an error,
-    // never a silent "no closing keyword found".
+    // Fail closed (#1174): an unreadable body/title/commits/linkage is an
+    // error, never a silent "no closing keyword found".
     console.error(`✘ closing-keyword guard: ${err.message}`)
     process.exit(1)
   }
@@ -604,7 +854,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     process.exit(1)
   }
 
-  const result = assess({ body, title, commits, changedFiles })
+  const result = assess({ body, title, commits, changedFiles, closingIssuesReferences })
   if (result.ok) {
     console.log(`✓ closing-keyword guard: ${result.reason}.`)
     process.exit(0)

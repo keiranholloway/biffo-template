@@ -298,7 +298,24 @@ jobs:
       actions: read
       statuses: write
     steps:
+      # `fetch-depth: 0` matches the `js` and `security-secrets` checkouts
+      # above (#1692). Without it this checkout is shallow (depth 1, single
+      # ref) and `origin/dev` — or any other ref/merge-base — is simply not a
+      # valid object in the working tree: `git merge-base HEAD origin/dev`
+      # fails `fatal: Not a valid object name origin/dev` (exit 128), not a
+      # wrong answer. A step built on that resolution would fail CLOSED with
+      # a clear git error, never silently skip — but the swept job as it
+      # stands has exactly one step that touches git/origin state at all
+      # ("Error-branch coverage" below), and it deliberately does its own
+      # `git fetch --depth=1 --no-tags origin "$default_branch"` rather than
+      # relying on this checkout's depth, precisely so a PR under test cannot
+      # influence which gate script version runs. That step is unaffected
+      # either way. This still brings the job in line with its siblings and
+      # closes the gap for any script this job's steps call out to
+      # (`scripts/*.sh` — out of this change's read set, see the PR body).
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 0
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true

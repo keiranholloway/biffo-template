@@ -1,6 +1,6 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { isTemplateOwned, readCoreManifest } from './core-manifest.js'
 import {
   checkTerraformInput,
@@ -11,6 +11,41 @@ import {
 // Not mkdtempSync: `no-raw-mkdtemp.test.ts` walks the AST of every test file and
 // fails a direct call. makeTmpDir registers the directory for an automatic sweep.
 import { makeTmpDir } from '../test-utils/tmp.js'
+
+/**
+ * `vi.hoisted` because `vi.mock` factories are hoisted above ordinary
+ * top-level declarations; a plain `let` read from the factory is in its
+ * temporal dead zone when the factory runs.
+ */
+const race = vi.hoisted(() => ({ statSyncThrowsFor: null as string | null }))
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>()
+  return {
+    ...actual,
+    /**
+     * Pass-through unless a test opts in, so every other consumer of
+     * `node:fs` in this file — including `makeTmpDir` — behaves exactly as
+     * normal. Simulates the real race (#1713): another process removes an
+     * entry between `walk`'s `readdirSync` and its `statSync` on that same
+     * entry, which throws ENOENT for a path that was real a moment ago.
+     */
+    statSync: (p: Parameters<typeof actual.statSync>[0]): ReturnType<typeof actual.statSync> => {
+      if (race.statSyncThrowsFor !== null && String(p) === race.statSyncThrowsFor) {
+        const err = new Error(
+          `ENOENT: no such file or directory, stat '${p}'`,
+        ) as NodeJS.ErrnoException
+        err.code = 'ENOENT'
+        throw err
+      }
+      return actual.statSync(p)
+    },
+  }
+})
+
+afterEach(() => {
+  race.statSyncThrowsFor = null
+})
 
 const repoRoot = join(__dirname, '..', '..', '..')
 
@@ -254,5 +289,54 @@ describe('vendored plugin .github/ is skipped, but only there (#1565)', () => {
     expect(files).toContain('services/plain-service/.github/workflows/ci.yml')
     expect(files).toContain('_skeletons/plugin-template/.github/workflows/ci.yml')
     expect(files).not.toContain('services/idea-scout/.github/workflows/ci.yml')
+  })
+})
+
+/**
+ * #1713: `walk` recurses from `repoRoot` unfiltered and calls `statSync` on
+ * every entry with no `try`/`catch`. A concurrently-mutated `.venv` (another
+ * vitest worker's `uv sync`/pip-audit fixture, or a real `.venv` at the repo
+ * root) removes entries between `readdirSync` and `statSync`, and the bare
+ * `statSync` throws ENOENT for an entry that existed a moment ago — failing
+ * this test file for a reason unrelated to what it actually checks.
+ *
+ * Two independent halves, because they close different gaps:
+ *   1. `.venv` added to the skip set — removes the one directory known to
+ *      churn like this, matching `skeleton-drift-guard.ts` /
+ *      `plugin-collision-guard.ts`.
+ *   2. `statSync` wrapped in try/catch — makes ANY concurrently-removed
+ *      entry harmless, not just `.venv`. Skipping `.venv` alone would leave
+ *      the class open for the next directory somebody churns.
+ */
+describe('walk tolerates a concurrently-mutated tree (#1713)', () => {
+  it('does not throw when an entry is removed between readdirSync and statSync', () => {
+    const root = makeTmpDir('tf-input-guard-race')
+    mkdirSync(join(root, '.github', 'workflows'), { recursive: true })
+    writeFileSync(join(root, '.github', 'workflows', 'ci.yml'), BROKEN)
+    // A plain directory — not `.venv` — races out from under statSync. This
+    // is the general try/catch half: the skip list cannot cover it by name.
+    mkdirSync(join(root, 'build-output'), { recursive: true })
+
+    race.statSyncThrowsFor = join(root, 'build-output')
+
+    expect(() => findWorkflowFiles(root)).not.toThrow()
+    expect(findWorkflowFiles(root)).toContain('.github/workflows/ci.yml')
+  })
+
+  it('skips .venv without statting it, even while it is being torn down', () => {
+    const root = makeTmpDir('tf-input-guard-venv')
+    mkdirSync(join(root, '.github', 'workflows'), { recursive: true })
+    writeFileSync(join(root, '.github', 'workflows', 'ci.yml'), BROKEN)
+    mkdirSync(join(root, '.venv', 'lib', 'python3.13', 'site-packages'), { recursive: true })
+    writeFileSync(join(root, '.venv', 'lib', 'python3.13', 'site-packages', 'pkg.txt'), 'x')
+
+    // Always throws for anything under .venv — proves the skip happens
+    // before any stat is attempted, not merely that a caught throw is
+    // tolerated.
+    race.statSyncThrowsFor = join(root, '.venv')
+
+    const files = findWorkflowFiles(root)
+    expect(files).toContain('.github/workflows/ci.yml')
+    expect(files.some((f) => f.startsWith('.venv'))).toBe(false)
   })
 })

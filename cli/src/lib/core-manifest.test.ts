@@ -302,6 +302,41 @@ describe('real repo core-manifest.json', () => {
     expect(isTemplateOwned('scripts/biffo.sh', manifest)).toBe(true)
   })
 
+  it('carves out infra/global/main.tf so the error_status_demote Lambda@Edge distributes (#1584)', () => {
+    // infra/ is user-owned wholesale. main.tf holds the error_status_demote
+    // Lambda@Edge (IAM role + policy attachment + function) that pairs with
+    // modules/cloud/aws/cdn/variables.tf's template-owned
+    // error_status_restore_lambda_arn plumbing -- before this carve-out the
+    // enabling half of that mechanism lived on the opposite side of the
+    // ownership boundary from the module that consumes it, so a template fix
+    // to the demote Lambda had no distribution channel into an already
+    // scaffolded instance.
+    const manifest = readCoreManifest(repoRoot)
+    expect(isTemplateOwned('infra/global/main.tf', manifest)).toBe(true)
+    // The carve-out is that one file, not the whole infra/global/ directory:
+    // outputs.tf and variables.tf carry the rest of the same
+    // error_status_restore_lambda_arn plumbing and were deliberately left
+    // user-owned, not surveyed for cross-instance divergence by this change.
+    expect(isTemplateOwned('infra/global/outputs.tf', manifest)).toBe(false)
+    expect(isTemplateOwned('infra/global/variables.tf', manifest)).toBe(false)
+    // ...and every other file under the bare infra/ prefix stays user-owned.
+    expect(isTemplateOwned('infra/environments/dev/main.tf', manifest)).toBe(false)
+  })
+
+  it('was user-owned before the #1584 carve-out, which is the whole defect', () => {
+    // The failing state, reconstructed from the live manifest by dropping the
+    // one entry that fixes it: without it, infra/global/main.tf resolves
+    // user-owned under the bare infra/ prefix, and `biffo core upgrade` never
+    // carries the error_status_demote Lambda@Edge into an instance.
+    const manifest = readCoreManifest(repoRoot)
+    const before: CoreManifest = {
+      ...manifest,
+      templateOwned: manifest.templateOwned.filter((p) => p !== 'infra/global/main.tf'),
+    }
+    expect(before.templateOwned.length).toBe(manifest.templateOwned.length - 1)
+    expect(isTemplateOwned('infra/global/main.tf', before)).toBe(false)
+  })
+
   it('carves out migrations/versions (append-only per-instance chain) but keeps the framework', () => {
     const manifest = readCoreManifest(repoRoot)
     // Instance-accumulated migration files must NOT be synced from the template.

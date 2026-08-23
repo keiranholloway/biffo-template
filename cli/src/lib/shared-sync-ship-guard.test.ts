@@ -45,8 +45,16 @@ function guardSource(): string {
   return lines.slice(start, end + 1).join('\n')
 }
 
+/** `wt_log` stubbed to a no-op, the same way `shared-sync-stage-lock.test.ts`
+ * stubs it: `require_staged_worktree` calls it on the failure path, but this
+ * file extracts that function alone, not the script that defines `wt_log`
+ * above it. Without the stub, `bash -c` reports `wt_log: command not found`
+ * on stderr — real output from a real defect (#1664), not a hypothetical:
+ * the missing-worktree tests below call it every time and printed exactly
+ * that line before this stub existed. The function still returns its correct
+ * exit code and message either way, so no assertion here ever caught it. */
 function callGuard(path: string) {
-  const program = `${guardSource()}\nrequire_staged_worktree ${JSON.stringify(path)} "some-repo"\n`
+  const program = `wt_log() { :; }\n${guardSource()}\nrequire_staged_worktree ${JSON.stringify(path)} "some-repo"\n`
   try {
     const stdout = execFileSync('bash', ['-c', program], { encoding: 'utf8' })
     return { code: 0, out: stdout }

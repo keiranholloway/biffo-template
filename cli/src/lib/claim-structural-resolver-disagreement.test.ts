@@ -122,7 +122,21 @@ function claim(binDir: string, issue: number) {
     const out = execFileSync(
       'sh',
       [script, String(issue), '--as', 'resolver-test-0816', '--check'],
-      { encoding: 'utf8', env: { ...process.env, PATH: `${binDir}:${process.env.PATH}` } },
+      {
+        encoding: 'utf8',
+        // FLEET_DIR points at a path that cannot exist: claim.sh's lease_query()
+        // (#1735) otherwise resolves the HOST machine's real $HOME/.claude/fleet
+        // bridge (if one happens to be installed there) and answers from its
+        // REAL, live lease registry instead of falling back to the label/PR/
+        // branch signals this file exists to exercise -- non-hermetic in
+        // exactly the way that is invisible until someone's workstation
+        // actually has the bridge installed.
+        env: {
+          ...process.env,
+          PATH: `${binDir}:${process.env.PATH}`,
+          FLEET_DIR: join(binDir, 'no-such-fleet-dir'),
+        },
+      },
     )
     return { code: 0, out }
   } catch (e) {

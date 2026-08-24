@@ -71,7 +71,18 @@ function run(dir: string, args: string[]) {
   try {
     const out = execFileSync('sh', [script, ...args], {
       encoding: 'utf8',
-      env: { ...process.env, PATH: `${dir}:${process.env.PATH}` },
+      // FLEET_DIR points at a path that cannot exist: claim.sh's lease_query()
+      // (#1735) otherwise resolves the HOST machine's real $HOME/.claude/fleet
+      // bridge (if one happens to be installed there) and answers from its
+      // REAL, live lease registry instead of falling back to the label/PR/
+      // branch signals these fixtures exist to exercise -- non-hermetic in
+      // exactly the way that is invisible until someone's workstation actually
+      // has the bridge installed.
+      env: {
+        ...process.env,
+        PATH: `${dir}:${process.env.PATH}`,
+        FLEET_DIR: join(dir, 'no-such-fleet-dir'),
+      },
     })
     return { code: 0, out }
   } catch (e) {

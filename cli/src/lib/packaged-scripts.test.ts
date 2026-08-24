@@ -8,9 +8,11 @@ import { describe, expect, it } from 'vitest'
 // because 71 hand-wired cleanups leaked for days until unrelated tooling died
 // with ENOSPC — which happened twice again today.
 import { makeTmpDir } from '../test-utils/tmp.js'
+import { isInstanceRepo } from './core-version.js'
 import { findPackagedScript } from './packaged-scripts.js'
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
+const runningInInstance = isInstanceRepo(repoRoot)
 
 /**
  * The bridge and the packaged script, together (#1109).
@@ -121,14 +123,19 @@ describe('scripts/biffo.sh resolves a satellite through its shared-version pin',
   })
 })
 
-describe('the copy it replaces', () => {
-  it('still exists, because Phase 0 proves the path before removing anything', () => {
-    // Deliberate: `scripts/wait-for-checks.sh` stays in `shared-files.json` until
-    // a published version carrying the subcommand has been proven from a real
-    // satellite. Removing it from the shared set only stops shared-sync KEEPING
-    // it in step — it does not delete the 15 existing copies, so removing it
-    // early would leave stale scripts drifting silently, which is worse than
-    // the state being fixed.
+describe.skipIf(runningInInstance)('the copy it replaces', () => {
+  it('still exists, because it is the packaging source, not a distributed copy', () => {
+    // `scripts/wait-for-checks.sh` was removed from `shared-files.json` on
+    // 2026-08-03 (#1109) — satellites resolve it through this bridge now, not a
+    // hand-kept copy — and from core-manifest.json's distributed set on
+    // 2026-08-24 (biffo-fleet#372's audit finding #4) — instances resolve it the
+    // same way, and a stale, uncalled copy sat in every instance for weeks with
+    // nothing reading it. Neither removal deletes this repo's OWN root copy: it
+    // stays here because it is what `sync-packaged-assets.mjs` packages into the
+    // CLI tarball at prepack (see `packaged-root-assets.mjs`), not a distributed
+    // artifact — which is exactly why this assertion is template-only. A fresh
+    // instance no longer receives this file at all, so the same check would fail
+    // there for a reason that has nothing to do with packaging.
     expect(existsSync(join(repoRoot, 'scripts/wait-for-checks.sh'))).toBe(true)
   })
 })

@@ -4,8 +4,10 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { makeTmpDir } from '../test-utils/tmp.js'
+import { isInstanceRepo } from './core-version.js'
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
+const runningInInstance = isInstanceRepo(repoRoot)
 const sharedFiles = JSON.parse(readFileSync(join(repoRoot, 'shared-files.json'), 'utf8')) as {
   files: string[]
 }
@@ -164,7 +166,10 @@ describe('the callers moved with the scripts', () => {
     expect(verify).not.toContain('[ -f scripts/pg-test-db.sh ]')
   })
 
-  it('practices-daily runs hook-audit through the bridge', () => {
+  it.skipIf(runningInInstance)('practices-daily runs hook-audit through the bridge', () => {
+    // practices-daily.sh is template-only as of biffo-fleet#372 (workstation
+    // cron tooling with no instance caller) -- an instance's checkout no
+    // longer carries it at all.
     const daily = readFileSync(join(repoRoot, 'scripts/practices-daily.sh'), 'utf8')
     expect(daily).toContain('sh scripts/biffo.sh hook-audit')
   })

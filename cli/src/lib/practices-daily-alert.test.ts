@@ -21,34 +21,13 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { makeTmpDir } from '../test-utils/tmp.js'
+import { isInstanceRepo } from './core-version.js'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
-const SCRIPT = join(repoRoot, 'scripts/practices-daily.sh')
+const runningInInstance = isInstanceRepo(repoRoot)
 
 /** The trap machinery, extracted so it can be driven without a 5-minute run. */
 let harness = ''
-
-beforeAll(() => {
-  const src = readFileSync(SCRIPT, 'utf8')
-  const grab = (name: string) => {
-    const start = src.indexOf(`${name}() {`)
-    if (start === -1) throw new Error(`${name} not found in practices-daily.sh`)
-    const end = src.indexOf('\n}\n', start)
-    return src.slice(start, end + 3)
-  }
-  // `_stamp_stale` and `_finish` both read `$PRACTICES_LOG` (#1126) rather than
-  // the string it used to hardcode, and that assignment lives at top level, not
-  // inside either function -- `grab()` only lifts function bodies, so without
-  // this line the harness ran `set -u` against a variable nothing had ever set,
-  // and the trap aborted mid-`_stamp_stale` before writing the banner it was
-  // meant to prove. Deliberately NOT pulling in the `exec > >(tee ...) 2>&1`
-  // line a few lines below it: that redirects the running script's own stderr
-  // into the tee pipe, which would starve the "stderr contains ABORTED" test
-  // below of anything to read on the child process's fd 2.
-  const logAssignment = src.match(/^PRACTICES_LOG=.*$/m)?.[0]
-  if (!logAssignment) throw new Error('PRACTICES_LOG assignment not found in practices-daily.sh')
-  harness = `set -euo pipefail\n${logAssignment}\n${grab('_notify')}\n${grab('_stamp_stale')}\n${grab('_finish')}\ntrap _finish EXIT\n`
-})
 
 interface Result {
   page: string
@@ -135,7 +114,36 @@ function abortRuns(
   }
 }
 
-describe('a failed collection marks the dashboard stale', () => {
+describe.skipIf(runningInInstance)('a failed collection marks the dashboard stale', () => {
+  // practices-daily.sh is template-only as of biffo-fleet#372 (workstation
+  // cron tooling with no instance caller) -- nested here rather than at
+  // module scope so the guard's `.skipIf` recognises it and so a module-level
+  // hook does not run in an instance where the enclosing describe is skipped.
+  // Populates the shared `harness` this file's other gated describes below
+  // also read, via ordinary module state (this describe runs first).
+  beforeAll(() => {
+    const src = readFileSync(join(repoRoot, 'scripts/practices-daily.sh'), 'utf8')
+    const grab = (name: string) => {
+      const start = src.indexOf(`${name}() {`)
+      if (start === -1) throw new Error(`${name} not found in practices-daily.sh`)
+      const end = src.indexOf('\n}\n', start)
+      return src.slice(start, end + 3)
+    }
+    // `_stamp_stale` and `_finish` both read `$PRACTICES_LOG` (#1126) rather
+    // than the string it used to hardcode, and that assignment lives at top
+    // level, not inside either function -- `grab()` only lifts function
+    // bodies, so without this line the harness ran `set -u` against a
+    // variable nothing had ever set, and the trap aborted mid-`_stamp_stale`
+    // before writing the banner it was meant to prove. Deliberately NOT
+    // pulling in the `exec > >(tee ...) 2>&1` line a few lines below it: that
+    // redirects the running script's own stderr into the tee pipe, which
+    // would starve the "stderr contains ABORTED" test below of anything to
+    // read on the child process's fd 2.
+    const logAssignment = src.match(/^PRACTICES_LOG=.*$/m)?.[0]
+    if (!logAssignment) throw new Error('PRACTICES_LOG assignment not found in practices-daily.sh')
+    harness = `set -euo pipefail\n${logAssignment}\n${grab('_notify')}\n${grab('_stamp_stale')}\n${grab('_finish')}\ntrap _finish EXIT\n`
+  })
+
   it('stamps a banner saying the numbers are not today’s', () => {
     const { page } = abortRuns(1)
 
@@ -190,7 +198,7 @@ describe('a failed collection marks the dashboard stale', () => {
   })
 })
 
-describe('the alert interrupts once, not once per failure', () => {
+describe.skipIf(runningInInstance)('the alert interrupts once, not once per failure', () => {
   it('replaces the previous card instead of stacking a new one', () => {
     // `-u critical` never auto-expires in GNOME. Without --replace-id, three
     // dark days leave three identical permanent cards, and the pile is what
@@ -251,7 +259,7 @@ describe('the alert interrupts once, not once per failure', () => {
   })
 })
 
-describe('a driven run can decline to alert a human', () => {
+describe.skipIf(runningInInstance)('a driven run can decline to alert a human', () => {
   it('sends nothing when PRACTICES_NO_DESKTOP_ALERT is set', () => {
     const { notifications } = abortRuns(3, undefined, { PRACTICES_NO_DESKTOP_ALERT: '1' })
 
@@ -277,12 +285,12 @@ describe('a driven run can decline to alert a human', () => {
   })
 })
 
-describe('the notification path is reachable from cron', () => {
+describe.skipIf(runningInInstance)('the notification path is reachable from cron', () => {
   it('does not gate on an inherited DBUS_SESSION_BUS_ADDRESS', () => {
     // The three calls this replaced were guarded on that variable being set,
     // which under cron it never is: the crontab exports PATH and nothing else.
     // So the estate-audit alert existed, read as coverage, and had never fired.
-    const src = readFileSync(SCRIPT, 'utf8')
+    const src = readFileSync(join(repoRoot, 'scripts/practices-daily.sh'), 'utf8')
     const notify = src.slice(
       src.indexOf('_notify() {'),
       src.indexOf('\n}\n', src.indexOf('_notify() {')),

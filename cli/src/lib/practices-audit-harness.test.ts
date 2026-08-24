@@ -36,20 +36,14 @@ import { beforeAll, describe, expect, it } from 'vitest'
 import { makeTmpDir } from '../test-utils/tmp.js'
 // @ts-expect-error -- plain .mjs so the standup runs on bare node.
 import { readAudits } from '../../../scripts/practices-standup.mjs'
+import { isInstanceRepo } from './core-version.js'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
-const DAILY = join(repoRoot, 'scripts/practices-daily.sh')
+const runningInInstance = isInstanceRepo(repoRoot)
 const ASSEMBLE = join(repoRoot, 'scripts/practices-audit-assemble.mjs')
 
 /** The real `audit_json`, lifted so it can be driven without a 5-minute run. */
 let auditJson = ''
-
-beforeAll(() => {
-  const src = readFileSync(DAILY, 'utf8')
-  const start = src.indexOf('audit_json() {')
-  if (start === -1) throw new Error('audit_json not found in practices-daily.sh')
-  auditJson = src.slice(start, src.indexOf('\n}\n', start) + 3)
-})
 
 interface Run {
   status: number
@@ -101,66 +95,82 @@ function runAudits(calls: string[], expected: string, dir: string): Run {
   return { status, stdout, raw, audits: raw ? JSON.parse(raw).audits : [] }
 }
 
-describe('audit_json survives an audit whose summary line does not match', () => {
-  /**
-   * The regression test. Against the pre-fix script this fails on every
-   * assertion: the run exits 1 at the second call, `REACHED_THE_END` is never
-   * printed, and the third audit never happens.
-   */
-  it('runs every subsequent audit after a grep miss', () => {
-    const dir = makeTmpDir('audit-harness')
-    const run = runAudits(
-      [
-        `audit_json first "echo hello-world" 'hello'`,
-        `audit_json second "echo nothing-matches-here" '^[0-9]+ working trees'`,
-        `audit_json third "echo still-running" 'still'`,
-      ],
-      'first second third',
-      dir,
-    )
-
-    expect(run.status).toBe(0)
-    expect(run.stdout).toContain('REACHED_THE_END')
-    expect(run.audits.map((a) => a.name)).toEqual(['first', 'second', 'third'])
-    expect(run.audits[2].summary).toBe('still-running')
-  })
-
-  /**
-   * A no-match used to report the constant "no summary line" and discard the
-   * audit's output. That is why the 2026-08-04 root cause is unrecoverable: the
-   * `arming` audit produced something, and nothing kept it.
-   */
-  it('preserves the audit output so a no-match is diagnosable', () => {
-    const dir = makeTmpDir('audit-harness')
-    const run = runAudits(
-      [`audit_json arming "echo 'DEAD working trees:'" '^[0-9]+ working trees'`],
-      'arming',
-      dir,
-    )
-
-    expect(run.audits[0].summary).toContain('no line matched')
-    expect(run.audits[0].summary).toContain('DEAD working trees:')
-  })
-
-  it('still reports a failing audit as failing', () => {
-    const dir = makeTmpDir('audit-harness')
-    const run = runAudits(
-      [`audit_json drift "echo '3 current, 2 drifted'; exit 1" 'current, .* drifted'`],
-      'drift',
-      dir,
-    )
-
-    expect(run.status).toBe(0)
-    expect(run.audits[0]).toMatchObject({
-      name: 'drift',
-      ok: false,
-      exit: 1,
-      summary: '3 current, 2 drifted',
+describe.skipIf(runningInInstance)(
+  'audit_json survives an audit whose summary line does not match',
+  () => {
+    // practices-daily.sh is template-only as of biffo-fleet#372 (workstation
+    // cron tooling with no instance caller) -- nested here rather than at
+    // module scope so the guard's `.skipIf` recognises it and so a module-level
+    // hook does not run in an instance where the enclosing describe is skipped.
+    // Populates the shared `auditJson` this file's other gated describes below
+    // also read, via ordinary module state (this describe runs first).
+    beforeAll(() => {
+      const src = readFileSync(join(repoRoot, 'scripts/practices-daily.sh'), 'utf8')
+      const start = src.indexOf('audit_json() {')
+      if (start === -1) throw new Error('audit_json not found in practices-daily.sh')
+      auditJson = src.slice(start, src.indexOf('\n}\n', start) + 3)
     })
-  })
-})
 
-describe('the assembled file is always well-formed', () => {
+    /**
+     * The regression test. Against the pre-fix script this fails on every
+     * assertion: the run exits 1 at the second call, `REACHED_THE_END` is never
+     * printed, and the third audit never happens.
+     */
+    it('runs every subsequent audit after a grep miss', () => {
+      const dir = makeTmpDir('audit-harness')
+      const run = runAudits(
+        [
+          `audit_json first "echo hello-world" 'hello'`,
+          `audit_json second "echo nothing-matches-here" '^[0-9]+ working trees'`,
+          `audit_json third "echo still-running" 'still'`,
+        ],
+        'first second third',
+        dir,
+      )
+
+      expect(run.status).toBe(0)
+      expect(run.stdout).toContain('REACHED_THE_END')
+      expect(run.audits.map((a) => a.name)).toEqual(['first', 'second', 'third'])
+      expect(run.audits[2].summary).toBe('still-running')
+    })
+
+    /**
+     * A no-match used to report the constant "no summary line" and discard the
+     * audit's output. That is why the 2026-08-04 root cause is unrecoverable: the
+     * `arming` audit produced something, and nothing kept it.
+     */
+    it('preserves the audit output so a no-match is diagnosable', () => {
+      const dir = makeTmpDir('audit-harness')
+      const run = runAudits(
+        [`audit_json arming "echo 'DEAD working trees:'" '^[0-9]+ working trees'`],
+        'arming',
+        dir,
+      )
+
+      expect(run.audits[0].summary).toContain('no line matched')
+      expect(run.audits[0].summary).toContain('DEAD working trees:')
+    })
+
+    it('still reports a failing audit as failing', () => {
+      const dir = makeTmpDir('audit-harness')
+      const run = runAudits(
+        [`audit_json drift "echo '3 current, 2 drifted'; exit 1" 'current, .* drifted'`],
+        'drift',
+        dir,
+      )
+
+      expect(run.status).toBe(0)
+      expect(run.audits[0]).toMatchObject({
+        name: 'drift',
+        ok: false,
+        exit: 1,
+        summary: '3 current, 2 drifted',
+      })
+    })
+  },
+)
+
+describe.skipIf(runningInInstance)('the assembled file is always well-formed', () => {
   it('records an audit that never ran as an explicit failure, not an absence', () => {
     const dir = makeTmpDir('audit-harness')
     const run = runAudits(
@@ -229,18 +239,21 @@ describe('the assembled file is always well-formed', () => {
  * the authority on whether it should have. But the copy has to be pinned, or the
  * eleventh audit is added and silently never checked for absence.
  */
-describe('the expected-audit list matches the audits actually called', () => {
-  it('declares exactly the audits the script runs, in order', () => {
-    const src = readFileSync(DAILY, 'utf8')
-    const called = [...src.matchAll(/^audit_json (\w+)/gm)].map((m) => m[1])
-    const declared = (src.match(/^AUDIT_EXPECTED='([^']+)'/m)?.[1] ?? '')
-      .split(/\s+/)
-      .filter(Boolean)
+describe.skipIf(runningInInstance)(
+  'the expected-audit list matches the audits actually called',
+  () => {
+    it('declares exactly the audits the script runs, in order', () => {
+      const src = readFileSync(join(repoRoot, 'scripts/practices-daily.sh'), 'utf8')
+      const called = [...src.matchAll(/^audit_json (\w+)/gm)].map((m) => m[1])
+      const declared = (src.match(/^AUDIT_EXPECTED='([^']+)'/m)?.[1] ?? '')
+        .split(/\s+/)
+        .filter(Boolean)
 
-    expect(called.length).toBeGreaterThan(0)
-    expect(declared).toEqual(called)
-  })
-})
+      expect(called.length).toBeGreaterThan(0)
+      expect(declared).toEqual(called)
+    })
+  },
+)
 
 describe('the standup reader degrades loudly, never silently', () => {
   const captureWarnings = (fn: () => unknown) => {

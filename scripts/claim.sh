@@ -578,6 +578,60 @@ note() { REASONS="${REASONS}  $1\n"; TAKEN=1; }
 # "free" or "taken" for certain.
 note_cannot_tell() { REASONS="${REASONS}  $1\n"; CANNOT_TELL=1; }
 
+# ADVISORY: reported, never blocking (ADR-0008, ADR-0009 Sec3b; biffo-fleet#372, M5).
+# What used to be `note()` for the label and the open-PR/branch checks below, now that
+# the lease is the authority for those two and can answer conclusively. Kept distinct
+# from `note()` on purpose -- a caller reading REASONS cannot tell an advisory line from
+# a blocking one by string alone, but the exit code and TAKEN can, and that is the
+# property every downstream reader (this script's own summary, and any external caller
+# parsing `Taken`/`Free`) must keep being able to rely on.
+note_advisory() { REASONS="${REASONS}  $1\n"; }
+
+# --- THE LEASE, THE ONE AUTHORITY (ADR-0008; ADR-0009 Sec3b; biffo-fleet#372, M5) -------
+#
+# `claim.sh` used to have THREE signals that each independently set TAKEN=1: the label,
+# an open PR, a remote branch. Every one is correct about ITSELF and none is correct
+# about reality -- tabsii-platform#1126 is the measured cost: a builder pushed the
+# cross-tenant RLS fix across 304/337 policies and died before opening a PR. The label
+# said Taken from a claim nobody was renewing, the branch alone ALSO said Taken with no
+# takeover path (#180), and the issue became permanently unreachable -- "the signal that
+# proves work is happening became the signal that guarantees it never resumes" (ADR-0008).
+#
+# The lease registry (ADR-0007) is a claim with an expiry the holder must keep renewing,
+# so a dead holder is detected by absence rather than by a human noticing. It lives in
+# `biffo-fleet`, a SEPARATE repo on this same machine (ADR-0007: single machine, no
+# remote-host handling) -- this script cannot `import` it, so it shells out to the one
+# bridge that repo built for exactly this (`bin/liveness.py`; see its own docstring).
+#
+# lease_query <issue> prints one TAB-separated line to stdout and returns:
+#   0  "live\t<holder>\t<expires_at>"  -- a live lease names a holder
+#   0  "free\t\t"                      -- the registry answered: nobody holds a live lease
+#   2  "unknown\t\t<reason>"           -- could not consult it (see below)
+lease_query() {
+  _lq_bridge="${FLEET_DIR:-$HOME/.claude/fleet}/liveness.py"
+  if [ ! -f "$_lq_bridge" ]; then
+    printf 'unknown\t\tliveness.py not found at %s (not yet deployed, or this box has no fleet)\n' "$_lq_bridge"
+    return 2
+  fi
+  if ! command -v python3 >/dev/null 2>&1; then
+    printf 'unknown\t\tpython3 not on PATH\n'
+    return 2
+  fi
+  _lq_out=$(python3 "$_lq_bridge" live "$(repo_slug)" "$1" 2>/dev/null)
+  _lq_rc=$?
+  case "$_lq_rc" in
+    0) printf '%s\n' "$_lq_out"; return 0 ;;
+    2) printf '%s\n' "$_lq_out"; return 2 ;;
+    *)
+      # A THIRD exit code from the bridge is a fact this script has never seen before,
+      # and a check whose only two known outcomes are hard-coded above must not silently
+      # trust a third one as either "live" or "free". Same "cannot tell" reasoning as
+      # everywhere else in this file.
+      printf 'unknown\t\tliveness.py exited %s, an outcome this script does not recognise\n' "$_lq_rc"
+      return 2 ;;
+  esac
+}
+
 # --- --release <token>: only the holder clears it (#1279) --------------------
 #
 # A claim nobody can prove ownership of is one anybody can clear, and a stale
@@ -865,7 +919,57 @@ if [ "$state" != "OPEN" ]; then
   exit 1
 fi
 
+# --- 0.5. THE LEASE. The one authority for "is this being worked on" ---------
+#
+# ADR-0008: "The lease decides. A unit with no live lease is available, whatever
+# else exists." So this runs FIRST, ahead of the label/PR/branch below, and its
+# answer decides whether those three still BLOCK (`note`) or only INFORM
+# (`note_advisory`) -- the "many inputs, one authority" split ADR-0008 draws
+# between detection (fine, encouraged, kept) and a second STORED verdict (the
+# defect this migration removes).
+#
+# INTERIM RULE FOR DISAGREEMENT (temporarily SEVEN sources, not one -- ADR-0008's
+# own phrase for this migration window): a LIVE lease always wins outright. A
+# lease the registry can positively report as FREE demotes the label/PR/branch
+# below to advisory. But when the lease CANNOT be consulted at all -- the most
+# likely state today, since nothing acquires one until the fleet's restart
+# milestones (biffo-fleet#376/#377) wire dispatch through `supervise.py`, and
+# `bin/liveness.py` itself needs a one-time hand symlink into $FLEET_DIR before
+# any instance repo can even reach it (see `lease_query`'s own docstring) -- this
+# falls back to EXACTLY the pre-migration three-signal behaviour below, unchanged,
+# rather than degrading every claim to "Cannot tell" for the length of that gap.
+# That would be a worse regression than the one this migration fixes: a script
+# every agent runs before starting any work would refuse ALL of them.
+LEASE_KNOWN=0
+_lease_line=$(lease_query "$ISSUE")
+_lease_rc=$?
+_lease_kind=$(printf '%s' "$_lease_line" | cut -f1)
+_lease_holder=$(printf '%s' "$_lease_line" | cut -f2)
+_lease_exp=$(printf '%s' "$_lease_line" | cut -f3)
+case "$_lease_rc $_lease_kind" in
+  "0 live")
+    LEASE_KNOWN=1
+    if [ -n "$HOLDER" ] && [ "$_lease_holder" = "$HOLDER" ]; then
+      echo "${DIM}lease      held by ${HOLDER} — that is you${OFF}"
+    else
+      note "${RED}lease${OFF}      held by ${_lease_holder:-unknown}, expires ${_lease_exp:-unknown}"
+    fi
+    ;;
+  "0 free")
+    LEASE_KNOWN=1
+    ;;
+  *)
+    # 2/unknown, or any shape this script does not recognise -- fail closed to
+    # the OLD rule (LEASE_KNOWN stays 0), never to "must be free".
+    ;;
+esac
+
 # --- 1. The label. Easiest to check, easiest to forget. ----------------------
+#
+# ADVISORY once the lease has an opinion (LEASE_KNOWN=1): reported via
+# `note_advisory` rather than `note`, so it is never again what makes an issue
+# permanently unreachable on its own (ADR-0009 Sec3, once the lease exists).
+# Still the ONLY signal used, unchanged, when the lease could not be consulted.
 
 case ",$labels," in
   *",$LABEL,"*)
@@ -891,8 +995,20 @@ case ",$labels," in
     fi
     case "$_held_status" in
       0) echo "${DIM}label      carries '$LABEL', held by ${HOLDER} — that is you${OFF}" ;;
-      2) note_cannot_tell "${YELLOW}label${OFF}      carries '$LABEL' — cannot tell who holds it (comments unreadable)" ;;
-      *) note "${YELLOW}label${OFF}      carries '$LABEL' (issue last updated $updated)" ;;
+      2)
+        if [ "$LEASE_KNOWN" -eq 1 ]; then
+          note_advisory "${YELLOW}label${OFF}      carries '$LABEL' — cannot tell who holds it (comments unreadable; advisory, the lease already answered)"
+        else
+          note_cannot_tell "${YELLOW}label${OFF}      carries '$LABEL' — cannot tell who holds it (comments unreadable)"
+        fi
+        ;;
+      *)
+        if [ "$LEASE_KNOWN" -eq 1 ]; then
+          note_advisory "${YELLOW}label${OFF}      carries '$LABEL' (issue last updated $updated) — advisory, the lease decides"
+        else
+          note "${YELLOW}label${OFF}      carries '$LABEL' (issue last updated $updated)"
+        fi
+        ;;
     esac
     ;;
 esac
@@ -915,7 +1031,14 @@ if [ -n "$open_prs" ]; then
   printf '%s\n' "$open_prs" | while IFS= read -r pr; do
     [ -n "$pr" ] && echo "  ${RED}open PR${OFF}    $pr"
   done
-  note "${RED}open PR${OFF}    see above — someone has working code"
+  # ADVISORY once the lease has an opinion (ADR-0008/0009 Sec3b): a human working by
+  # hand opens a PR and holds no lease, and this is what keeps that visible without
+  # letting it wedge the issue the way it did for tabsii-platform#1126's branch.
+  if [ "$LEASE_KNOWN" -eq 1 ]; then
+    note_advisory "${RED}open PR${OFF}    see above — advisory, the lease decides"
+  else
+    note "${RED}open PR${OFF}    see above — someone has working code"
+  fi
 fi
 
 # --- 3. A remote branch naming it --------------------------------------------
@@ -945,7 +1068,17 @@ if [ -n "$branches" ]; then
   printf '%s\n' "$branches" | while IFS= read -r b; do
     [ -n "$b" ] && echo "  ${RED}branch${OFF}     $b"
   done
-  note "${RED}branch${OFF}     a remote branch names this issue"
+  # ADVISORY once the lease has an opinion (ADR-0008/0009 Sec3b) -- this is THE signal
+  # ADR-0009 Sec3b names by number: "a remote branch names this issue" alone used to set
+  # TAKEN=1 unconditionally and had no takeover path (#180). tabsii-platform#1126 is
+  # exactly this shape: a branch existed, no PR, the builder was gone, and this line is
+  # why the issue could never be reclaimed. It stays reported -- a human working by hand
+  # creates a branch and holds no lease -- it just no longer decides on its own.
+  if [ "$LEASE_KNOWN" -eq 1 ]; then
+    note_advisory "${RED}branch${OFF}     a remote branch names this issue — advisory, the lease decides"
+  else
+    note "${RED}branch${OFF}     a remote branch names this issue"
+  fi
 fi
 
 # --- 4. A recently merged PR that already closed it --------------------------

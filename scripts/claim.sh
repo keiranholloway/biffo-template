@@ -101,9 +101,12 @@
 #     morning, three were "work exists, label does not" — so a gate keyed on
 #     the label would have caught one of four. This checks only what git and
 #     GitHub cannot help but know: an open PR, a remote branch.
-#   - **Never compares identity.** A claim on #1109 was recorded as
-#     `github-actions[bot]` because of a repo-local `user.email` override —
-#     usernames are not a trustworthy signal here.
+#   - **Never compares identity by GitHub username.** A claim on #1109 was
+#     recorded as `github-actions[bot]` because of a repo-local `user.email`
+#     override — usernames are not a trustworthy signal here. What #1698 adds
+#     below is not a username comparison: it is the claim record's own
+#     `claim-branch` field, written by `--as` at claim time, checked against
+#     the branch actually being pushed.
 #   - **Excludes the branch being pushed, and any PR whose head IS that
 #     branch**, from counting as a conflict. Without this, pushing your own
 #     branch a second time blocks you on your own work.
@@ -122,6 +125,18 @@
 #     waved through the most ordinary rival there is. Note the discount applies
 #     to the BRANCH signal only: an OPEN PR is a live claim regardless of
 #     lineage and is never discounted.
+#   - **The discount above is ALSO gated on the claim record (#1698).** Patch
+#     equivalence alone cannot tell "my own rebase of my own predecessor" from
+#     "an independent rival's rebase of the same starting point" — two sessions
+#     rebasing the same predecessor onto the same tip produce identical
+#     patches, with zero merge commits, and no open PR on either side for the
+#     first several minutes. `branch_is_absorbed` therefore only DISCOUNTS a
+#     candidate when the issue's claim record — `claim_guard_branch`, read from
+#     the same durable comment `--as` already writes, never a new store —
+#     names the branch being pushed as the CURRENT claim. Missing, unreadable,
+#     written before this field existed, or naming a different branch: all
+#     fail CLOSED into a conflict, same as an ordinary rival, with a message
+#     explaining why rather than a silent pass.
 #   - **A real conflict — another branch or another open PR naming the same
 #     issue — exits 1**, naming what was found. AGENTS.md permits stealing a
 #     claim that is over an hour stale, with a comment; the message points
@@ -141,6 +156,7 @@ REPO=""
 HOLDER=""
 RELEASE=""
 HOLDER_MARK="claim-holder:"
+BRANCH_MARK="claim-branch:"
 CHECK_ONLY=""
 GUARD_BRANCH=""
 
@@ -276,6 +292,36 @@ claim_held_by() {
   [ -n "$_c" ] || return 1
   case "$_c" in
     *"$HOLDER_MARK$2"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# claim_guard_branch <issue> -- tri-state read of the RECORDED branch on
+# $issue's most recent claim comment (the `claim-branch:` field the write
+# side below adds, #1698). Prints the branch name and returns 0 when a claim
+# comment carries one; returns 1 when the comment list is readable but gives
+# no confirmed branch (no claim comment at all, or one written before this
+# field existed); returns 2 when the comment list itself could not be read.
+#
+# 1 and 2 are BOTH "not confirmed", never "confirmed free" -- the same
+# fail-closed shape `claim_held_by` already uses for the holder token, for the
+# same reason: a caller that collapsed them would treat an unclaimed issue or
+# a flaky API call as proof nobody else is here, which is exactly the
+# fail-open `--guard`'s own lineage discount shipped with (#1696) and this
+# function exists to close.
+claim_guard_branch() {
+  _c=$(gh_issue view "$1" --json comments \
+    --jq "[.comments[]? | select(.body | contains(\"$HOLDER_MARK\"))] | last | .body // \"\"" \
+    2>/dev/null) || return 2
+  [ -n "$_c" ] || return 1
+  case "$_c" in
+    *"$BRANCH_MARK"*)
+      _gb_rest=${_c#*"$BRANCH_MARK"}
+      _gb_branch=${_gb_rest%% *}
+      [ -n "$_gb_branch" ] || return 1
+      printf '%s\n' "$_gb_branch"
+      return 0
+      ;;
     *) return 1 ;;
   esac
 }
@@ -743,6 +789,39 @@ if [ -n "$GUARD_BRANCH" ]; then
     findings="${findings}  ${RED}open PR${OFF}    $(printf '%s' "$open_prs" | head -1)\n"
   fi
 
+  # --- the claim record's own idea of who currently holds $guard_issue --------
+  #
+  # #1698: `branch_is_absorbed` below answers "does the candidate carry work I
+  # lack?" -- a content test, not an identity one. Two independent sessions
+  # rebasing the same predecessor onto the same tip produce patch-id-equivalent
+  # commits, so content alone cannot tell "my own rebase of my own predecessor"
+  # from a genuine rival's rebase of the same starting point. Read once, used
+  # below to gate every absorption on this push -- not by comparing $2's shape
+  # the way `claim_held_by` does (`--guard` runs with no token, by design, see
+  # the header), but by checking whether the record's own `claim-branch` names
+  # THIS branch.
+  _guard_confirmed_branch=$(claim_guard_branch "$guard_issue")
+  _guard_confirmed_rc=$?
+  case "$_guard_confirmed_rc" in
+    0)
+      if [ "$_guard_confirmed_branch" = "$GUARD_BRANCH" ]; then
+        _guard_identity_ok=1
+        _guard_identity_reason=""
+      else
+        _guard_identity_ok=0
+        _guard_identity_reason="the claim record for #$guard_issue names \`$_guard_confirmed_branch\`, not this branch"
+      fi
+      ;;
+    1)
+      _guard_identity_ok=0
+      _guard_identity_reason="#$guard_issue carries no claim record naming a branch (unclaimed, or claimed before #1698's fix)"
+      ;;
+    *)
+      _guard_identity_ok=0
+      _guard_identity_reason="the claim record for #$guard_issue could not be read"
+      ;;
+  esac
+
   # --- a remote branch naming the issue, excluding our own branch -------------
   branch_err=$(mktemp)
   raw_branches=$(remote_branches 2>"$branch_err")
@@ -759,11 +838,15 @@ if [ -n "$GUARD_BRANCH" ]; then
     # substring search for $guard_issue inside the candidate's raw text. See
     # `derive_branch_issue` above for why that asymmetry was the defect.
     # Each candidate that names the same issue is then classified by LINEAGE
-    # (see `branch_is_absorbed`): `rival` is a conflict, `absorbed` is this
-    # pusher's own superseded predecessor and is reported but not blocked.
+    # (see `branch_is_absorbed`) AND, when lineage says absorbed, by IDENTITY
+    # (`$_guard_identity_ok`, above): a genuine rival is always `rival`; a
+    # content-superseded predecessor is only actually `absorbed` when the
+    # claim record also confirms this push as the current claim -- otherwise
+    # it is `denied` and treated as a conflict too (#1698 fails this closed,
+    # rather than the silent pass it replaces), with a message explaining why.
     # The candidate's SHA -- `git ls-remote`'s first, tab-separated field -- is
-    # what makes that question answerable, so it is no longer thrown away by a
-    # `sed` that kept only the name.
+    # what makes lineage answerable, so it is no longer thrown away by a `sed`
+    # that kept only the name.
     _classified=$(printf '%s\n' "$raw_branches" |
       while IFS= read -r _line; do
         case "$_line" in
@@ -778,27 +861,39 @@ if [ -n "$GUARD_BRANCH" ]; then
         [ "$_cand_issue" = "$guard_issue" ] || continue
         _cand_sha=$(printf '%s\n' "$_line" | cut -f1)
         if branch_is_absorbed "$_cand_sha" "$guard_tip"; then
-          printf 'absorbed %s\n' "$_cand"
+          if [ "$_guard_identity_ok" -eq 1 ]; then
+            printf 'absorbed %s\n' "$_cand"
+          else
+            printf 'denied %s\n' "$_cand"
+          fi
         else
           printf 'rival %s\n' "$_cand"
         fi
       done)
 
     other_branch=$(printf '%s\n' "$_classified" | sed -n 's/^rival //p' | head -1)
+    denied_branch=$(printf '%s\n' "$_classified" | sed -n 's/^denied //p' | head -1)
     absorbed_branches=$(printf '%s\n' "$_classified" | sed -n 's/^absorbed //p')
     if [ -n "$other_branch" ]; then
       conflict=1
       findings="${findings}  ${RED}branch${OFF}     $other_branch\n"
+    elif [ -n "$denied_branch" ]; then
+      conflict=1
+      findings="${findings}  ${RED}branch${OFF}     $denied_branch ${DIM}(content looks like a superseded predecessor, but $_guard_identity_reason)${OFF}\n"
     fi
   fi
 
   # A discount a guard grants silently is a guard nobody can audit, so say so
-  # -- on stderr, only when it actually fired, and whether or not a real rival
-  # was also found.
+  # -- on stderr, only when it actually fired. One line per branch (#1698):
+  # $absorbed_branches can hold more than one name, and explaining several in
+  # the singular sent whoever read it looking for the wrong branch.
   if [ -n "$absorbed_branches" ]; then
-    printf '%b' "${DIM}claim --guard: discounted $(printf '%s' "$absorbed_branches" | tr '\n' ' ') ${OFF}" >&2
-    echo "${DIM}-- every commit on it is already carried by $GUARD_BRANCH, so it is a${OFF}" >&2
-    echo "${DIM}superseded predecessor rather than a rival claim (#1112).${OFF}" >&2
+    printf '%s\n' "$absorbed_branches" | while IFS= read -r _ab; do
+      [ -n "$_ab" ] || continue
+      echo "${DIM}claim --guard: discounted $_ab -- every commit on it is already carried by${OFF}" >&2
+      echo "${DIM}$GUARD_BRANCH, and the claim record for #$guard_issue confirms $GUARD_BRANCH, so${OFF}" >&2
+      echo "${DIM}it is a superseded predecessor rather than a rival claim (#1112).${OFF}" >&2
+    done
   fi
 
   if [ "$conflict" -eq 1 ]; then
@@ -1156,13 +1251,28 @@ gh_label create "$LABEL" \
 # which is why a claim could be written with nothing to identify it. That branch
 # is now unreachable (the requirement above exits 2 first), so the conditional
 # would only be a place for the old behaviour to come back.
+#
+# `claim-branch` (#1698) is the fact `--guard` reads back via
+# `claim_guard_branch` to confirm a discount is safe -- this comment is that
+# mechanism's one durable, non-worktree record, so nothing new is invented,
+# only this field added to it. AGENTS.md's own sequence puts worktree-and-
+# branch creation before this claim runs, so the branch normally already
+# exists; when it genuinely does not (detached HEAD, or `HEAD` itself, which
+# `--abbrev-ref` returns rather than a real name), the field is OMITTED
+# entirely rather than written empty -- an empty `claim-branch:` would match
+# any `case *"$BRANCH_MARK"*` probe as "present" while naming nothing, the
+# same empty-token trap `claim_held_by` already guards against for $2 (#826).
+_claim_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '')
+case "$_claim_branch" in
+  '' | HEAD) _claim_branch='' ;;
+esac
 gh_issue edit "$ISSUE" --add-label "$LABEL" >/dev/null 2>&1 || {
   echo "${RED}claim: could not apply the '$LABEL' label.${OFF}" >&2
   echo "${DIM}  Not claimed. Do not start work on the assumption that it worked.${OFF}" >&2
   exit 2
 }
 gh_issue comment "$ISSUE" \
-  --body "Claimed at $(date -u +%FT%TZ) by \`$(git config user.name 2>/dev/null || echo agent)\`. ${HOLDER_MARK}${HOLDER} Release it — remove the label — on merge, or if you stop." \
+  --body "Claimed at $(date -u +%FT%TZ) by \`$(git config user.name 2>/dev/null || echo agent)\`. ${HOLDER_MARK}${HOLDER}${_claim_branch:+ ${BRANCH_MARK}${_claim_branch}} Release it — remove the label — on merge, or if you stop." \
   >/dev/null 2>&1
 
 echo "${GREEN}Claimed.${OFF}"

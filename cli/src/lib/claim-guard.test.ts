@@ -201,14 +201,18 @@ describe('claim.sh --guard', () => {
   })
 
   it('never treats the label as a signal — it is not asked about at all', () => {
-    // Guard mode makes no `gh issue` call of any kind, so a labelled-but-
-    // unworked issue (#1188's shape) cannot block a push. Proven by the call
-    // log rather than by inspecting labels, since guard mode has no code path
-    // that could read one.
+    // Guard mode makes no `gh issue --json labels` call of any kind, so a
+    // labelled-but-unworked issue (#1188's shape) cannot block a push on the
+    // label alone. It DOES now make one `gh issue view --json comments` call
+    // (#1698) to confirm the claim record before granting a lineage discount
+    // — a different signal from the label, and one this fixture has no
+    // candidate branch to even exercise. Proven by the call log rather than
+    // by inspecting labels, since guard mode has no code path that could read
+    // one.
     const { dir, callLog } = stubBins({ remoteBranches: ['feat/4321-thing'] })
     run(dir, 'feat/4321-thing')
 
-    expect(readFileSync(callLog, 'utf8')).not.toMatch(/gh issue/)
+    expect(readFileSync(callLog, 'utf8')).not.toMatch(/labels/)
   })
 
   it('warns and ALLOWS when it cannot tell', () => {

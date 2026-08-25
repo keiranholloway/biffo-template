@@ -31,6 +31,19 @@ import { makeTmpDir } from '../test-utils/tmp.js'
  * estate rather than invented: a pre-code reservation, the symmetric
  * seconds-apart race of 2026-08-03, a cherry-pick, a revert, a force-push.
  *
+ * That matrix left ONE row undiscountable on purpose: a rival whose every
+ * commit is patch-id equivalent to this push's own (#1698). A claim reserves
+ * FUTURE work and a content test can only see PAST work, so no amount of
+ * object-graph cleverness closes that row — two independent sessions
+ * rebasing the same predecessor onto the same tip produce byte-identical
+ * patches. #1698 closes it not by sharpening the content test but by gating
+ * every content-`absorbed` verdict on the claim record's own `claim-branch`
+ * field (`claim_guard_branch`, in `scripts/claim.sh`) confirming THIS push as
+ * the issue's current claim. Missing, unreadable, pre-dating the field, or
+ * naming a different branch — every one of those fails CLOSED into a
+ * conflict, same as a genuine rival, rather than the silent pass this
+ * replaces.
+ *
  * `GIT_DIR`/`GIT_WORK_TREE`/`GIT_INDEX_FILE` are stripped from every child's
  * environment. git EXPORTS those into hooks, and this suite can be run from
  * `.husky/pre-push`; leaving them set would make every `git` call below operate
@@ -62,10 +75,13 @@ interface Fixture {
 }
 
 /**
- * A `gh` that answers only what the guard asks, and reports no open PRs — so
- * every outcome below is attributable to the BRANCH signal under test.
+ * A `gh` that answers only what the guard asks, reports no open PRs, and
+ * answers `issue view`'s claim-record read with `claimCommentBody` (default:
+ * empty, i.e. "no claim record at all") — so every outcome below is
+ * attributable to the BRANCH and CLAIM-RECORD signals under test, not to an
+ * unhandled call falling through to the generic error.
  */
-function ghStub(dir: string): string {
+function ghStub(dir: string, claimCommentBody = ''): string {
   const stub = join(dir, 'stub')
   mkdirSync(stub)
   writeFileSync(
@@ -74,6 +90,7 @@ function ghStub(dir: string): string {
       '#!/usr/bin/env sh',
       'if [ "$1" = "repo" ] && [ "$2" = "view" ]; then echo "owner/repo"; exit 0; fi',
       'if [ "$1" = "pr" ] && [ "$2" = "list" ]; then exit 0; fi',
+      `if [ "$1" = "issue" ] && [ "$2" = "view" ]; then echo "${claimCommentBody}"; exit 0; fi`,
       'echo "stub gh: unhandled: $*" >&2; exit 1',
       '',
     ].join('\n'),
@@ -90,7 +107,7 @@ function ghStub(dir: string): string {
  * would still leave every other branch's objects readable and the
  * "objects absent from this clone" case could not be built at all.
  */
-function makeFixture(): Fixture {
+function makeFixture(claimCommentBody = ''): Fixture {
   const dir = makeTmpDir('claimlineage')
   const origin = join(dir, 'origin.git')
   const work = join(dir, 'work')
@@ -109,7 +126,7 @@ function makeFixture(): Fixture {
   git(work, 'commit', '-qm', 'base')
   git(work, 'push', '-q', 'origin', 'dev')
 
-  return { work, stub: ghStub(dir), git }
+  return { work, stub: ghStub(dir, claimCommentBody), git }
 }
 
 function commit(fx: Fixture, name: string, body: string): void {
@@ -134,8 +151,8 @@ function guard(fx: Fixture, branch: string, cwd = fx.work) {
  * REBASED onto it under a new name, and the old branch is left on the remote.
  * Returns the fixture with `fix/1050-carry-rebased` checked out.
  */
-function withRebasedPredecessor(): Fixture {
-  const fx = makeFixture()
+function withRebasedPredecessor(claimCommentBody = ''): Fixture {
+  const fx = makeFixture(claimCommentBody)
   fx.git(fx.work, 'checkout', '-q', '-b', 'fix/1050-upstream-carry')
   commit(fx, 'a.txt', 'one\n')
   commit(fx, 'b.txt', 'two\n')
@@ -179,8 +196,12 @@ describe('claim.sh --guard lineage (tabsii-com/tabsii-platform#1112)', () => {
     expect(cherry).not.toMatch(/^\+/m)
   })
 
+  /** The claim record confirming `fix/1050-carry-rebased` as the live claim on #1050. */
+  const CONFIRMS_CARRY_REBASED =
+    'Claimed by agent. claim-holder:test-token claim-branch:fix/1050-carry-rebased Release it on merge.'
+
   it('ALLOWS the push, and says so, when the only other branch is its own superseded predecessor', () => {
-    const fx = withRebasedPredecessor()
+    const fx = withRebasedPredecessor(CONFIRMS_CARRY_REBASED)
     const { code, out } = guard(fx, 'fix/1050-carry-rebased')
 
     expect(code, out).toBe(0)
@@ -192,7 +213,7 @@ describe('claim.sh --guard lineage (tabsii-com/tabsii-platform#1112)', () => {
   it('STILL BLOCKS a genuine rival claimant while discounting the predecessor', () => {
     // The case that matters: a change passing the first two and failing this
     // one has not fixed the guard, it has disabled it.
-    const fx = withRebasedPredecessor()
+    const fx = withRebasedPredecessor(CONFIRMS_CARRY_REBASED)
     addRival(fx, 'fix/1050-other-agent', 'rival.txt')
 
     const { code, out } = guard(fx, 'fix/1050-carry-rebased')
@@ -200,8 +221,45 @@ describe('claim.sh --guard lineage (tabsii-com/tabsii-platform#1112)', () => {
     expect(code, out).toBe(1)
     expect(out).toContain('claimed by someone else')
     expect(out).toContain('fix/1050-other-agent')
-    // The predecessor is discounted, and never presented as the conflict.
+    // The predecessor is discounted, and never presented as the conflict --
+    // a real rival elsewhere does not revoke a confirmed discount.
     expect(out).not.toMatch(/branch {2,}fix\/1050-upstream-carry/)
+    expect(out).toContain('discounted fix/1050-upstream-carry')
+  })
+
+  it('BLOCKS the discount (never falls back to content-only) when the claim record cannot be read at all', () => {
+    // gh outage / unauthenticated. Falling back to content-only here would
+    // silently reopen #1698 for as long as the outage lasts.
+    const fx = withRebasedPredecessor()
+    writeFileSync(
+      join(fx.stub, 'gh'),
+      [
+        '#!/usr/bin/env sh',
+        'if [ "$1" = "repo" ] && [ "$2" = "view" ]; then echo "owner/repo"; exit 0; fi',
+        'if [ "$1" = "pr" ] && [ "$2" = "list" ]; then exit 0; fi',
+        'if [ "$1" = "issue" ] && [ "$2" = "view" ]; then echo "gh: API error" >&2; exit 1; fi',
+        'echo "stub gh: unhandled: $*" >&2; exit 1',
+        '',
+      ].join('\n'),
+    )
+
+    const { code, out } = guard(fx, 'fix/1050-carry-rebased')
+    expect(code, out).toBe(1)
+    expect(out).toContain('fix/1050-upstream-carry')
+    expect(out).toContain('could not be read')
+  })
+
+  it('BLOCKS the discount when the claim record predates the claim-branch field (#1698 rollout gap)', () => {
+    // A claim written before this field existed reads as "not confirmed",
+    // never as "confirmed free" -- same fail-closed shape as an unreadable one.
+    const fx = withRebasedPredecessor(
+      'Claimed by agent. claim-holder:test-token Release it on merge.',
+    )
+
+    const { code, out } = guard(fx, 'fix/1050-carry-rebased')
+    expect(code, out).toBe(1)
+    expect(out).toContain('fix/1050-upstream-carry')
+    expect(out).toContain('claimed before #1698')
   })
 
   it('BLOCKS a rival whose objects this clone has never fetched — absence of evidence is not supersession', () => {
@@ -323,8 +381,8 @@ describe('claim.sh --guard lineage (tabsii-com/tabsii-platform#1112)', () => {
  */
 describe('claim.sh --guard: a commitless candidate is a reservation, not a predecessor', () => {
   /** My branch, with real work on it, ready to push. */
-  function withMyWork(): Fixture {
-    const fx = makeFixture()
+  function withMyWork(claimCommentBody = ''): Fixture {
+    const fx = makeFixture(claimCommentBody)
     fx.git(fx.work, 'checkout', '-q', '-b', 'fix/1050-mine')
     commit(fx, 'a.txt', 'one\n')
     commit(fx, 'b.txt', 'two\n')
@@ -456,20 +514,15 @@ describe('claim.sh --guard: a commitless candidate is a reservation, not a prede
     expect(out).toContain('fix/1050-other-agent')
   })
 
-  it('still DISCOUNTS a rival carrying only patch-identical work — the declared residual gap', () => {
-    // Executable, so the limit cannot be quietly widened or quietly forgotten.
-    // A claim reserves FUTURE work and this predicate can only see PAST work,
-    // so a content test cannot close this row: the rival's commits are all
-    // already in hand, and nothing in the object graph distinguishes that from
-    // a rebase. Declared in `branch_is_absorbed`'s header, not silent.
-    // Built as INDEPENDENT commits with their own messages, not as a
-    // cherry-pick: git is deterministic, so cherry-picking these two commits
-    // onto the same base reproduces their exact SHAs, and the branch would
-    // then be the "candidate at the pusher's tip" row above wearing a
-    // disguise. That is worth stating because the first prosecution's
-    // equivalent fixture was that disguise, and it is now blocked for the
-    // ordinary reason rather than tolerated for this one.
-    const fx = withMyWork()
+  /**
+   * Build the two independent, patch-identical branches shared by both tests
+   * below: `fix/1050-mine` (this push) and `fix/1050-other-agent` (the
+   * rival), each carrying the SAME two changes as its own, distinct commits —
+   * not a cherry-pick, which would reproduce identical SHAs and collapse this
+   * into the "candidate at the pusher's tip" row above wearing a disguise.
+   */
+  function withPatchIdenticalRival(claimCommentBody = ''): { fx: Fixture; cand: string } {
+    const fx = withMyWork(claimCommentBody)
     fx.git(fx.work, 'checkout', '-q', '-b', 'fix/1050-other-agent', 'dev')
     writeFileSync(join(fx.work, 'a.txt'), 'one\n')
     fx.git(fx.work, 'add', '-A')
@@ -481,10 +534,42 @@ describe('claim.sh --guard: a commitless candidate is a reservation, not a prede
     const cand = fx.git(fx.work, 'rev-parse', 'fix/1050-other-agent')
     fx.git(fx.work, 'checkout', '-q', 'fix/1050-mine')
     fx.git(fx.work, 'branch', '-D', 'fix/1050-other-agent')
+    return { fx, cand }
+  }
 
-    // Distinct commits, carrying nothing this push lacks.
+  it('BLOCKS a rival carrying only patch-identical work when the claim record does not confirm this push (#1698, closing the declared residual gap)', () => {
+    // This used to be the declared residual gap: a claim reserves FUTURE work
+    // and a content test can only see PAST work, so `branch_is_absorbed`
+    // alone cannot tell "my own rebase of my own predecessor" from an
+    // independent rival's rebase of the same starting point — their patches
+    // are byte-for-byte the same. #1698 closes it not by making the content
+    // test smarter (it cannot be) but by requiring the claim record to also
+    // confirm this push before a content-absorbed candidate is discounted.
+    // No claim record here (the default empty stub) is "not confirmed", the
+    // same as an unreadable one — fails closed.
+    const { fx, cand } = withPatchIdenticalRival()
+
+    // Distinct commits, carrying nothing this push lacks — content alone
+    // still says "absorbed"; the assertion is that this fix does not stop
+    // there.
     expect(cand).not.toBe(fx.git(fx.work, 'rev-parse', 'fix/1050-mine'))
     expect(fx.git(fx.work, 'rev-list', '--count', cand, '--not', 'fix/1050-mine')).toBe('2')
+
+    const { code, out } = guard(fx, 'fix/1050-mine')
+    expect(code, out).toBe(1)
+    expect(out).toContain('claimed by someone else')
+    expect(out).toContain('fix/1050-other-agent')
+    expect(out).toContain('content looks like a superseded predecessor')
+  })
+
+  it('ALLOWS discounting the same patch-identical rival once the claim record confirms this push', () => {
+    // The other half of #1698: the fix must not just block everything. When
+    // the claim record's own `claim-branch` names this exact branch, the same
+    // content-absorbed candidate is still safely discounted — this is not a
+    // revert of #1696's original fix, only a precondition added to it.
+    const { fx } = withPatchIdenticalRival(
+      'Claimed by agent. claim-holder:test-token claim-branch:fix/1050-mine Release it on merge.',
+    )
 
     const { code, out } = guard(fx, 'fix/1050-mine')
     expect(code, out).toBe(0)

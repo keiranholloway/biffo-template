@@ -13,6 +13,7 @@ import { runEventBridgeLogPermissionCheck } from '../scripts/check-eventbridge-l
 import { runInstanceAdoptionCheck } from '../scripts/check-instance-adoption.js'
 import { runLambdaOutputCheck } from '../scripts/check-lambda-output.js'
 import { runMigrationBodyChangeCheck } from '../scripts/check-migration-body-change.js'
+import { runOrphanRatchetCheck } from '../scripts/check-orphan-ratchet.js'
 import { runPipeTrapCheck } from '../scripts/check-pipe-trap.js'
 import { runPluginAllowlistConventionCheck } from '../scripts/check-plugin-allowlist-convention.js'
 import { runPluginCollisionCheck } from '../scripts/check-plugin-collisions.js'
@@ -47,8 +48,8 @@ import { runTerraformInputCheck } from '../scripts/check-terraform-input.js'
 export const checkCommand = new Command('check').description(
   'Repo guards (ownership, release subject, plugin terraform, plugin collisions, ' +
     'eventbridge-log-permissions, plugin-tool-supply, core-direct-paths, instance-adoption, ' +
-    'cognito-invite-template, lambda-output, pipe-trap, codeql-suppression, skeleton-drift, ' +
-    'terraform-input, plugin-allowlist-convention, migration-body-change) ' +
+    'orphan-ratchet, cognito-invite-template, lambda-output, pipe-trap, codeql-suppression, ' +
+    'skeleton-drift, terraform-input, plugin-allowlist-convention, migration-body-change) ' +
     'run in CI and git hooks, plus out-of-band audits (branch protection, plugin-staleness)',
 )
 
@@ -196,6 +197,45 @@ checkCommand
   .action(async (opts: { instance?: string; instanceDir?: string; theirsDir?: string }) => {
     await runInstanceAdoptionCheck(opts)
   })
+
+checkCommand
+  .command('orphan-ratchet')
+  .description(
+    'Refuse an instance-written file under a template-owned path with no sanctioned carve-out ' +
+      "(#1026), reusing planCoreUpgrade's classify() and checkOrphanRatchet — previously " +
+      'reachable only from inside `biffo core upgrade`, so drift was discovered only ~90 core ' +
+      'versions later by the upgrade it blocks (#1714). --instance-dir defaults to a SELF-CHECK ' +
+      "(this repo's own tree, unlike instance-adoption above) that can only ever report zero — " +
+      "see the entrypoint's own doc comment for why that default exists anyway. Pass a real " +
+      'instance checkout for a check that can actually find something.',
+  )
+  .option(
+    '--instance-dir <dir>',
+    "The real instance tree to check (oursDir). Defaults to a self-check of this repo's own " +
+      'root, which always reports 0 orphans (#1714) — pass a real instance checkout for a ' +
+      'meaningful result',
+  )
+  .option(
+    '--theirs-dir <dir>',
+    'Template tree that defines ownership (theirsDir); defaults to this repo root',
+  )
+  .option(
+    '--base-dir <dir>',
+    "Merge-base template tree (baseDir) — the template at the instance's CURRENT core " +
+      'version; defaults to --theirs-dir, which is only correct when the instance is already ' +
+      'on the latest version',
+  )
+  .option('--label <name>', 'Label for the report; defaults to the basename of --instance-dir')
+  .action(
+    async (opts: {
+      instanceDir?: string
+      theirsDir?: string
+      baseDir?: string
+      label?: string
+    }) => {
+      await runOrphanRatchetCheck(opts)
+    },
+  )
 
 checkCommand
   .command('cognito-invite-template')

@@ -36,6 +36,7 @@ describe('biffo check', () => {
     'eventbridge-log-permissions',
     'lambda-output',
     'migration-body-change',
+    'orphan-ratchet',
     'ownership',
     'pipe-trap',
     'plugin-allowlist-convention',

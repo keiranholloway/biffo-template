@@ -184,6 +184,8 @@ resource "aws_db_instance" "main" {
 
   enabled_cloudwatch_logs_exports = ["postgresql", "upgrade"]
 
+  iam_database_authentication_enabled = var.enable_iam_database_authentication
+
   depends_on = [aws_cloudwatch_log_group.postgresql, aws_cloudwatch_log_group.upgrade]
 
   tags = merge(var.tags, { Name = "${local.name_prefix}-postgres" })

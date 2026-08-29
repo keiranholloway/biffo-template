@@ -87,6 +87,12 @@ variable "enable_rds_proxy" {
   default     = false
 }
 
+variable "enable_iam_database_authentication" {
+  description = "Allow IAM principals to authenticate as a database role granted rds_iam. Off by default; RDS applies this without downtime. Enabling it grants nothing on its own — a no-op until a Postgres role has been granted rds_iam AND an IAM principal has been given rds-db:connect on that specific dbuser: resource, so do not read the switch alone as broken or as sufficient."
+  type        = bool
+  default     = false
+}
+
 variable "tags" {
   type    = map(string)
   default = {}

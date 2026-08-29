@@ -243,6 +243,21 @@ while [ $# -gt 0 ]; do
       shift 2
       ;;
     -h | --help) usage ;;
+    -*)
+      # An unrecognized flag must never fall into the catch-all below (#1741).
+      # It used to: a token that starts with `-` but matches none of the
+      # cases above fell straight into `*) ISSUE="$1"; shift ;;`, so
+      # `--bogus` silently became the "issue number" -- corrupting ISSUE with
+      # flag text instead of the real positional argument -- and the script
+      # went on to fail the `[!0-9]*` check below with "give an issue
+      # number", a message that describes the SYMPTOM (ISSUE is not
+      # numeric) and hides the actual CAUSE (an unsupported flag was typed).
+      # Refusing here, at the point the flag is actually unrecognized, says
+      # what is really wrong instead of a confusing knock-on error.
+      echo "${RED}claim: unrecognized flag '$1'${OFF}" >&2
+      echo "${DIM}  Known flags: -R/--repo, --check, --as, --release, --guard, -h/--help.${OFF}" >&2
+      exit 2
+      ;;
     *)
       ISSUE="$1"
       shift

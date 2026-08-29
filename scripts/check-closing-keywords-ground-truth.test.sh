@@ -40,7 +40,13 @@ FAILURES=0
 CASES=0
 
 # _assert_case <label> <expect_ok: true|false> <expect_kind_or_reason>
-#   <PR_BODY> <PR_CLOSING_ISSUES json> <PR_FILES space-separated>
+#   <PR_BODY> <PR_CLOSING_ISSUES json> <PR_FILES space-separated> [<PR_COMMITS json>]
+#
+# The 7th arg is new (#1732): every case before it hardcoded PR_COMMITS='[]',
+# which is exactly why the commit-message gap this file now also covers went
+# untested by this harness for as long as it did -- the corpus this file
+# exercised never included the one document GitHub's squash-merge actually
+# reads. Defaults to '[]' so every existing call site (6 args) is unaffected.
 _assert_case() {
   label=$1
   expect_ok=$2
@@ -48,11 +54,12 @@ _assert_case() {
   body=$4
   closing_json=$5
   files=$6
+  commits=${7:-[]}
 
   CASES=$((CASES + 1))
 
   actual=$(
-    PR_BODY="$body" PR_TITLE='' PR_COMMITS='[]' \
+    PR_BODY="$body" PR_TITLE='' PR_COMMITS="$commits" \
     PR_CLOSING_ISSUES="$closing_json" PR_FILES="$files" \
     node "$RUNNER" 2>&1
   )
@@ -155,6 +162,86 @@ _assert_case \
   'This is the one-word fix #1664 asked for.' \
   '[]' \
   ''
+
+# ── #1732: closingIssuesReferences is PR-BODY-scoped, and cannot see a hit ──
+# ── that lives only in a COMMIT MESSAGE -- yet that is the document this  ──
+# ── repo's squash-merge actually composes (squash_merge_commit_message =  ──
+# ── COMMIT_MESSAGES, confirmed via `gh api repos/.../branches/dev/protection`).
+#
+# All four cases below pass PR_BODY containing the SAME phrase wrapped in a
+# markdown code span, mirroring PR #1730's real body (`gh pr view 1730 --json
+# body`) -- GitHub's PR-body linker correctly ignores it there, so
+# closingIssuesReferences reads [] (empty) in every case, exactly as it did
+# for #1730. The distinguishing fact is what the COMMIT message says, since a
+# git commit message has no markdown semantics: a backtick there is two
+# literal characters, not a code-span delimiter, and GitHub's push-based
+# closing-keyword scan (independent of closingIssuesReferences) reads it raw.
+#
+# Real instance: PR #1730 (`gh pr view 1730 --json body,commits,mergeCommit`;
+# squash commit read via `gh api repos/keiranholloway/biffo-template/commits/
+# a11a5b7e26478efb2274205e2a1203c16abaabce --jq .commit.message`) squash-
+# merged with closingIssuesReferences==[] and a commit message containing the
+# bare (unprotected) phrase "fix #1664" -- which closed #1664 1 second after
+# merge, per the issue timeline.
+
+# Real: PR #1730's own actual body and squash commit message (see provenance
+# above). Both are fixture FILES, not inline literals -- the real text
+# contains apostrophes and backticks that are painful and error-prone to
+# single-quote-escape faithfully in POSIX sh; a file sidesteps that entirely
+# without paraphrasing a single character of the captured text.
+_assert_case \
+  'PR #1730 real shape: PR body backtick-protects "fix #1664" (ground truth stays []), but the commit message does not' \
+  false 'commit-ground-truth-mismatch' \
+  "$(cat "$HERE/check-closing-keywords-fixtures/pr-1730-real-body.txt")" \
+  '[]' \
+  'scripts/check-closing-keywords.mjs' \
+  "$(cat "$HERE/check-closing-keywords-fixtures/pr-1730-real-commit.json")"
+
+# Real corpus: a LATER commit on dev narrates the #1021 incident, quoting
+# `Does not close #1021` inside backticks. That quoted example is itself a
+# NEGATED closing keyword (check 2's territory) -- and since a commit message
+# has no markdown semantics, the backticks around it are literal, not
+# protection, so check 2's own raw (un-stripped) scan of this commit document
+# now catches it directly as `negated-keyword`, one check earlier than the
+# new commit-ground-truth check below would have. Confirms the SAME `code:
+# false` fix (#1732 part (a): the guard's own lexical scan was blind to
+# backtick-wrapped commit text) independently repairs check 2, not only the
+# new check 3b. Captured via:
+#   git log origin/dev --all --format='%B' | sed -n '20329p'
+_assert_case \
+  'real corpus: a negation quoted in backticks inside a COMMIT is not protected there the way it is in a PR body' \
+  false 'negated-keyword' \
+  'Unrelated PR body, no ground truth for this issue at all.' \
+  '[]' \
+  'docs/practices.md' \
+  "$(cat "$HERE/check-closing-keywords-fixtures/corpus-recurrence-line-commit.json")"
+
+# Synthetic (models the mechanism directly): a closing directive wrapped in
+# backticks -- as an author familiar with THIS guard's PR-body behaviour would
+# reasonably write, expecting the same protection -- sitting ONLY in the
+# commit message. Git commit messages have no markdown semantics, so the
+# backticks are literal and do not protect it there the way they would in a
+# PR body.
+_assert_case \
+  'synthetic: a backtick-quoted "Closes #99" in a COMMIT message is NOT protected the way it would be in the PR body' \
+  false 'commit-ground-truth-mismatch' \
+  'Refs #99 only, nothing deliberate here.' \
+  '[]' \
+  'cli/src/lib/a.ts' \
+  "$(cat "$HERE/check-closing-keywords-fixtures/synthetic-backtick-commit.json")"
+
+# Real corpus: an ordinary, idiomatic `closes #NNNN` trailer on its own line
+# in a commit body -- the overwhelmingly common real shape (hundreds of
+# examples per the corpus grep above) -- must keep passing on an ordinary
+# path with no ground truth, exactly as it always has. Captured via:
+#   git log origin/dev --all --format='%B' | sed -n '14448,14454p'
+_assert_case \
+  'real corpus: a genuine own-line commit trailer ("closes #1413") still PASSES on an ordinary path' \
+  true 'no-deploy-only-paths' \
+  'Refs #1413 elsewhere, nothing to reconcile in the body.' \
+  '[]' \
+  'cli/src/lib/a.ts' \
+  "$(cat "$HERE/check-closing-keywords-fixtures/corpus-trailer-commit.json")"
 
 echo
 echo "check-closing-keywords ground-truth guard: ${CASES} case(s), $((CASES - FAILURES)) passed, ${FAILURES} failed."

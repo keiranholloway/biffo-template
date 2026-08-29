@@ -1,0 +1,6 @@
+[
+  {
+    "messageHeadline": "fix(scripts): reconcile check-closing-keywords.mjs against GitHub's own closingIssuesReferences (#1730)",
+    "messageBody": "The deploy-only-path check silently passed a genuine closing-keyword hit\nwhenever the changed paths were ordinary, with nothing checking whether\nGitHub's own `closingIssuesReferences` actually confirmed the close. Merged\nPR #1680's body read (in context) \"the one-word fix #1664 asked for\" --\nmid-sentence prose, not a deliberate `Closes #N` trailer -- alongside its own\nexplicit `Refs #1664` elsewhere. `closingIssuesReferences` read #1664 while\nthe PR was in that state; `assess()` returned `ok: true`. Release Guards\nreported SUCCESS. Only a human reword before merge kept #1664 open."
+  }
+]

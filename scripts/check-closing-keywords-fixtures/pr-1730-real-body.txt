@@ -1,0 +1,8 @@
+The deploy-only-path check silently passed a genuine closing-keyword hit
+whenever the changed paths were ordinary, with nothing checking whether
+GitHub's own `closingIssuesReferences` actually confirmed the close would
+happen. Real instance: merged PR #1680's body read (in context)
+`"the one-word fix #1664 asked for"` -- mid-sentence prose, not a deliberate
+`Closes #N` trailer -- alongside its own explicit `Refs #1664` elsewhere.
+
+Refs #1686

@@ -493,6 +493,18 @@ const catalogWithDelivery: WorkflowCatalog = {
   scope_levels: [],
 }
 
+// `catalogWithDelivery` plus WhatsApp as a delivery destination too, so a
+// delivery sub-config can exercise the same text/template conditional branch
+// as the standalone WhatsApp action above.
+const catalogWithWhatsappDelivery: WorkflowCatalog = {
+  triggers: catalog.triggers,
+  actions: [
+    ...catalogWithDelivery.actions,
+    catalog.actions.find((a) => a.type === 'whatsapp') as (typeof catalog.actions)[number],
+  ],
+  scope_levels: [],
+}
+
 // An agent workflow whose delivery targets Slack, with the webhook stored as the
 // redaction sentinel — exactly what a Core read returns (#432). Editing it must
 // round-trip the sentinel so the stored secret is kept.
@@ -557,6 +569,31 @@ const notify: WorkflowDefinition = {
     to: 'keiran@tabsii.com',
     subject: 'New demo request',
     body: 'A demo came in.',
+  },
+  enabled: true,
+  schedule_config: null,
+  scope: null,
+}
+
+// A WhatsApp workflow stored (as Core would return it) on the `text` branch —
+// only `to`/`message_type`/`message` present, no `language_code` at all,
+// because it was never applicable when this was saved. Editing it and
+// switching to `template` mid-edit is the #1614 repro: `language_code` newly
+// applies but was never seeded, unlike a freshly-selected action.
+const whatsappText: WorkflowDefinition = {
+  id: 'wf-wa',
+  tenant_id: 'default',
+  created_at: null,
+  updated_at: null,
+  name: 'Ping on demo',
+  trigger_source: 'biffo.core',
+  trigger_detail_type: 'demo.requested',
+  trigger_filter: null,
+  action_type: 'whatsapp',
+  action_config: {
+    to: '+15551234567',
+    message_type: 'text',
+    message: 'A demo came in.',
   },
   enabled: true,
   schedule_config: null,
@@ -803,6 +840,72 @@ describe('OrchestrationPage', () => {
         }),
       )
     })
+  })
+
+  it('seeds the catalog default when a conditional field newly applies mid-edit (#1614)', async () => {
+    // Unlike the fresh-selection case above, editing an existing workflow loads
+    // its raw stored action_config — never `defaultConfig()` — so `language_code`
+    // starts genuinely absent, not merely empty.
+    fetchWorkflows.mockResolvedValue([whatsappText])
+    updateWorkflow.mockResolvedValue(whatsappText)
+
+    render(<OrchestrationPage />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }))
+
+    expect(screen.getByLabelText('Message')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Language code')).not.toBeInTheDocument()
+
+    // Switch the conditional branch mid-edit — `language_code` newly applies.
+    fireEvent.change(screen.getByLabelText('Message type'), { target: { value: 'template' } })
+
+    // It must render the catalog default, not blank — a blank required field
+    // here blocks Save with only the browser's generic tooltip.
+    expect(screen.getByLabelText('Language code')).toHaveValue('en_US')
+
+    fireEvent.change(screen.getByLabelText('Template name'), {
+      target: { value: 'demo_booked' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    await waitFor(() => {
+      expect(updateWorkflow).toHaveBeenCalled()
+    })
+    const [, , body] = updateWorkflow.mock.calls.at(0) as [unknown, string, WorkflowInput]
+    // The default must round-trip into the saved config, not just the display —
+    // a render-only fallback would save `language_code` as blank.
+    expect(body.action_config).toMatchObject({
+      message_type: 'template',
+      template_name: 'demo_booked',
+      language_code: 'en_US',
+    })
+  })
+
+  it('seeds the delivery sub-config default when its own conditional field newly applies mid-edit (#1614)', async () => {
+    // The same mechanism must cover the nested delivery config (ADR-0027),
+    // reached through the FieldContext interface's second config shape.
+    const agentWithWhatsappTextDelivery: WorkflowDefinition = {
+      ...agentWithDelivery,
+      id: 'wf-del-wa',
+      action_config: {
+        agent_name: 'enricher',
+        instructions: 'Enrich it.',
+        model: 'moonshotai/kimi-k3',
+        delivery: {
+          type: 'whatsapp',
+          config: { to: '+15551234567', message_type: 'text', message: 'Result: {output}' },
+        },
+      },
+    }
+    fetchCatalog.mockResolvedValue(catalogWithWhatsappDelivery)
+    fetchWorkflows.mockResolvedValue([agentWithWhatsappTextDelivery])
+    updateWorkflow.mockResolvedValue(agentWithWhatsappTextDelivery)
+
+    render(<OrchestrationPage />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }))
+
+    expect(screen.queryByLabelText('Language code')).not.toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Message type'), { target: { value: 'template' } })
+    expect(screen.getByLabelText('Language code')).toHaveValue('en_US')
   })
 
   it('groups the trigger options by source', async () => {

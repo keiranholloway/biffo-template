@@ -384,6 +384,25 @@ function defaultConfig(action: CatalogAction | undefined): Config {
   return config
 }
 
+// The fields defaultConfig() misses: a conditional field (visible_when) that
+// has just become applicable in an ALREADY-loaded config — editing an existing
+// workflow loads its raw stored action_config, never defaultConfig(), so
+// switching a branch (e.g. WhatsApp text -> template) can bring a required
+// field into view whose value was never seeded (#1614). Plain inputs read the
+// raw config value with no catalog-default fallback (unlike effectiveValue,
+// used for select display and by fieldApplies itself), so an unseeded field
+// renders blank and blocks native `required` validation with no indication a
+// default exists. Only fields genuinely unset are returned — a field the
+// author already cleared, or already holds a value for, is left alone.
+function newlyApplicableDefaults(
+  fields: CatalogActionField[],
+  cfg: Config,
+): { name: string; value: string }[] {
+  return fields
+    .filter((f) => f.default != null && cfg[f.name] == null && fieldApplies(fields, cfg, f))
+    .map((f) => ({ name: f.name, value: f.default as string }))
+}
+
 // The agent action's outcome journey (issue #527) reframes its config fields.
 // These names live under **Advanced settings** (models, turns, the raw prompt,
 // and the capability picker) — everything else is a task-shaped Outcome field.
@@ -647,8 +666,60 @@ export default function OrchestrationPage() {
   const deliveryField = selectedAction?.config_fields.find((f) => f.type === 'delivery')
   const delivery = deliveryField != null ? asDelivery(config[deliveryField.name]) : null
   const deliveryAction = catalog?.actions.find((a) => a.type === delivery?.type)
-  const deliveryFields = deliveryAction?.config_fields ?? []
-  const deliveryConfig: Config = delivery?.config ?? {}
+  // Memoized (rather than a bare `?? []` / `?? {}`) so their identity only
+  // changes when what they're derived from does — the defaults-seeding effect
+  // below depends on both, and a fresh literal every render would fire it on
+  // every render regardless of whether anything actually changed.
+  const deliveryFields = useMemo(() => deliveryAction?.config_fields ?? [], [deliveryAction])
+  const deliveryConfig: Config = useMemo(() => delivery?.config ?? {}, [delivery])
+
+  // Seed catalog defaults for any field — top-level or nested inside the
+  // delivery sub-config — that has just become applicable via `visible_when`,
+  // the same way defaultConfig() seeds a freshly-selected action. Runs on every
+  // config change, but only ever writes when a field is genuinely missing its
+  // default, so it settles after one pass rather than looping (#1614).
+  useEffect(() => {
+    const fields = configFieldsFor(selectedAction)
+    const mainMissing = newlyApplicableDefaults(fields, config)
+    const deliveryMissing =
+      deliveryField != null && delivery != null
+        ? newlyApplicableDefaults(deliveryFields, deliveryConfig)
+        : []
+    if (mainMissing.length === 0 && deliveryMissing.length === 0) return
+
+    setConfig((c) => {
+      const next = { ...c }
+      let changed = false
+      for (const { name, value } of mainMissing) {
+        if (next[name] == null) {
+          next[name] = value
+          changed = true
+        }
+      }
+      if (deliveryField != null && deliveryMissing.length > 0) {
+        const currentDelivery = asDelivery(next[deliveryField.name])
+        if (currentDelivery != null) {
+          const nextDeliveryConfig = { ...currentDelivery.config }
+          let deliveryChanged = false
+          for (const { name, value } of deliveryMissing) {
+            if (nextDeliveryConfig[name] == null) {
+              nextDeliveryConfig[name] = value
+              deliveryChanged = true
+            }
+          }
+          if (deliveryChanged) {
+            next[deliveryField.name] = { ...currentDelivery, config: nextDeliveryConfig }
+            changed = true
+          }
+        }
+      }
+      return changed ? next : c
+    })
+    // deliveryFields/deliveryConfig are listed for exhaustive-deps even though
+    // both are derived fresh from config/selectedAction every render (never
+    // independent state) — the effect body already no-ops via the length check
+    // above whenever neither has actually changed.
+  }, [config, selectedAction, deliveryField, delivery, deliveryFields, deliveryConfig])
 
   // A selected delivery is valid only when every applicable required field is
   // filled — except `output_body`, which is optional in a delivery (defaults to

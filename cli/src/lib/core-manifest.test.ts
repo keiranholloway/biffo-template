@@ -7,6 +7,7 @@ import {
   CORE_MANIFEST_FILE,
   type CoreManifest,
   computeCoreDiff,
+  explainOwnership,
   findTemplateRoot,
   isTemplateOwned,
   listTemplateOwnedFiles,
@@ -555,5 +556,83 @@ describe('listTemplateOwnedFiles + computeCoreDiff', () => {
 
     expect(diff.removed).toEqual([])
     expect(diff.instanceOnly).toHaveLength(2)
+  })
+})
+
+describe('explainOwnership (#1714 — orphan-ratchet guard failure-message helper)', () => {
+  it('names the templateOwned entry that claims the path, and a userOwned entry sharing a leading segment', () => {
+    const manifest: CoreManifest = {
+      version: 1,
+      templateOwned: ['services/api/'],
+      userOwned: ['services/api/tests/instance/'],
+    }
+    // Under services/api/tests/ but NOT inside the tests/instance/ carve-out —
+    // the shape a misplaced instance file actually takes.
+    const result = explainOwnership('services/api/tests/helper.py', manifest)
+
+    expect(result.templateOwnedMatch).toBe('services/api/')
+    expect(result.nearestUserOwnedEntries).toEqual(['services/api/tests/instance/'])
+  })
+
+  it('reports no nearby carve-out when no userOwned entry shares a leading segment', () => {
+    const manifest: CoreManifest = {
+      version: 1,
+      templateOwned: ['scripts/'],
+      userOwned: ['infra/', 'apps/'],
+    }
+    const result = explainOwnership('scripts/post-deploy-smoke.sh', manifest)
+
+    expect(result.templateOwnedMatch).toBe('scripts/')
+    expect(result.nearestUserOwnedEntries).toEqual([])
+  })
+
+  it('is purely structural: a shared leading segment is reported even when the entry is an unrelated exact-file exemption, not a directory carve-out', () => {
+    const manifest: CoreManifest = {
+      version: 1,
+      templateOwned: ['scripts/'],
+      userOwned: ['scripts/verify.sh'],
+    }
+    const result = explainOwnership('scripts/post-deploy-smoke.sh', manifest)
+
+    // scripts/verify.sh is not a real carve-out for a NEW scripts/ file — it is
+    // one specific exempted file — but it shares the leading `scripts` segment,
+    // and explainOwnership makes no semantic judgement (see its doc comment).
+    expect(result.nearestUserOwnedEntries).toEqual(['scripts/verify.sh'])
+  })
+
+  it('ranks multiple equally-specific userOwned entries together, and a more specific one alone', () => {
+    const manifest: CoreManifest = {
+      version: 1,
+      templateOwned: ['scripts/'],
+      userOwned: ['scripts/claim.sh', 'scripts/branch-health.sh', 'scripts/verify-deployed.checks'],
+    }
+    // No entry shares more than the leading `scripts` segment with this path,
+    // so all three tie and are reported together.
+    const tied = explainOwnership('scripts/new-tool.sh', manifest)
+    expect(tied.nearestUserOwnedEntries.sort()).toEqual(
+      ['scripts/branch-health.sh', 'scripts/claim.sh', 'scripts/verify-deployed.checks'].sort(),
+    )
+
+    const deeper: CoreManifest = {
+      version: 1,
+      templateOwned: ['services/api/'],
+      userOwned: ['services/api/tests/', 'services/api/tests/instance/'],
+    }
+    // services/api/tests/instance/ shares one more leading segment than
+    // services/api/tests/ alone, so only the more specific one is reported.
+    const closest = explainOwnership('services/api/tests/instance/helper.py', deeper)
+    expect(closest.nearestUserOwnedEntries).toEqual(['services/api/tests/instance/'])
+  })
+
+  it('returns a null templateOwnedMatch for a path no templateOwned entry covers', () => {
+    const manifest: CoreManifest = {
+      version: 1,
+      templateOwned: ['scripts/'],
+      userOwned: [],
+    }
+    const result = explainOwnership('README.md', manifest)
+
+    expect(result.templateOwnedMatch).toBeNull()
+    expect(result.nearestUserOwnedEntries).toEqual([])
   })
 })

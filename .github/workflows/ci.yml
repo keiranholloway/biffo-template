@@ -200,6 +200,26 @@ jobs:
       - name: Core-direct-paths guard (skeleton self-check)
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: sh scripts/biffo.sh check core-direct-paths
+      # Orphan ratchet / unsanctioned-file guard (#1026's checkOrphanRatchet +
+      # planCoreUpgrade's classify(), cli/src/lib/core-upgrade.ts) — previously
+      # reachable only from inside `biffo core upgrade`, so an instance could
+      # accumulate unsanctioned files under a template-owned path for months
+      # before an upgrade ever tripped over them (biffo-template#1714).
+      # Self-check only: with no --instance-dir, it defaults to comparing this
+      # checkout's own root against itself, so classify() can only ever report
+      # zero — there is no second, diverged tree for the template to compare
+      # itself against (see check-orphan-ratchet.ts's doc comment for the
+      # proof, and for why that default exists here rather than being refused
+      # the way instance-adoption's is below). This step exists to prove the
+      # CLI wiring, exit codes and the #1714 per-file guidance work in real CI
+      # on every PR, and to give an instance a working command to copy.
+      # Pointing --instance-dir at a REAL instance tree, in that instance's
+      # own CI (or a scheduled cross-repo report mirroring
+      # instance-adoption-report.yml), is the follow-up that actually catches
+      # drift — deliberately out of scope for #1714.
+      - name: Orphan-ratchet guard (template self-check)
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: sh scripts/biffo.sh check orphan-ratchet
       # A Cognito invite_message_template missing email_subject/email_message/
       # sms_message, or one of the {username}/{####} placeholders Cognito's
       # CreateUserPool requires — terraform validate is silent on this, so a

@@ -256,6 +256,73 @@ export function isTemplateOwned(relPath: string, manifest: CoreManifest): boolea
   return t > u
 }
 
+/**
+ * Which manifest entry currently claims `relPath` as template-owned, and
+ * which `userOwned` entries sit nearest it — for the orphan-ratchet guard's
+ * failure message (#1714), not for any ownership *decision*: `isTemplateOwned`
+ * above is still the only authority for that.
+ *
+ * "Nearest" is purely structural — the `userOwned` entries sharing the
+ * longest run of literal leading path segments with `relPath` — never
+ * semantic. It cannot tell "this file belongs in an existing carve-out" from
+ * "this file is a core capability that belongs upstream": both look the same
+ * from here, a path with no `userOwned` entry covering it. #1714 asks for
+ * that distinction to be surfaced only where the existing classify()/
+ * isTemplateOwned() logic can already tell it apart — it cannot, so this
+ * reports structural proximity and leaves the semantic call to the reader,
+ * rather than guessing.
+ */
+export interface OwnershipExplanation {
+  /** The templateOwned entry that makes `relPath` template-owned today, or
+   * null if none matches (isTemplateOwned would already be false). */
+  templateOwnedMatch: string | null
+  /** userOwned entries sharing the longest run of leading path segments with
+   * `relPath`, most specific first. Empty when no userOwned entry shares even
+   * one leading segment — i.e. no sanctioned carve-out exists anywhere near
+   * this path today. */
+  nearestUserOwnedEntries: string[]
+}
+
+function leadingSegmentOverlap(relPath: string, pattern: string): number {
+  const pathSegs = relPath.split('/')
+  // A glob or `**` segment asserts nothing about a specific literal value, so
+  // it cannot contribute to "this concretely shares a path with relPath" —
+  // only a literal, matching segment counts.
+  const patternSegs = pattern.replace(/\/$/, '').split('/')
+  let shared = 0
+  for (let i = 0; i < Math.min(pathSegs.length, patternSegs.length); i++) {
+    if (patternSegs[i] !== pathSegs[i]) break
+    shared++
+  }
+  return shared
+}
+
+export function explainOwnership(relPath: string, manifest: CoreManifest): OwnershipExplanation {
+  let templateOwnedMatch: string | null = null
+  let bestTemplateLen = -1
+  for (const p of manifest.templateOwned) {
+    const len = matchLength(relPath, p)
+    if (len > bestTemplateLen) {
+      bestTemplateLen = len
+      templateOwnedMatch = p
+    }
+  }
+
+  let bestShared = 0
+  let nearestUserOwnedEntries: string[] = []
+  for (const p of manifest.userOwned) {
+    const shared = leadingSegmentOverlap(relPath, p)
+    if (shared > bestShared) {
+      bestShared = shared
+      nearestUserOwnedEntries = [p]
+    } else if (shared === bestShared && shared > 0) {
+      nearestUserOwnedEntries.push(p)
+    }
+  }
+
+  return { templateOwnedMatch, nearestUserOwnedEntries }
+}
+
 function toPosix(p: string): string {
   return sep === '/' ? p : p.split(sep).join('/')
 }

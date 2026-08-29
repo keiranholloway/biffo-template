@@ -489,7 +489,7 @@ function formatGroundTruthFailure({ closingIssuesReferences }) {
     `GitHub's own closingIssuesReferences says this PR will close ${refs.join(', ')} on`,
     'merge — but nothing in the PR body, title or commit messages reads as a',
     'DELIBERATE closing directive (a keyword+reference at the start of the',
-    'document, a line, or a sentence). GitHub\'s linker does not care about',
+    "document, a line, or a sentence). GitHub's linker does not care about",
     'paths or sentence position; it only needs the lexical shape, wherever it',
     'sits.',
     '',
@@ -738,24 +738,64 @@ export async function resolveCommits({
  * Fetch a PR's `closingIssuesReferences` via the GitHub CLI — GitHub's own
  * ground truth for which issues this PR will close on merge (#1686). Same
  * split as the other fetchers so tests can inject a fake. Each element is
- * the shape `gh pr view --json closingIssuesReferences` returns:
  * `{ id, number, repository: {...}, url }` (confirmed live against PR #1417,
- * which genuinely closes an issue).
+ * which genuinely closes an issue, and against #1730/tabsii-crm#379 below).
+ *
+ * This calls `gh api graphql` with an explicit query, NOT `gh pr view --json
+ * closingIssuesReferences`. That shorthand only works if the installed `gh`
+ * binary's OWN hardcoded `--json` field allowlist happens to include the
+ * field — `closingIssuesReferences` was added to that allowlist partway
+ * through gh's release history, so it is a property of the CLI binary, not
+ * of the GitHub API. tabsii-crm#379 failed identically on two attempts of
+ * the same commit with `Unknown JSON field: "closingIssuesReferences"` —
+ * this repo's own `gh` (2.96.0) lists the field, but tabsii-crm's Release
+ * Guards runs on ITS OWN self-hosted runner fleet (`vars.RUNNER_LABEL:
+ * tabsii`), whose baked-in `gh` binary predates it. That is a real, and
+ * recurring, source of drift: every satellite's runner image can lag behind
+ * whatever `gh` happens to be on the machine this file was last tested on,
+ * and `check-closing-keywords.mjs` is distributed VERBATIM (`shared-files.json`
+ * `files`) to every one of them — so pinning to a newer allowlisted field is
+ * a bug this file WILL hit again on the next satellite with an older image,
+ * not a one-off.
+ *
+ * `gh api graphql` has no such allowlist: it sends the query text through
+ * to GitHub's GraphQL endpoint verbatim, and has done so since `gh api` was
+ * introduced, long before `closingIssuesReferences` reached `pr view --json`.
+ * Asking for a field GitHub's schema does not have is still a real failure —
+ * it always was, and always will be, GitHub's error rather than the local
+ * binary's — but a locally-out-of-date `gh` can no longer manufacture a
+ * false one. This removes the CLI-version dependency instead of chasing it
+ * runner image by runner image.
  */
 export async function fetchPrClosingIssuesReferencesViaGh({ GH_TOKEN, PR_NUMBER, GH_REPO }) {
   const { execFileSync } = await import('node:child_process')
+  const [owner, repo] = GH_REPO.split('/')
+  const query = `
+    query($owner: String!, $repo: String!, $num: Int!) {
+      repository(owner: $owner, name: $repo) {
+        pullRequest(number: $num) {
+          closingIssuesReferences(first: 50) {
+            nodes { id number url repository { nameWithOwner } }
+          }
+        }
+      }
+    }
+  `
   const raw = execFileSync(
     'gh',
     [
-      'pr',
-      'view',
-      String(PR_NUMBER),
-      '--repo',
-      GH_REPO,
-      '--json',
-      'closingIssuesReferences',
+      'api',
+      'graphql',
+      '-f',
+      `query=${query}`,
+      '-f',
+      `owner=${owner}`,
+      '-f',
+      `repo=${repo}`,
+      '-F',
+      `num=${PR_NUMBER}`,
       '--jq',
-      '.closingIssuesReferences',
+      '.data.repository.pullRequest.closingIssuesReferences.nodes',
     ],
     { encoding: 'utf8', env: { ...process.env, GH_TOKEN } },
   ).trim()

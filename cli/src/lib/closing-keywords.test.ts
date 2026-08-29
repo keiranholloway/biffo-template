@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { execFileSync } from 'node:child_process'
 // @ts-expect-error -- plain .mjs so it runs on bare node in CI with no install,
 // like every other script in scripts/. Tested from here so the logic has one home.
 import {
@@ -7,6 +8,7 @@ import {
   DEPLOY_ONLY_PREFIXES,
   deployOnlyPaths,
   documentsFor,
+  fetchPrClosingIssuesReferencesViaGh,
   fetchPrCommitsViaGh,
   fetchPrTitleViaGh,
   formatFailure,
@@ -17,6 +19,15 @@ import {
   resolveTitle,
   VERIFIED_TRAILER,
 } from '../../../scripts/check-closing-keywords.mjs'
+
+// fetchPrClosingIssuesReferencesViaGh shells out too, and unlike the other
+// two fetchers below it is actually EXERCISED here, not just typeof-checked —
+// see the describe block near the bottom of this file for why that gap is
+// exactly what let tabsii-crm#379 through.
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal()
+  return { ...actual, execFileSync: vi.fn() }
+})
 
 /**
  * The two REAL bodies that motivated the negation guard (#1245). Fixtures, not
@@ -629,6 +640,86 @@ describe('closing-keyword guard', () => {
     it('are exported functions — the live path exists, not only the injectable fake', () => {
       expect(typeof fetchPrTitleViaGh).toBe('function')
       expect(typeof fetchPrCommitsViaGh).toBe('function')
+    })
+  })
+
+  // Unlike the pair above, this one is actually EXERCISED — the gap that let
+  // tabsii-crm#379 through. `fetchPrClosingIssuesReferencesViaGh` originally
+  // shelled out to `gh pr view --json closingIssuesReferences`, which is
+  // only as reliable as the installed `gh` binary's own hardcoded --json
+  // field allowlist. Two identical CI runs on tabsii-crm#379 (same commit,
+  // 03:10:33Z and 03:16:37Z) both failed with `Unknown JSON field:
+  // "closingIssuesReferences"` — tabsii-crm's Release Guards runs on its own
+  // self-hosted runner fleet (`vars.RUNNER_LABEL: tabsii`), whose `gh` predates
+  // that field. This repo's own `gh` (2.96.0) lists the field and every prior
+  // test here only ever checked `typeof fn === 'function'`, so the command
+  // shape had literally never run against a mocked (or real) `gh` before —
+  // an untested branch that turned out to be a guess about the CLI surface.
+  //
+  // The fix moves to `gh api graphql`, which has no version-dependent field
+  // allowlist of its own: it forwards the query text verbatim to GitHub's
+  // GraphQL schema. These tests exercise the actual invocation and the
+  // actual parse, with a captured-live fixture rather than an invented one.
+  describe('fetchPrClosingIssuesReferencesViaGh', () => {
+    it('is an exported function — the live path exists, not only the injectable fake', () => {
+      expect(typeof fetchPrClosingIssuesReferencesViaGh).toBe('function')
+    })
+
+    it('calls `gh api graphql`, never `gh pr view --json closingIssuesReferences` (the shape a stale gh CLI rejects)', async () => {
+      const mockExecFileSync = vi.mocked(execFileSync)
+      // Real output: `gh api graphql -f query='...' -f owner=keiranholloway
+      // -f repo=biffo-template -F num=1417 --jq
+      // .data.repository.pullRequest.closingIssuesReferences.nodes`,
+      // captured live against PR #1417 (which genuinely closes an issue).
+      mockExecFileSync.mockReturnValueOnce(
+        JSON.stringify([
+          {
+            id: 'I_kwDOTGuLIc8AAAABMDkoVw',
+            number: 1411,
+            url: 'https://github.com/keiranholloway/biffo-template/issues/1411',
+            repository: { nameWithOwner: 'keiranholloway/biffo-template' },
+          },
+        ]),
+      )
+
+      const result = await fetchPrClosingIssuesReferencesViaGh({
+        GH_TOKEN: 'gh-token-fixture',
+        PR_NUMBER: '1417',
+        GH_REPO: 'keiranholloway/biffo-template',
+      })
+
+      expect(result).toEqual([
+        {
+          id: 'I_kwDOTGuLIc8AAAABMDkoVw',
+          number: 1411,
+          url: 'https://github.com/keiranholloway/biffo-template/issues/1411',
+          repository: { nameWithOwner: 'keiranholloway/biffo-template' },
+        },
+      ])
+
+      expect(mockExecFileSync).toHaveBeenCalledTimes(1)
+      const [command, args] = mockExecFileSync.mock.calls[0]
+      expect(command).toBe('gh')
+      expect(args).toContain('api')
+      expect(args).toContain('graphql')
+      // The exact failure this replaces — never reach for the version-gated
+      // shorthand again.
+      expect(args).not.toContain('pr')
+      expect(args).not.toContain('closingIssuesReferences')
+      expect(args.join(' ')).toContain('owner=keiranholloway')
+      expect(args.join(' ')).toContain('repo=biffo-template')
+      expect(args.join(' ')).toContain('num=1417')
+      expect(args.join(' ')).toContain('closingIssuesReferences')
+    })
+
+    it('returns [] on empty output, same contract as the other live fetchers', async () => {
+      vi.mocked(execFileSync).mockReturnValueOnce('')
+      const result = await fetchPrClosingIssuesReferencesViaGh({
+        GH_TOKEN: 'gh-token-fixture',
+        PR_NUMBER: '1',
+        GH_REPO: 'o/r',
+      })
+      expect(result).toEqual([])
     })
   })
 })

@@ -262,6 +262,152 @@ describe('planCoreUpgrade (classification)', () => {
   })
 })
 
+describe('newly templateOwned path — never synced via the upgrade mechanism (#1715)', () => {
+  let base: string
+  let ours: string
+  let theirs: string
+
+  beforeEach(() => {
+    base = makeTmpDir('base')
+    ours = makeTmpDir('ours')
+    theirs = makeTmpDir('theirs')
+  })
+  afterEach(() => {
+    for (const d of [base, ours, theirs]) rmSync(d, { recursive: true, force: true })
+  })
+
+  function w(root: string, rel: string, content: string): void {
+    const p = join(root, rel)
+    mkdirSync(dirname(p), { recursive: true })
+    writeFileSync(p, content)
+  }
+  function statusOf(entries: { path: string; status: string }[], path: string): string | undefined {
+    return entries.find((e) => e.path === path)?.status
+  }
+
+  // The instance's base version: the path (infra/global/main.tf in the real
+  // #1584 case) already existed as a file, but the template's OWN manifest at
+  // that version did not declare it templateOwned yet — the instance edited it
+  // freely, outside the upgrade mechanism entirely.
+  function writeBaseManifest(templateOwned: string[]): void {
+    w(
+      base,
+      'core-manifest.json',
+      JSON.stringify({ version: 1, templateOwned, userOwned: ['infra/'] }),
+    )
+  }
+
+  // The CURRENT manifest passed to planCoreUpgrade: the path has since been
+  // added to templateOwned (the #1584 shape).
+  const CURRENT_MANIFEST: CoreManifest = {
+    version: 1,
+    templateOwned: ['infra/global/main.tf'],
+    userOwned: ['infra/'],
+  }
+
+  it('does NOT silently resolve to keep-ours when the instance copy diverged and template content is unchanged', async () => {
+    // The exact reported scenario: template-side content is IDENTICAL between
+    // base and theirs (theirsChanged === false), so old classify() short-circuited
+    // straight to keep-ours on oursChanged alone — without ever checking whether
+    // this path was governed at base at all.
+    writeBaseManifest(['services/api/']) // not templateOwned yet at the instance's base version
+    w(base, 'infra/global/main.tf', 'upstream v1')
+    w(theirs, 'infra/global/main.tf', 'upstream v1') // template content unchanged
+    w(ours, 'infra/global/main.tf', 'instance diverged independently')
+
+    const p = await planCoreUpgrade({
+      baseDir: base,
+      oursDir: ours,
+      theirsDir: theirs,
+      manifest: CURRENT_MANIFEST,
+      mergeFile: fakeMerge,
+    })
+
+    const e = p.entries.find((x) => x.path === 'infra/global/main.tf')
+    // Must not be the silent no-op: keep-ours entries are excluded from
+    // plan.changes, so a `keep-ours` here IS the bug — nothing would appear in
+    // the upgrade PR for a human to resolve.
+    expect(e?.status).not.toBe('keep-ours')
+    expect(e?.conflicted).toBe(true)
+    expect(p.changes.map((x) => x.path)).toContain('infra/global/main.tf')
+    expect(p.conflicts.map((x) => x.path)).toContain('infra/global/main.tf')
+  })
+
+  it('resolves to unchanged (no false conflict) when the never-synced instance copy already matches theirs', async () => {
+    writeBaseManifest(['services/api/'])
+    w(base, 'infra/global/main.tf', 'upstream v1')
+    w(theirs, 'infra/global/main.tf', 'upstream v1')
+    w(ours, 'infra/global/main.tf', 'upstream v1') // instance happens to match already
+
+    const p = await planCoreUpgrade({
+      baseDir: base,
+      oursDir: ours,
+      theirsDir: theirs,
+      manifest: CURRENT_MANIFEST,
+      mergeFile: fakeMerge,
+    })
+
+    expect(statusOf(p.entries, 'infra/global/main.tf')).toBe('unchanged')
+    expect(p.conflicts).toHaveLength(0)
+  })
+
+  it('resolves to added when the instance never had the file at all', async () => {
+    writeBaseManifest(['services/api/'])
+    w(base, 'infra/global/main.tf', 'upstream v1')
+    w(theirs, 'infra/global/main.tf', 'upstream v1')
+    // absent from ours entirely
+
+    const p = await planCoreUpgrade({
+      baseDir: base,
+      oursDir: ours,
+      theirsDir: theirs,
+      manifest: CURRENT_MANIFEST,
+      mergeFile: fakeMerge,
+    })
+
+    expect(statusOf(p.entries, 'infra/global/main.tf')).toBe('added')
+  })
+
+  it('keeps ordinary keep-ours behavior for a path already templateOwned at base (steady state)', async () => {
+    // Regression guard: the path was ALREADY governed at the instance's base
+    // version — the normal, correct case for keep-ours must be unaffected.
+    writeBaseManifest(['infra/global/main.tf'])
+    w(base, 'infra/global/main.tf', 'upstream v1')
+    w(theirs, 'infra/global/main.tf', 'upstream v1')
+    w(ours, 'infra/global/main.tf', 'instance edit, previously reconciled')
+
+    const p = await planCoreUpgrade({
+      baseDir: base,
+      oursDir: ours,
+      theirsDir: theirs,
+      manifest: CURRENT_MANIFEST,
+      mergeFile: fakeMerge,
+    })
+
+    expect(statusOf(p.entries, 'infra/global/main.tf')).toBe('keep-ours')
+    expect(p.changes).toHaveLength(0)
+  })
+
+  it('falls back to prior behavior when base has no core-manifest.json at all (pre-ADR-0006 base)', async () => {
+    // No writeBaseManifest() call — base carries no manifest whatsoever, the
+    // only case old classify() ever saw. Cannot determine "newly owned" here,
+    // so this must not regress into treating every path as newly-owned noise.
+    w(base, 'infra/global/main.tf', 'upstream v1')
+    w(theirs, 'infra/global/main.tf', 'upstream v1')
+    w(ours, 'infra/global/main.tf', 'instance edit')
+
+    const p = await planCoreUpgrade({
+      baseDir: base,
+      oursDir: ours,
+      theirsDir: theirs,
+      manifest: CURRENT_MANIFEST,
+      mergeFile: fakeMerge,
+    })
+
+    expect(statusOf(p.entries, 'infra/global/main.tf')).toBe('keep-ours')
+  })
+})
+
 describe('gitMergeFile (real git integration)', () => {
   it('merges non-overlapping changes cleanly', async () => {
     const base = 'l1\nl2\nl3\nl4\nl5\n'

@@ -212,11 +212,14 @@ jobs:
       # proof, and for why that default exists here rather than being refused
       # the way instance-adoption's is below). This step exists to prove the
       # CLI wiring, exit codes and the #1714 per-file guidance work in real CI
-      # on every PR, and to give an instance a working command to copy.
-      # Pointing --instance-dir at a REAL instance tree, in that instance's
-      # own CI (or a scheduled cross-repo report mirroring
-      # instance-adoption-report.yml), is the follow-up that actually catches
-      # drift — deliberately out of scope for #1714.
+      # on every PR, and to give an instance a working command to copy. It is
+      # left in place deliberately even though it can never itself catch a
+      # real orphan: kept, not removed, because it is still real per-PR
+      # coverage of the CLI path itself, and removing it would buy nothing.
+      # The part that CAN catch real drift — --instance-dir pointed at a real
+      # instance tree — now runs in .github/workflows/orphan-ratchet-report.yml
+      # (biffo-template#1714), a scheduled cross-repo report cloning every
+      # live instance fresh, mirroring instance-adoption-report.yml exactly.
       - name: Orphan-ratchet guard (template self-check)
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: sh scripts/biffo.sh check orphan-ratchet

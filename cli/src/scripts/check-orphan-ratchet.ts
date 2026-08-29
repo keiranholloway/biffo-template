@@ -47,11 +47,13 @@
  * work correctly in real CI, and gives an instance an already-exercised
  * command to point at its own tree. It can never itself catch the drift
  * #1714 was filed over — that requires this same command, with
- * `--instance-dir` pointed at a REAL instance tree, running in that
- * instance's own CI (or a scheduled cross-repo report, the shape
- * `instance-adoption-report.yml` already established for the sibling guard
- * this one is modelled on). Both are out of scope for this PR by design; see
- * biffo-template#1714's own scoping.
+ * `--instance-dir` pointed at a REAL instance tree. That caller now exists:
+ * `.github/workflows/orphan-ratchet-report.yml` clones every live instance
+ * fresh on a schedule and runs exactly this invocation against each one's
+ * real tree, mirroring `instance-adoption-report.yml`'s shape for the
+ * sibling guard it was modelled on. This self-check step in ci.yml stays as
+ * it is — it proves the CLI path on every PR — but it is no longer the only
+ * caller this command has.
  *
  * ── The per-file guidance (#1714) ────────────────────────────────────────
  *

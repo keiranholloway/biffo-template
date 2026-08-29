@@ -1,0 +1,368 @@
+name: Orphan-ratchet estate report
+
+# orphan-ratchet guard (#1026/#1714): does a real instance's tree carry a
+# file under a template-owned path that core-manifest.json does not sanction
+# -- an unreviewed script, test or config an operator added directly instead
+# of upstreaming it or declaring a carve-out, invisible until the next
+# `biffo core upgrade` refuses to proceed on top of it?
+#
+# `checkOrphanRatchet` + `planCoreUpgrade`'s `classify()`
+# (cli/src/lib/core-upgrade.ts) had exactly one caller before #1714:
+# `biffo core upgrade`. ci.yml (#1714, this same PR) added a second caller,
+# `sh scripts/biffo.sh check orphan-ratchet` with no arguments -- but every
+# argument that command can take (--instance-dir, --theirs-dir, --base-dir)
+# defaults to THIS repo's own root, so oursDir/theirsDir/baseDir are all the
+# same tree read three times. classify()'s `orphaned` flag requires a path
+# present in ours but ABSENT from both base and theirs, which is impossible
+# when they are literally identical -- self-check mode proves the CLI wiring,
+# the exit codes and the #1714 per-file guidance work in real CI; it cannot,
+# by construction, ever find a real orphan (see check-orphan-ratchet.ts's own
+# doc comment for the proof). Measured cost of the gap this leaves open:
+# tabsii-platform carried 21 unsanctioned files against an 18-baseline three
+# weeks and ~90 core versions stale before anyone looked (#1714's own
+# report), and nothing in the estate's CI -- before or after ci.yml's
+# self-check step -- could ever have caught it, because the self-check's
+# denominator is mathematically zero on every run, forever.
+#
+# This workflow is the missing caller that actually can find something: it
+# clones every live core instance fresh and runs the identical command with
+# `--instance-dir` pointed at that instance's REAL tree, on a schedule -- the
+# same shape `instance-adoption-report.yml` (#1609) already established for
+# the adjacent "a guard's only caller is one manual path, so drift outside
+# that path goes unseen for as long as nobody happens to run it" problem
+# (#1413's "third audit nobody runs"). That file is this one's direct model,
+# reused almost verbatim for the discovery half: same `BIFFO_GITHUB_TOKEN`
+# cross-repo auth (the default `GITHUB_TOKEN` cannot read another repo), same
+# `user/repos?affiliation=owner` + `orgs/tabsii-com/repos` discovery
+# (`users/<name>/repos` silently narrows to PUBLIC repos regardless of
+# token), same archival read from each repo's own `.archived` field rather
+# than a hardcoded skip list, same "an instance is a repo carrying
+# biffo.core.json at its root" population (`isInstanceRepo()`,
+# cli/src/lib/core-version.ts) rather than a name list two instances would
+# already outgrow, and the same "open/update one tracking issue by exact
+# stable title, never auto-close" pattern `shared-sync-report.yml`,
+# `core-direct-paths-report.yml` and `instance-adoption-report.yml` all use.
+#
+# ## theirsDir and baseDir both point at the CURRENT template tip
+#
+# `biffo core upgrade` passes the template at the instance's *current* core
+# version as baseDir -- the correct comparison for "what changed since your
+# last upgrade". This report asks a different, simpler question: "does the
+# instance carry a file the CURRENT template does not sanction, right now,
+# today?" -- so both theirsDir and baseDir are this checkout's own root, the
+# same choice check-orphan-ratchet.ts's self-check default makes for the
+# same two arguments. The trade-off is real and worth naming rather than
+# leaving implicit: an instance meaningfully behind on core versions can see
+# a live count here that would differ from what its own next
+# `biffo core upgrade` computes against ITS actual baseDir. That is
+# acceptable here because this workflow's verdict is a ratchet against each
+# instance's own recorded `biffo.orphan-baseline.json`, not an absolute
+# count -- pre-existing residue never fails, only growth over the baseline
+# does (checkOrphanRatchet, #1026's own decision) -- and because a report
+# that is occasionally conservative about WHICH version introduced a file is
+# still strictly better than the zero-callers gap it replaces. A tighter
+# per-instance baseDir (the template at that instance's pinned core version)
+# is a real improvement and is left as follow-up, not invented here.
+#
+# ## The per-file guidance (#1714) rides along for free
+#
+# check-orphan-ratchet.ts's own report already names, via `explainOwnership`
+# (cli/src/lib/core-manifest.ts), the templateOwned manifest entry claiming
+# each orphaned path and the nearest userOwned carve-out(s), or says plainly
+# that core-manifest.json has no carve-out anywhere near it -- this workflow
+# does not reimplement that; it just captures the command's own stdout/stderr
+# into the log the same way instance-adoption-report.yml does, so a finding
+# here already carries #1714's "where should this actually live" guidance.
+# `explainOwnership`'s distinction is structural (shared leading path
+# segments) rather than semantic: it cannot itself tell "belongs in an
+# existing carve-out" apart from "is a core capability that belongs upstream
+# instead" when no userOwned entry is nearby -- that residual gap is named in
+# check-orphan-ratchet.ts's own doc comment and is not something this
+# workflow invents a heuristic for either.
+#
+# ## Fail closed, on purpose, at every layer
+#
+# Same discipline as the two precedent workflows: a missing/empty
+# BIFFO_GITHUB_TOKEN, a repo-listing call that fails, or a clone that fails is
+# a loud step failure, never a silently smaller estate. Zero candidates
+# cloned, or zero of them carrying biffo.core.json, is ALSO a loud failure --
+# not a clean report -- because a real defect ships as invisibly as "we
+# checked and found nothing" reads. An instance with no recorded
+# `biffo.orphan-baseline.json` is not a failure either (the ratchet's own
+# "establish, don't fail" rule) -- it is reported as such in the log rather
+# than silently treated as zero.
+#
+# ## Cadence
+#
+# 07:30 UTC -- 30 minutes after instance-adoption-report.yml's 07:00 and an
+# hour after core-direct-paths-report.yml's 06:30, so the four scheduled
+# estate clones do not all hit the same two owners' APIs in the same window.
+
+on:
+  schedule:
+    - cron: '30 7 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: orphan-ratchet-report
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: '22'
+
+jobs:
+  report:
+    name: Report orphan-ratchet findings across the live estate
+    # Only the template should ever run this: `.github/` is wholly
+    # template-owned (core-manifest.json) except `*.instance.yml`, so this
+    # file rides `biffo core upgrade` into every instance exactly like
+    # instance-adoption-report.yml already does -- and each instance running
+    # its own copy would open its own duplicate tracking issue about a check
+    # that only means anything from the template's side. Same reasoning,
+    # same guard, as instance-adoption-report.yml.
+    if: github.repository == 'keiranholloway/biffo-template'
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      # This step's own tree is theirsDir AND baseDir -- "does the CURRENT
+      # template sanction every file a real instance carries?" -- so it must
+      # be the real tip, not whatever SHA triggered the run. Same reasoning
+      # and same fix as shared-sync-report.yml's "Re-point the checkout" step.
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: dev
+          fetch-depth: 0
+
+      - name: Re-point the checkout at the current origin/dev tip
+        run: |
+          set -eu
+          git fetch origin dev --prune
+          git reset --hard origin/dev
+          behind=$(git rev-list --count HEAD..origin/dev)
+          if [ "$behind" -ne 0 ]; then
+            echo "::error title=orphan-ratchet: checkout still behind origin/dev::Reset to origin/dev but still $behind commit(s) behind." >&2
+            exit 1
+          fi
+          echo "checkout is at origin/dev tip: $(git rev-parse --short HEAD)"
+
+      - name: Discover live instances and clone them fresh
+        id: estate
+        env:
+          GH_TOKEN: ${{ secrets.BIFFO_GITHUB_TOKEN }}
+        run: |
+          set -u
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error title=orphan-ratchet: no cross-repo token::BIFFO_GITHUB_TOKEN is not set. The default GITHUB_TOKEN cannot read other repos, so this job cannot see any instance -- refusing to report a clean run against nothing it could reach." >&2
+            exit 1
+          fi
+
+          ESTATE="$RUNNER_TEMP/orphan-ratchet-estate"
+          mkdir -p "$ESTATE"
+
+          # Same discovery as shared-sync-report.yml / core-direct-paths-report.yml
+          # / instance-adoption-report.yml, same reason: `GET
+          # /users/keiranholloway/repos` returns PUBLIC repos only regardless of
+          # token; `GET /user/repos?affiliation=owner` is the authenticated,
+          # owner-scoped call that actually sees the private estate.
+          if ! gh api "user/repos?affiliation=owner&per_page=100" --paginate \
+              --jq '.[] | select(.owner.login == "keiranholloway" and .archived == false and .fork == false) | .full_name' \
+              >> "$RUNNER_TEMP/candidates.txt.tmp"; then
+            echo "::error title=orphan-ratchet: could not list keiranholloway's repos::gh api user/repos?affiliation=owner failed -- refusing to survey a shrunk, silently-partial estate." >&2
+            exit 1
+          fi
+          if ! gh api "orgs/tabsii-com/repos?per_page=100" --paginate \
+              --jq '.[] | select(.archived == false and .fork == false) | .full_name' \
+              >> "$RUNNER_TEMP/candidates.txt.tmp"; then
+            echo "::error title=orphan-ratchet: could not list tabsii-com's repos::gh api orgs/tabsii-com/repos failed -- refusing to survey a shrunk, silently-partial estate." >&2
+            exit 1
+          fi
+          candidates="$RUNNER_TEMP/candidates.txt"
+          mv "$RUNNER_TEMP/candidates.txt.tmp" "$candidates"
+
+          : > "$candidates.filtered"
+          while IFS= read -r slug; do
+            name="${slug##*/}"
+            case "$name" in
+              biffo-template) continue ;;   # this repo IS the template; nothing to check it against itself
+              biffo-*|tabsii-*) ;;
+              *) continue ;;
+            esac
+            printf '%s\n' "$slug" >> "$candidates.filtered"
+          done < "$candidates"
+
+          cloned=0
+          while IFS= read -r slug; do
+            [ -n "$slug" ] || continue
+            name="${slug##*/}"
+            echo "cloning ${slug}"
+            if ! gh repo clone "$slug" "$ESTATE/$name" -- --quiet --depth 1 2>&1; then
+              echo "::error title=orphan-ratchet: could not clone ${slug}::A repo this job could see in the listing but could not clone is a LOUD failure, not a skip -- the alternative silently shrinks the denominator the same way #1145 did for branch protection." >&2
+              exit 1
+            fi
+            cloned=$((cloned + 1))
+          done < "$candidates.filtered"
+
+          if [ "$cloned" -eq 0 ]; then
+            echo "::error title=orphan-ratchet: zero candidate repos::Listed keiranholloway and tabsii-com and found nothing matching biffo-*/tabsii-* to even attempt -- a configuration error in this workflow or a naming-convention change, not a clean estate." >&2
+            exit 1
+          fi
+
+          # An instance is a repo carrying biffo.core.json at its root --
+          # isInstanceRepo()'s own definition (cli/src/lib/core-version.ts),
+          # not a hardcoded name list. A sibling or plugin repo correctly has
+          # none and is correctly excluded here, not counted as a miss.
+          : > "$RUNNER_TEMP/instances.txt"
+          for dir in "$ESTATE"/*/; do
+            [ -d "$dir" ] || continue
+            name=$(basename "$dir")
+            if [ -f "${dir%/}/biffo.core.json" ]; then
+              printf '%s\n' "$name" >> "$RUNNER_TEMP/instances.txt"
+            fi
+          done
+          instance_count=$(wc -l < "$RUNNER_TEMP/instances.txt" | tr -d ' ')
+
+          if [ "$instance_count" -eq 0 ]; then
+            echo "::error title=orphan-ratchet: zero instances found::Cloned ${cloned} candidate repo(s) but NONE carried biffo.core.json -- refusing to report a clean run against an empty population. If every instance repo was renamed or moved, this workflow's discovery needs updating; if not, something in this step broke." >&2
+            exit 1
+          fi
+
+          echo "estate=$ESTATE" >> "$GITHUB_OUTPUT"
+          echo "cloned=$cloned" >> "$GITHUB_OUTPUT"
+          echo "instance_count=$instance_count" >> "$GITHUB_OUTPUT"
+          echo "cloned ${cloned} candidate repo(s), ${instance_count} carry biffo.core.json (instances): $(paste -sd, - "$RUNNER_TEMP/instances.txt")"
+
+      - uses: pnpm/action-setup@v4
+        if: steps.estate.outcome == 'success'
+      - uses: actions/setup-node@v5
+        if: steps.estate.outcome == 'success'
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - name: Install this repo's dependencies (the CLI that runs the check)
+        id: install
+        if: steps.estate.outcome == 'success'
+        run: pnpm install --frozen-lockfile
+
+      - name: Run the orphan-ratchet check against every discovered instance, and report the denominator
+        id: check
+        if: ${{ !cancelled() && steps.estate.outcome == 'success' && steps.install.outcome == 'success' }}
+        run: |
+          set -u
+          estate="${{ steps.estate.outputs.estate }}"
+          theirs_dir="$(pwd)"
+          log="$RUNNER_TEMP/orphan-ratchet-check.log"
+          : > "$log"
+
+          examined=0
+          increased=0
+          failed_instances=""
+          checked_names=""
+
+          while IFS= read -r name; do
+            [ -n "$name" ] || continue
+            echo "== ${name} ==" >> "$log"
+            set +e
+            out=$(sh scripts/biffo.sh check orphan-ratchet \
+              --instance-dir "${estate}/${name}" --theirs-dir "$theirs_dir" \
+              --base-dir "$theirs_dir" --label "$name" 2>&1)
+            rc=$?
+            set -e
+            printf '%s\n' "$out" >> "$log"
+            echo "(exit ${rc})" >> "$log"
+            echo "" >> "$log"
+
+            examined=$((examined + 1))
+            checked_names="${checked_names}${checked_names:+, }${name}"
+
+            # 0 clean or a baseline that did not increase, 1 the live count
+            # increased over the instance's own recorded biffo.orphan-baseline.json
+            # (a real, actionable finding -- pre-existing residue never fails,
+            # only growth does), 2 cannot-tell (the clone directory vanished
+            # between discovery and this step) -- 2 is never folded into
+            # "clean", same three-valued convention scripts/biffo.sh's own
+            # header documents.
+            if [ "$rc" -ne 0 ]; then
+              increased=$((increased + 1))
+              failed_instances="${failed_instances} ${name}(exit ${rc})"
+            fi
+          done < "${RUNNER_TEMP}/instances.txt"
+
+          denom="examined ${examined} instance(s): ${checked_names:-(none)}; ${increased} with a finding"
+
+          echo "$denom"
+          {
+            echo "### Orphan-ratchet estate report"
+            echo
+            echo "\`$denom\`"
+            echo
+            if [ "$increased" -gt 0 ]; then
+              echo "**${increased} of ${examined} instance(s) reported a finding:**${failed_instances}"
+            else
+              echo "All ${examined} instance(s) carry no unsanctioned file growth over their recorded baseline."
+            fi
+            echo
+            echo '```'
+            cat "$log"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "denom=$denom" >> "$GITHUB_OUTPUT"
+          echo "increased=$increased" >> "$GITHUB_OUTPUT"
+          echo "examined=$examined" >> "$GITHUB_OUTPUT"
+          echo "log=$log" >> "$GITHUB_OUTPUT"
+
+          # Fail closed (#1363): a run that examined zero instances is exactly
+          # the vacuity this workflow exists to end, even though the discovery
+          # step above already guards against a zero instance_count -- this is
+          # the second, independent check at the layer that actually iterates,
+          # in case that guard is ever bypassed by a future edit to this step
+          # alone.
+          if [ "$examined" -eq 0 ]; then
+            echo "::error title=orphan-ratchet: zero instances examined::The discovery step found instances but this step never got to any of them." >&2
+            exit 1
+          fi
+
+          if [ "$increased" -gt 0 ]; then
+            echo "::error title=orphan-ratchet: unsanctioned file growth or an unreadable instance found::${increased} of ${examined} instance(s) had a finding:${failed_instances}. See the job step summary or log above." >&2
+            exit 1
+          fi
+
+          exit 0
+
+      - name: Open or update a tracking issue on any failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -u
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          title="orphan-ratchet scheduled report: an instance carries unsanctioned file growth"
+          denom="${{ steps.check.outputs.denom }}"
+          [ -n "$denom" ] || denom="(the run failed before the check step could compute a denominator -- see the run log)"
+          body=$(printf '%s\n' \
+            "\`$denom\`" \
+            "" \
+            "Run: ${run_url}" \
+            "" \
+            "See the job step summary on the run above for which instance(s), which file(s), the " \
+            "templateOwned entry claiming each, and the nearest sanctioned carve-out (or a plain " \
+            "statement that core-manifest.json has none nearby) -- printed per file by " \
+            "check-orphan-ratchet.ts's own explainOwnership guidance (biffo-template#1714)." \
+            "" \
+            "A finding here means the instance's live unsanctioned-file count grew past its OWN " \
+            "recorded biffo.orphan-baseline.json -- pre-existing residue never fails this ratchet, " \
+            "only growth over the baseline does (biffo-template#1026)." \
+            "" \
+            "This issue is not auto-closed on the next clean run, per AGENTS.md section 4 -- " \
+            "confirm the file was actually moved to a sanctioned carve-out, upstreamed, or the " \
+            "baseline deliberately re-recorded, before closing it.")
+          existing=$(gh issue list --state open --limit 100 --json number,title \
+            --jq "map(select(.title == \"${title}\")) | .[0].number // empty")
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body"
+          fi

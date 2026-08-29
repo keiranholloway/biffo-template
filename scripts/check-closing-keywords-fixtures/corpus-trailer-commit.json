@@ -1,0 +1,6 @@
+[
+  {
+    "messageHeadline": "ci(guards): wire the three orphaned cross-artifact guards, and sweep for a fourth (#1418)",
+    "messageBody": "closes #1413"
+  }
+]

@@ -5,6 +5,7 @@ import { execFileSync } from 'node:child_process'
 import {
   assess,
   closingReferences,
+  deliberateClosingReferences,
   DEPLOY_ONLY_PREFIXES,
   deployOnlyPaths,
   documentsFor,
@@ -84,6 +85,55 @@ describe('closing-keyword guard', () => {
 
     it('does not match a word that merely starts with a keyword', () => {
       expect(closingReferences('Closest #12')).toEqual([])
+    })
+
+    // #1732: a commit message has no markdown semantics, so `{ code: false
+    // }` must find a hit even inside backticks — the opposite of the
+    // default, which correctly models the PR body/title's real markdown
+    // rendering.
+    it('with { code: false }, finds a keyword even INSIDE backticks — commit messages are not markdown', () => {
+      expect(
+        closingReferences('The rule refuses `Closes #99` on deploy paths', { code: false }),
+      ).toEqual(['#99'])
+    })
+
+    it('with { code: false } still finds a keyword with no backticks at all, same as the default', () => {
+      expect(closingReferences('Closes #99', { code: false })).toEqual(['#99'])
+    })
+  })
+
+  describe('deliberateClosingReferences', () => {
+    it('recognises a trailer on its own line as deliberate', () => {
+      expect(deliberateClosingReferences('Closes #1001')).toEqual(['#1001'])
+    })
+
+    it('recognises a trailer sentence following prose on the same line', () => {
+      expect(deliberateClosingReferences('warnings on both commands. Closes #201.')).toEqual([
+        '#201',
+      ])
+    })
+
+    it('does NOT recognise a mid-sentence hit as deliberate — the #1680/#1664 real shape', () => {
+      expect(deliberateClosingReferences('This is the one-word fix #1664 asked for.')).toEqual([])
+    })
+
+    // #1732: with { code: false }, a LEADING backtick is a literal character
+    // sitting before the keyword, not stripped away — so it blocks the
+    // clause-initial match the same way any other stray character would,
+    // and this reads as NOT deliberate. That is the safe direction, not a
+    // bug: an author who wraps `Closes #99` in backticks inside a COMMIT
+    // message, out of habit from writing PR bodies (where it WOULD be
+    // protected), gets exactly what happened for real in #1730 — GitHub
+    // still closes it regardless of the backticks, so this heuristic
+    // correctly refuses to call that "obviously intentional" and asks for a
+    // plain, backtick-free trailer instead (see `assess`'s
+    // `commit-ground-truth-mismatch`, which this feeds).
+    it('with { code: false }, a backtick-WRAPPED trailer is NOT recognised as deliberate — the safe direction', () => {
+      expect(deliberateClosingReferences('`Closes #99`', { code: false })).toEqual([])
+      // The un-stripped hit detector still finds it, though — GitHub will
+      // still act on it, backticks or not, which is exactly why this is not
+      // treated as safe.
+      expect(closingReferences('`Closes #99`', { code: false })).toEqual(['#99'])
     })
   })
 
@@ -388,10 +438,10 @@ describe('closing-keyword guard', () => {
         commits: [{ messageHeadline: 'fix(ci): a', messageBody: 'Closes #1' }],
       })
       expect(docs).toEqual([
-        { source: 'the PR body', text: 'Refs #1' },
-        { source: 'the PR title', text: 'fix(ci): tighten workflow permissions' },
-        { source: 'the commit message (subject)', text: 'fix(ci): a' },
-        { source: 'the commit message (body)', text: 'Closes #1' },
+        { source: 'the PR body', text: 'Refs #1', kind: 'body' },
+        { source: 'the PR title', text: 'fix(ci): tighten workflow permissions', kind: 'title' },
+        { source: 'the commit message (subject)', text: 'fix(ci): a', kind: 'commit' },
+        { source: 'the commit message (body)', text: 'Closes #1', kind: 'commit' },
       ])
     })
 
@@ -414,7 +464,7 @@ describe('closing-keyword guard', () => {
 
     it('omits title and commits entirely when absent, so every pre-#1334 caller is unaffected', () => {
       expect(documentsFor({ body: 'Refs #1' })).toEqual([
-        { source: 'the PR body', text: 'Refs #1' },
+        { source: 'the PR body', text: 'Refs #1', kind: 'body' },
       ])
     })
 
@@ -485,18 +535,118 @@ describe('closing-keyword guard', () => {
       expect(result.hits.map((h: { source: string }) => h.source)).toEqual(['the PR title'])
     })
 
-    it('still PASSES a commit closing keyword when nothing changed is deploy-only', () => {
+    it('still PASSES a DELIBERATE commit closing keyword when nothing changed is deploy-only', () => {
       // The deploy-only-path check stays scoped by design — see the module
       // docstring's "why this guard fires on every path" note, which is
-      // about the NEGATION check, not this one. A closing keyword in a
-      // commit on an ordinary code change is fine, same as it always was
-      // for the body.
+      // about the NEGATION check, not this one. A genuine, deliberate
+      // closing trailer in a commit on an ordinary code change is fine, same
+      // as it always was for the body.
+      const result = assess({
+        body: 'Refs #9',
+        commits: [{ messageHeadline: 'fix: x', messageBody: 'Closes #9' }],
+        changedFiles: ['cli/src/lib/a.ts'],
+      })
+      expect(result.ok).toBe(true)
+    })
+
+    // #1732: this is the corrected behaviour for the case the test above USED
+    // TO cover before this fix — 'fix: closes #9' is a non-deliberate hit
+    // (the keyword is not clause-initial), and until now that was considered
+    // fine on any ordinary path with no way to reconcile it. That is exactly
+    // the gap PR #1730 fell into for real: `closingIssuesReferences` can
+    // never see a commit-only hit, so a hit that would previously have been
+    // silently passed on an ordinary path must now be reconciled the same
+    // way a body hit already is.
+    it('FAILS a non-deliberate commit-message hit on an ORDINARY path too, once the fix lands (#1732)', () => {
       const result = assess({
         body: 'Refs #9',
         commits: [{ messageHeadline: 'fix: closes #9', messageBody: '' }],
         changedFiles: ['cli/src/lib/a.ts'],
       })
+      expect(result.ok).toBe(false)
+      expect(result.kind).toBe('commit-ground-truth-mismatch')
+      expect(result.hits.map((h: { source: string }) => h.source)).toEqual([
+        'the commit message (subject)',
+      ])
+    })
+
+    // The real incident (#1732): PR #1730's own body quoted the historical
+    // bug it was fixing — "the one-word fix #1664 asked for" — inside a
+    // markdown code span, so GitHub's PR-body linker correctly ignored it
+    // and closingIssuesReferences read [] (verified live via `gh pr view
+    // 1730 --json body,closingIssuesReferences`). The identical phrase, with
+    // NO code span, was already sitting in the branch's own commit message
+    // (verified via `gh api repos/.../commits/a11a5b7e2647 --jq
+    // .commit.message`) — a git commit message has no markdown semantics, so
+    // a backtick there is a literal character, not protection — and it
+    // closed #1664 one second after merge. `closingIssuesReferences` being
+    // empty must NOT excuse a hit that lives only in a commit.
+    it('FAILS the real PR #1730 shape: body-only backtick protection does not extend to the commit (#1732)', () => {
+      const body = [
+        'The deploy-only-path check silently passed a genuine closing-keyword hit',
+        'whenever the changed paths were ordinary, with nothing checking whether',
+        "GitHub's own `closingIssuesReferences` actually confirmed the close would",
+        "happen. Real instance: merged PR #1680's body read (in context)",
+        '`"the one-word fix #1664 asked for"` -- mid-sentence prose, not a deliberate',
+        '`Closes #N` trailer -- alongside its own explicit `Refs #1664` elsewhere.',
+      ].join('\n')
+      // Real squash commit text (a11a5b7e2647), trimmed to the load-bearing
+      // paragraph — the backtick-free "fix #1664" is what actually closed it.
+      const commitBody = [
+        'Merged PR #1680\'s body read (in context) "the one-word fix #1664 asked',
+        'for" -- mid-sentence prose, not a deliberate `Closes #N` trailer.',
+      ].join('\n')
+      const result = assess({
+        body,
+        commits: [
+          {
+            messageHeadline: 'fix(scripts): reconcile against ground truth',
+            messageBody: commitBody,
+          },
+        ],
+        changedFiles: ['scripts/check-closing-keywords.mjs'],
+        closingIssuesReferences: [],
+      })
+      expect(result.ok).toBe(false)
+      expect(result.kind).toBe('commit-ground-truth-mismatch')
+    })
+
+    it('a backtick-quoted closing keyword in a COMMIT is NOT protected the way it is in the PR body (#1732)', () => {
+      // The mechanical half of #1732: a commit message has no markdown
+      // semantics, so `stripCode` must not be applied to it the way it
+      // correctly is to the PR body/title.
+      const result = assess({
+        body: 'Refs #99 only.',
+        commits: [
+          { messageHeadline: 'chore: tidy', messageBody: 'Quoting the pattern: `Closes #99`.' },
+        ],
+        changedFiles: ['cli/src/lib/a.ts'],
+      })
+      expect(result.ok).toBe(false)
+      expect(result.kind).toBe('commit-ground-truth-mismatch')
+    })
+
+    it('a backtick-quoted closing keyword in the PR BODY stays protected — commits are the only document this changes', () => {
+      const result = assess({
+        body: 'Quoting the pattern: `Closes #99`.',
+        commits: [{ messageHeadline: 'chore: tidy', messageBody: 'Refs #99 only.' }],
+        changedFiles: ['cli/src/lib/a.ts'],
+      })
       expect(result.ok).toBe(true)
+    })
+
+    it('a deliberate commit trailer for a deploy-only path is STILL caught by check 1, not this new check', () => {
+      // Ordering matters: a hit on a deploy-only path must fail as
+      // 'deploy-only-path' (with the existing Verified-on-deploy escape
+      // hatch), never as 'commit-ground-truth-mismatch' — the new check only
+      // ever fires from inside the "no deploy-only paths" pass branch.
+      const result = assess({
+        body: 'Refs #42',
+        commits: [{ messageHeadline: 'fix: x', messageBody: 'Closes #42' }],
+        changedFiles: ['infra/a.tf'],
+      })
+      expect(result.ok).toBe(false)
+      expect(result.kind).toBe('deploy-only-path')
     })
 
     it('a Verified-on-deploy trailer in the body still excuses a commit-message closing keyword', () => {

@@ -119,6 +119,18 @@ jobs:
         # py-dependency-audit.sh already carry as inert-but-verified copies
         # in a Python-only or JS-only sibling.
         run: sh scripts/core-revision-preflight.test.sh
+      - name: Core-version preflight — self-test
+        if: ${{ !cancelled() }}
+        # scripts/core-version-preflight.sh (biffo-template#1605) is
+        # distributed here too, verbatim, via shared-files.json's `files` —
+        # same reasoning as the Core-revision preflight self-test above: a
+        # plugin repo has no deploy.yml, so it is never invoked for a REAL
+        # preflight here the way the sibling skeleton's deploy.yml invokes
+        # it. This is the caller that keeps it off the #1413 zero-caller
+        # list anyway: it proves the script itself still blocks a stale
+        # core, passes a current one, and fails CLOSED when the health
+        # document is missing or reports "unknown", against a stubbed curl.
+        run: sh scripts/core-version-preflight.test.sh
       - name: Guard self-test wiring — this repo's own scripts/*.test.sh
         if: ${{ !cancelled() }}
         # Level-3 self-audit (biffo-template#1710): the template repo's own

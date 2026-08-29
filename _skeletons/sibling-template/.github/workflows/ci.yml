@@ -259,6 +259,18 @@ jobs:
         # is missing, against a stubbed curl. Without this caller the script
         # is the #1413 zero-caller class the instant it lands.
         run: sh ../../scripts/core-revision-preflight.test.sh
+      - name: Core-version preflight — self-test
+        if: ${{ !cancelled() }}
+        # Same shape as the two self-tests above: not exercising a real core
+        # deployment (CI has none to reach), proves
+        # scripts/core-version-preflight.sh — the deploy.yml
+        # preflight-core-version job (#1605) that blocks this sibling from
+        # deploying against an instance whose core TEMPLATE version is too
+        # old — still blocks a stale core, passes a current one, and fails
+        # CLOSED when the health document is missing or reports "unknown",
+        # against a stubbed curl. Without this caller the script is the
+        # #1413 zero-caller class the instant it lands.
+        run: sh ../../scripts/core-version-preflight.test.sh
       - name: Guard self-test wiring — this repo's own scripts/*.test.sh
         if: ${{ !cancelled() }}
         working-directory: .

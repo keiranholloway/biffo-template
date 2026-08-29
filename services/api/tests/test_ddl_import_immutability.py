@@ -54,6 +54,7 @@ this test needs to forbid. Git already knows what the base branch holds.
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -80,6 +81,13 @@ def _git(*args: str) -> subprocess.CompletedProcess[str]:
         text=True,
         check=False,
     )
+
+
+def _git_ok(*args: str) -> subprocess.CompletedProcess[str]:
+    """`_git`, but fail loudly -- for test setup where a git error means a broken fixture."""
+    result = _git(*args)
+    assert result.returncode == 0, f"git {args} failed: {result.stderr}"
+    return result
 
 
 def _fetch_base() -> None:
@@ -141,7 +149,17 @@ def _modified_against(ref: str) -> list[str]:
     # what did THIS branch change. The builder's workaround for the false positive was to
     # verify by hand with the three-dot form and proceed past the local failure -- so the
     # guard was already training people to ignore it, which is how a real hit gets missed.
-    out = _git("diff", "--name-only", f"{ref}...HEAD", "--", *sorted(on_base))
+    #
+    # `--diff-filter=d` (lowercase d = exclude deletions) is deliberate: without it,
+    # `git diff --name-only` reports a DELETED already-applied file as "modified", which
+    # blocks the docstring's own sanctioned escape for a module that was merged but never
+    # successfully applied -- revert-and-replace with a new number requires deleting the
+    # old file, and the guard used to fail on that deletion too. Deletion is safe to
+    # exclude here because the importer's read phase (`main.py::_apply_batch`) only
+    # checksums files it finds ON DISK; a history row whose file is gone is never
+    # consulted, so a deletion cannot produce the checksum-mismatch failure this guard
+    # exists to prevent. Cost tabsii-platform#1144 an 8-consecutive-red-deploy outage.
+    out = _git("diff", "--name-only", "--diff-filter=d", f"{ref}...HEAD", "--", *sorted(on_base))
     if out.returncode != 0:
         pytest.skip(f"could not diff against {ref}: {out.stderr.strip()}")
     return [p for p in out.stdout.split("\n") if p.endswith(".sql")]
@@ -222,3 +240,65 @@ class TestTheComparisonItself:
         on_base = _sql_files_on(base)
         # Nothing reported may be outside the base's own file set, by construction.
         assert set(_modified_against(base)) <= on_base
+
+
+class TestDeletionVsModificationOfAnAppliedModule:
+    """`--diff-filter=d` must open exactly one door and leave the other shut.
+
+    issue #1743: a merged-but-never-applied module (its deploy failed, so it has
+    no `ddl_import_history` row anywhere) can only be recovered by
+    revert-and-replace, which requires DELETING the old file. Before this fix,
+    `_modified_against` reported a deletion the same as a modification, so the
+    guard blocked the very escape its own docstring prescribes.
+
+    These tests build a throwaway git repo under `tmp_path` and point the
+    module's `REPO_ROOT` at it via monkeypatch, so they exercise the real
+    `_git`/`_modified_against` plumbing against a controlled two-commit history
+    rather than a hand-rolled model of what git would say.
+    """
+
+    _APPLIED_SQL_PATH = "db/imports/widgets/001_create_widgets.sql"
+
+    @pytest.fixture
+    def applied_module_repo(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> tuple[Path, str]:
+        """A repo with one committed, "already-applied" DDL file. Returns (repo, base_sha)."""
+        monkeypatch.setattr(sys.modules[__name__], "REPO_ROOT", tmp_path)
+
+        _git_ok("init", "-q")
+        _git_ok("config", "user.email", "ddl-guard-test@example.invalid")
+        _git_ok("config", "user.name", "DDL Guard Test")
+        _git_ok("config", "commit.gpgsign", "false")
+
+        sql_file = tmp_path / self._APPLIED_SQL_PATH
+        sql_file.parent.mkdir(parents=True)
+        sql_file.write_text("CREATE TABLE widgets (id int);\n")
+        _git_ok("add", "-A")
+        _git_ok("commit", "-q", "-m", "base: add applied module")
+        base_sha = _git_ok("rev-parse", "HEAD").stdout.strip()
+
+        return tmp_path, base_sha
+
+    def test_deleted_applied_module_does_not_fail_the_guard(
+        self, applied_module_repo: tuple[Path, str]
+    ) -> None:
+        """Revert-and-replace deletes the old file. That must not trip the guard."""
+        repo, base_sha = applied_module_repo
+        (repo / self._APPLIED_SQL_PATH).unlink()
+        _git_ok("add", "-A")
+        _git_ok("commit", "-q", "-m", "revert-and-replace: delete never-applied module")
+
+        assert _modified_against(base_sha) == []
+
+    def test_modified_applied_module_still_fails_the_guard(
+        self, applied_module_repo: tuple[Path, str]
+    ) -> None:
+        """A byte change to an applied module -- even just a comment -- must still be caught."""
+        repo, base_sha = applied_module_repo
+        sql_file = repo / self._APPLIED_SQL_PATH
+        sql_file.write_text(sql_file.read_text() + "-- reworded comment, no statement change\n")
+        _git_ok("add", "-A")
+        _git_ok("commit", "-q", "-m", "edit: reword a comment on an applied module")
+
+        assert _modified_against(base_sha) == [self._APPLIED_SQL_PATH]

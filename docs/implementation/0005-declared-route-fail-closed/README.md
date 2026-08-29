@@ -309,3 +309,25 @@ evidence"* — is why.
    installed plugin; the revert in 3 is the response.
 5. `biffo-plugin-marketing`'s manifest is deliberately **not** changed. Once M1 lands its
    empty `required_role` becomes inert rather than dangerous.
+
+## What decomposition files, when this plan merges
+
+**#1736 itself is the epic.** It is not re-filed as a new issue: `fleet.sh plan` keys
+every stage on the *planned issue's* number — the plan branch is `plan/1736-<slug>` and
+milestones are found by grepping their bodies for `Part of <repo>#1736`. A freshly-minted
+epic issue would leave #1736 reading `DECOMPOSE` forever and the next session would file
+the whole set again.
+
+So decomposition:
+
+1. Labels **#1736** `epic` — so the fleet never dispatches a builder at it — and edits its
+   body to append the milestone checklist with the real numbers.
+2. Files **2 milestone issues**, neither labelled `epic`:
+   - **M1** in `keiranholloway/biffo-template`, body carrying M1's done-conditions above
+     and `Part of keiranholloway/biffo-template#1736`.
+   - **M2** in `tabsii-com/tabsii-platform`, body carrying M2's done-conditions,
+     `depends-on:#<M1>`, and `Part of keiranholloway/biffo-template#1736`.
+3. Both inherit #1736's `priority:`. No `feature:<slug>` label (biffo-fleet#384 — the
+   `Part of` line is the one authority for membership). The epic is referenced with
+   `Part of`, **never** a closing keyword: `closes` would shut #1736 the moment M1 merged,
+   with the replay unrun — which is precisely the evidence this issue exists to demand.

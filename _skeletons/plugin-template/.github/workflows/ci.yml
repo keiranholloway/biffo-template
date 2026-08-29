@@ -41,7 +41,14 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
-      - run: uv sync --all-groups
+      # `--locked` mirrors the root repo's own `ci.yml` (see the comment
+      # there): plain `uv sync` silently RE-RESOLVES when `pyproject.toml`
+      # has drifted from `uv.lock`, so a dependency bump committed without
+      # re-running `uv lock` still installs and still goes green — the
+      # committed lock just stops describing what actually ran. Every
+      # `uv sync` call in this workflow carries it for the same reason
+      # (biffo-template#1731).
+      - run: uv sync --all-groups --locked
       - run: uv run ruff check .
       - run: uv run ruff format --check .
 
@@ -54,7 +61,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
-      - run: uv sync --all-groups
+      - run: uv sync --all-groups --locked
       - run: uv run pyright
 
   test:
@@ -66,7 +73,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
-      - run: uv sync --all-groups
+      - run: uv sync --all-groups --locked
       # `--cov-report=json` is additive to the xml Codecov reads: the step
       # below (`scripts/error_branch_coverage.py`) reads coverage.json and
       # nothing else, so without this line it has no input and exits 2 ("no
@@ -180,7 +187,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
-      - run: uv sync --all-groups
+      - run: uv sync --all-groups --locked
       # Authoritative check: load_manifest() runs the *real* Pydantic model
       # (biffo_plugin_sdk.plugin.PluginManifest) that the SDK, the Core API's
       # discover_plugin_manifests(), and `biffo plugin install` all actually
@@ -305,7 +312,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
-      - run: uv sync --all-groups
+      - run: uv sync --all-groups --locked
       # Fails on a real advisory, but treats an unreachable PyPI/OSV as
       # INCONCLUSIVE rather than reddening a required check for an
       # infrastructure hiccup (#591, #743). The raw `uv run pip-audit` this

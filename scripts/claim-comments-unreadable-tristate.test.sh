@@ -108,7 +108,14 @@ fail=0
 
 # --- Scenario 1: --release on a claim the script cannot actually read -------
 
-release_output=$(PATH="$STUB_DIR:$PATH" sh "$REPO_ROOT/scripts/claim.sh" "$ISSUE" --release "$HOLDER_TOKEN" -R fake-owner/fake-repo 2>&1)
+# Invoked as a bare executable path, not `sh "$REPO_ROOT/scripts/claim.sh"`
+# -- claim.sh's own shebang is `#!/usr/bin/env sh` so this was never a
+# runtime-crash risk, but the quoted variable path made it unresolvable to
+# interpreter-audit.sh once that audit started reading scripts/*.sh (#1681):
+# "could not examine" is the honest verdict for an invocation this audit
+# cannot statically resolve, and a bare path resolves it like every other
+# call site in this round.
+release_output=$(PATH="$STUB_DIR:$PATH" "$REPO_ROOT/scripts/claim.sh" "$ISSUE" --release "$HOLDER_TOKEN" -R fake-owner/fake-repo 2>&1)
 release_status=$?
 
 if printf '%s' "$release_output" | grep -q "not held by"; then
@@ -129,7 +136,8 @@ fi
 
 # --- Scenario 2: ordinary claim path against a label it cannot verify -------
 
-claim_output=$(PATH="$STUB_DIR:$PATH" sh "$REPO_ROOT/scripts/claim.sh" "$ISSUE" --as "$HOLDER_TOKEN" -R fake-owner/fake-repo 2>&1)
+# Bare executable path -- see Scenario 1's comment above.
+claim_output=$(PATH="$STUB_DIR:$PATH" "$REPO_ROOT/scripts/claim.sh" "$ISSUE" --as "$HOLDER_TOKEN" -R fake-owner/fake-repo 2>&1)
 claim_status=$?
 
 # Fail CLOSED either way: this must never report the issue free to claim.

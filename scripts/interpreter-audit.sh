@@ -195,6 +195,16 @@
 # `ci-wiring-audit.sh`'s own header gives for skipping a ratchet); a ratchet
 # is for debt being deliberately deferred, and there is none left here.
 #
+# Still true after #1681 widened the scan to scripts/*.sh: the widened audit
+# found two genuine, live mismatches (not fixtures) in `dev` --
+# `scripts/shared-sync-daily.sh` and `scripts/shared-sync.sh` each invoking a
+# bash-shebang target via explicit `sh` -- plus a quoted-variable-path
+# invocation of `claim.sh` that was resolvable but unparseable as written.
+# All three were fixed in the same round the scan widened (see the case
+# matrix above), so the "no residue to protect" property still holds:
+# checked live at landing, 41 explicit-interpreter invocations across 17
+# workflow files and 40 script files, 0 mismatched, 0 could not examine.
+#
 # ## Known, out-of-scope gap
 #
 # `core_version=$(sh ../scripts/resolve-core-version.sh)` in `deploy-app.yml`
@@ -239,6 +249,145 @@
 # every property this file's exit-code contract still had to hold
 # afterward, executed under both bash and dash.
 #
+# ## Sixth-pass: script-to-script invocations were entirely invisible (#1681)
+#
+# Everything above reads `.github/workflows/*.yml` / `*.yaml` only -- see the
+# original "## What this checks" section below. A script invoking ANOTHER
+# script with an explicit, mismatched interpreter was completely outside what
+# this audit examined: `mismatched: 0` was a true statement about workflow
+# files and said nothing about `scripts/*.sh` calling `scripts/*.sh`.
+#
+# The concrete miss: `scripts/branch-health-plan-only-detection.test.sh`
+# (added for #1582) invoked `sh "$REPO_ROOT/scripts/branch-health.sh"
+# --branch dev` -- branch-health.sh declares `#!/usr/bin/env bash` and needs
+# it (`set -uo pipefail`). CI run `32556851227` died with `Illegal option
+# -o pipefail`, misdiagnosed by the test's own assertions as a missing-output
+# bug, because the crash produced none. This audit ran clean on that exact
+# commit. (That specific call site was fixed at the source before this round
+# -- #1582's own PR -- so it can no longer serve as live fail-first evidence;
+# see the self-test for a deliberately-constructed equivalent instead.)
+#
+# ### Reused, not re-derived
+#
+# `find_invocations()` and its flag/line-continuation/`-c`/shell-variable
+# handling are unchanged and now run against `scripts/*.sh` bodies exactly as
+# they already ran against workflow YAML -- the parsing problem (does this
+# line invoke `sh`/`bash` against a resolvable script path?) does not care
+# what kind of file the line came from.
+#
+# ### What a script body has that a workflow YAML mostly does not: prose
+#
+# Scanning every line of a `run:` step (as this audit already did, with no
+# YAML-aware filtering at all) works because workflow files in this repo do
+# not carry stray comments or string literals that happen to contain
+# `sh scripts/whatever.sh`. Script bodies are saturated with exactly that --
+# usage comments (`# Run: sh scripts/foo.test.sh`), help text
+# (`echo "sh scripts/claim.sh 1234 --as <token>"`), desktop-notification
+# strings, and test-scenario labels (`assert_case "matrix: bash
+# scripts/${name}.sh ..."`). Reusing the line-scan verbatim against script
+# bodies would report every one of those as an "invocation" -- a guard that
+# is red on prose it can't tell from code trains people to stop reading it
+# exactly like a guard that is red on legitimate residue (AGENTS.md §9).
+#
+# Two filters close that gap, both applied uniformly to EVERY file this
+# audit reads (workflow YAML included -- a workflow's `run: |` block can
+# carry the identical shape, e.g. a `gh pr comment` body built from quoted
+# heredoc-style lines; nothing here is script-specific):
+#
+#   - **`strip_unquoted_comment()`** truncates a logical line at the first
+#     `#` that is not inside a quoted string, so a doc comment mid-body
+#     (not just a line whose first character is `#`) is never scanned as
+#     code.
+#   - **`is_quoted_before()`** computes shell quote parity (single- and
+#     double-quote, backslash-escaped) up to the position of a candidate
+#     `sh`/`bash` match, against the WHOLE logical line -- not the
+#     already-sliced `rest` a repeat match operates on, which would have lost
+#     any quote opened earlier in the line. A match that lands inside an
+#     open quote is a string, not a command, and is never emitted as a
+#     record. Heredocs and multi-line quoting are NOT tracked -- each call
+#     starts fresh per logical line. That is a known, accepted gap (see
+#     "Still out of scope" below), not a silent one.
+#
+# ### Case matrix -- captured live against this repo at the commit this
+# ### landed on, not invented
+#
+# Every row below is real output from `grep`/`sed` against the actual files
+# named, not a constructed example (`git log` on this commit shows the exact
+# greps used). "Verdict" is what the WIDENED audit does with it now.
+#
+#   MUST be caught (real invocations this audit was blind to before #1681):
+#   - `scripts/shared-sync-daily.sh:95` (pre-fix): `sh scripts/shared-sync.sh
+#     --scheduled --estate "$ESTATE"` -- bare, unquoted, in command position.
+#     shared-sync.sh declares `#!/usr/bin/env bash`. Verdict: MISMATCH.
+#     Fixed in this same round (see "Live findings" below) -- invoked as a
+#     bare executable now, so the CURRENT tree reports CLEAN, not MISMATCH;
+#     the self-test's synthetic fixture reproduces the pre-fix shape so the
+#     MISMATCH path itself stays covered.
+#   - `scripts/shared-sync.sh:1990` (pre-fix): `sh
+#     "$TEMPLATE_ROOT/scripts/gate-coverage.sh" 2>&1` -- bare `sh`, quoted
+#     variable target. gate-coverage.sh declares `#!/usr/bin/env bash`.
+#     Verdict: UNPARSEABLE (quoted target, per existing design) -- still
+#     fails the audit, which is the point: an invocation this audit cannot
+#     resolve is unexamined, not fine, exactly as for a workflow. Also fixed
+#     in this round.
+#
+#   MUST NOT be caught (prose containing invocation-shaped text):
+#   - `scripts/biffo.sh:105`: `echo "    sh scripts/shared-sync.sh --estate
+#     <path-to-your-repos>" >&2` -- help text. `sh` sits inside an open
+#     double quote. Verdict: filtered by `is_quoted_before()`.
+#   - `scripts/claim.sh:993`: `echo "  sh scripts/biffo.sh claim $ISSUE --as
+#     $_s" >&2` -- same shape. Filtered the same way.
+#   - `scripts/branch-health.sh:427`: a `notify-send` message literal
+#     containing "... sh scripts/branch-health.sh" inside a double-quoted
+#     string spanning a `\`-continued `notify-send` call. Filtered.
+#   - `scripts/interpreter-audit.test.sh:230`:
+#     `assert_case "matrix: bash scripts/${name}.sh (correct code)" ...` --
+#     a test-scenario label, not a command. `bash` sits inside the outer
+#     double quote. Filtered.
+#   - `scripts/verify-deployed.sh:96`: `_die "usage: sh
+#     scripts/verify-deployed.sh <check-name> | --list"` -- usage text,
+#     filtered the same way.
+#   - `# Run: sh scripts/interpreter-audit.test.sh` (this file's own sibling
+#     test's header comment) -- a full-line comment, filtered by
+#     `strip_unquoted_comment()` before quote-checking is even reached.
+#
+#   Already CLEAN, unaffected by the widened scan (verified so the fix does
+#   not newly flag correct code):
+#   - `scripts/gate-coverage.sh:80`: `sh scripts/verify.sh --list` --
+#     verify.sh declares `#!/usr/bin/env sh`. Matches.
+#   - `scripts/shared-sync.sh:1794,1888,1969`: `sh scripts/biffo.sh ...` --
+#     biffo.sh declares `#!/usr/bin/env sh`. Matches.
+#
+# ### Live findings fixed in this same round
+#
+# The two MUST-be-caught cases above were genuine, if latent, instances of
+# this exact class already present in `dev` -- not fixtures. Both call sites
+# now invoke their target as a bare executable path (respecting its own
+# shebang) instead of forcing it through an explicit `sh`, the identical fix
+# already applied to `scripts/branch-health-plan-only-detection.test.sh`
+# (#1582) and to `scripts/practices-daily.sh`'s `branch-health.sh` call
+# (#1709). Both targets already carry the executable bit (`100755`), so
+# nothing else about the call sites needed to change.
+#
+# ### Still out of scope, and why
+#
+# `scripts/practices-daily.sh`'s `audit_json drift "sh scripts/shared-sync.sh
+# --check --estate '$ESTATE'" ...` is a THIRD live instance of the same
+# mismatch, one level more indirect than either fixed case above:
+# `audit_json()` runs its second argument via `_out=$(sh -c "$_cmd" 2>&1)`,
+# so this string is genuinely executed as `sh -c "sh scripts/shared-sync.sh
+# ..."` at runtime -- a real `sh`-invokes-`bash`-shebang crash risk. It is
+# NOT fixed here, and this audit does not and cannot catch it: the literal
+# text `sh scripts/shared-sync.sh` sits inside a quoted string passed as a
+# plain argument, indistinguishable at the text level from every MUST-NOT-
+# catch case above (a string literal that happens to contain
+# invocation-shaped text). Telling "this string is prose" from "this string
+# will later reach `sh -c`" needs data-flow analysis this audit has no
+# machinery for and should not grow ad hoc -- the same reasoning the
+# existing header already gives for never parsing a direct `sh -c "..."`
+# argument, one level further removed. Recorded here rather than silently
+# left for the next reader to rediscover, same as the `$(sh ...)` gap below.
+#
 # Usage:
 #   bash scripts/interpreter-audit.sh
 #
@@ -246,9 +395,9 @@
 #         and none were left unparsed.
 # Exit 1: at least one `sh`-invokes-`bash-shebang` mismatch, OR at least one
 #         invocation could not be examined.
-# Exit 2: not a git repo, or `.github/workflows/` holds no workflow files --
-#         this audit checked nothing, which is a configuration error, not a
-#         pass.
+# Exit 2: not a git repo, `.github/workflows/` holds no workflow files, or
+#         `scripts/` holds no `*.sh` files -- this audit checked nothing,
+#         which is a configuration error, not a pass.
 
 set -u
 (set -o pipefail) 2>/dev/null && set -o pipefail || true
@@ -278,6 +427,27 @@ if [ "$WF_COUNT" -eq 0 ]; then
   exit 2
 fi
 
+# Scripts calling scripts (#1681) -- same "checked nothing is a config error,
+# not a pass" stance as WF_DIR above, applied to the second scan root.
+SCRIPTS_DIR="scripts"
+if [ ! -d "$SCRIPTS_DIR" ]; then
+  echo "no $SCRIPTS_DIR -- this audit checked nothing" >&2
+  exit 2
+fi
+
+SCRIPT_FILES=""
+SCRIPT_COUNT=0
+for f in "$SCRIPTS_DIR"/*.sh; do
+  [ -f "$f" ] || continue
+  SCRIPT_FILES="$SCRIPT_FILES $f"
+  SCRIPT_COUNT=$((SCRIPT_COUNT + 1))
+done
+
+if [ "$SCRIPT_COUNT" -eq 0 ]; then
+  echo "$SCRIPTS_DIR holds no *.sh -- this audit checked nothing" >&2
+  exit 2
+fi
+
 # shebang_shell <script-path>
 #
 # Prints the interpreter name from a script's first line (`bash` or `sh`) on
@@ -301,7 +471,7 @@ shebang_shell() {
   esac
 }
 
-# find_invocations <workflow-file>
+# find_invocations <workflow-or-script-file>
 #
 # Emits one TSV record per explicit-interpreter invocation found in the
 # file, one of:
@@ -310,11 +480,20 @@ shebang_shell() {
 #
 # A trailing `\` line continuation is spliced onto the next physical line
 # before matching, so an interpreter and its script split across two lines
-# in a `run: |` block are read as one logical line. Interpreter flags
-# (`-e`, `-eu`, ...) between the interpreter and the script are consumed.
-# A script argument that is a quoted string (the `-c "..."` shape) or an
-# interpreter that is a shell variable (`$VAR`, `${VAR}`) is reported
-# UNPARSEABLE rather than matched or silently dropped.
+# in a `run: |` block (or a script body) are read as one logical line.
+# Interpreter flags (`-e`, `-eu`, ...) between the interpreter and the script
+# are consumed. A script argument that is a quoted string (the `-c "..."`
+# shape) or an interpreter that is a shell variable (`$VAR`, `${VAR}`) is
+# reported UNPARSEABLE rather than matched or silently dropped.
+#
+# Before matching, each logical line is truncated at the first `#` that is
+# not inside a quoted string (`strip_unquoted_comment()`), and any candidate
+# `sh`/`bash` match that falls inside an open quote at that point
+# (`is_quoted_before()`) is dropped rather than emitted. Neither of those
+# mattered while this only read workflow YAML; both matter once it also
+# reads script bodies, which are full of doc comments and usage/help-text
+# string literals shaped exactly like a real invocation (#1681 -- see the
+# case matrix in this file's header for real examples of each).
 find_invocations() {
   awk '
 {
@@ -325,12 +504,80 @@ find_invocations() {
     sub(/\\[ \t]*$/, "", line)
     line = line " " nextline
   }
+  line = strip_unquoted_comment(line)
   process(line, startline)
 }
 
-function process(line, startline,    rest, matched, interp, wordend, tail, tail2, token, vline,    consumed, flaglen, wslen, toklen, vconsumed) {
+# is_quoted_before(str, pos)
+#
+# True (1) if position `pos` (1-based) in `str` falls inside an open,
+# unterminated '"'"'...'"'"' or "..." at that point. Backslash escapes the next
+# character everywhere except inside single quotes -- close enough to POSIX
+# shell quoting to tell code from prose embedded in the same file (an
+# echo/printf/assert_case string literal that happens to contain
+# "sh scripts/foo.sh" is not an invocation). Heredocs and quoting that spans
+# multiple physical lines are NOT tracked -- each call starts fresh per
+# logical line; a documented, accepted gap, not a silent one.
+function is_quoted_before(str, pos,    i, n, c, in_s, in_d) {
+  in_s = 0; in_d = 0
+  n = pos - 1
+  i = 1
+  while (i <= n) {
+    c = substr(str, i, 1)
+    if (in_s) {
+      if (c == "'"'"'") in_s = 0
+      i++
+    } else if (in_d) {
+      if (c == "\\") { i += 2 }
+      else { if (c == "\"") in_d = 0; i++ }
+    } else {
+      if (c == "\\") { i += 2 }
+      else if (c == "'"'"'") { in_s = 1; i++ }
+      else if (c == "\"") { in_d = 1; i++ }
+      else i++
+    }
+  }
+  return (in_s || in_d)
+}
+
+# strip_unquoted_comment(str)
+#
+# Truncates `str` at the first `#` that is not inside a quoted string --
+# not just a line whose FIRST character is `#` -- so a doc comment mid-body
+# (`foo() { ... }  # sh scripts/bar.sh does X`) is never scanned as code.
+function strip_unquoted_comment(str,    i, n, c, in_s, in_d) {
+  in_s = 0; in_d = 0
+  n = length(str)
+  i = 1
+  while (i <= n) {
+    c = substr(str, i, 1)
+    if (in_s) {
+      if (c == "'"'"'") in_s = 0
+      i++
+    } else if (in_d) {
+      if (c == "\\") { i += 2 }
+      else { if (c == "\"") in_d = 0; i++ }
+    } else {
+      if (c == "\\") { i += 2 }
+      else if (c == "'"'"'") { in_s = 1; i++ }
+      else if (c == "\"") { in_d = 1; i++ }
+      else if (c == "#") { return substr(str, 1, i - 1) }
+      else i++
+    }
+  }
+  return str
+}
+
+function process(line, startline,    rest, matched, interp, wordend, tail, tail2, token, vline,    consumed, flaglen, wslen, toklen, vconsumed, offset, voffset, abspos, interp_rstart) {
   rest = line
+  offset = 0
   while (match(rest, /(^|[ \t])(sh|bash)([ \t]|$)/)) {
+    # Captured the instant this match() returns -- see the #1625 comment
+    # below on `consumed` for why: the flag-skip and token-extraction
+    # match() calls a few lines down overwrite the same RSTART/RLENGTH this
+    # one just set, and abspos (added for #1681) needs the ORIGINAL match
+    # position, not whatever match() left behind last.
+    interp_rstart = RSTART
     matched = substr(rest, RSTART, RLENGTH)
     if (matched ~ /^bash/)      { interp = "bash"; wordend = RSTART + 4 - 1 }
     else if (matched ~ /^sh/)   { interp = "sh";   wordend = RSTART + 2 - 1 }
@@ -372,20 +619,35 @@ function process(line, startline,    rest, matched, interp, wordend, tail, tail2
       }
     }
 
-    if (token != "" && token ~ /^[^ \t"$]+\.sh$/) {
-      printf "CLEAN\t%d\t%s\t%s\n", startline, interp, token
-    } else if (token != "" && index(token, ".sh") > 0) {
-      printf "UNPARSEABLE\t%d\t%s\tinvoked with %s, target is not a bare script path: %s\n", startline, interp, interp, token
+    # The interpreter word itself may sit inside a quoted string this audit
+    # has no business treating as code -- a usage comment turned into help
+    # text (`echo "... sh scripts/foo.sh ..."`), a notify-send message, an
+    # assert_case scenario label. Quote parity is computed against the WHOLE
+    # logical `line`, not `rest` -- `rest` has already had earlier
+    # invocations sliced off the front, which would lose any quote opened
+    # before the slice point (#1681; see is_quoted_before()).
+    abspos = offset + interp_rstart
+    if (!is_quoted_before(line, abspos)) {
+      if (token != "" && token ~ /^[^ \t"$]+\.sh$/) {
+        printf "CLEAN\t%d\t%s\t%s\n", startline, interp, token
+      } else if (token != "" && index(token, ".sh") > 0) {
+        printf "UNPARSEABLE\t%d\t%s\tinvoked with %s, target is not a bare script path: %s\n", startline, interp, interp, token
+      }
     }
 
     rest = substr(rest, consumed + 1)
+    offset += consumed
   }
 
   vline = line
+  voffset = 0
   while (match(vline, /(^|[ \t])\$\{?[A-Za-z_][A-Za-z0-9_]*\}?[ \t]+[^ \t]+\.sh([ \t]|$)/)) {
     vconsumed = RSTART + RLENGTH
-    printf "UNPARSEABLE\t%d\tvar\tinterpreter is a shell variable, cannot be resolved statically\n", startline
+    if (!is_quoted_before(line, voffset + RSTART)) {
+      printf "UNPARSEABLE\t%d\tvar\tinterpreter is a shell variable, cannot be resolved statically\n", startline
+    }
     vline = substr(vline, vconsumed)
+    voffset += vconsumed
   }
 }
 ' "$1"
@@ -395,7 +657,7 @@ match_count=0
 mismatch_count=0
 unparseable_count=0
 
-for f in $WF_FILES; do
+for f in $WF_FILES $SCRIPT_FILES; do
   records=$(find_invocations "$f") || true
   [ -n "$records" ] || continue
 
@@ -459,8 +721,8 @@ total=$((examined + unparseable_count))
 # The denominator, printed unconditionally before any verdict -- see header,
 # #1413. Three states, never a fourth silent one: examined-and-matching,
 # examined-and-mismatched, could-not-examine.
-printf 'interpreter audit: checked %s workflow file(s), %s explicit-interpreter invocation(s) found\n' \
-  "$WF_COUNT" "$total"
+printf 'interpreter audit: checked %s workflow file(s) and %s script file(s), %s explicit-interpreter invocation(s) found\n' \
+  "$WF_COUNT" "$SCRIPT_COUNT" "$total"
 printf '  examined, matching:    %s\n' "$match_count"
 printf '  examined, mismatched:  %s\n' "$mismatch_count"
 printf '  could not examine:     %s\n\n' "$unparseable_count"

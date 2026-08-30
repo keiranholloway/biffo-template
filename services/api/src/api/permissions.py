@@ -260,6 +260,32 @@ def lookup_permission(
 _DECIDABLE_PROVIDERS: tuple[type, ...] = (DefaultIdentityProvider,)
 
 
+def _is_decidable(provider: object) -> bool:
+    """True when ``provider`` is genuinely covered by the ``_DECIDABLE_PROVIDERS``
+    proof, not merely an ``isinstance`` of one (#1638).
+
+    ``isinstance(provider, _DECIDABLE_PROVIDERS)`` proves an *is-a*
+    relationship — it does not prove the invariant the proof actually depends
+    on, which is that ``resolve_permissions`` was left exactly as the
+    decidable base class defines it (see the module docstring: "``resolve_
+    permissions`` unconditionally returns an empty set"). A subclass that
+    overrides ``resolve_permissions`` — e.g. to reuse a decidable provider's
+    other surface (``list_profiles``, ``get_profile``, ...) while swapping in
+    custom RBAC — passes ``isinstance`` while that guarantee is false, and can
+    genuinely grant a code the base class unconditionally denies. So this
+    checks method identity, not just class identity: the provider must be an
+    instance of a decidable type *and* must not have replaced that type's
+    ``resolve_permissions``.
+    """
+    for decidable_type in _DECIDABLE_PROVIDERS:
+        if isinstance(provider, decidable_type) and (
+            getattr(type(provider), "resolve_permissions", None)
+            is getattr(decidable_type, "resolve_permissions", None)
+        ):
+            return True
+    return False
+
+
 @dataclass(frozen=True)
 class UnreachablePermissionCodesReport:
     """Three states, not two (#1636).
@@ -327,7 +353,7 @@ def unreachable_permission_codes(
     provider = get_identity_provider()
     provider_name = type(provider).__name__
 
-    if not isinstance(provider, _DECIDABLE_PROVIDERS):
+    if not _is_decidable(provider):
         return UnreachablePermissionCodesReport(checked=False, findings=[], provider=provider_name)
 
     findings: list[dict[str, str]] = []

@@ -196,13 +196,14 @@ class TestGetRegistryCaching:
 class _CustomProvider:
     """The minimal stand-in for "an instance registered its own provider".
 
-    unreachable_permission_codes only ever asks `isinstance(provider,
-    _DECIDABLE_PROVIDERS)` — it never calls a provider method — so this does
-    not need to implement the rest of the ADR-0012 Protocol to prove that
-    branch; a real deployment's provider genuinely does grant permission codes
-    from wherever it likes, which is exactly why this function cannot prove
-    anything once one is registered — it reports `checked=False`, not a clean
-    bill of health (#1636).
+    unreachable_permission_codes only ever asks whether `type(provider)` is on
+    `_DECIDABLE_PROVIDERS` and has not overridden its `resolve_permissions`
+    (#1638) — it never calls a provider method — so this does not need to
+    implement the rest of the ADR-0012 Protocol to prove that branch; a real
+    deployment's provider genuinely does grant permission codes from wherever
+    it likes, which is exactly why this function cannot prove anything once
+    one is registered — it reports `checked=False`, not a clean bill of health
+    (#1636).
     """
 
 
@@ -306,6 +307,36 @@ class TestUnreachablePermissionCodes:
         report = unreachable_permission_codes(registry)
         assert report.checked is False
         assert report.provider == "_AnotherCustomProvider"
+
+    def test_a_subclass_overriding_resolve_permissions_cannot_be_checked(self):
+        """#1638: isinstance(provider, _DECIDABLE_PROVIDERS) proves *is-a*, not
+        that the subclass left DefaultIdentityProvider.resolve_permissions
+        untouched. A subclass reusing DefaultIdentityProvider's profile-surface
+        methods (list_profiles, get_profile, ...) while overriding only
+        resolve_permissions for custom RBAC is exactly the plausible future
+        pattern the issue names -- and it passes the isinstance check while the
+        guarantee the check stands in for (resolve_permissions unconditionally
+        returns empty) is false.
+
+        Fail-first: before the fix this returned checked=True with
+        crm.lead.read reported unreachable, even though this provider's
+        resolve_permissions genuinely grants it -- the function never calls
+        resolve_permissions when isinstance passes, so it reported a false
+        'unreachable' on a table that actually works.
+        """
+
+        class CustomRbacProvider(DefaultIdentityProvider):
+            async def resolve_permissions(self, db, user_id):
+                return frozenset({"crm.lead.read"})
+
+        set_identity_provider(CustomRbacProvider())  # type: ignore[arg-type]
+        registry = _registry_with_code("crm.lead.read")
+
+        report = unreachable_permission_codes(registry)
+
+        assert report.checked is False
+        assert report.findings == []
+        assert report.provider == "CustomRbacProvider"
 
     def test_multiple_declarations_are_each_named(self):
         """Every unreachable declaration is reported, not just the first —

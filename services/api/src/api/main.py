@@ -42,7 +42,6 @@ from .routing.owner_data_router import build_owner_data_router
 from .routing.plugin_router import build_plugin_router
 
 logger = Logger()
-tracer = Tracer()
 
 app = FastAPI(
     title="Biffo Core API",
@@ -216,6 +215,27 @@ def _ensure_event_loop() -> asyncio.AbstractEventLoop:
         _event_loop = asyncio.new_event_loop()
     asyncio.set_event_loop(_event_loop)
     return _event_loop
+
+
+# Constructed here, after every app.include_router() call above, not at module
+# top as a Logger()-style module constant (#1779). Tracer()'s __init__
+# unconditionally calls aws_lambda_powertools' own _patch_xray_provider(),
+# which does `from aws_xray_sdk.core import xray_recorder` -- an eager,
+# non-lazy import that pulls in the full botocore session/client/config/
+# credentials/args chain (measured 64-101ms; see the issue for the full
+# import-time trace). That happened whether or not tracing ends up enabled,
+# and unconditionally-before-registration, so it silently "pre-warmed"
+# botocore for every router/domain import below it -- masking the cost of
+# whatever imports botocore next, most importantly build_domain_router()'s
+# instance-owned domain code (services/api/src/api/domains/), which cannot
+# fix a cost this template-owned file has already paid on its behalf. Moving
+# the construction to just before its only use -- decorating lambda_handler,
+# which itself only touches tracer.provider lazily inside the wrapper it
+# returns, not at decoration time -- defers the aws_xray_sdk/botocore import
+# past route/domain registration without needing a lazy proxy: nothing
+# between the old and new position references `tracer`, so this is a pure
+# reorder, not a behavior change.
+tracer = Tracer()
 
 
 @logger.inject_lambda_context

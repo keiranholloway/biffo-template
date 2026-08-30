@@ -9,8 +9,8 @@ way main.py mounts it on the real app, and every CRUD operation the manifest
 declares is exercised as an actual HTTP call.
 """
 
-import asyncio
 from collections.abc import AsyncGenerator, Generator
+from contextlib import asynccontextmanager, contextmanager
 
 import pytest
 from api.database import get_db
@@ -22,8 +22,46 @@ from api.models.base import Base
 from api.routing.plugin_router import build_plugin_router
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 from sqlalchemy.pool import StaticPool
+
+
+# Every throwaway app in this file needs an in-memory SQLite engine whose
+# tables exist before the first request and whose connection is disposed
+# after the last one. The obvious way to write that -- `asyncio.run(_create())`
+# on a one-off loop, then hand the engine to `TestClient` -- builds the
+# engine's aiosqlite connection on a loop that is closed before the first
+# request runs; `TestClient`'s own request loop (and, for a bare
+# `TestClient(app)` with no `with`, potentially a *fresh* loop per call) is a
+# different one. That cross-loop reuse is exactly #1725's cause 3:
+# non-deterministic `RuntimeError: Event loop is closed` / `sqlite3.OperationalError:
+# no such table` failures under pytest-xdist, confirmed as the sole remaining
+# source of parallel flakiness in this file.
+#
+# FastAPI's lifespan protocol is the fix: attached via `app = FastAPI(lifespan=...)`
+# and driven through `with TestClient(app) as client:`, startup and every
+# request handler are guaranteed to run on the *same* loop -- Starlette's own
+# portal, entered once for the `with` block's lifetime. That makes the
+# cross-loop failure structurally impossible rather than merely rare, so every
+# engine in this file is built through this one helper instead of three
+# separate copies of the same throwaway-loop pattern.
+def _lifespan_owning(engine: AsyncEngine):
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        try:
+            yield
+        finally:
+            await engine.dispose()
+
+    return lifespan
+
 
 _HOST_ARN = "arn:aws:sts::123456789012:assumed-role/acme-dev-plugin-host-role/host-session"
 
@@ -97,13 +135,6 @@ def plugin_app() -> Generator[FastAPI]:
         poolclass=StaticPool,
         connect_args={"check_same_thread": False},
     )
-
-    async def _create_tables() -> None:
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-
-    asyncio.run(_create_tables())
-
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
     async def override_get_db() -> AsyncGenerator[AsyncSession]:
@@ -115,7 +146,7 @@ def plugin_app() -> Generator[FastAPI]:
                 await session.rollback()
                 raise
 
-    app = FastAPI()
+    app = FastAPI(lifespan=_lifespan_owning(engine))
     app.include_router(build_plugin_router(manifests=[_NOTEPAD_MANIFEST]), prefix="/api/v1")
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[require_auth] = lambda: _caller("default")
@@ -125,12 +156,14 @@ def plugin_app() -> Generator[FastAPI]:
 
     yield app
 
-    asyncio.run(engine.dispose())
-
 
 @pytest.fixture
-def client(plugin_app: FastAPI) -> TestClient:
-    return TestClient(plugin_app)
+def client(plugin_app: FastAPI) -> Generator[TestClient]:
+    # `with` is load-bearing, not style -- it is what runs plugin_app's
+    # lifespan (table creation, later disposal) on the same loop that serves
+    # every request below. See _lifespan_owning.
+    with TestClient(plugin_app) as c:
+        yield c
 
 
 class TestOpenApiInclusion:
@@ -264,6 +297,7 @@ class TestRequirePluginTenantContext:
         assert require_plugin_tenant_context(Principal(user=_caller("default"))) == "default"
 
 
+@contextmanager
 def _enforcement_client(manifest: dict, caller: AuthenticatedUser) -> Generator[TestClient]:
     """Build a throwaway app for one manifest + caller, for the ADR-0004
     enforcement tests. Mirrors the plugin_app fixture but parameterized."""
@@ -272,12 +306,6 @@ def _enforcement_client(manifest: dict, caller: AuthenticatedUser) -> Generator[
         poolclass=StaticPool,
         connect_args={"check_same_thread": False},
     )
-
-    async def _create_tables() -> None:
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-
-    asyncio.run(_create_tables())
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
     async def override_get_db() -> AsyncGenerator[AsyncSession]:
@@ -289,16 +317,14 @@ def _enforcement_client(manifest: dict, caller: AuthenticatedUser) -> Generator[
                 await session.rollback()
                 raise
 
-    app = FastAPI()
+    app = FastAPI(lifespan=_lifespan_owning(engine))
     app.include_router(build_plugin_router(manifests=[manifest]), prefix="/api/v1")
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[require_auth] = lambda: caller
     app.dependency_overrides[require_principal] = lambda: Principal(user=caller)
 
-    try:
-        yield TestClient(app)
-    finally:
-        asyncio.run(engine.dispose())
+    with TestClient(app) as client:
+        yield client
 
 
 def _manifest_with_permissions(permissions: dict) -> dict:
@@ -371,7 +397,7 @@ class TestPermissionEnforcement:
                 },
             ],
         }
-        for client in _enforcement_client(manifest, _caller("default")):
+        with _enforcement_client(manifest, _caller("default")) as client:
             assert client.get("/api/v1/plugins/gadgets/g").status_code == 404
             assert client.post("/api/v1/plugins/gadgets/g", json={"label": "x"}).status_code == 404
 
@@ -379,7 +405,7 @@ class TestPermissionEnforcement:
         manifest = _manifest_with_permissions(
             {"list": {"allowed": True}}  # only list; create/etc. default-denied
         )
-        for client in _enforcement_client(manifest, _caller("default")):
+        with _enforcement_client(manifest, _caller("default")) as client:
             assert client.get("/api/v1/plugins/gadgets/g").status_code == 200
             # create declared as a route but not allowed -> 404, not 403.
             assert client.post("/api/v1/plugins/gadgets/g", json={"label": "x"}).status_code == 404
@@ -392,7 +418,7 @@ class TestPermissionEnforcement:
             }
         )
         # Caller has no roles -> can list, but create is 403 (exposed, wrong role).
-        for client in _enforcement_client(manifest, _caller("default")):
+        with _enforcement_client(manifest, _caller("default")) as client:
             assert client.get("/api/v1/plugins/gadgets/g").status_code == 200
             assert client.post("/api/v1/plugins/gadgets/g", json={"label": "x"}).status_code == 403
 
@@ -401,13 +427,14 @@ class TestPermissionEnforcement:
             {"create": {"allowed": True, "required_role": ["editor", "admin"]}}
         )
         # Any-of match: caller has 'editor', one of the required roles.
-        for client in _enforcement_client(manifest, _caller("default", roles=["editor"])):
+        with _enforcement_client(manifest, _caller("default", roles=["editor"])) as client:
             resp = client.post("/api/v1/plugins/gadgets/g", json={"label": "x"})
             assert resp.status_code == 201
             assert resp.json()["label"] == "x"
 
 
-def _internal_app(caller: AuthenticatedUser, *, service: bool):
+@contextmanager
+def _internal_app(caller: AuthenticatedUser, *, service: bool) -> Generator[TestClient]:
     """An app carrying BOTH mounts, with the caller injected on the principal
     seam only — i.e. exactly what a SigV4 host forwarding a user token looks
     like to Core. `require_auth` is deliberately left un-overridden so the
@@ -417,19 +444,13 @@ def _internal_app(caller: AuthenticatedUser, *, service: bool):
         poolclass=StaticPool,
         connect_args={"check_same_thread": False},
     )
-
-    async def _create() -> None:
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-
-    asyncio.run(_create())
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
     async def override_get_db() -> AsyncGenerator[AsyncSession]:
         async with session_factory() as session:
             yield session
 
-    app = FastAPI()
+    app = FastAPI(lifespan=_lifespan_owning(engine))
     app.include_router(build_plugin_router(manifests=[_NOTEPAD_MANIFEST]), prefix="/api/v1")
     app.include_router(
         build_plugin_router(
@@ -444,7 +465,8 @@ def _internal_app(caller: AuthenticatedUser, *, service: bool):
         user=caller,
         service=ServicePrincipal(principal_arn=_HOST_ARN) if service else None,
     )
-    return app, TestClient(app), engine
+    with TestClient(app) as client:
+        yield client
 
 
 class TestInternalMount:
@@ -486,21 +508,15 @@ class TestInternalMount:
         """A signed host forwarding a real user's token gets served — the case
         the bearer-only guard refuses, and the reason #652 was unfixable in the
         plugin."""
-        app, client, engine = _internal_app(_caller("default"), service=True)
-        try:
+        with _internal_app(_caller("default"), service=True) as client:
             resp = client.get("/api/v1/internal/plugins/notepad/notes")
             assert resp.status_code == 200, resp.text
             assert resp.json() == []
-        finally:
-            asyncio.run(engine.dispose())
 
     def test_the_public_mount_still_refuses_a_principal_only_caller(self):
         """The widening must not leak onto the public routes: they keep the
         bearer-only guard, so overriding only the principal seam is not enough
         to reach them."""
-        app, client, engine = _internal_app(_caller("default"), service=True)
-        try:
+        with _internal_app(_caller("default"), service=True) as client:
             resp = client.get("/api/v1/plugins/notepad/notes")
             assert resp.status_code in (401, 403), resp.text
-        finally:
-            asyncio.run(engine.dispose())

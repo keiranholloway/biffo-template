@@ -90,7 +90,18 @@ jobs:
         with:
           enable-cache: true
 
-      - run: uv sync --all-groups
+      # `--locked` mirrors every `uv sync` call site in this skeleton's own
+      # ci.yml (see the comment there): plain `uv sync` silently
+      # RE-RESOLVES when `pyproject.toml` has drifted from `uv.lock`, so a
+      # dependency bump committed without re-running `uv lock` still
+      # installs and still succeeds — the committed lock just stops
+      # describing what actually ran. This workflow fires on every `v*` tag
+      # push and is what actually builds and publishes the release
+      # artefact, so drift here ships silently rather than failing closed
+      # (biffo-template#1731, missed here originally and fixed per #1762;
+      # see scripts/uv-sync-locked.test.sh for the guard that now checks
+      # every call site under _skeletons/**/.github/workflows/**).
+      - run: uv sync --all-groups --locked
 
       # Full CI gate re-run on the tag, not just a build — a tag push must
       # be at least as strict as a merged PR before anything is published.

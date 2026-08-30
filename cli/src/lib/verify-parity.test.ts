@@ -152,6 +152,18 @@ const EXCLUDED: Record<
     kind: 'network',
     why: 'runs immediately after the terraform init on the line above, against providers that init just downloaded from the registry; not runnable standalone without that network-dependent init',
   },
+  // #1775 wired `terraform test` (the native *.tftest.hcl suite) into CI with
+  // its own `terraform -chdir="$dir" init` immediately before it — the same
+  // network-dependent init/test pairing as the `validate` step above, over a
+  // different loop. #1775 landed with no matching EXCLUDED entry for the
+  // `test` line, and the audit that set KNOWN_UNCATEGORISED_DEBT_BASELINE to
+  // 23 (#1773) ran against the same ci.yml content without counting it —
+  // undercounting by one, so `dev`'s own push-triggered CI has failed this
+  // exact assertion (24 > 23) since that baseline commit, not just locally.
+  'terraform -chdir="$dir" test || rc=1': {
+    kind: 'network',
+    why: 'runs immediately after its own terraform init a few lines above (Terraform test step), against providers that init just downloaded from the registry; not runnable standalone without that network-dependent init',
+  },
   'terraform -chdir="infra/global" init -backend=false -input=false': {
     kind: 'network',
     why: 'terraform init downloads provider plugins from the registry on every call; this repo does not run terraform validate locally at all (verify.sh only runs terraform fmt), so there is nothing to pair it with offline',

@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { makeTmpDir } from '../test-utils/tmp.js'
+import { workflowRunCommands } from './workflow-run-commands.js'
 
 /**
  * Keep the local gate a mirror of CI, not a subset of it.
@@ -76,65 +77,118 @@ const gateRuns = execFileSync('sh', [join(repoRoot, 'scripts/verify.sh'), '--lis
  * with. `pytest` is no longer here at all — it is included wherever it is
  * measurably fast (H5 gap 4).
  */
-const EXCLUDED: Record<string, { kind: 'network' | 'pr-time' | 'history' | 'slow'; why: string }> =
-  {
-    'pnpm install --frozen-lockfile': { kind: 'network', why: 'dependency install, not a check' },
-    'uv sync --all-groups --locked': {
-      kind: 'network',
-      why: 'dependency install, not a check',
-    },
-    'pnpm --filter @biffo/portal build': {
-      kind: 'slow',
-      why: 'a full Next build; measured >60s in this repo, against a ~20s whole-gate budget',
-    },
-    'sh scripts/js-dependency-audit.sh': {
-      kind: 'network',
-      why: 'queries the npm advisory database',
-    },
-    'sh scripts/py-dependency-audit.sh': {
-      kind: 'network',
-      why: 'queries the PyPI advisory database',
-    },
-    'sh scripts/biffo.sh check release-subject': {
-      kind: 'pr-time',
-      why: 'validates the PR title, which does not exist at push time; exits 2 rather than passing when it cannot run',
-    },
-    'sh scripts/biffo.sh check ownership': {
-      kind: 'pr-time',
-      why: 'the CI form diffs against the PR base branch — but the check is NOT skipped locally: the commit-msg hook runs it with --staged, earlier and per-commit',
-    },
-    'uv run pytest --cov --cov-report=xml --cov-report=json || [ $? -eq 5 ]': {
-      kind: 'slow',
-      why: 'measured 51.2s in this repo on 2026-07-29, against a 15s budget. Included automatically wherever it measures faster — 1.7-2.7s in every sibling',
-    },
-    // REMOVED IN #1666, deliberately, and this note is here so the removal is not
-    // read later as an oversight.
-    //
-    // The excluded command used to be a standalone `run:` line:
-    //   uv run python scripts/error_branch_coverage.py --check --coverage coverage.json
-    // It is now a few lines inside the multi-line `run: |` block of ci.yml's
-    // `Error-branch coverage` step, wrapped in shell conditionals, so
-    // `ciCheckCommands()` cannot see it at all — its prefix match needs a command
-    // at the start of a line.
-    //
-    // There is no exclusion to write, because there is no extracted command to key
-    // one to, and a key that matches nothing is exactly the stale exclusion the
-    // assertion below rejects.
-    //
-    // The step is also CI-ONLY BY CONSTRUCTION now, which the old one was not: it
-    // needs GH_TOKEN, network access, and another workflow run's coverage artefact.
-    // It could not run in a local push gate whatever this file said about it.
-    //
-    // What asserts it instead: services/api/tests/test_second_coverage_lane.py's
-    // TestTheGateIsWiredAndTrusted, which checks the step exists, runs the trusted
-    // scripts, fails closed on a timeout, and always posts its required status.
-    //
-    // The blind spot this exposes is REAL, PRE-EXISTING and WIDER than this step:
-    // `ciCheckCommands()` reads single-line `run:` only, so four commands in this
-    // repo's own ci.yml (terraform validate/init/fmt, gitleaks version) are already
-    // invisible to it — in neither EXCLUDED nor `missing`. That is #897's shape
-    // recurring one level down and is filed separately rather than widened here.
-  }
+const EXCLUDED: Record<
+  string,
+  { kind: 'network' | 'pr-time' | 'history' | 'slow' | 'container'; why: string }
+> = {
+  'pnpm install --frozen-lockfile': { kind: 'network', why: 'dependency install, not a check' },
+  'uv sync --all-groups --locked': {
+    kind: 'network',
+    why: 'dependency install, not a check',
+  },
+  'pnpm --filter @biffo/portal build': {
+    kind: 'slow',
+    why: 'a full Next build; measured >60s in this repo, against a ~20s whole-gate budget',
+  },
+  'sh scripts/js-dependency-audit.sh': {
+    kind: 'network',
+    why: 'queries the npm advisory database',
+  },
+  'sh scripts/py-dependency-audit.sh': {
+    kind: 'network',
+    why: 'queries the PyPI advisory database',
+  },
+  'sh scripts/biffo.sh check release-subject': {
+    kind: 'pr-time',
+    why: 'validates the PR title, which does not exist at push time; exits 2 rather than passing when it cannot run',
+  },
+  'sh scripts/biffo.sh check ownership': {
+    kind: 'pr-time',
+    why: 'the CI form diffs against the PR base branch — but the check is NOT skipped locally: the commit-msg hook runs it with --staged, earlier and per-commit',
+  },
+  'uv run pytest --cov --cov-report=xml --cov-report=json || [ $? -eq 5 ]': {
+    kind: 'slow',
+    why: 'measured 51.2s in this repo on 2026-07-29, against a 15s budget. Included automatically wherever it measures faster — 1.7-2.7s in every sibling',
+  },
+  // REMOVED IN #1666, deliberately, and this note is here so the removal is not
+  // read later as an oversight.
+  //
+  // The excluded command used to be a standalone `run:` line:
+  //   uv run python scripts/error_branch_coverage.py --check --coverage coverage.json
+  // It is now a few lines inside the multi-line `run: |` block of ci.yml's
+  // `Error-branch coverage` step, wrapped in shell conditionals, so
+  // `ciCheckCommands()` cannot see it at all — its prefix match needs a command
+  // at the start of a line.
+  //
+  // There is no exclusion to write, because there is no extracted command to key
+  // one to, and a key that matches nothing is exactly the stale exclusion the
+  // assertion below rejects.
+  //
+  // The step is also CI-ONLY BY CONSTRUCTION now, which the old one was not: it
+  // needs GH_TOKEN, network access, and another workflow run's coverage artefact.
+  // It could not run in a local push gate whatever this file said about it.
+  //
+  // What asserts it instead: services/api/tests/test_second_coverage_lane.py's
+  // TestTheGateIsWiredAndTrusted, which checks the step exists, runs the trusted
+  // scripts, fails closed on a timeout, and always posts its required status.
+  //
+  // The block-scanning half of the blind spot this exposed was fixed in #1668:
+  // `ciCheckCommands()` now walks `run: |` bodies via `workflowRunCommands()`
+  // (below), so a command that sits alone on its own line inside a block is no
+  // longer invisible. This one still is, and is not fixable the same way: the
+  // command runs on the SAME LINE as its `if`, not a line of its own —
+  //   if ! python3 .gate-trusted/second_coverage_lane.py --github-output > lane.env; then
+  // — so the extracted text is the whole conditional, starting with `if`, and no
+  // prefix in `RUN_COMMAND_PREFIXES` below matches it (nor would `python3` help:
+  // the prefix filter tests the START of the line, and `if` is what starts it).
+  // That is a real, currently-unfixed residual of this extractor — see the
+  // 'sees what it can, and states what it cannot' tests below, which measure it
+  // with a fixture rather than asserting it away.
+  'terraform -chdir="$dir" init -backend=false -input=false >/dev/null || { rc=1; continue; }': {
+    kind: 'network',
+    why: 'terraform init downloads provider plugins from the registry on every call; this repo does not run terraform validate locally at all (verify.sh only runs terraform fmt), so there is nothing to pair it with offline',
+  },
+  'terraform -chdir="$dir" validate || rc=1': {
+    kind: 'network',
+    why: 'runs immediately after the terraform init on the line above, against providers that init just downloaded from the registry; not runnable standalone without that network-dependent init',
+  },
+  'terraform -chdir="infra/global" init -backend=false -input=false': {
+    kind: 'network',
+    why: 'terraform init downloads provider plugins from the registry on every call; this repo does not run terraform validate locally at all (verify.sh only runs terraform fmt), so there is nothing to pair it with offline',
+  },
+  'terraform -chdir="infra/global" validate': {
+    kind: 'network',
+    why: 'runs immediately after the terraform init on the line above, against providers that init just downloaded from the registry; not runnable standalone without that network-dependent init',
+  },
+  'gitleaks version': {
+    kind: 'network',
+    why: 'the last line of the "Install gitleaks" step, printing the version of the binary curl/tar just fetched from a GitHub release over the network; verifies the install, not a check of the repo',
+  },
+  // Newly visible after #1668's block-scanning widened ciCheckCommands()
+  // from 46 to 54 commands — this one sits alone on its own line inside
+  // release-guards.yml's `docker run … debian:stable bash -c '…'` block. A
+  // prosecutor (biffo-template#1771) traced it further than #1668 itself
+  // did: kindOf() below has no pattern for it (returns ''), and the
+  // "missing" computation in the very next test silently drops any
+  // unrecognised, unexcluded command rather than failing on it — so this
+  // real, wired self-test (release-guards.yml's own "Workflow/script
+  // interpreter audit — self-test" step, added for #1629/#1652 specifically
+  // to close a different no-caller gap) was invisible a second time, one
+  // layer past the bug #1668 fixed.
+  'sh scripts/interpreter-audit.test.sh': {
+    kind: 'container',
+    why: "that step spins up a real debian:stable docker container (pulled over the network) to get a genuine dash, because the point of the test is verifying dash-specific behaviour that this repo's own host shell cannot reproduce; not runnable in the local push gate without that container",
+  },
+  // `terraform fmt -check -recursive infra/environments/` and
+  // `.../infra/global/` are ALSO newly visible after #1668 and are deliberately
+  // NOT keyed here: `kindOf()` below maps every `terraform fmt` command to the
+  // same 'terraform-fmt' kind, and verify.sh already runs `terraform fmt -check`
+  // locally in this repo (over modules/) whenever terraform is installed — so
+  // they are covered by the GATE, by kind, the same way the two gitleaks
+  // `detect` commands are covered by the 'gitleaks' kind rather than by name.
+  // Adding an EXCLUDED entry for a command the gate already covers would be the
+  // stale-exclusion shape the test below rejects.
+}
 
 /**
  * Commands in ci.yml that are checks rather than setup or reporting.
@@ -163,16 +217,52 @@ const EXCLUDED: Record<string, { kind: 'network' | 'pr-time' | 'history' | 'slow
  * A future CI step invoking some other bare binary will still be invisible — the
  * residual is recorded rather than solved, and the anti-vacuity test below is what
  * makes the next omission survivable.
+ *
+ * ## The LINE-SHAPE half of the blind spot, and what #1668 did about it
+ *
+ * Until #1668 the extraction was a single regex, `/^\s*run:\s+(.*)$/`, matched
+ * per line — which only ever matches the INLINE form (`run: pnpm install`). A
+ * command inside a multi-line `run: |` block never starts with `run:`, so it
+ * matched nothing: not caught by the prefix list, not excluded, not counted as
+ * missing either — invisible in the same way #897 first found (see above), one
+ * level down. Measured on this repo's own `ci.yml` on 2026-08-30: four real
+ * commands (terraform init/validate/fmt over `infra/environments` and
+ * `infra/global`, `gitleaks version`) were invisible this way, and two more
+ * `terraform fmt` invocations besides.
+ *
+ * `workflowRunCommands()` (`./workflow-run-commands.ts`) already parses both
+ * forms — it was built for a different guard (`assertRunsCommand`), but the
+ * parsing problem is identical, so this reuses it rather than growing a second,
+ * divergent block-scanner. `checkCommandsIn()` below is `workflowRunCommands()`
+ * plus the same prefix filter this file always applied.
+ *
+ * This does NOT close the wider gap the line-by-line design still has:
+ * `workflowRunCommands()` returns one array entry per PHYSICAL LINE, so a
+ * command that shares a line with a shell conditional (`if ! cmd; then`) or
+ * sits after a `|`/`&&` on the same line is captured as part of that longer
+ * line's text, not as its own entry — and the prefix filter tests the START of
+ * that text, which is the conditional or the first pipeline stage, not the
+ * command of interest. That residual is real and is measured, not assumed
+ * absent, by the 'sees what it can, and states what it cannot' tests below.
  */
-function ciCheckCommands(): string[] {
+const RUN_COMMAND_PREFIXES = /^(pnpm|uv|terraform|node|gitleaks|sh scripts\/|bash scripts\/)/
+
+/**
+ * `workflowRunCommands()`'s output, narrowed to the commands that look like
+ * checks rather than setup or reporting. Exported in shape (not literally, this
+ * is a test file) so the denominator test below can run it over a small fixture
+ * instead of the real `ci.yml` — same extraction, different input.
+ */
+function checkCommandsIn(workflowText: string): string[] {
   const found = new Set<string>()
-  for (const line of ci.split('\n')) {
-    const m = line.match(/^\s*run:\s+(.*)$/)
-    if (!m) continue
-    const cmd = m[1].trim()
-    if (/^(pnpm|uv|terraform|node|gitleaks|sh scripts\/|bash scripts\/)/.test(cmd)) found.add(cmd)
+  for (const cmd of workflowRunCommands(workflowText)) {
+    if (RUN_COMMAND_PREFIXES.test(cmd)) found.add(cmd)
   }
   return [...found]
+}
+
+function ciCheckCommands(): string[] {
+  return checkCommandsIn(ci)
 }
 
 describe('verify.sh mirrors CI', () => {
@@ -257,6 +347,61 @@ describe('verify.sh mirrors CI', () => {
     expect([...new Set(missing)]).toEqual([])
   })
 
+  /**
+   * The root cause behind biffo-template#1771, closed here rather than only
+   * for the one command a prosecutor happened to trace.
+   *
+   * The assertion above compares by KIND, and `.filter((k) => k &&
+   * !gateKinds.has(k))` treats an unrecognised command — `kindOf()` returning
+   * `''` — as "not missing", because `''` is falsy. So a command that is not
+   * in `EXCLUDED`, not run verbatim by the local gate, and maps to no known
+   * kind produces NO test failure: it is not caught as missing, and it is not
+   * caught as covered either. It is simply not counted, in either direction —
+   * the identical "not excluded, invisible" shape #1668's own title names,
+   * one layer past the extractor #1668 fixed. #1668's widening of
+   * `ciCheckCommands()` (46 → 54 commands, via block-scanning) walked
+   * straight into it: `sh scripts/interpreter-audit.test.sh` newly appeared
+   * and fell straight through this hole, unnoticed until a prosecutor traced
+   * it by hand.
+   *
+   * That specific command is now named in `EXCLUDED` above. But keying one
+   * instance would leave the CLASS open — the next unrecognised command,
+   * whatever shape it takes, would fall through exactly the same way. So this
+   * asserts the general property instead: every command not in `EXCLUDED`
+   * must either match a known `kindOf()` the gate also runs (asserted above)
+   * or appear verbatim in `gateRuns`. An unrecognised, ungated, unexcluded
+   * command is now a loud failure rather than a silent pass.
+   *
+   * Auditing the real denominator to build this test surfaced 23 OTHER
+   * commands already hitting this exact shape — pre-existing, not introduced
+   * by #1668 (all 23 are single-line inline `run:` steps, visible under the
+   * ORIGINAL pre-#1668 regex too), never caught because this comparison never
+   * existed before now. Deciding each one's fate — wire it into
+   * `scripts/verify.sh`'s local gate, or give it a real `EXCLUDED` reason —
+   * is 23 separate judgement calls, out of scope for closing #1771's
+   * detection gap, and is tracked instead as biffo-template#1773.
+   *
+   * So the pre-existing 23 are baselined by COUNT, the same ratchet shape as
+   * `checkOrphanRatchet`/`skeletonAdoption` elsewhere in this repo (see
+   * AGENTS.md §9) — measured against `origin/dev` + this branch on
+   * 2026-08-30. A count-based baseline survives a workflow comment being
+   * reworded, which an exact string list would not. It can only be lowered by
+   * hand, one real decision at a time, per biffo-template#1773; it must never
+   * be raised to make a NEW uncategorised command fit.
+   */
+  it('does not let an unrecognised command hide from the missing-check computation (#1771)', () => {
+    const KNOWN_UNCATEGORISED_DEBT_BASELINE = 23 // biffo-template#1773; lower by hand as each is resolved, never raise
+    const gateSet = new Set(gateRuns)
+    const uncategorised = ciCheckCommands().filter(
+      (cmd) => !(cmd in EXCLUDED) && kindOf(cmd) === '' && !gateSet.has(cmd),
+    )
+    expect(
+      uncategorised.length,
+      `uncategorised CI commands — must be <= ${KNOWN_UNCATEGORISED_DEBT_BASELINE} ` +
+        `pre-existing (biffo-template#1773) or explicitly resolved: ${uncategorised.join(', ')}`,
+    ).toBeLessThanOrEqual(KNOWN_UNCATEGORISED_DEBT_BASELINE)
+  })
+
   it('does not carry exclusions for checks CI no longer runs', () => {
     // A stale exclusion is a claim about a check that is not there, and it
     // would silently excuse a future check that happens to share its name.
@@ -271,7 +416,7 @@ describe('verify.sh mirrors CI', () => {
    * number so the claim can be re-measured and disagreed with.
    */
   it('justifies every exclusion mechanically, not in prose', () => {
-    const KINDS = ['network', 'pr-time', 'history', 'slow']
+    const KINDS = ['network', 'pr-time', 'history', 'slow', 'container']
     for (const [cmd, { kind, why }] of Object.entries(EXCLUDED)) {
       expect(KINDS, `${cmd}`).toContain(kind)
       expect(why.length, `${cmd} needs a real reason`).toBeGreaterThan(20)
@@ -290,6 +435,69 @@ describe('verify.sh mirrors CI', () => {
     // timed, which is exactly how the bandit rationale got in.
     expect(slow.length).toBeGreaterThan(0)
     for (const [, e] of slow) expect(e.why).toMatch(/measured|>\d/)
+  })
+})
+
+/**
+ * The extractor's denominator (#1668, the #1363 convention applied to this
+ * guard itself): a fixture, not the real `ci.yml`, so what is caught and what
+ * is not is pinned rather than assumed.
+ *
+ * #1668 fixed the LINE-SHAPE half of the blind spot — `checkCommandsIn()` now
+ * walks `run: |` block bodies via `workflowRunCommands()`, so a command that
+ * sits alone on its own line is found regardless of whether the step used the
+ * inline or block form. It did NOT fix, and does not attempt to fix, the
+ * SAME-LINE half: a command sharing a physical line with a shell conditional
+ * or a pipe is captured as part of that longer line, and the prefix filter
+ * matches the START of a line — which is the conditional or the first
+ * pipeline stage, not the command buried after it. Both halves are asserted
+ * here, together, so the fixed half cannot silently regress and the
+ * unfixed half cannot silently be assumed away.
+ */
+describe('checkCommandsIn sees what it can, and states what it cannot (#1668)', () => {
+  // Every command below is at file scope only for this test — chosen to be
+  // unmistakable in an assertion failure, not because it runs anywhere.
+  const fixture = [
+    'jobs:',
+    '  example:',
+    '    steps:',
+    '      - name: block form, one command per line',
+    '        run: |',
+    '          echo "setting up"',
+    '          sh scripts/biffo.sh check fixture-block-command',
+    '      - name: a command on the same line as a shell conditional',
+    '        run: |',
+    '          if ! sh scripts/biffo.sh check fixture-conditional-command; then',
+    '            exit 1',
+    '          fi',
+    '      - name: a command on the same line as a pipe, after the first stage',
+    '        run: |',
+    '          cat report.json | gitleaks detect --no-git --redact fixture-pipe-command',
+    '',
+  ].join('\n')
+
+  it('catches a command that sits alone on its own line inside a run: | block', () => {
+    expect(checkCommandsIn(fixture)).toContain('sh scripts/biffo.sh check fixture-block-command')
+  })
+
+  it('MISSES a command embedded after a shell conditional on the same line', () => {
+    const seen = checkCommandsIn(fixture)
+    expect(seen.some((cmd) => cmd.includes('fixture-conditional-command'))).toBe(false)
+    // Not lost by workflowRunCommands() itself — the whole line is captured,
+    // starting with `if`, which is why the prefix filter above drops it.
+    const rawLine = workflowRunCommands(fixture).find((cmd) =>
+      cmd.includes('fixture-conditional-command'),
+    )
+    expect(rawLine).toBeDefined()
+    expect(rawLine).toMatch(/^if /)
+  })
+
+  it('MISSES a command that sits after a pipe rather than at the start of the line', () => {
+    const seen = checkCommandsIn(fixture)
+    expect(seen.some((cmd) => cmd.includes('fixture-pipe-command'))).toBe(false)
+    const rawLine = workflowRunCommands(fixture).find((cmd) => cmd.includes('fixture-pipe-command'))
+    expect(rawLine).toBeDefined()
+    expect(rawLine).toMatch(/^cat /)
   })
 })
 

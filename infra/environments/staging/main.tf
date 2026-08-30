@@ -118,19 +118,19 @@ module "storage" {
 }
 
 module "cdn" {
-  source                          = "../../../modules/cloud/aws/cdn"
-  project_name                    = var.project_name
-  environment                     = local.environment
-  portal_bucket_regional_domain   = module.storage.portal_bucket_regional_domain
-  portal_bucket_name              = module.storage.portal_bucket_name
-  portal_bucket_id                = module.storage.portal_bucket_name
-  portal_bucket_arn               = module.storage.portal_bucket_arn
-  custom_domain                   = var.custom_domain
-  acm_certificate_arn             = var.acm_certificate_arn
-  hosted_zone_id                  = var.hosted_zone_id
-  sibling_origins                 = var.sibling_origins
-  error_status_restore_lambda_arn = var.error_status_restore_lambda_arn
-  tags                            = local.tags
+  source                         = "../../../modules/cloud/aws/cdn"
+  project_name                   = var.project_name
+  environment                    = local.environment
+  portal_bucket_regional_domain  = module.storage.portal_bucket_regional_domain
+  portal_bucket_name             = module.storage.portal_bucket_name
+  portal_bucket_id               = module.storage.portal_bucket_name
+  portal_bucket_arn              = module.storage.portal_bucket_arn
+  custom_domain                  = var.custom_domain
+  acm_certificate_arn            = var.acm_certificate_arn
+  hosted_zone_id                 = var.hosted_zone_id
+  sibling_origins                = var.sibling_origins
+  error_status_demote_lambda_arn = var.error_status_demote_lambda_arn
+  tags                           = local.tags
 }
 
 module "auth" {
@@ -272,7 +272,7 @@ variable "acm_certificate_arn" {
 # no-op today, not dead: the module gates every lambda_function_association
 # on this same variable, so it activates automatically once staging grows
 # those routes rather than needing a second change to remember.
-variable "error_status_restore_lambda_arn" {
+variable "error_status_demote_lambda_arn" {
   type    = string
   default = ""
 }

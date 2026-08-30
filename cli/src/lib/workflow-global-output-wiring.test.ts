@@ -108,7 +108,7 @@ describe('infra/global outputs reach the regional stacks (#1574)', () => {
     expect(names.length).toBeGreaterThanOrEqual(3)
     expect(names).toContain('acm_certificate_arn')
     expect(names).toContain('hosted_zone_id')
-    expect(names).toContain('error_status_restore_lambda_arn')
+    expect(names).toContain('error_status_demote_lambda_arn')
   })
 
   it('every environment declares each of them, so none is dev-only', () => {
@@ -172,10 +172,10 @@ describe('the error-status fix is wired end to end (#1529, #1574)', () => {
   // of index.html on API errors, with nothing red anywhere to say so.
   it('deploy-global publishes it and deploy-infra consumes it', () => {
     expect(read('.github', 'workflows', 'deploy-global.yml')).toContain(
-      'gh variable set ERROR_STATUS_RESTORE_LAMBDA_ARN',
+      'gh variable set ERROR_STATUS_DEMOTE_LAMBDA_ARN',
     )
     expect(read('.github', 'workflows', 'deploy-infra.yml')).toContain(
-      'TF_VAR_error_status_restore_lambda_arn: ${{ vars.ERROR_STATUS_RESTORE_LAMBDA_ARN }}',
+      'TF_VAR_error_status_demote_lambda_arn: ${{ vars.ERROR_STATUS_DEMOTE_LAMBDA_ARN }}',
     )
   })
 
@@ -185,11 +185,11 @@ describe('the error-status fix is wired end to end (#1529, #1574)', () => {
     // Lambda version, and `infra/` is user-owned, so an instance can genuinely
     // lack the function while running this template-owned workflow.
     const global = read('.github', 'workflows', 'deploy-global.yml')
-    expect(global).toContain('gh variable delete ERROR_STATUS_RESTORE_LAMBDA_ARN')
+    expect(global).toContain('gh variable delete ERROR_STATUS_DEMOTE_LAMBDA_ARN')
   })
 
   it('reads the global output tolerantly, so instances without it still get DNS and certs', () => {
     const global = read('.github', 'workflows', 'deploy-global.yml')
-    expect(global).toMatch(/terraform output -raw error_status_restore_lambda_arn[^\n]*\|\|\s*true/)
+    expect(global).toMatch(/terraform output -raw error_status_demote_lambda_arn[^\n]*\|\|\s*true/)
   })
 })

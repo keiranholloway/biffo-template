@@ -271,7 +271,7 @@ jobs:
           fi
 
           # biffo-template#1574: publish the error-status-demote Lambda@Edge ARN
-          # so deploy-infra.yml can pass it as TF_VAR_error_status_restore_lambda_arn.
+          # so deploy-infra.yml can pass it as TF_VAR_error_status_demote_lambda_arn.
           # Same shape as ACM_CERTIFICATE_ARN above, and here for the same reason:
           # Lambda@Edge must live in us-east-1, so the function is created in THIS
           # stack and its qualified ARN threaded into the regional one.
@@ -293,18 +293,18 @@ jobs:
           # the #1529 demote/restore pair, so it must track the global stack in
           # lockstep. If the function goes away and the variable does not, the
           # regional apply pins an association to a dead Lambda version.
-          RESTORE_ARN=$(terraform output -raw error_status_restore_lambda_arn 2>/dev/null || true)
-          if printf '%s' "$RESTORE_ARN" \
+          DEMOTE_ARN=$(terraform output -raw error_status_demote_lambda_arn 2>/dev/null || true)
+          if printf '%s' "$DEMOTE_ARN" \
             | grep -Eq '^arn:aws:lambda:us-east-1:[0-9]{12}:function:[A-Za-z0-9_-]+:[0-9]+$'; then
-            gh variable set ERROR_STATUS_RESTORE_LAMBDA_ARN --body "$RESTORE_ARN"
+            gh variable set ERROR_STATUS_DEMOTE_LAMBDA_ARN --body "$DEMOTE_ARN"
           else
-            gh variable delete ERROR_STATUS_RESTORE_LAMBDA_ARN --confirm || true
-            if [ -n "$RESTORE_ARN" ]; then
-              echo "::warning::infra/global output error_status_restore_lambda_arn is not a qualified us-east-1 Lambda@Edge ARN ('$RESTORE_ARN'); ERROR_STATUS_RESTORE_LAMBDA_ARN cleared and the biffo-template#1529 API-error-body fix stays OFF."
+            gh variable delete ERROR_STATUS_DEMOTE_LAMBDA_ARN --confirm || true
+            if [ -n "$DEMOTE_ARN" ]; then
+              echo "::warning::infra/global output error_status_demote_lambda_arn is not a qualified us-east-1 Lambda@Edge ARN ('$DEMOTE_ARN'); ERROR_STATUS_DEMOTE_LAMBDA_ARN cleared and the biffo-template#1529 API-error-body fix stays OFF."
             else
-              echo "::warning::infra/global publishes no error_status_restore_lambda_arn output; ERROR_STATUS_RESTORE_LAMBDA_ARN cleared and the biffo-template#1529 API-error-body fix stays OFF. API 403/404 responses will keep returning the portal's index.html. Copy infra/global's error-status-demote resources in to enable it."
+              echo "::warning::infra/global publishes no error_status_demote_lambda_arn output; ERROR_STATUS_DEMOTE_LAMBDA_ARN cleared and the biffo-template#1529 API-error-body fix stays OFF. API 403/404 responses will keep returning the portal's index.html. Copy infra/global's error-status-demote resources in to enable it."
             fi
-            RESTORE_ARN=""
+            DEMOTE_ARN=""
           fi
 
           echo "## Global DNS/certificate deployment" >> $GITHUB_STEP_SUMMARY
@@ -315,8 +315,8 @@ jobs:
           if [ -n "$ZONE_ID" ]; then
             echo "Hosted Zone ID: \`$ZONE_ID\`" >> $GITHUB_STEP_SUMMARY
           fi
-          if [ -n "$RESTORE_ARN" ]; then
-            echo "Error-status-demote Lambda@Edge ARN: \`$RESTORE_ARN\`" >> $GITHUB_STEP_SUMMARY
+          if [ -n "$DEMOTE_ARN" ]; then
+            echo "Error-status-demote Lambda@Edge ARN: \`$DEMOTE_ARN\`" >> $GITHUB_STEP_SUMMARY
           else
             echo "Error-status-demote Lambda@Edge ARN: _not published — API 403/404 bodies stay overwritten by the SPA shell (biffo-template#1529)_" >> $GITHUB_STEP_SUMMARY
           fi

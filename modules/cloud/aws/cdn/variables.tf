@@ -204,11 +204,16 @@ variable "tracked_link_api_domain" {
 # to scope it away from the API behaviours — so it was also rewriting every
 # genuine 403/404 JSON body the API origins return into that same HTML shell.
 #
-# error_status_restore_lambda_arn is the QUALIFIED ARN (including a numeric
-# version — Lambda@Edge requires a published version, never $LATEST) of a
-# Lambda@Edge function that, on the three API behaviours only, demotes a real
-# 403/404 to 200 before CloudFront's error-page logic ever sees it, then
-# restores the true status just before the response reaches the viewer. See
+# error_status_demote_lambda_arn is the QUALIFIED ARN (including a numeric
+# version — Lambda@Edge requires a published version, never $LATEST) of the
+# error-status-demote Lambda@Edge function — the ONLY half of the pair that is
+# a Lambda@Edge with an ARN worth passing (restore is a CloudFront Function,
+# created in-region, with no ARN of its own — biffo-template#1583). On the
+# three API behaviours only, demote turns a real 403/404 into a 200 before
+# CloudFront's error-page logic ever sees it, then restore puts the true
+# status back just before the response reaches the viewer. This one variable
+# gates BOTH associations (see main.tf) — they are deliberately coupled behind
+# a single gate (biffo-template#1576) and must never be split. See
 # error-status-demote.js and error-status-restore.js for the full mechanism.
 #
 # A qualified ARN, not a bare one: Lambda@Edge associations are pinned to one
@@ -228,8 +233,8 @@ variable "tracked_link_api_domain" {
 # `function_association` (viewer-response) blocks below are gated on this
 # being non-empty, exactly as the API behaviours themselves are gated on
 # their own domain variables.
-variable "error_status_restore_lambda_arn" {
-  description = "Qualified ARN (us-east-1, versioned) of the error-status-demote Lambda@Edge function. Output from infra/global. Empty disables the API-error-body fix — see module README."
+variable "error_status_demote_lambda_arn" {
+  description = "Qualified ARN (us-east-1, versioned) of the error-status-demote Lambda@Edge function. Gates both the demote (origin-response) and restore (viewer-response) associations, which are deliberately coupled behind this one variable (biffo-template#1576) — restore is a CloudFront Function with no ARN of its own. Output from infra/global. Empty disables the API-error-body fix — see module README."
   type        = string
   default     = ""
 
@@ -270,9 +275,9 @@ variable "error_status_restore_lambda_arn" {
   # one that reaches every instance automatically via `biffo core upgrade`.
   validation {
     condition = (
-      var.error_status_restore_lambda_arn == "" ||
-      can(regex("^arn:aws:lambda:us-east-1:[0-9]{12}:function:[0-9A-Za-z_-]+:[0-9]+$", var.error_status_restore_lambda_arn))
+      var.error_status_demote_lambda_arn == "" ||
+      can(regex("^arn:aws:lambda:us-east-1:[0-9]{12}:function:[0-9A-Za-z_-]+:[0-9]+$", var.error_status_demote_lambda_arn))
     )
-    error_message = "error_status_restore_lambda_arn must be empty (fix disabled) or a QUALIFIED us-east-1 Lambda@Edge ARN ending in a numeric version, e.g. arn:aws:lambda:us-east-1:123456789012:function:my-project-error-status-demote:7. An unqualified ARN, $LATEST, or another region cannot be associated with a CloudFront behaviour. Use infra/global's error_status_restore_lambda_arn output (biffo-template#1529, #1574)."
+    error_message = "error_status_demote_lambda_arn must be empty (fix disabled) or a QUALIFIED us-east-1 Lambda@Edge ARN ending in a numeric version, e.g. arn:aws:lambda:us-east-1:123456789012:function:my-project-error-status-demote:7. An unqualified ARN, $LATEST, or another region cannot be associated with a CloudFront behaviour. Use infra/global's error_status_demote_lambda_arn output (biffo-template#1529, #1574)."
   }
 }

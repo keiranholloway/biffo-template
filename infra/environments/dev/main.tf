@@ -174,7 +174,7 @@ module "cdn" {
   # of the three API routes above has its body replaced with the portal's
   # SPA shell — see the module's own variables.tf for the full mechanism.
   # Output from infra/global, same wiring as acm_certificate_arn above.
-  error_status_restore_lambda_arn = var.error_status_restore_lambda_arn
+  error_status_demote_lambda_arn = var.error_status_demote_lambda_arn
 
   tags = local.tags
 }

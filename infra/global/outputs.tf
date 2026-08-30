@@ -25,7 +25,7 @@ output "certificate_validation_records" {
   description = "DNS records required to validate the ACM certificate."
 }
 
-output "error_status_restore_lambda_arn" {
+output "error_status_demote_lambda_arn" {
   value       = aws_lambda_function.error_status_demote.qualified_arn
-  description = "Qualified (versioned) ARN of the error-status-demote Lambda@Edge function (biffo-template#1529) — pass to environment Terraform as TF_VAR_error_status_restore_lambda_arn."
+  description = "Qualified (versioned) ARN of the error-status-demote Lambda@Edge function (biffo-template#1529) — gates both the demote and restore CloudFront associations, deliberately coupled behind this one value (biffo-template#1576); restore is a CloudFront Function with no ARN of its own. Pass to environment Terraform as TF_VAR_error_status_demote_lambda_arn."
 }

@@ -1699,6 +1699,69 @@ release_stage_lock() {
   wt_log lock-released "$_rl_label" "$_rl_dir"
 }
 
+# Force-reclaims `chore/sync-shared` wherever it is CURRENTLY checked out, not
+# only at the path this round expects to find it. `chore/sync-shared` is
+# deliberately the same branch name across every round (see the comment above
+# the staging lock for why), so exactly one worktree can ever hold it at a
+# time -- git refuses to check the same branch out twice. That means finding
+# it by BRANCH rather than by the expected path also finds a FOREIGN one: an
+# `Enter Worktree` investigation left open, a killed process's leftover
+# checkout, or -- the real case behind biffo-template#1785 -- an entirely
+# unrelated worktree (`.worktrees/pr379-gh-fix` in tabsii-crm, debris from one
+# of PR#379's rejected remediation attempts) that happened to be sitting on
+# this branch name. See `reset_sync_worktree` below for what this fixes.
+reclaim_sync_branch() {
+  _rc_d="$1"
+  _rc_expected="$2"
+  _rc_label="$3"
+  _rc_holder=$(git -C "$_rc_d" worktree list --porcelain | awk '
+    /^worktree / { path = $0; sub(/^worktree /, "", path) }
+    /^branch refs\/heads\/chore\/sync-shared$/ { print path }
+  ')
+  [ -n "$_rc_holder" ] || return 0
+  [ "$_rc_holder" != "$_rc_expected" ] || return 0
+  wt_log remove-foreign-worktree "$_rc_label" "$_rc_holder"
+  printf '%-26s \033[33mreclaiming\033[0m chore/sync-shared, held by a foreign worktree at %s\n' \
+    "$_rc_label" "$_rc_holder" >&2
+  git -C "$_rc_d" worktree remove --force "$_rc_holder" 2>/dev/null
+  # The directory can be gone without the worktree being properly removed (a
+  # manual `rm -rf` rather than `git worktree remove`) -- `remove --force` can
+  # fail against that too, so prune unconditionally as a second attempt rather
+  # than assuming the first one worked.
+  git -C "$_rc_d" worktree prune 2>/dev/null
+}
+
+# Re-stage `$wt` on a fresh `chore/sync-shared` tip. Split out from
+# `stage_repo` so this sequence -- and `reclaim_sync_branch`'s effect on it --
+# can be tested in isolation the same way `acquire_stage_lock` is
+# (shared-sync-stage-lock.test.ts): see shared-sync-foreign-worktree-
+# reclaim.test.ts.
+#
+# biffo-template#1785: before `reclaim_sync_branch` existed, this block
+# unconditionally removed only `$wt` (a no-op when `chore/sync-shared` was
+# checked out somewhere ELSE) and then ran `branch -D chore/sync-shared`.
+# `branch -D` against a branch checked out in another worktree DOES print
+# `error: cannot delete branch ... checked out at ...` and exit non-zero, but
+# this call redirects both away and never inspects the exit code (see the
+# comment on the line below), so the failure was invisible right up until the
+# following `worktree add -b chore/sync-shared` died with `fatal: a branch
+# named 'chore/sync-shared' already exists` -- which aborted staging for the
+# WHOLE repo, which aborts the ENTIRE estate-wide round by design (nothing is
+# pushed on a partial rehearsal). That happened for real and stayed silent for
+# 5 consecutive days, because nothing polls `$SYNC_WT_LOG`.
+reset_sync_worktree() {
+  _rsw_d="$1"
+  _rsw_wt="$2"
+  _rsw_label="$3"
+  _rsw_base="$4"
+  git -C "$_rsw_d" worktree remove --force "$_rsw_wt" 2>/dev/null
+  reclaim_sync_branch "$_rsw_d" "$_rsw_wt" "$_rsw_label"
+  # `branch -D` reports on STDOUT, so a quiet run printed "Deleted branch
+  # chore/sync-shared" in the middle of the rehearsal table.
+  git -C "$_rsw_d" branch -D chore/sync-shared >/dev/null 2>&1
+  git -C "$_rsw_d" worktree add -q "$_rsw_wt" -b chore/sync-shared "origin/$_rsw_base"
+}
+
 stage_repo() {
   d="$1"
   label="$2"
@@ -1714,11 +1777,7 @@ stage_repo() {
 
   wt="$d/.worktrees/shared-sync"
   wt_log remove-pre-stage "$label" "$wt"
-  git -C "$d" worktree remove --force "$wt" 2>/dev/null
-  # `branch -D` reports on STDOUT, so a quiet run printed "Deleted branch
-  # chore/sync-shared" in the middle of the rehearsal table.
-  git -C "$d" branch -D chore/sync-shared >/dev/null 2>&1
-  git -C "$d" worktree add -q "$wt" -b chore/sync-shared "origin/$base" || {
+  reset_sync_worktree "$d" "$wt" "$label" "$base" || {
     wt_log add-FAILED "$label" "$wt"
     release_stage_lock "$d" "$label"
     return 1

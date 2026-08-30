@@ -24,7 +24,13 @@ import { realpathSync } from 'node:fs'
 /** Injectable git runner so the lookup is unit-testable without a real repo. */
 export type GitRunner = (args: string[]) => string
 
-const defaultGit: GitRunner = (args) =>
+/**
+ * The real git runner, exported so other callers needing the same
+ * shell-out-with-injectable-fake pattern (e.g. core-upgrade.ts's divergence-
+ * trailer history lookup) share one implementation rather than each hand-rolling
+ * `execFileSync` with its own flags.
+ */
+export const defaultGit: GitRunner = (args) =>
   execFileSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
 
 /**

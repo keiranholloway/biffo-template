@@ -14,8 +14,8 @@ import { dirname, join } from 'node:path'
 import { execa } from './exec.js'
 import { z } from 'zod'
 import { type CoreManifest, listTemplateOwnedFiles } from './core-manifest.js'
-import { readDivergenceConfig } from './core-ownership-guard.js'
-import { type GitRunner, gitTrackedFiles } from './git-tracked-files.js'
+import { parseDivergenceTrailer, readDivergenceConfig } from './core-ownership-guard.js'
+import { defaultGit, type GitRunner, gitTrackedFiles } from './git-tracked-files.js'
 
 /**
  * The three-way merge engine for `biffo core upgrade` (ADR-0006 Phase 3).
@@ -95,11 +95,13 @@ export interface MergeEntry {
    * `orphaned` list — see there for the gitignore/untracked filter applied on
    * top of it.
    *
-   * `false` when the path is instead declared in `biffo.divergence.json`
-   * (#1602): a `warnOnly` entry is the SAME acceptance the commit-time
-   * `checkCoreOwnership` guard already grants the path, so the ratchet
-   * treats it as sanctioned rather than re-deciding the question from a
-   * count nobody reads prose against.
+   * `false` when the path is instead declared divergent — either a `warnOnly`
+   * entry in `biffo.divergence.json` (#1602), or a `Core-Divergence:` trailer
+   * recorded against the path in the instance's own git history (#1718). Both
+   * are the SAME acceptance the commit-time `checkCoreOwnership` guard already
+   * grants the path via its two independent routes, so the ratchet treats
+   * either as sanctioned rather than re-deciding the question from a count
+   * nobody reads prose against.
    */
   orphaned?: boolean
 }
@@ -231,6 +233,52 @@ const EMPTY_SUMMARY: () => Record<MergeStatus, number> = () => ({
 })
 
 /**
+ * Whether any commit touching `path` in the instance's own history carries a
+ * `Core-Divergence:` trailer (#1718).
+ *
+ * `checkCoreOwnership` (core-ownership-guard.ts) has always accepted a
+ * template-owned path via TWO independent routes: a `biffo.divergence.json`
+ * `warnOnly` entry, or a bare `Core-Divergence: <reason>` trailer on the commit
+ * — and its own printed guidance names the trailer as a way past. #1602/#1717
+ * unified the *first* route into this ratchet's `isDeclaredDivergent`, but never
+ * the second: an operator who declared divergence exactly the way the guard's
+ * own message suggested still hit an "orphan" at the next `biffo core upgrade`,
+ * green at commit time and refused later, in front of whoever else was mid
+ * upgrade. This closes that gap by reusing `parseDivergenceTrailer` — the same
+ * parser the commit-time guard reads — rather than re-deriving trailer parsing
+ * a second time, so the two acceptance routes cannot drift onto different
+ * definitions of "declared".
+ *
+ * `git log --follow`, not just the tip commit: the declaration only needs to
+ * have been made once, on whichever commit introduced or last touched the
+ * path, and `--follow` keeps it findable across a rename the same way
+ * `parseNameStatus`'s destination-path convention (core-ownership-guard.ts)
+ * already treats a rename's target as the path of record.
+ *
+ * Fails CLOSED (returns `false`) whenever git cannot answer — no repo, no
+ * history for the path, or any other error. This is the opposite of
+ * `gitTrackedFiles`'s fail-OPEN contract: there, silence means "don't filter",
+ * which is the safe default for a filter. Here, silence must NOT be read as
+ * "declared" — that would turn every un-inspectable tree (exactly the plain
+ * temp directories this module's own tests build) into a free pass for the
+ * orphan ratchet this function feeds, which is the opposite of what #1602
+ * fixed and what #1718 extends.
+ */
+export function pathHasDivergenceTrailerInHistory(
+  oursDir: string,
+  path: string,
+  git: GitRunner = defaultGit,
+): boolean {
+  let out: string
+  try {
+    out = git(['-C', oursDir, 'log', '--follow', '--format=%x00%B', '--', path])
+  } catch {
+    return false
+  }
+  return out.split('\x00').some((message) => parseDivergenceTrailer(message) !== null)
+}
+
+/**
  * Compute the upgrade plan. Reads all three trees, classifies each
  * template-owned path, and three-way-merges the ones that changed on both
  * sides. Nothing is written.
@@ -263,8 +311,19 @@ export async function planCoreUpgrade(options: PlanCoreUpgradeOptions): Promise<
   // way to keep it deleted. Reuse the same biffo.divergence.json the ownership
   // guard reads; a malformed file throws here too, which is the right failure.
   const divergentPrefixes = readDivergenceConfig(options.oursDir).warnOnly.map((e) => e.prefix)
-  const isDeclaredDivergent = (path: string): boolean =>
-    divergentPrefixes.some((prefix) => path.startsWith(prefix))
+  // Cache the (comparatively expensive) `git log` lookup per path — `classify()`
+  // calls `isDeclaredDivergent` at most twice per path, but there is no reason
+  // to shell out twice for the same answer.
+  const trailerDivergenceCache = new Map<string, boolean>()
+  const isDeclaredDivergent = (path: string): boolean => {
+    if (divergentPrefixes.some((prefix) => path.startsWith(prefix))) return true
+    let viaTrailer = trailerDivergenceCache.get(path)
+    if (viaTrailer === undefined) {
+      viaTrailer = pathHasDivergenceTrailerInHistory(options.oursDir, path, options.git)
+      trailerDivergenceCache.set(path, viaTrailer)
+    }
+    return viaTrailer
+  }
 
   const paths = [...new Set([...base, ...ours, ...theirs])].sort()
   const entries: MergeEntry[] = []
@@ -317,15 +376,17 @@ async function classify(
   // is no base or upstream version to merge against, so leave it untouched
   // rather than trying to read a non-existent base/theirs copy.
   //
-  // Unsanctioned by default (#1026) — UNLESS this exact path is declared in
-  // `biffo.divergence.json` (#1602, class #1362): the commit-time ownership
-  // guard already accepts such a path via the same `warnOnly` prefixes
-  // (`checkCoreOwnership`, core-ownership-guard.ts), so counting it as an
-  // orphan here re-litigates, from a second document, a question the first
-  // document already answered. `isDeclaredDivergent` is the same closure the
-  // "instance deleted a template file" branch below already reads — reused,
-  // not re-derived, so the two branches cannot drift onto different sources
-  // of truth for the same declaration.
+  // Unsanctioned by default (#1026) — UNLESS this exact path is declared
+  // divergent via either of the commit-time guard's two independent routes:
+  // a `biffo.divergence.json` `warnOnly` prefix (#1602, class #1362), or a
+  // `Core-Divergence:` trailer recorded against the path in history (#1718).
+  // `checkCoreOwnership` (core-ownership-guard.ts) already accepts a path via
+  // either, so counting it as an orphan here re-litigates, from a second
+  // document, a question the first document already answered.
+  // `isDeclaredDivergent` is the same closure the "instance deleted a template
+  // file" branch below already reads — reused, not re-derived, so the two
+  // branches (and the two acceptance routes within it) cannot drift onto
+  // different sources of truth for the same declaration.
   if (!inBase && !inTheirs) {
     if (isDeclaredDivergent(path)) {
       return { path, status: 'keep-ours', conflicted: false, orphaned: false }

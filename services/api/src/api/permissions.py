@@ -262,26 +262,53 @@ _DECIDABLE_PROVIDERS: tuple[type, ...] = (DefaultIdentityProvider,)
 
 def _is_decidable(provider: object) -> bool:
     """True when ``provider`` is genuinely covered by the ``_DECIDABLE_PROVIDERS``
-    proof, not merely an ``isinstance`` of one (#1638).
+    proof, not merely an ``isinstance`` of one (#1638, #1770).
 
     ``isinstance(provider, _DECIDABLE_PROVIDERS)`` proves an *is-a*
     relationship — it does not prove the invariant the proof actually depends
     on, which is that ``resolve_permissions`` was left exactly as the
     decidable base class defines it (see the module docstring: "``resolve_
-    permissions`` unconditionally returns an empty set"). A subclass that
-    overrides ``resolve_permissions`` — e.g. to reuse a decidable provider's
-    other surface (``list_profiles``, ``get_profile``, ...) while swapping in
-    custom RBAC — passes ``isinstance`` while that guarantee is false, and can
-    genuinely grant a code the base class unconditionally denies. So this
-    checks method identity, not just class identity: the provider must be an
-    instance of a decidable type *and* must not have replaced that type's
-    ``resolve_permissions``.
+    permissions`` unconditionally returns an empty set"). A replacement can
+    happen at two levels, and both must be checked:
+
+    - **Class level** (#1638) — a subclass overrides ``resolve_permissions``,
+      e.g. to reuse a decidable provider's other surface (``list_profiles``,
+      ``get_profile``, ...) while swapping in custom RBAC. This passes
+      ``isinstance`` while the guarantee is false.
+    - **Instance level** (#1770) — ``resolve_permissions`` is replaced on a
+      single instance (``provider.resolve_permissions =
+      types.MethodType(...)``), leaving ``type(provider)`` exactly the
+      decidable type. Python attribute lookup checks the instance's
+      ``__dict__`` *before* the class's, so a check that only ever inspects
+      ``type(provider)`` — as this one used to — is structurally blind to
+      this: the class is untouched, only the instance's own resolution
+      differs.
+
+    So rather than comparing ``type(provider).resolve_permissions`` to
+    ``decidable_type.resolve_permissions`` (which only ever answers "did the
+    class change?"), this resolves ``resolve_permissions`` the same way a
+    caller actually would — via ``getattr(provider, ...)``, which runs normal
+    instance-then-class attribute lookup — and compares the *underlying
+    function* of whatever that resolves to against the decidable type's own.
+    That single check subsumes both cases: a class-level override changes
+    what the attribute resolves to via the MRO, and an instance-level
+    override changes it via the instance ``__dict__`` taking priority over
+    the class; either way the resolved function no longer matches, and this
+    reports "not decidable".
+
+    Fails closed on anything that does not look like an ordinary bound
+    method of the decidable type (e.g. a bare function assigned to the
+    instance without ``types.MethodType``, which has no ``__func__``) —
+    ``getattr(..., None)`` on both sides means an unrecognised shape compares
+    unequal rather than raising, so "cannot prove clean" always resolves to
+    "not decidable" rather than an exception escaping this check.
     """
     for decidable_type in _DECIDABLE_PROVIDERS:
-        if isinstance(provider, decidable_type) and (
-            getattr(type(provider), "resolve_permissions", None)
-            is getattr(decidable_type, "resolve_permissions", None)
-        ):
+        if not isinstance(provider, decidable_type):
+            continue
+        resolved = getattr(provider, "resolve_permissions", None)
+        underlying = getattr(resolved, "__func__", None)
+        if underlying is getattr(decidable_type, "resolve_permissions", None):
             return True
     return False
 

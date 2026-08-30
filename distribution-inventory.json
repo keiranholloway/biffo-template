@@ -1,0 +1,149 @@
+{
+  "version": 1,
+  "note": "biffo-template#1570 lever 1: 'An inventory, and a test that reads it.' This estate has several independent channels that carry a change from one repo to N others (filesFromSkeleton, shared-files.json's other five lists, core-manifest.json's templateOwned boundary via `biffo core upgrade`, the instance-adoption pair registry). Each grew its own drift detector, or none, and nothing before this file answered 'which artifacts must travel, by which channel, and is each one currently checked?' -- so a #1570 sub-shape (a) failure (the channel exists, nobody registered the artifact with it) was invisible to every detector at once, because a detector only ever compares the copies it already knows about. This file is the registry; distribution-inventory.test.ts (cli/src/lib/) is the sweep that reads it. It reuses existing per-channel detectors (#1562/#1573's claim-invocation guard, #1564's shared-sync.sh --check, #1538/#1570/#1609's instance-adoption pair registry) rather than inventing new comparison logic -- see #1570 itself for why one more per-channel detector does not close this class.",
+  "statusNote": "Three states, not two, because #1570's own comment thread found the middle one is real: `detected` (a real detector exists for exactly this artifact and currently reports it clean), `unregistered` (the CHANNEL's mechanism exists and already checks OTHER artifacts -- e.g. instanceAdoptionPair already ships one registered pair -- but this specific artifact has not been added to it, so the mechanism runs and sees nothing wrong only because it never looks), and `unverified` (channel `none` -- no mechanism exists for this artifact at all, sub-shape (a) with nothing to register with, or sub-shape (c)). Collapsing `unregistered` into `unverified` would erase the distinction #1570's instance 7 depends on: 'the artifact travelled, and the thing that switches it on did not' is a different, cheaper fix (add a pair) than 'no channel exists' (needs a channel built or an architectural decision).",
+  "channelsNote": "One entry per distribution mechanism this estate actually has. `selfCheckable` means the detector can run against THIS checkout alone (no other repo's tree required) -- distribution-inventory.test.ts calls it for real and asserts it currently passes. `false` means the detector needs a real satellite/instance tree this repo's own CI cannot see (an `--estate` clone or a live `--instance-dir`); the sweep can only assert the detector is wired into a scheduled workflow, not that the remote copies are clean right now -- that currency lives in the named workflow's own run history, not here.",
+  "channels": {
+    "filesFromSkeleton": {
+      "description": "shared-files.json's filesFromSkeleton map: a file whose canonical copy is a skeleton's, created where absent and kept in step (`sync`) or seeded once (`seed`) in every repo scaffolded from that skeleton.",
+      "detectorCommand": "sh scripts/biffo.sh check claim-invocation",
+      "detectorImplementation": "cli/src/lib/claim-invocation-parity.ts#auditClaimInvocationParity (invoked via cli/src/scripts/check-claim-invocation.ts)",
+      "selfCheckable": true,
+      "selfCheckableReason": "distributedAgentsDocs() reads this checkout's own root AGENTS.md plus every _skeletons/*/AGENTS.md -- both live in this repo, so no external clone is needed.",
+      "scope": "Currently covers only the claim-invocation block inside AGENTS.md (#1573). It does NOT compare CLAUDE.md, release-guards.yml, or any other filesFromSkeleton entry against its skeleton copies -- those have no comparator at all, which is why they are individually recorded as gaps below rather than assumed covered by this channel's name.",
+      "wiredIn": "pnpm run test (cli/src/lib/claim-invocation-parity.test.ts) and CI's own check invocation are not additionally scheduled; the guard runs as part of the normal vitest suite on every PR."
+    },
+    "sharedFilesSync": {
+      "description": "shared-files.json's other five lists (files, filesIfPresent, mustBeUniform, overridesFloor, keyMustBeUniform) plus filesFromSkeleton generally: distributed and measured across every satellite repo by scripts/shared-sync.sh.",
+      "detectorCommand": "bash scripts/shared-sync.sh --check --estate <estate-dir>",
+      "detectorImplementation": "scripts/shared-sync.sh (--check mode)",
+      "selfCheckable": false,
+      "selfCheckableReason": "Requires a real clone of every satellite repo under --estate; this checkout has no such clone and fabricating one would prove nothing about real drift (same reasoning check-instance-adoption.ts gives for refusing a self-check default).",
+      "wiredIn": ".github/workflows/shared-sync-report.yml, scheduled (clones the real satellites and runs --check)"
+    },
+    "templateOwnedCoreUpgrade": {
+      "description": "core-manifest.json's templateOwned paths, distributed to instances via `biffo core upgrade`. Currency (is an instance's checkout behind the template) is reported by `biffo doctor`, not by core upgrade itself, which only ever runs against whichever instance an operator happens to point it at.",
+      "detectorCommand": "npx @biffo/cli doctor",
+      "detectorImplementation": "cli/src/commands/doctor.ts / cli/src/lib/doctor.ts (core-version staleness finding)",
+      "selfCheckable": false,
+      "selfCheckableReason": "Staleness is a property of an INSTANCE's checkout (INSTANCE_CORE_FILE) relative to this template's tags; this repo is the template and has no instance tree of its own to be stale against.",
+      "wiredIn": "Run by an operator/agent inside an instance checkout (AGENTS.md/CLAUDE.md workflows reference it); not itself scheduled from this repo."
+    },
+    "instanceAdoptionPair": {
+      "description": "A template-owned file distributes correctly, but the user-owned line that makes it DO anything is a separate manual edit an instance operator must make -- the #1538/#1570 shape. Registered pairs live in cli/src/lib/instance-adoption.ts's REGISTERED_ADOPTION_PAIRS.",
+      "detectorCommand": "sh scripts/biffo.sh check instance-adoption --instance-dir <real-instance-checkout>",
+      "detectorImplementation": "cli/src/lib/instance-adoption.ts#checkInstanceAdoption (invoked via cli/src/scripts/check-instance-adoption.ts)",
+      "selfCheckable": false,
+      "selfCheckableReason": "Needs a real instance tree (oursDir); this repo IS the template and has none of its own, per check-instance-adoption.ts's own documented reasoning.",
+      "wiredIn": ".github/workflows/instance-adoption-report.yml, scheduled (clones a real live instance and runs `biffo.sh check instance-adoption` against it)"
+    },
+    "none": {
+      "description": "No distribution channel exists at all for this artifact -- #1570's sub-shape (a) or (c). Recording it here is the fix this issue asks for in this case: 'record it as a real gap, not something to build a channel for' where building one is out of scope or a separate architectural decision.",
+      "detectorCommand": null,
+      "detectorImplementation": null,
+      "selfCheckable": false,
+      "wiredIn": null
+    }
+  },
+  "entries": [
+    {
+      "id": "agents-md-claim-invocation-block",
+      "artifact": "The `--as`/`--release` claim-invocation documentation inside AGENTS.md (biffo-template#1562)",
+      "channel": "filesFromSkeleton",
+      "targets": ["_skeletons/sibling-template/AGENTS.md", "_skeletons/plugin-template/AGENTS.md"],
+      "status": "detected",
+      "evidence": ["#1562", "#1573"],
+      "notes": "Registration was never missing -- AGENTS.md has been a `sync` entry all along. What was missing was a comparison, which #1573 shipped. This is #1570's own corrected framing of its sub-shape (a): 'the channel carries the file, the copies diverge, and nothing asserts they agree.'"
+    },
+    {
+      "id": "apps-frontend-api-client",
+      "artifact": "apps/frontend/src/lib/api-client.ts (and its .test.ts)",
+      "channel": "sharedFilesSync",
+      "targets": ["every sibling repo carrying apps/frontend/"],
+      "status": "detected",
+      "evidence": ["#1107", "#1108", "shared-files.json filesIfPresent"],
+      "notes": "filesIfPresent: kept current only in repos that already hold the file, never created -- see shared-files.json's filesIfPresentNote for why (a sibling's apps/frontend/ has no counterpart at this repo's root)."
+    },
+    {
+      "id": "apps-frontend-auth-ts",
+      "artifact": "apps/frontend/src/lib/auth.ts (and its .test.ts)",
+      "channel": "sharedFilesSync",
+      "targets": [
+        "every sibling repo carrying apps/frontend/ (tabsii-marketplace carries a declared, permanent divergence)"
+      ],
+      "status": "detected",
+      "evidence": ["#1117", "shared-files.json mustBeUniform"],
+      "notes": "mustBeUniform, not filesFromSkeleton/filesIfPresent: a one-way overwrite would have clobbered six repos with no evidence which behaviour was right. Declared uniform at baseline 2 variants across 7 repos (6 byte-identical to the skeleton, plus marketplace's declared divergence) -- see mustBeUniformNote in shared-files.json for the full reconciliation trail."
+    },
+    {
+      "id": "pnpm-overrides-security-pins",
+      "artifact": "apps/frontend/package.json's pnpm.overrides and engines keys",
+      "channel": "sharedFilesSync",
+      "targets": ["every sibling repo's apps/frontend/package.json"],
+      "status": "detected",
+      "evidence": [
+        "#1352",
+        "#1367",
+        "#1380",
+        "#1381",
+        "shared-files.json overridesFloor/keyMustBeUniform"
+      ],
+      "notes": "Two detectors, not one, because the class has two symptoms: overridesFloor catches a repo missing a key entirely (the nanoid CVE shape); keyMustBeUniform catches every repo holding the key but disagreeing on its value (the undici/sharp shape). overridesFloor also ships a narrow writer (apply_overrides_floor, dry-run only) -- see shared-files.json's overridesFloorNote."
+    },
+    {
+      "id": "template-owned-path-currency",
+      "artifact": "Every path core-manifest.json marks templateOwned (services/api/, cli/, packages/, modules/, .github/, ...)",
+      "channel": "templateOwnedCoreUpgrade",
+      "targets": ["every live instance's checkout"],
+      "status": "unregistered",
+      "gapReason": "`biffo doctor` reports an instance's staleness against the highest core-v* tag (#1544, decoded via extractVersionField rather than parseCoreRecord specifically so a malformed core.version file cannot silently read as up to date) -- the mechanism is real, but nothing SCHEDULES it: it is a manual command an operator or agent has to remember to invoke, with no workflow analogous to shared-sync-report.yml or instance-adoption-report.yml running it against live instances on a cadence. That is the exact 'third audit nobody runs' shape (#1413) instance-adoption.ts's own module doc names for the pre-#1609 version of THAT channel -- unfixed here.",
+      "evidence": ["#1544", "#1413", "core-manifest.json"],
+      "notes": "This is currency of the CHANNEL generically, not of any one templateOwned file -- individual templateOwned artifacts with their OWN adoption gap (the CDN entries below) are tracked as separate entries because a clean `biffo doctor` run says nothing about whether a specific file's consuming line was ever written."
+    },
+    {
+      "id": "core-api-environment-merge-wiring",
+      "artifact": "module \"core_api\"'s environment_variables merging in local.core_api_environment (infra/environments/dev/main.tf)",
+      "channel": "instanceAdoptionPair",
+      "targets": ["every instance's infra/environments/dev/main.tf"],
+      "status": "detected",
+      "evidence": ["#1538", "#1540", "#1579", "keiranholloway/biffo-platform#174"],
+      "notes": "The only pair currently registered in REGISTERED_ADOPTION_PAIRS. Template-owned core-api-environment.core.tf rides every `biffo core upgrade`; Terraform cannot inject an argument into an existing module block from a second file, so the instance's own main.tf must merge it in by hand -- and nothing noticed for 3 days until PR #174."
+    },
+    {
+      "id": "cdn-error-status-restore-lambda-tf-var",
+      "artifact": "TF_VAR_error_status_restore_lambda_arn, gating every association in modules/cloud/aws/cdn's #1529 Terraform",
+      "channel": "instanceAdoptionPair",
+      "targets": ["every instance's infra deploy pipeline (and this repo's own deploy-infra.yml)"],
+      "status": "unregistered",
+      "gapReason": "The mechanism this shape needs (instance-adoption's registered-pair pattern) already exists and already ships one pair (core-api-environment-merge-wiring above), but this artifact has not been registered as a pair -- so checkInstanceAdoption cannot see it and instance-adoption-report.yml never flags it. Filed as #1574 but not yet wired into REGISTERED_ADOPTION_PAIRS. Per #1570's own instance 7: 'the artifact travelled, and the thing that switches it on did not' -- and this repo's OWN deploy-infra.yml never sets the var either, so it is not only an instance gap.",
+      "evidence": ["#1529", "#1574"]
+    },
+    {
+      "id": "cdn-error-status-demote-zip-freshness-guard",
+      "artifact": "cdn-error-status-demote-zip-freshness.test.ts (catches a stale local cli/dist silently corrupting the Lambda@Edge zip)",
+      "channel": "none",
+      "targets": ["every instance's CDN Terraform apply"],
+      "status": "unverified",
+      "gapReason": "The guard is real and lives in cli/src/lib/, but cli/ guards reach an instance only via `npx @biffo/cli check <name>` from the PUBLISHED package (cli/ source itself is deliberately no longer template-owned/distributed, to keep 31k lines of scaffolding tooling out of every tenant's CI -- see check.ts's own module doc comment). Nothing wires this specific guard into any instance's own CI or deploy pipeline as an invoked `biffo check` step, so a guard that is correct and merged still protects zero real instances. #1570's instance 6.",
+      "evidence": ["#1529", "cli/src/lib/cdn-error-status-demote-zip-freshness.test.ts"]
+    },
+    {
+      "id": "gitleaks-toml-plugin-repos",
+      "artifact": ".gitleaks.toml secret-scan rules (biffo-specific allowlists and account-id detector)",
+      "channel": "none",
+      "targets": ["biffo-plugin-marketing", "biffo-plugin-idea-scout"],
+      "status": "unverified",
+      "gapReason": "templateOwned reaches instances via `biffo core upgrade`; plugin repos are reached by nothing. Both plugin repos' workflows invoke `gitleaks detect` with no --config, so they scan under gitleaks' built-in default ruleset rather than absence -- real scans, missing this estate's own secret shapes (a bare 12-digit account id passes there, fails everywhere else). biffo-plugin-marketing additionally carries a deliberately-customised 38-line copy with an old broad regex; a naive `files`/`filesFromSkeleton` entry would silently delete that customisation, so this is NOT simply a missing registration -- three repos hold the file for three different, legitimate-or-stale reasons and two hold none (see #1623's classification table). The rule-CONTENT question is #1628 (separate, in progress); this entry tracks only the DISTRIBUTION gap.",
+      "evidence": ["biffo-plugin-marketing#19", "#1623", "#1628"]
+    },
+    {
+      "id": "build-skill-diff-review-step",
+      "artifact": "The build skills' diff-review step (the practice of reading a diff, including any delegated part, before opening a PR)",
+      "channel": "none",
+      "targets": ["every workstation running a Biffo build skill"],
+      "status": "unverified",
+      "gapReason": "Skills are workstation-local (#1128): a fix filed against the skill that owns this practice has its remedy in a directory nothing syncs and no CI reads. 'Done' on one machine is indistinguishable from absent everywhere else. #1570 itself says this needs an architectural decision (are skills distributable at all) before it can be a channel, not a channel this inventory can wire today -- recorded here as the gap, per #1570's instruction, rather than built around.",
+      "evidence": ["#1526", "#1128"]
+    }
+  ]
+}

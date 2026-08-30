@@ -338,6 +338,40 @@ class TestUnreachablePermissionCodes:
         assert report.findings == []
         assert report.provider == "CustomRbacProvider"
 
+    def test_an_instance_level_override_of_resolve_permissions_cannot_be_checked(self):
+        """#1770: #1638's fix checks `type(provider).resolve_permissions`, which
+        only ever sees a CLASS-level override (subclassing). Python attribute
+        lookup checks the instance's `__dict__` before the class's, so an
+        instance-level replacement -- `provider.resolve_permissions =
+        types.MethodType(...)` -- leaves `type(provider)` exactly
+        `DefaultIdentityProvider` (not a subclass) while genuinely swapping the
+        method the auth path actually calls.
+
+        Fail-first: before this fix, `_is_decidable` only ever consulted
+        `type(provider)`, so this returned `checked=True` with `crm.lead.read`
+        reported unreachable even though this provider's `resolve_permissions`
+        genuinely grants it -- the same false-broken symptom #1638 fixed for
+        subclassing, reopened here for instance-level replacement.
+        """
+        import types
+
+        # NOT a subclass -- type(provider) is exactly DefaultIdentityProvider.
+        provider = DefaultIdentityProvider()
+
+        async def granting_resolve_permissions(self, db, user_id):
+            return frozenset({"crm.lead.read"})
+
+        provider.resolve_permissions = types.MethodType(granting_resolve_permissions, provider)
+
+        set_identity_provider(provider)  # type: ignore[arg-type]
+        registry = _registry_with_code("crm.lead.read")
+
+        report = unreachable_permission_codes(registry)
+
+        assert report.checked is False
+        assert report.findings == []
+        assert report.provider == "DefaultIdentityProvider"
+
     def test_multiple_declarations_are_each_named(self):
         """Every unreachable declaration is reported, not just the first —
         the diagnostic exists to be read, and a truncated list would send

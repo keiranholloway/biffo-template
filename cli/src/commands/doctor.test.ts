@@ -1,7 +1,7 @@
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { runDoctor } from './doctor.js'
+import { gatherRepoFacts, runDoctor, runDoctorFix } from './doctor.js'
 import { makeTmpDir } from '../test-utils/tmp.js'
 
 vi.mock('../lib/logger.js', () => ({
@@ -30,6 +30,15 @@ function gitMock(overrides: Record<string, unknown> = {}) {
     listWorktrees: vi.fn().mockResolvedValue([]),
     countBehind: vi.fn().mockResolvedValue(0),
     showFileAtRef: vi.fn().mockResolvedValue(null),
+    removeWorktree: vi.fn().mockResolvedValue(true),
+    ...overrides,
+  }
+}
+
+/** A github adapter reporting every branch as merged; override per test. */
+function githubMock(overrides: Record<string, unknown> = {}) {
+  return {
+    prVerdictForBranch: vi.fn().mockResolvedValue('merged'),
     ...overrides,
   }
 }
@@ -188,5 +197,106 @@ describe('runDoctor', () => {
       'stale-branches',
       'worktree-stale',
     ])
+  })
+})
+
+/**
+ * `runDoctorFix` (#1682, milestone 1) — the command-level wiring from
+ * gathered facts to `reapAll`. The classification table itself is
+ * unit-tested exhaustively in `lib/doctor-reaper.test.ts`; this only proves
+ * the command actually reaches it with the facts `gatherRepoFacts` already
+ * collected, rather than `--fix` existing as a flag with nothing behind it —
+ * and that it never deletes a branch, worktree-only being this milestone's
+ * whole scope.
+ */
+describe('runDoctorFix', () => {
+  it('removes the worktree of a branch whose PR merged', async () => {
+    const git = gitMock({
+      listBranchRefs: vi
+        .fn()
+        .mockResolvedValue([
+          { name: 'chore/merged', upstream: 'refs/remotes/origin/chore/merged', track: '[gone]' },
+        ]),
+      listWorktrees: vi.fn().mockResolvedValue([{ path: '/wt/merged', branch: 'chore/merged' }]),
+    })
+    const github = githubMock()
+
+    const facts = await gatherRepoFacts({ cwd, fetch: true }, { git: git as never })
+    const outcomes = await runDoctorFix(cwd, facts, { git: git as never, github: github as never })
+
+    expect(outcomes).toEqual([
+      {
+        candidate: { branch: 'chore/merged', worktreePath: '/wt/merged' },
+        verdict: { action: 'reap' },
+        worktreeRemoved: true,
+      },
+    ])
+    expect(git.removeWorktree).toHaveBeenCalledWith(cwd, '/wt/merged')
+  })
+
+  it('keeps a worktree whose branch PR closed unmerged, and never removes it', async () => {
+    const git = gitMock({
+      listBranchRefs: vi.fn().mockResolvedValue([
+        {
+          name: 'security/undici-advisories',
+          upstream: 'refs/remotes/origin/security/undici-advisories',
+          track: '[gone]',
+        },
+      ]),
+      listWorktrees: vi
+        .fn()
+        .mockResolvedValue([{ path: '/wt/undici', branch: 'security/undici-advisories' }]),
+    })
+    const github = githubMock({ prVerdictForBranch: vi.fn().mockResolvedValue('closed') })
+
+    const facts = await gatherRepoFacts({ cwd, fetch: true }, { git: git as never })
+    const outcomes = await runDoctorFix(cwd, facts, { git: git as never, github: github as never })
+
+    expect(outcomes).toEqual([
+      {
+        candidate: { branch: 'security/undici-advisories', worktreePath: '/wt/undici' },
+        verdict: { action: 'keep', reason: 'pr-closed' },
+        worktreeRemoved: null,
+      },
+    ])
+    expect(git.removeWorktree).not.toHaveBeenCalled()
+  })
+
+  it('never considers a [gone] branch with no worktree — bare-branch reaping is milestone 2', async () => {
+    const git = gitMock({
+      listBranchRefs: vi.fn().mockResolvedValue([
+        {
+          name: 'chore/bare-merged',
+          upstream: 'refs/remotes/origin/chore/bare-merged',
+          track: '[gone]',
+        },
+      ]),
+      listWorktrees: vi.fn().mockResolvedValue([]),
+    })
+    const github = githubMock()
+
+    const facts = await gatherRepoFacts({ cwd, fetch: true }, { git: git as never })
+    const outcomes = await runDoctorFix(cwd, facts, { git: git as never, github: github as never })
+
+    expect(outcomes).toEqual([])
+    expect(github.prVerdictForBranch).not.toHaveBeenCalled()
+  })
+
+  it('never considers the branch this checkout is currently on', async () => {
+    const git = gitMock({
+      currentBranch: vi.fn().mockResolvedValue('agent/1682'),
+      listBranchRefs: vi
+        .fn()
+        .mockResolvedValue([
+          { name: 'agent/1682', upstream: 'refs/remotes/origin/agent/1682', track: '[gone]' },
+        ]),
+    })
+    const github = githubMock()
+
+    const facts = await gatherRepoFacts({ cwd, fetch: true }, { git: git as never })
+    const outcomes = await runDoctorFix(cwd, facts, { git: git as never, github: github as never })
+
+    expect(outcomes).toEqual([])
+    expect(github.prVerdictForBranch).not.toHaveBeenCalled()
   })
 })

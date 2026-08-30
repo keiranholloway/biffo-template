@@ -310,6 +310,22 @@ export class GitAdapter {
     return exitCode === 0
   }
 
+  /**
+   * Removes a linked worktree, returning whether it went.
+   *
+   * Deliberately NOT `--force`: the caller (`doctor --fix`, #1682) only ever
+   * reaches this after confirming the worktree is clean, so a plain `remove`
+   * should always succeed. If it does not — a lock file, a submodule holding
+   * a reference, something this check did not anticipate — failing rather
+   * than forcing past it is the point: an unexpected refusal is new
+   * information, not an obstacle to blast through on a path that deletes
+   * things.
+   */
+  async removeWorktree(cwd: string, path: string): Promise<boolean> {
+    const { exitCode } = await execa('git', ['worktree', 'remove', path], { cwd, reject: false })
+    return exitCode === 0
+  }
+
   /** Create and switch to a new branch. Fails if it already exists. */
   async createBranch(cwd: string, branch: string): Promise<void> {
     await execa('git', ['switch', '-c', branch], { cwd })

@@ -1,0 +1,115 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.8",
+  "planned_values": {
+    "outputs": {
+      "hash": {
+        "sensitive": false,
+        "type": "string",
+        "value": "vvaCQNruPIwpfOCOzAoyhSA2DF4FamgsX4CsvljWd3s="
+      }
+    },
+    "root_module": {}
+  },
+  "output_changes": {
+    "hash": {
+      "actions": ["create"],
+      "before": null,
+      "after": "vvaCQNruPIwpfOCOzAoyhSA2DF4FamgsX4CsvljWd3s=",
+      "after_unknown": false,
+      "before_sensitive": false,
+      "after_sensitive": false
+    }
+  },
+  "prior_state": {
+    "format_version": "1.0",
+    "terraform_version": "1.9.8",
+    "values": {
+      "outputs": {
+        "hash": {
+          "sensitive": false,
+          "value": "vvaCQNruPIwpfOCOzAoyhSA2DF4FamgsX4CsvljWd3s=",
+          "type": "string"
+        }
+      },
+      "root_module": {
+        "resources": [
+          {
+            "address": "data.archive_file.root",
+            "mode": "data",
+            "type": "archive_file",
+            "name": "root",
+            "provider_name": "registry.terraform.io/hashicorp/archive",
+            "schema_version": 0,
+            "values": {
+              "exclude_symlink_directories": null,
+              "excludes": null,
+              "id": "f437fcea78509cc58f8ccc4349a8ce231fe7cc63",
+              "output_base64sha256": "vvaCQNruPIwpfOCOzAoyhSA2DF4FamgsX4CsvljWd3s=",
+              "output_base64sha512": "TB6yYB9OUrHOg2xQw1OlArrGrSX4NRIgX++crXumD++5J98iiAkkGXSMf6E+HosKcQM5IhMR7yBLImZfk/t33A==",
+              "output_file_mode": null,
+              "output_md5": "556038850019f64684ce534cdd1340e8",
+              "output_path": "./.build/root-thing.zip",
+              "output_sha": "f437fcea78509cc58f8ccc4349a8ce231fe7cc63",
+              "output_sha256": "bef68240daee3c8c297ce08ecc0a328520360c5e056a682c5f80acbe58d6777b",
+              "output_sha512": "4c1eb2601f4e52b1ce836c50c353a502bac6ad25f83512205fef9cad7ba60fefb927df2288092419748c7fa13e1e8b0a710339221311ef204b22665f93fb77dc",
+              "output_size": 141,
+              "source": [{ "content": "hello", "filename": "index.js" }],
+              "source_content": null,
+              "source_content_filename": null,
+              "source_dir": null,
+              "source_file": null,
+              "type": "zip"
+            },
+            "sensitive_values": { "source": [{}] }
+          }
+        ]
+      }
+    }
+  },
+  "configuration": {
+    "provider_config": {
+      "archive": {
+        "name": "archive",
+        "full_name": "registry.terraform.io/hashicorp/archive",
+        "version_constraint": "~\u003e 2.4"
+      }
+    },
+    "root_module": {
+      "outputs": {
+        "hash": {
+          "expression": {
+            "references": ["data.archive_file.root.output_base64sha256", "data.archive_file.root"]
+          }
+        }
+      },
+      "resources": [
+        {
+          "address": "data.archive_file.root",
+          "mode": "data",
+          "type": "archive_file",
+          "name": "root",
+          "provider_config_key": "archive",
+          "expressions": {
+            "output_path": { "constant_value": "./.build/root-thing.zip" },
+            "source": [
+              {
+                "content": { "constant_value": "hello" },
+                "filename": { "constant_value": "index.js" }
+              }
+            ],
+            "type": { "constant_value": "zip" }
+          },
+          "schema_version": 0
+        }
+      ]
+    }
+  },
+  "relevant_attributes": [
+    { "resource": "data.archive_file.root", "attribute": ["output_base64sha256"] }
+  ],
+  "timestamp": "2026-08-30T01:04:11Z",
+  "applyable": true,
+  "complete": true,
+  "errored": false
+}

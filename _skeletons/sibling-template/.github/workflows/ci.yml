@@ -182,7 +182,13 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
-      - run: uv sync --all-groups
+      # `--locked` mirrors the root repo's own `ci.yml` (see the comment
+      # there): plain `uv sync` silently RE-RESOLVES when `pyproject.toml`
+      # has drifted from `uv.lock`, so a dependency bump committed without
+      # re-running `uv lock` still installs and still goes green — the
+      # committed lock just stops describing what actually ran
+      # (biffo-template#1731).
+      - run: uv sync --all-groups --locked
       - name: Lint
         if: ${{ !cancelled() }}
         run: uv run ruff check .

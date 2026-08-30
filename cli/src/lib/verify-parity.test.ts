@@ -152,6 +152,10 @@ const EXCLUDED: Record<
     kind: 'network',
     why: 'runs immediately after the terraform init on the line above, against providers that init just downloaded from the registry; not runnable standalone without that network-dependent init',
   },
+  'terraform -chdir="$dir" test || rc=1': {
+    kind: 'network',
+    why: 'the .tftest.hcl runner (#1661), running immediately after the network-dependent terraform init on the line above, against providers that init just downloaded from the registry; not runnable standalone without that network-dependent init, and verify.sh does not run terraform validate/test locally at all — only terraform fmt',
+  },
   'terraform -chdir="infra/global" init -backend=false -input=false': {
     kind: 'network',
     why: 'terraform init downloads provider plugins from the registry on every call; this repo does not run terraform validate locally at all (verify.sh only runs terraform fmt), so there is nothing to pair it with offline',

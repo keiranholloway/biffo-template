@@ -9,10 +9,13 @@
  * a bare branch with no worktree at all) and nothing calls it yet (no CI, no
  * hook, no cron) — both are later milestones tracked on #1682. Fail-closed by
  * construction: every candidate that is not provably "PR merged, worktree
- * clean, HEAD not detached, and worktree HEAD actually contained in what that
- * PR shipped" (#1810 — a branch name having a merged PR is not, by itself,
- * proof of that last part) is left alone and reported with a reason, per the
- * #1413 denominator rule (state what was kept, not only what was removed).
+ * clean, HEAD not detached, worktree HEAD actually contained in what that PR
+ * shipped (#1810 — a branch name having a merged PR is not, by itself, proof
+ * of that last part), and not held by a live biffo-fleet worktree-claim
+ * lock (#1833, replaces #1825 — a merged, clean, attached worktree can still
+ * be open for follow-up work under a live session)" is left alone and
+ * reported with a reason, per the #1413 denominator rule (state what was
+ * kept, not only what was removed).
  *
  * ## Why local commit reachability is not the signal
  *
@@ -42,6 +45,7 @@ export type ReapAction = 'reap' | 'keep'
 export type KeepReason =
   | 'detached-head'
   | 'uncommitted-changes'
+  | 'fleet-worktree-claimed'
   | 'pr-open'
   | 'pr-closed'
   | 'no-pr'
@@ -58,6 +62,16 @@ export interface ReapVerdict {
 export interface ReapCandidateFacts {
   isDetached: boolean
   isDirty: boolean
+  /**
+   * True if a live session still holds this worktree via biffo-fleet's own
+   * `.fleet-worktree-claim` lock (#1833, replaces #1825). A worktree can be
+   * clean, merged, and not detached — passing every other check below —
+   * while a live session has it open for follow-up work after the merge.
+   * Checked alongside `isDetached`/`isDirty`, before the PR verdict is even
+   * asked for: a bare branch (no worktree, no lock directory) always passes
+   * `false` here, the same way it does for those two fields.
+   */
+  hasFleetClaim: boolean
   prVerdict: PrVerdict
   /**
    * Whether the worktree's current HEAD is contained within (an ancestor of,
@@ -85,6 +99,12 @@ export interface ReapCandidateFacts {
  * apply here.
  */
 export function classifyReapCandidate(facts: ReapCandidateFacts): ReapVerdict {
+  // Checked first, ahead of isDetached/isDirty: the lock directory itself is
+  // untracked, so a live claim almost always ALSO trips `isDirty` via `git
+  // status --porcelain` (#1833) — checking isDirty first would report every
+  // claimed worktree as merely "uncommitted-changes" and the more specific,
+  // actionable reason would rarely if ever surface in practice.
+  if (facts.hasFleetClaim) return { action: 'keep', reason: 'fleet-worktree-claimed' }
   if (facts.isDetached) return { action: 'keep', reason: 'detached-head' }
   if (facts.isDirty) return { action: 'keep', reason: 'uncommitted-changes' }
 
@@ -155,7 +175,12 @@ export interface ReapOutcome {
 export interface ReapDeps {
   git: Pick<
     GitAdapter,
-    'hasUncommittedChanges' | 'currentBranch' | 'removeWorktree' | 'headSha' | 'isAncestor'
+    | 'hasUncommittedChanges'
+    | 'hasFleetWorktreeClaim'
+    | 'currentBranch'
+    | 'removeWorktree'
+    | 'headSha'
+    | 'isAncestor'
   >
   github: Pick<GithubCliAdapter, 'prVerdictForBranch' | 'mergedHeadSha'>
 }
@@ -178,14 +203,17 @@ export async function reapCandidate(
 ): Promise<ReapOutcome> {
   const { git, github } = deps
 
-  const [current, isDirty] = await Promise.all([
+  const [current, isDirty, hasFleetClaim] = await Promise.all([
     git.currentBranch(candidate.worktreePath),
     git.hasUncommittedChanges(candidate.worktreePath),
+    git.hasFleetWorktreeClaim(candidate.worktreePath),
   ])
   const isDetached = current === 'HEAD' || current === ''
 
   const prVerdict: PrVerdict =
-    isDetached || isDirty ? 'unknown' : await github.prVerdictForBranch(cwd, candidate.branch)
+    isDetached || isDirty || hasFleetClaim
+      ? 'unknown'
+      : await github.prVerdictForBranch(cwd, candidate.branch)
 
   // Unused by classifyReapCandidate unless prVerdict === 'merged' — see that
   // field's doc comment. `true` here is a harmless default for every other
@@ -202,7 +230,13 @@ export async function reapCandidate(
         : await git.isAncestor(cwd, headSha, mergedHeadSha)
   }
 
-  const verdict = classifyReapCandidate({ isDetached, isDirty, prVerdict, mergeContainsHead })
+  const verdict = classifyReapCandidate({
+    isDetached,
+    isDirty,
+    hasFleetClaim,
+    prVerdict,
+    mergeContainsHead,
+  })
 
   if (verdict.action === 'keep') {
     return { candidate, verdict, worktreeRemoved: null }
@@ -305,6 +339,10 @@ export async function reapBareBranch(
   const verdict = classifyReapCandidate({
     isDetached: false,
     isDirty: false,
+    // A bare branch has no worktree, so there is no `.fleet-worktree-claim`
+    // directory that could exist — trivially false, same reasoning as the
+    // two fields above (#1833).
+    hasFleetClaim: false,
     prVerdict,
     mergeContainsHead,
   })

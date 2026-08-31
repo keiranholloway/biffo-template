@@ -144,3 +144,37 @@ without that guard, because the last unpinned ordering in this file's mechanism
 Putting the provider in `identity/` instead is what this carve-out exists to
 avoid: that path is template-owned, so the commit-time guard blocks edits and
 every change needs a per-commit `Core-Divergence` trailer.
+
+## Tracing your own domain code
+
+`main.py` builds a module-level `tracer`, and — symmetric with the
+identity-provider example above — you can reach for it the obvious way:
+
+```python
+# domains/<name>/__init__.py
+from ...main import tracer
+
+
+@tracer.capture_method
+def some_handler_helper(...):
+    ...
+```
+
+Its *construction* is deliberately deferred to just before its only in-module
+use, decorating `lambda_handler`, which is textually **after**
+`build_domain_router()` — i.e. after your `__init__.py` has already been
+imported (issue #1779): `Tracer()`'s own `__init__` eagerly imports
+`aws_xray_sdk`/`botocore` regardless of whether tracing ends up enabled, and
+constructing it before domain registration used to silently pre-warm that
+cost onto whichever domain happened to import next, masking it from any
+downstream fix trying to measure its own import weight.
+
+That deferral does not break the import above (issue #1808): `main.py`
+resolves `tracer` lazily via a module-level `__getattr__` (PEP 562), so
+whichever import reaches for it first — your domain's, since it runs before
+`main.py`'s own bottom-of-file assignment — constructs the one real `Tracer()`
+instance for the process there, and every later reference (including
+`main.py`'s own) reuses that same object. So the import cost lands on the
+domain that actually wants tracing, not on whichever router/domain happened
+to load next regardless of whether it traces at all — and a domain that never
+touches `tracer` never pays for it.

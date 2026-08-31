@@ -6,6 +6,23 @@ terraform {
 
 locals {
   name_prefix = "${var.project_name}-${var.environment}"
+
+  # The compute module (modules/cloud/aws/compute/main.tf) creates a "live"
+  # alias on every function it provisions and CI/CD moves it to the newest
+  # published version after each deploy (#1747) — neither provisioned
+  # concurrency nor SnapStart can attach to $LATEST, and this is also how a
+  # bad deploy is rolled back in one API call instead of a redeploy.
+  #
+  # Derived here by string concatenation rather than taking the alias ARN as
+  # a variable: an alias ARN is deterministically the unqualified function
+  # ARN plus ":<alias name>", so this needs no direct Terraform dependency on
+  # the compute module and var.lambda_function_arn's existing contract (the
+  # plain function ARN) is unchanged for every caller. The alias name is
+  # fixed at "live" in both modules rather than threaded through as a
+  # variable — the two would otherwise have to be kept in sync by convention
+  # with nothing enforcing it if a caller ever overrode only one side.
+  lambda_alias_name = "live"
+  lambda_alias_arn  = "${var.lambda_function_arn}:${local.lambda_alias_name}"
 }
 
 data "aws_region" "current" {}
@@ -65,9 +82,12 @@ resource "aws_apigatewayv2_authorizer" "cognito" {
 }
 
 resource "aws_apigatewayv2_integration" "lambda" {
-  api_id                 = aws_apigatewayv2_api.main.id
-  integration_type       = "AWS_PROXY"
-  integration_uri        = var.lambda_function_arn
+  api_id           = aws_apigatewayv2_api.main.id
+  integration_type = "AWS_PROXY"
+  # Targets the "live" alias, not the unqualified function ARN (#1747) — see
+  # local.lambda_alias_arn above for why this alias exists and how the ARN is
+  # derived.
+  integration_uri        = local.lambda_alias_arn
   payload_format_version = "2.0"
   timeout_milliseconds   = 29000
 }
@@ -158,4 +178,13 @@ resource "aws_lambda_permission" "api_gateway" {
   function_name = var.lambda_function_name
   principal     = "apigateway.amazonaws.com"
   source_arn    = "${aws_apigatewayv2_api.main.execution_arn}/*/*"
+
+  # REQUIRED now that the integration above targets the "live" alias, not the
+  # unqualified function (#1747). A Lambda alias carries its OWN
+  # resource-based policy, separate from the unqualified function's — a
+  # permission added without a qualifier does not extend to invocations made
+  # via a qualified (alias or version) ARN. Without this, API Gateway's
+  # invoke would fail closed with AccessDenied even though this exact
+  # statement, unqualified, would have worked before this change.
+  qualifier = local.lambda_alias_name
 }

@@ -311,3 +311,29 @@ resource "aws_lambda_function" "main" {
 
   tags = var.tags
 }
+
+# Neither provisioned concurrency nor SnapStart can attach to $LATEST — both
+# require a published, numbered version behind an alias (#1747). This is the
+# stable name the API Gateway module's integration targets and CI/CD moves
+# forward on every deploy; it is also how a bad deploy is rolled back in one
+# `update-alias` API call instead of a redeploy.
+#
+# Created here, pointed at $LATEST (the placeholder code, on first apply) —
+# deploy-app.yml is what actually moves it, via `aws lambda publish-version`
+# + `aws lambda update-alias` after every `update-function-code`
+# (scripts/publish-lambda-version.sh). `function_version` is therefore
+# ignored after creation: without that, the next `terraform apply` would see
+# the alias still declared as pointing at "$LATEST" in HCL, diverging from
+# whatever version CI/CD has since moved it to, and would move it BACK —
+# silently undoing every deploy's alias promotion the next time infrastructure
+# is applied.
+resource "aws_lambda_alias" "live" {
+  name             = "live"
+  description      = "Stable alias CI/CD moves to the newest published version after every deploy (#1747) — the API Gateway integration and any provisioned-concurrency/SnapStart config target this, never $LATEST."
+  function_name    = aws_lambda_function.main.function_name
+  function_version = "$LATEST"
+
+  lifecycle {
+    ignore_changes = [function_version]
+  }
+}

@@ -1,5 +1,6 @@
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   checkCognitoInviteTemplates,
   checkInviteTemplateSource,
@@ -9,6 +10,45 @@ import {
   stripHclComments,
   stripHeredocs,
 } from './cognito-invite-template-guard.js'
+// Not mkdtempSync: `no-raw-mkdtemp.test.ts` walks the AST of every test file and
+// fails a direct call. makeTmpDir registers the directory for an automatic sweep.
+import { makeTmpDir } from '../test-utils/tmp.js'
+
+/**
+ * `vi.hoisted` because `vi.mock` factories are hoisted above ordinary
+ * top-level declarations; a plain `let` read from the factory is in its
+ * temporal dead zone when the factory runs.
+ */
+const race = vi.hoisted(() => ({ statSyncThrowsFor: null as string | null }))
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>()
+  return {
+    ...actual,
+    /**
+     * Pass-through unless a test opts in, so every other consumer of
+     * `node:fs` in this file — including `makeTmpDir` — behaves exactly as
+     * normal. Simulates the real race (#1720, same shape as #1713): another
+     * process removes an entry between `walk`'s `readdirSync` and its
+     * `statSync` on that same entry, which throws ENOENT for a path that was
+     * real a moment ago.
+     */
+    statSync: (p: Parameters<typeof actual.statSync>[0]): ReturnType<typeof actual.statSync> => {
+      if (race.statSyncThrowsFor !== null && String(p) === race.statSyncThrowsFor) {
+        const err = new Error(
+          `ENOENT: no such file or directory, stat '${p}'`,
+        ) as NodeJS.ErrnoException
+        err.code = 'ENOENT'
+        throw err
+      }
+      return actual.statSync(p)
+    },
+  }
+})
+
+afterEach(() => {
+  race.statSyncThrowsFor = null
+})
 
 const repoRoot = join(__dirname, '..', '..', '..')
 
@@ -197,5 +237,58 @@ describe('the repository itself', () => {
       }
     `
     expect(checkInviteTemplateSource('branded.tf', branded)).toEqual([])
+  })
+})
+
+/**
+ * #1720: `findModuleTerraformFiles`'s `walk` recurses through `modules/`
+ * unfiltered and calls `statSync` on every entry with no `try`/`catch`. A
+ * concurrently-mutated `.venv` (another vitest worker's `uv sync`/pip-audit
+ * fixture, or a real `.venv` at the repo root) removes entries between
+ * `readdirSync` and `statSync`, and the bare `statSync` throws ENOENT for an
+ * entry that existed a moment ago — failing this walk for a reason unrelated
+ * to what it actually checks. Same shape as `terraform-input-guard.ts`
+ * (#1713), and the same fix applies:
+ *   1. `.venv` added to the skip set — removes the one directory known to
+ *      churn like this, matching `skeleton-drift-guard.ts` /
+ *      `plugin-collision-guard.ts`.
+ *   2. `statSync` wrapped in try/catch — makes ANY concurrently-removed
+ *      entry harmless, not just `.venv`.
+ */
+describe('walk tolerates a concurrently-mutated tree (#1720)', () => {
+  it('does not throw when an entry is removed between readdirSync and statSync', () => {
+    const root = makeTmpDir('cognito-guard-race')
+    mkdirSync(join(root, 'modules', 'cloud', 'aws', 'auth'), { recursive: true })
+    writeFileSync(join(root, 'modules', 'cloud', 'aws', 'auth', 'main.tf'), 'resource "x" "y" {}\n')
+    // A plain directory — not `.venv` — races out from under statSync. This
+    // is the general try/catch half: the skip list cannot cover it by name.
+    mkdirSync(join(root, 'modules', 'build-output'), { recursive: true })
+
+    race.statSyncThrowsFor = join(root, 'modules', 'build-output')
+
+    expect(() => findModuleTerraformFiles(root)).not.toThrow()
+    expect(findModuleTerraformFiles(root)).toContain('modules/cloud/aws/auth/main.tf')
+  })
+
+  it('skips .venv without statting it, even while it is being torn down', () => {
+    const root = makeTmpDir('cognito-guard-venv')
+    mkdirSync(join(root, 'modules', 'cloud', 'aws', 'auth'), { recursive: true })
+    writeFileSync(join(root, 'modules', 'cloud', 'aws', 'auth', 'main.tf'), 'resource "x" "y" {}\n')
+    mkdirSync(join(root, 'modules', '.venv', 'lib', 'python3.13', 'site-packages'), {
+      recursive: true,
+    })
+    writeFileSync(
+      join(root, 'modules', '.venv', 'lib', 'python3.13', 'site-packages', 'pkg.txt'),
+      'x',
+    )
+
+    // Always throws for anything under .venv — proves the skip happens
+    // before any stat is attempted, not merely that a caught throw is
+    // tolerated.
+    race.statSyncThrowsFor = join(root, 'modules', '.venv')
+
+    const files = findModuleTerraformFiles(root)
+    expect(files).toContain('modules/cloud/aws/auth/main.tf')
+    expect(files.some((f) => f.includes('.venv'))).toBe(false)
   })
 })

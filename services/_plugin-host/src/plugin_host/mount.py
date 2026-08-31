@@ -294,6 +294,10 @@ def build_host(
         # gating them on the plugin's user group as well would reject the admin
         # an admin-only required_role exists to admit (#652). Everything else
         # falls through to the gated plugin app untouched.
+        # The plugin's group and this host's authorizer are handed to the
+        # forwarder so it can fall back to them for the one case where the table
+        # rule authorises nobody and so nothing would be checked anywhere
+        # (#1837) — it is not a second, unconditional gate.
         # An admin-only plugin has no user-facing app; its admin mount above is
         # the whole of its surface.
         if p.app is None or p.required_group is None:
@@ -304,6 +308,8 @@ def build_host(
                 user_app,
                 DeclaredRouteForwarder(p.name, p.api_routes, send_to_core=send_to_core),
                 token_of=_founder_token,
+                required_group=p.required_group,
+                authorize=authorize,
             )
         routes.append(Mount(f"/{p.name}", app=_quarantine(user_app, p.name, failures)))
         mounted.append((p.name, p.app))

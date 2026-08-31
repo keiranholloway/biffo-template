@@ -20,6 +20,22 @@ deliberate: the admin UI's calls are admin-gated by the table's
 would reject the admin the route exists for. So the forwarder sits ahead of the
 group gate and matches ONLY declared routes; everything else still reaches the
 plugin's app behind its gate, unchanged.
+
+**With one exception, added in #1837: a rule that authorises nobody.** The
+sentence above holds only while the table rule actually decides something. A rule
+that is ``allowed`` with an empty ``required_role`` and an empty
+``permission_code`` names nobody in particular, so Core admits any authenticated
+caller of the tenant — and because the forwarder sits outside the group gate,
+nothing was checked anywhere. Reproduced live: an ``hq-admin`` persona JWT with
+no ``cognito:groups`` claim at all read five marketing tables with HTTP 200,
+while the same mount correctly returned 403 on a sub-route it evaluates itself.
+
+So *only in that case*, the forwarder falls back to the plugin's
+``user_ingress.required_group`` and refuses a caller who has not passed it,
+without calling Core at all. Where the rule expresses any authorisation —
+either axis — behaviour is exactly as before and Core remains the sole
+authority. The predicate is :attr:`~plugin_host.discover.DeclaredRoute.authorises_nobody`;
+its docstring holds the reasoning for why both axes are in it.
 """
 
 from __future__ import annotations
@@ -64,11 +80,28 @@ class DeclaredRouteForwarder:
         send_to_core: Callable[..., Any],
     ) -> None:
         self.plugin_name = plugin_name
-        self._routes = tuple((r.method.upper(), _pattern(r.path)) for r in routes)
+        self._routes = tuple((r.method.upper(), _pattern(r.path), r) for r in routes)
         self._send_to_core = send_to_core
 
+    def match(self, method: str, path: str) -> DeclaredRoute | None:
+        """The matched declared route, or ``None``.
+
+        The route itself rather than a bool (#1837): the gate has to read the
+        route's own table rule to decide whether anything authorised it.
+
+        If a manifest declares two routes matching the same method and path, the
+        first wins — which is the one this forwarder already routed to before
+        #1837, so nothing about routing order changes here.
+        """
+        for m, pattern, route in self._routes:
+            if m == method.upper() and pattern.match(path):
+                return route
+        return None
+
     def matches(self, method: str, path: str) -> bool:
-        return any(m == method.upper() and p.match(path) for m, p in self._routes)
+        """Whether any declared route matches. Kept as the boolean form of
+        :meth:`match` for callers that only need routing, not the rule."""
+        return self.match(method, path) is not None
 
     def core_path(self, path: str) -> str:
         return f"{INTERNAL_PREFIX}/{self.plugin_name}{path}"
@@ -97,16 +130,37 @@ def forwarding_gate(
     forwarder: DeclaredRouteForwarder,
     *,
     token_of: Callable[[list[tuple[bytes, bytes]]], str],
+    required_group: str | None = None,
+    authorize: Callable[[str, str], Any] | None = None,
 ) -> Callable:
     """Wrap ``plugin_app`` so declared routes go to Core and everything else
     reaches the plugin unchanged.
 
     Deliberately placed OUTSIDE the plugin's group gate: a declared route is
-    authorised by its table's own permissions in Core, and gating it on the
-    plugin's user group as well would reject the admin that e.g. an
+    normally authorised by its table's own permissions in Core, and gating it on
+    the plugin's user group as well would reject the admin that e.g. an
     admin-only ``required_role`` exists to admit. Non-declared paths fall
     through untouched, so the plugin's own routes keep their gate.
+
+    **Except where the table rule authorises nobody** (#1837). Then Core admits
+    any authenticated caller of the tenant, "outside the group gate" means
+    nothing is checked anywhere, and this gate falls back to the plugin's own
+    ``required_group``: it calls ``authorize`` and answers the resulting
+    :class:`~plugin_host.mount.GateError`'s status and detail as JSON **without
+    calling Core**. See the module docstring, and
+    :attr:`~plugin_host.discover.DeclaredRoute.authorises_nobody` for why the
+    predicate reads both ADR-0004 axes.
+
+    ``required_group``/``authorize`` are optional so an existing caller keeps
+    today's behaviour, and because a plugin may have no group to fall back to —
+    in which case no group is invented and the route is forwarded as before
+    (decision 3). ``discover`` logs that case at ERROR rather than leaving it
+    silent.
     """
+    # Deferred to here rather than module scope: `mount` imports this module, so
+    # a top-level import would be circular. Resolved once per wrap, not per
+    # request — `build_host` calls this while `mount` is fully imported.
+    from .mount import GateError
 
     async def app(scope: dict, receive: Callable, send: Callable) -> None:
         if scope.get("type") != "http":
@@ -114,7 +168,8 @@ def forwarding_gate(
             return
 
         path = _route_path(scope)
-        if not forwarder.matches(scope.get("method", "GET"), path):
+        route = forwarder.match(scope.get("method", "GET"), path)
+        if route is None:
             await plugin_app(scope, receive, send)
             return
 
@@ -124,6 +179,15 @@ def forwarding_gate(
             # forwarding an unaccompanied signed call.
             await _respond_json(send, 401, {"detail": "No bearer token"})
             return
+
+        if route.authorises_nobody and required_group and authorize is not None:
+            # Nothing downstream will check this caller — the table rule names
+            # nobody and Core would admit any authenticated user of the tenant.
+            try:
+                authorize(token, required_group)
+            except GateError as exc:
+                await _respond_json(send, exc.status, {"detail": exc.detail})
+                return
 
         body = await _read_body(receive)
         try:

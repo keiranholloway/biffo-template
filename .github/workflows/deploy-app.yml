@@ -670,10 +670,19 @@ jobs:
               --zip-file fileb://lambda.zip \
               --output text --query 'LastUpdateStatus'
           fi
-      - name: Initialise database schema
+      - name: Publish version and move alias (Core API)
+        # Neither provisioned concurrency nor SnapStart can attach to $LATEST
+        # (#1747) — both need a published, numbered version behind an alias,
+        # and this is also how a bad deploy is rolled back in one API call
+        # instead of a redeploy. Waits for the code update above to finish
+        # applying first: scripts/publish-lambda-version.sh does not wait
+        # itself, so the ordering has to be enforced here.
         run: |
           aws lambda wait function-updated \
             --function-name ${{ vars.CORE_API_LAMBDA_NAME }}
+          sh scripts/publish-lambda-version.sh "${{ vars.CORE_API_LAMBDA_NAME }}"
+      - name: Initialise database schema
+        run: |
           RESULT=$(aws lambda invoke \
             --function-name ${{ vars.CORE_API_LAMBDA_NAME }} \
             --payload '{"source":"biffo:db-init"}' \
@@ -788,6 +797,9 @@ jobs:
             --output text --query 'LastUpdateStatus'
           aws lambda wait function-updated \
             --function-name ${{ vars.PR_SIGNER_LAMBDA_NAME }}
+          # Publish a version and move the "live" alias to it (#1747) — see
+          # the Core API's "Publish version and move alias" step for why.
+          sh scripts/publish-lambda-version.sh "${{ vars.PR_SIGNER_LAMBDA_NAME }}"
       # Package and deploy each enabled plugin's own Lambda (ADR-0003, #196).
       # deploy-infra (running in parallel) creates the function from a placeholder
       # zip with ignore_changes on its code; this step ships the real handler. A
@@ -859,6 +871,9 @@ jobs:
               --zip-file "fileb://plugin-$name.zip" \
               --output text --query 'LastUpdateStatus'
             aws lambda wait function-updated --function-name "$fn"
+            # Publish a version and move the "live" alias to it (#1747) —
+            # see the Core API's "Publish version and move alias" step.
+            sh scripts/publish-lambda-version.sh "$fn"
             echo "::endgroup::"
           done
       # Package and deploy the SHARED plugin host (ADR-0021, #545) — ONE Lambda
@@ -969,6 +984,9 @@ jobs:
             --zip-file fileb://plugin-host.zip \
             --output text --query 'LastUpdateStatus'
           aws lambda wait function-updated --function-name "$fn"
+          # Publish a version and move the "live" alias to it (#1747) — see
+          # the Core API's "Publish version and move alias" step.
+          sh scripts/publish-lambda-version.sh "$fn"
 
       # Build and deploy each installed user-facing plugin's static frontend
       # (ADR-0018 §2 — the shape ADR-0021 reuses for the frontend until its own
@@ -1583,10 +1601,19 @@ jobs:
               --zip-file fileb://lambda.zip \
               --output text --query 'LastUpdateStatus'
           fi
-      - name: Initialise database schema
+      - name: Publish version and move alias (Core API)
+        # Neither provisioned concurrency nor SnapStart can attach to $LATEST
+        # (#1747) — both need a published, numbered version behind an alias,
+        # and this is also how a bad deploy is rolled back in one API call
+        # instead of a redeploy. Waits for the code update above to finish
+        # applying first: scripts/publish-lambda-version.sh does not wait
+        # itself, so the ordering has to be enforced here.
         run: |
           aws lambda wait function-updated \
             --function-name ${{ vars.CORE_API_LAMBDA_NAME }}
+          sh scripts/publish-lambda-version.sh "${{ vars.CORE_API_LAMBDA_NAME }}"
+      - name: Initialise database schema
+        run: |
           RESULT=$(aws lambda invoke \
             --function-name ${{ vars.CORE_API_LAMBDA_NAME }} \
             --payload '{"source":"biffo:db-init"}' \
@@ -1701,6 +1728,9 @@ jobs:
             --output text --query 'LastUpdateStatus'
           aws lambda wait function-updated \
             --function-name ${{ vars.PR_SIGNER_LAMBDA_NAME }}
+          # Publish a version and move the "live" alias to it (#1747) — see
+          # the Core API's "Publish version and move alias" step for why.
+          sh scripts/publish-lambda-version.sh "${{ vars.PR_SIGNER_LAMBDA_NAME }}"
       # Package and deploy each enabled plugin's own Lambda (ADR-0003, #196).
       # deploy-infra (running in parallel) creates the function from a placeholder
       # zip with ignore_changes on its code; this step ships the real handler. A
@@ -1772,6 +1802,9 @@ jobs:
               --zip-file "fileb://plugin-$name.zip" \
               --output text --query 'LastUpdateStatus'
             aws lambda wait function-updated --function-name "$fn"
+            # Publish a version and move the "live" alias to it (#1747) —
+            # see the Core API's "Publish version and move alias" step.
+            sh scripts/publish-lambda-version.sh "$fn"
             echo "::endgroup::"
           done
       # Package and deploy the SHARED plugin host (ADR-0021, #545) — ONE Lambda
@@ -1882,6 +1915,9 @@ jobs:
             --zip-file fileb://plugin-host.zip \
             --output text --query 'LastUpdateStatus'
           aws lambda wait function-updated --function-name "$fn"
+          # Publish a version and move the "live" alias to it (#1747) — see
+          # the Core API's "Publish version and move alias" step.
+          sh scripts/publish-lambda-version.sh "$fn"
 
       # Build and deploy each installed user-facing plugin's static frontend
       # (ADR-0018 §2 — the shape ADR-0021 reuses for the frontend until its own
@@ -2508,10 +2544,19 @@ jobs:
               --zip-file fileb://lambda.zip \
               --output text --query 'LastUpdateStatus'
           fi
-      - name: Initialise database schema
+      - name: Publish version and move alias (Core API)
+        # Neither provisioned concurrency nor SnapStart can attach to $LATEST
+        # (#1747) — both need a published, numbered version behind an alias,
+        # and this is also how a bad deploy is rolled back in one API call
+        # instead of a redeploy. Waits for the code update above to finish
+        # applying first: scripts/publish-lambda-version.sh does not wait
+        # itself, so the ordering has to be enforced here.
         run: |
           aws lambda wait function-updated \
             --function-name ${{ vars.CORE_API_LAMBDA_NAME }}
+          sh scripts/publish-lambda-version.sh "${{ vars.CORE_API_LAMBDA_NAME }}"
+      - name: Initialise database schema
+        run: |
           RESULT=$(aws lambda invoke \
             --function-name ${{ vars.CORE_API_LAMBDA_NAME }} \
             --payload '{"source":"biffo:db-init"}' \
@@ -2626,6 +2671,9 @@ jobs:
             --output text --query 'LastUpdateStatus'
           aws lambda wait function-updated \
             --function-name ${{ vars.PR_SIGNER_LAMBDA_NAME }}
+          # Publish a version and move the "live" alias to it (#1747) — see
+          # the Core API's "Publish version and move alias" step for why.
+          sh scripts/publish-lambda-version.sh "${{ vars.PR_SIGNER_LAMBDA_NAME }}"
       # Package and deploy each enabled plugin's own Lambda (ADR-0003, #196).
       # deploy-infra (running in parallel) creates the function from a placeholder
       # zip with ignore_changes on its code; this step ships the real handler. A
@@ -2697,6 +2745,9 @@ jobs:
               --zip-file "fileb://plugin-$name.zip" \
               --output text --query 'LastUpdateStatus'
             aws lambda wait function-updated --function-name "$fn"
+            # Publish a version and move the "live" alias to it (#1747) —
+            # see the Core API's "Publish version and move alias" step.
+            sh scripts/publish-lambda-version.sh "$fn"
             echo "::endgroup::"
           done
       # Package and deploy the SHARED plugin host (ADR-0021, #545) — ONE Lambda
@@ -2807,6 +2858,9 @@ jobs:
             --zip-file fileb://plugin-host.zip \
             --output text --query 'LastUpdateStatus'
           aws lambda wait function-updated --function-name "$fn"
+          # Publish a version and move the "live" alias to it (#1747) — see
+          # the Core API's "Publish version and move alias" step.
+          sh scripts/publish-lambda-version.sh "$fn"
 
       # Build and deploy each installed user-facing plugin's static frontend
       # (ADR-0018 §2 — the shape ADR-0021 reuses for the frontend until its own

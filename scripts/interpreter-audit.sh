@@ -534,6 +534,39 @@
 # reproduce #1809, so this pass adds no new "could not examine" noise to the
 # real-repo case in `scripts/interpreter-audit.test.sh`.
 #
+# ## Tenth-pass: the Ninth-pass gate itself had a sibling gap -- backticks (#1826)
+#
+# `token_is_truncated()` (signal 1 above) counted unbalanced `"`, `'` and
+# `(`/`)` only. Backtick command substitution -- `` sh `dirname "$0"`/x.sh ``,
+# the POSIX-portable sibling of the `$(dirname "$0")/x.sh` shape the
+# Ninth-pass fix was built to catch -- is truncated by the exact same plain
+# whitespace split (the captured token is `` `dirname ``), but that token has
+# balanced quotes and balanced parens: no `"`, no `(`. `token_is_truncated()`
+# returned false, signal 1 never fired, and the new UNPARSEABLE branch never
+# ran -- the invocation fell through uncounted, reproducing #1809's own
+# silent fourth state under different quoting syntax, in the very commit that
+# closed #1809.
+#
+# Fixed by extending `token_is_truncated()` with a fifth counter: an odd
+# number of backticks in the token is treated exactly like an unmatched `"`
+# or unmatched `(` -- syntactic evidence the whitespace split cut through a
+# still-open construct. This was chosen over reworking the whole function
+# into a generic "starts with a known substitution opener with no matching
+# closer" scan (the alternative #1826 raised): every opener this function
+# cares about (`"`, `'`, `(`, `` ` ``) is single-character and has no nesting
+# semantics worth modelling here, so a fifth parity counter is exactly as
+# simple as the four it joins, carries the same false-positive profile (an
+# odd count is always evidence of a cut, never of a complete word), and adds
+# no new control flow -- a structural rewrite would cost more surface for a
+# scan this function does not need. `tail2` (signal 2) is unchanged: it
+# already contains `.sh` past the truncation point regardless of which
+# opener did the truncating.
+#
+# Verified against this repo's real `.github/workflows/*.yml` and
+# `scripts/*.sh`: zero backtick-parity matches outside the fixture built to
+# reproduce #1826, so, as with the Ninth-pass fix, this adds no new "could
+# not examine" noise to the real-repo case.
+#
 # Usage:
 #   bash scripts/interpreter-audit.sh
 #
@@ -798,20 +831,28 @@ function is_quoted_before(str, pos,    i, n, c, in_s, in_d) {
 # as a candidate script-argument token -- carries syntactic evidence of
 # having been cut short mid-construct by that whitespace split, rather than
 # being a complete shell word on its own: an unmatched `"`, an unmatched
-# single quote, or an unmatched `(`. `"$(dirname` (one unclosed `"`, one
-# unclosed `(`) is true; `foo`, a fully single-quoted word, and
-# `"scripts/foo.sh"` are all false. Counts are taken via `gsub()` on a
-# throwaway copy of `tok` -- `gsub()` mutates its third argument in place,
-# and `tok` is a scalar parameter (call-by-value in awk, unlike an array),
-# so this never touches the caller'"'"'s string. See the
-# "Ninth-pass" header section (#1809) for why this alone is not sufficient
-# and must be paired with a `.sh` check on the untruncated remainder.
-function token_is_truncated(tok,    c, dq, sq, op, cp) {
+# single quote, an unmatched `(`, or an unmatched backtick. `"$(dirname`
+# (one unclosed `"`, one unclosed `(`) is true; `` `dirname `` (the token
+# extracted from `` sh `dirname "$0"`/x.sh ``, one unclosed backtick) is
+# true; `foo`, a fully single-quoted word, and `"scripts/foo.sh"` are all
+# false. Counts
+# are taken via `gsub()` on a throwaway copy of `tok` -- `gsub()` mutates
+# its third argument in place, and `tok` is a scalar parameter
+# (call-by-value in awk, unlike an array), so this never touches the
+# caller'"'"'s string. See the "Ninth-pass" header section (#1809) for why
+# quote/paren parity alone is not sufficient and must be paired with a
+# `.sh` check on the untruncated remainder, and the "Tenth-pass" section
+# (#1826) for why backtick parity had to join the other three counters --
+# backtick command substitution truncates the same way `$(...)` does, but
+# left no unbalanced quote or paren behind for the first three counters to
+# catch.
+function token_is_truncated(tok,    c, dq, sq, op, cp, bt) {
   c = tok; dq = gsub(/"/, "", c)
   c = tok; sq = gsub(/'"'"'/, "", c)
   c = tok; op = gsub(/\(/, "", c)
   c = tok; cp = gsub(/\)/, "", c)
-  return (dq % 2 == 1) || (sq % 2 == 1) || (op != cp)
+  c = tok; bt = gsub(/`/, "", c)
+  return (dq % 2 == 1) || (sq % 2 == 1) || (op != cp) || (bt % 2 == 1)
 }
 
 # strip_unquoted_comment(str)

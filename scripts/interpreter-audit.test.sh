@@ -379,6 +379,20 @@ d="$WORK/script-to-script-cmdsub-whitespace"
 make_script_fixture "$d" "inner" "outer" 'sh "$(dirname "$0")/inner.sh"'
 assert_case "script-to-script: command-substitution-with-internal-whitespace target is UNPARSEABLE, not dropped" "$d" 1 1 "COULD NOT EXAMINE" "MISMATCH"
 
+# MUST be caught, in the "could not examine" state: #1826's own reproduction
+# -- the POSIX-portable backtick sibling of the `$()` shape immediately
+# above, `sh `dirname "$0"`/inner.sh`. Same naive `[^ \t]+` token extraction,
+# same internal-whitespace truncation (the space inside `dirname "$0"`), but
+# the captured fragment is `` `dirname `` -- balanced quotes, balanced
+# parens, ONE unmatched backtick. `token_is_truncated()` before the
+# Tenth-pass fix counted only `"`, `'`, `(` and `)`, so this fragment read as
+# a syntactically complete word and the new UNPARSEABLE branch never fired --
+# reproducing #1809's own silent fourth state under different quoting syntax,
+# inside the very fix that closed #1809.
+d="$WORK/script-to-script-cmdsub-backtick"
+make_script_fixture "$d" "inner" "outer" 'sh `dirname "$0"`/inner.sh'
+assert_case "script-to-script: backtick-command-substitution-with-internal-whitespace target is UNPARSEABLE, not dropped" "$d" 1 1 "COULD NOT EXAMINE" "MISMATCH"
+
 # MUST NOT be caught: a script body is full of prose that LOOKS like an
 # invocation and is not one -- usage comments, echo/printf help text,
 # test-scenario labels (real examples in this file's own header: biffo.sh's

@@ -489,6 +489,51 @@
 # `scripts/interpreter-audit.test.sh` for the fixture matrix covering all
 # three (fleet-filed issue #1817).
 #
+# ## Ninth-pass: a whitespace-truncated token fell through BOTH branches (#1809)
+#
+# `process()`'s token extraction (`match(tail2, /^[^ \t]+/)`) is a plain
+# whitespace split -- it has no notion of quoting or `$(...)` nesting. A
+# script argument built via a command substitution that itself contains a
+# space before the target's own `.sh` suffix -- `sh "$(dirname "$0")/x.sh"`
+# is the reproduction in the issue -- gets cut at that internal space, so the
+# captured token is a fragment like `"$(dirname`: it neither ends in `.sh`
+# (the CLEAN branch) nor contains `.sh` as a substring (the existing
+# UNPARSEABLE branch, which is what correctly catches the simpler quoted-
+# variable-target shape from the Sixth-pass, `sh "$TARGET_DIR/x.sh"`, because
+# THAT token has no internal whitespace and so is never truncated). Neither
+# branch fires, and the invocation is never printed at all -- not CLEAN, not
+# MISMATCH, not "could not examine": a fourth, silent, uncounted state, which
+# is exactly the denominator-honesty invariant this whole file exists to
+# hold.
+#
+# Fixed by a third, narrower branch rather than a blanket "anything else is
+# UNPARSEABLE" catch-all, because most tokens that fail both existing checks
+# genuinely are not a script invocation at all (`bash -c 'do something'` has
+# no `.sh` anywhere and should stay silent, not get flagged on a coincidence).
+# The new branch fires only when BOTH of two independent signals hold:
+#
+#   1. `token_is_truncated()` -- the captured token itself carries syntactic
+#      evidence of having been cut mid-construct: an unbalanced quote
+#      (`"$(dirname` has one unmatched `"`) or an unbalanced paren (one
+#      unmatched `(`). A syntactically complete word like `foo` or
+#      `'whole-thing'` is balanced and never matches this.
+#   2. `tail2` -- the FULL remainder of the line after the interpreter and
+#      its flags, not the truncated first-whitespace-chunk `token` -- still
+#      contains `.sh` somewhere past the truncation point. This is what tells
+#      a real truncated script-path expression (`.sh` sitting later in the
+#      same quoted/substituted argument) apart from an unrelated LATER
+#      command on the same line that happens to mention `.sh`
+#      (`bash foo && ./scripts/run.sh` -- `foo` is a complete, balanced
+#      token, so signal 1 alone already excludes this case, but signal 2 is
+#      what would otherwise false-positive on it if token balance were ever
+#      relaxed).
+#
+# Both signals independently verified against this repo's real
+# `.github/workflows/*.yml` and `scripts/*.sh` at the commit this fix landed:
+# zero matches for either heuristic alone outside the fixture built to
+# reproduce #1809, so this pass adds no new "could not examine" noise to the
+# real-repo case in `scripts/interpreter-audit.test.sh`.
+#
 # Usage:
 #   bash scripts/interpreter-audit.sh
 #
@@ -747,6 +792,28 @@ function is_quoted_before(str, pos,    i, n, c, in_s, in_d) {
   return (in_s || in_d)
 }
 
+# token_is_truncated(tok)
+#
+# True (1) if `tok` -- a whitespace-delimited fragment `process()` extracted
+# as a candidate script-argument token -- carries syntactic evidence of
+# having been cut short mid-construct by that whitespace split, rather than
+# being a complete shell word on its own: an unmatched `"`, an unmatched
+# single quote, or an unmatched `(`. `"$(dirname` (one unclosed `"`, one
+# unclosed `(`) is true; `foo`, a fully single-quoted word, and
+# `"scripts/foo.sh"` are all false. Counts are taken via `gsub()` on a
+# throwaway copy of `tok` -- `gsub()` mutates its third argument in place,
+# and `tok` is a scalar parameter (call-by-value in awk, unlike an array),
+# so this never touches the caller'"'"'s string. See the
+# "Ninth-pass" header section (#1809) for why this alone is not sufficient
+# and must be paired with a `.sh` check on the untruncated remainder.
+function token_is_truncated(tok,    c, dq, sq, op, cp) {
+  c = tok; dq = gsub(/"/, "", c)
+  c = tok; sq = gsub(/'"'"'/, "", c)
+  c = tok; op = gsub(/\(/, "", c)
+  c = tok; cp = gsub(/\)/, "", c)
+  return (dq % 2 == 1) || (sq % 2 == 1) || (op != cp)
+}
+
 # strip_unquoted_comment(str)
 #
 # Truncates `str` at the first `#` that is not inside a quoted string --
@@ -839,6 +906,15 @@ function process(line, startline,    rest, matched, interp, wordend, tail, tail2
         printf "CLEAN\t%d\t%s\t%s\n", startline, interp, token
       } else if (token != "" && index(token, ".sh") > 0) {
         printf "UNPARSEABLE\t%d\t%s\tinvoked with %s, target is not a bare script path: %s\n", startline, interp, interp, token
+      } else if (token != "" && token_is_truncated(token) && index(tail2, ".sh") > 0) {
+        # #1809: `token` is only the first whitespace-delimited chunk of a
+        # longer quoted/command-substitution argument, cut short before its
+        # own `.sh` suffix -- e.g. `"$(dirname` from `sh "$(dirname
+        # "$0")/x.sh"`. Neither branch above can match a fragment; falling
+        # through here silently would be the fourth, uncounted state this
+        # audit'"'"'s own invariant forbids. `tail2` (not `token`) is checked for
+        # `.sh` because it is the untruncated remainder of the line.
+        printf "UNPARSEABLE\t%d\t%s\tinvoked with %s, target argument was truncated by internal whitespace (quoted/command-substitution expression), could not resolve: %s\n", startline, interp, interp, token
       }
     }
 

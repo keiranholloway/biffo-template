@@ -363,6 +363,22 @@ d="$WORK/script-to-script-quoted"
 make_script_fixture "$d" "inner" "outer" 'TARGET_DIR=.; sh "$TARGET_DIR/scripts/inner.sh"'
 assert_case "script-to-script: quoted variable target is UNPARSEABLE, not dropped" "$d" 1 1 "COULD NOT EXAMINE" "MISMATCH"
 
+# MUST be caught, in the "could not examine" state: #1809's own reproduction
+# -- a script argument built via a command substitution that itself takes an
+# argument, `sh "$(dirname "$0")/inner.sh"`, has internal whitespace (the
+# space inside `dirname "$0"`) BEFORE the tokenizer's own first whitespace
+# boundary. The naive `[^ \t]+` token extraction stops at that internal
+# space, capturing only `"$(dirname` -- a fragment that neither ends in
+# `.sh` (CLEAN) nor itself contains `.sh` (the quoted-variable-target
+# UNPARSEABLE branch immediately above, whose token has NO internal
+# whitespace and so is never truncated this way). Before this fix that
+# fragment matched neither branch and the whole invocation was dropped --
+# not examined, not mismatched, not "could not examine" -- the exact silent
+# fourth state this audit's own header invariant forbids.
+d="$WORK/script-to-script-cmdsub-whitespace"
+make_script_fixture "$d" "inner" "outer" 'sh "$(dirname "$0")/inner.sh"'
+assert_case "script-to-script: command-substitution-with-internal-whitespace target is UNPARSEABLE, not dropped" "$d" 1 1 "COULD NOT EXAMINE" "MISMATCH"
+
 # MUST NOT be caught: a script body is full of prose that LOOKS like an
 # invocation and is not one -- usage comments, echo/printf help text,
 # test-scenario labels (real examples in this file's own header: biffo.sh's

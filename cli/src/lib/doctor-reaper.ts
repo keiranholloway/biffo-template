@@ -235,3 +235,106 @@ export async function reapAll(
   }
   return outcomes
 }
+
+/**
+ * Milestone 2 (#1682): the same judgement, extended to a **bare** branch — one
+ * with a `[gone]` upstream and no linked worktree at all. 124 measured
+ * 2026-08-22, the other half of the same accumulation `git branch -d` cannot
+ * clean up (squash merges mean its tips are never ancestors of `dev`).
+ *
+ * Deliberately reuses `classifyReapCandidate` rather than a parallel
+ * classifier: a bare branch has no working tree to be dirty or detached, so
+ * both of those inputs are trivially `false` — the ONLY question that differs
+ * from the worktree case is what "HEAD" means (a branch's own tip, not a
+ * checked-out one), which is what `branchSha` (vs. `headSha`) supplies.
+ */
+export interface BareBranchCandidate {
+  branch: string
+}
+
+/**
+ * Every `[gone]` local branch with **no** linked worktree. Deliberately the
+ * complement of `findReapCandidates`'s own filter (worktree branches only) —
+ * together the two cover every `[gone]` branch exactly once, never both ways
+ * for the same name.
+ */
+export function findBareBranchCandidates(
+  branches: BranchRef[],
+  worktrees: WorktreeFact[],
+): BareBranchCandidate[] {
+  const worktreeBranches = new Set(worktrees.map((w) => w.branch))
+  return branches
+    .filter((b) => b.track.includes('gone') && !worktreeBranches.has(b.name))
+    .map((b) => ({ branch: b.name }))
+}
+
+export interface BareBranchReapOutcome {
+  candidate: BareBranchCandidate
+  verdict: ReapVerdict
+  /** Only meaningful when verdict.action === 'reap'. */
+  branchDeleted: boolean | null
+}
+
+export interface BranchReapDeps {
+  git: Pick<GitAdapter, 'branchSha' | 'isAncestor' | 'deleteBranch'>
+  github: Pick<GithubCliAdapter, 'prVerdictForBranch' | 'mergedHeadSha'>
+}
+
+/** Judges and, if safe, deletes one bare branch — see the module doc above. */
+export async function reapBareBranch(
+  cwd: string,
+  candidate: BareBranchCandidate,
+  deps: BranchReapDeps,
+): Promise<BareBranchReapOutcome> {
+  const { git, github } = deps
+
+  const prVerdict = await github.prVerdictForBranch(cwd, candidate.branch)
+
+  let mergeContainsHead: boolean | null = true
+  if (prVerdict === 'merged') {
+    const [branchTip, mergedHeadSha] = await Promise.all([
+      git.branchSha(cwd, candidate.branch),
+      github.mergedHeadSha(cwd, candidate.branch),
+    ])
+    mergeContainsHead =
+      branchTip === null || mergedHeadSha === null
+        ? null
+        : await git.isAncestor(cwd, branchTip, mergedHeadSha)
+  }
+
+  const verdict = classifyReapCandidate({
+    isDetached: false,
+    isDirty: false,
+    prVerdict,
+    mergeContainsHead,
+  })
+
+  if (verdict.action === 'keep') {
+    return { candidate, verdict, branchDeleted: null }
+  }
+
+  const branchDeleted = await git.deleteBranch(cwd, candidate.branch)
+  return { candidate, verdict, branchDeleted }
+}
+
+/**
+ * Runs every bare-branch candidate, sequentially — same reasoning as
+ * `reapAll`: branch deletion mutates the same shared `.git` every worktree of
+ * this clone reads from.
+ */
+export async function reapAllBareBranches(
+  cwd: string,
+  branches: BranchRef[],
+  worktrees: WorktreeFact[],
+  currentBranch: string,
+  deps: BranchReapDeps,
+): Promise<BareBranchReapOutcome[]> {
+  const candidates = findBareBranchCandidates(branches, worktrees).filter(
+    (c) => c.branch !== currentBranch,
+  )
+  const outcomes: BareBranchReapOutcome[] = []
+  for (const candidate of candidates) {
+    outcomes.push(await reapBareBranch(cwd, candidate, deps))
+  }
+  return outcomes
+}

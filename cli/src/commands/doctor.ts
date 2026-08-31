@@ -6,7 +6,13 @@ import { GithubCliAdapter } from '../adapters/github-cli/index.js'
 import { GitAdapter } from '../adapters/git/index.js'
 import { CORE_VERSION_FILE, INSTANCE_CORE_FILE } from '../lib/core-version.js'
 import { type DoctorFinding, type RepoFacts, runDoctorChecks } from '../lib/doctor.js'
-import { type KeepReason, type ReapOutcome, reapAll } from '../lib/doctor-reaper.js'
+import {
+  type BareBranchReapOutcome,
+  type KeepReason,
+  type ReapOutcome,
+  reapAll,
+  reapAllBareBranches,
+} from '../lib/doctor-reaper.js'
 import { log } from '../lib/logger.js'
 
 /** The integration branch in every Biffo repo (AGENTS.md §2). */
@@ -20,13 +26,12 @@ export const doctorCommand = new Command('doctor')
   .option('--no-fetch', 'Skip the fetch; report against refs as they already are locally')
   .option(
     '--fix',
-    "Also remove any worktree PROVEN safe: one whose branch's PR merged, verified via GitHub " +
-      '(never local commit reachability — a squash merge rewrites every SHA), AND whose current ' +
-      'HEAD is confirmed contained in what that PR actually shipped — not merely on a branch of ' +
-      'the same name (#1810). Everything else (no PR, PR open, PR closed unmerged, detached HEAD, ' +
-      'uncommitted changes, commits ahead of what merged, or that containment could not be ' +
-      'confirmed) is reported, never touched. Branch deletion is not yet automated here — that is ' +
-      '#1682 milestone 2.',
+    'Also remove any worktree, and delete any bare local branch, PROVEN safe: one whose ' +
+      "branch's PR merged, verified via GitHub (never local commit reachability — a squash " +
+      'merge rewrites every SHA), AND whose current tip is confirmed contained in what that PR ' +
+      'actually shipped — not merely on a branch of the same name (#1810). Everything else (no ' +
+      'PR, PR open, PR closed unmerged, detached HEAD, uncommitted changes, commits ahead of ' +
+      'what merged, or that containment could not be confirmed) is reported, never touched.',
   )
   .action(async (options: { cwd?: string; fetch?: boolean; fix?: boolean }) => {
     const cwd = options.cwd ? resolve(options.cwd) : process.cwd()
@@ -37,8 +42,11 @@ export const doctorCommand = new Command('doctor')
       printFindings(findings)
 
       if (options.fix === true) {
-        const outcomes = await runDoctorFix(cwd, facts, { git, github: new GithubCliAdapter() })
+        const github = new GithubCliAdapter()
+        const outcomes = await runDoctorFix(cwd, facts, { git, github })
         printReapOutcomes(outcomes)
+        const branchOutcomes = await runDoctorFixBranches(cwd, facts, { git, github })
+        printBranchReapOutcomes(branchOutcomes)
       }
 
       // Non-zero on findings so CI can use this. Warnings alone do not fail:
@@ -168,6 +176,30 @@ export async function runDoctorFix(
   deps: DoctorFixDeps = { git: new GitAdapter(), github: new GithubCliAdapter() },
 ): Promise<ReapOutcome[]> {
   return reapAll(cwd, facts.branches, facts.worktrees, facts.currentBranch, deps)
+}
+
+/** What `runDoctorFixBranches` needs — the same shape as `DoctorFixDeps` minus the
+ * worktree-only operations, plus `deleteBranch`. Kept as its own interface (not a subset
+ * type of `DoctorFixDeps`) so a caller wiring only the branch half is not forced to also
+ * satisfy `removeWorktree`/`headSha`/`isAncestor`'s worktree-flavoured signatures. */
+export interface DoctorFixBranchDeps {
+  git: Pick<GitAdapter, 'branchSha' | 'isAncestor' | 'deleteBranch'>
+  github: Pick<GithubCliAdapter, 'prVerdictForBranch' | 'mergedHeadSha'>
+}
+
+/**
+ * `--fix` milestone 2 (#1682): delete any bare local branch (no linked
+ * worktree) `gatherRepoFacts` already proved has a `[gone]` upstream,
+ * restricted to what `classifyReapCandidate` can prove safe from GitHub's own
+ * verdict on its PR — same judgement `runDoctorFix` applies to worktrees, see
+ * `lib/doctor-reaper.ts`'s `reapAllBareBranches`.
+ */
+export async function runDoctorFixBranches(
+  cwd: string,
+  facts: Pick<RepoFacts, 'branches' | 'worktrees' | 'currentBranch'>,
+  deps: DoctorFixBranchDeps = { git: new GitAdapter(), github: new GithubCliAdapter() },
+): Promise<BareBranchReapOutcome[]> {
+  return reapAllBareBranches(cwd, facts.branches, facts.worktrees, facts.currentBranch, deps)
 }
 
 /**
@@ -329,6 +361,47 @@ export function printReapOutcomes(outcomes: ReapOutcome[]): void {
     chalk.dim(
       `\n  --fix: ${String(removed.length)} removed, ${String(failed.length)} failed, ` +
         `${String(kept.length)} kept, of ${String(outcomes.length)} worktree(s) considered.\n`,
+    ),
+  )
+}
+
+/**
+ * The branch counterpart to `printReapOutcomes` (#1682 milestone 2) — same
+ * denominator-honesty rule (#1413/#1805): the summary counts come from
+ * `branchDeleted`, the actual outcome, never from `verdict.action` alone.
+ */
+export function printBranchReapOutcomes(outcomes: BareBranchReapOutcome[]): void {
+  if (outcomes.length === 0) {
+    console.log(chalk.dim('  --fix (branches): no bare branch with a gone upstream to consider.\n'))
+    return
+  }
+
+  const attempted = outcomes.filter((o) => o.verdict.action === 'reap')
+  const kept = outcomes.filter((o) => o.verdict.action === 'keep')
+  const deleted = attempted.filter((o) => o.branchDeleted === true)
+  const failed = attempted.filter((o) => o.branchDeleted !== true)
+
+  console.log('')
+  for (const o of attempted) {
+    if (o.branchDeleted === true) {
+      console.log(chalk.green(`  deleted  ${o.candidate.branch}`))
+    } else {
+      console.log(
+        chalk.red(
+          `  FAILED   ${o.candidate.branch} — judged safe to delete but 'git branch -D' did not ` +
+            'succeed; left as-is',
+        ),
+      )
+    }
+  }
+  for (const o of kept) {
+    const reason = o.verdict.reason === undefined ? 'unknown' : KEEP_REASON_TEXT[o.verdict.reason]
+    console.log(chalk.dim(`  kept     ${o.candidate.branch} — ${reason}`))
+  }
+  console.log(
+    chalk.dim(
+      `\n  --fix (branches): ${String(deleted.length)} deleted, ${String(failed.length)} failed, ` +
+        `${String(kept.length)} kept, of ${String(outcomes.length)} branch(es) considered.\n`,
     ),
   )
 }

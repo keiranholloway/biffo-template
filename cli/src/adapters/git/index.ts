@@ -339,6 +339,18 @@ export class GitAdapter {
   }
 
   /**
+   * `branch`'s own tip SHA, without checking it out — the bare-branch
+   * counterpart to `headSha` (#1682 milestone 2). A branch with no linked
+   * worktree has no `cwd` of its own to run `rev-parse HEAD` against, so this
+   * resolves the ref by name instead; `cwd` only needs to be *any* worktree of
+   * the same clone; local refs are shared across all of them.
+   */
+  async branchSha(cwd: string, branch: string): Promise<string | null> {
+    const { stdout, exitCode } = await execa('git', ['rev-parse', branch], { cwd, reject: false })
+    return exitCode === 0 ? stdout.trim() : null
+  }
+
+  /**
    * Is `ancestor` reachable from `descendant` (including `ancestor ===
    * descendant`)? Three-valued, not boolean: `git merge-base --is-ancestor`
    * exits `0` for yes, `1` for no, and anything else — most commonly a SHA

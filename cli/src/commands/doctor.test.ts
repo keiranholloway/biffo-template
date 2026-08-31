@@ -1,8 +1,15 @@
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { gatherRepoFacts, printReapOutcomes, runDoctor, runDoctorFix } from './doctor.js'
-import type { ReapOutcome } from '../lib/doctor-reaper.js'
+import {
+  gatherRepoFacts,
+  printBranchReapOutcomes,
+  printReapOutcomes,
+  runDoctor,
+  runDoctorFix,
+  runDoctorFixBranches,
+} from './doctor.js'
+import type { BareBranchReapOutcome, ReapOutcome } from '../lib/doctor-reaper.js'
 import { capturedOutput } from '../test-utils/console.js'
 import { makeTmpDir } from '../test-utils/tmp.js'
 
@@ -37,6 +44,9 @@ function gitMock(overrides: Record<string, unknown> = {}) {
     // commit the merged PR shipped (self-is-ancestor-of-self).
     headSha: vi.fn().mockResolvedValue('merged-tip-sha'),
     isAncestor: vi.fn().mockResolvedValue(true),
+    // Milestone 2 (#1682): same safe-case default, for the bare-branch path.
+    branchSha: vi.fn().mockResolvedValue('merged-tip-sha'),
+    deleteBranch: vi.fn().mockResolvedValue(true),
     ...overrides,
   }
 }
@@ -305,7 +315,7 @@ describe('runDoctorFix', () => {
     expect(git.removeWorktree).not.toHaveBeenCalled()
   })
 
-  it('never considers a [gone] branch with no worktree — bare-branch reaping is milestone 2', async () => {
+  it('never considers a [gone] branch with no worktree — bare-branch reaping is runDoctorFixBranches below', async () => {
     const git = gitMock({
       listBranchRefs: vi.fn().mockResolvedValue([
         {
@@ -338,6 +348,119 @@ describe('runDoctorFix', () => {
 
     const facts = await gatherRepoFacts({ cwd, fetch: true }, { git: git as never })
     const outcomes = await runDoctorFix(cwd, facts, { git: git as never, github: github as never })
+
+    expect(outcomes).toEqual([])
+    expect(github.prVerdictForBranch).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * `runDoctorFixBranches` (#1682, milestone 2) — the command-level wiring from
+ * gathered facts to `reapAllBareBranches`. Same split of responsibility as
+ * `runDoctorFix` above: the classification table is unit-tested exhaustively
+ * in `lib/doctor-reaper.test.ts`; this only proves the command reaches it
+ * with the right facts, and that it is the worktree-havers' complement — a
+ * branch WITH a linked worktree is `runDoctorFix`'s job, never this one's.
+ */
+describe('runDoctorFixBranches', () => {
+  it('deletes a bare branch whose PR merged', async () => {
+    const git = gitMock({
+      listBranchRefs: vi.fn().mockResolvedValue([
+        {
+          name: 'fix/orphan-bare',
+          upstream: 'refs/remotes/origin/fix/orphan-bare',
+          track: '[gone]',
+        },
+      ]),
+      listWorktrees: vi.fn().mockResolvedValue([]),
+    })
+    const github = githubMock()
+
+    const facts = await gatherRepoFacts({ cwd, fetch: true }, { git: git as never })
+    const outcomes = await runDoctorFixBranches(cwd, facts, {
+      git: git as never,
+      github: github as never,
+    })
+
+    expect(outcomes).toEqual([
+      {
+        candidate: { branch: 'fix/orphan-bare' },
+        verdict: { action: 'reap' },
+        branchDeleted: true,
+      },
+    ])
+    expect(git.deleteBranch).toHaveBeenCalledWith(cwd, 'fix/orphan-bare')
+  })
+
+  it('keeps and never deletes a bare branch carrying commits ahead of its merged PR (#1810)', async () => {
+    const git = gitMock({
+      listBranchRefs: vi.fn().mockResolvedValue([
+        {
+          name: 'fix/orphan-bare',
+          upstream: 'refs/remotes/origin/fix/orphan-bare',
+          track: '[gone]',
+        },
+      ]),
+      listWorktrees: vi.fn().mockResolvedValue([]),
+      branchSha: vi.fn().mockResolvedValue('unpushed-follow-up-sha'),
+      isAncestor: vi.fn().mockResolvedValue(false),
+    })
+    const github = githubMock({ mergedHeadSha: vi.fn().mockResolvedValue('merged-tip-sha') })
+
+    const facts = await gatherRepoFacts({ cwd, fetch: true }, { git: git as never })
+    const outcomes = await runDoctorFixBranches(cwd, facts, {
+      git: git as never,
+      github: github as never,
+    })
+
+    expect(outcomes).toEqual([
+      {
+        candidate: { branch: 'fix/orphan-bare' },
+        verdict: { action: 'keep', reason: 'commits-not-in-merge' },
+        branchDeleted: null,
+      },
+    ])
+    expect(git.deleteBranch).not.toHaveBeenCalled()
+  })
+
+  it('never considers a [gone] branch that has a linked worktree — that is runDoctorFix', async () => {
+    const git = gitMock({
+      listBranchRefs: vi
+        .fn()
+        .mockResolvedValue([
+          { name: 'chore/merged', upstream: 'refs/remotes/origin/chore/merged', track: '[gone]' },
+        ]),
+      listWorktrees: vi.fn().mockResolvedValue([{ path: '/wt/merged', branch: 'chore/merged' }]),
+    })
+    const github = githubMock()
+
+    const facts = await gatherRepoFacts({ cwd, fetch: true }, { git: git as never })
+    const outcomes = await runDoctorFixBranches(cwd, facts, {
+      git: git as never,
+      github: github as never,
+    })
+
+    expect(outcomes).toEqual([])
+    expect(github.prVerdictForBranch).not.toHaveBeenCalled()
+  })
+
+  it('never considers the branch this checkout is currently on', async () => {
+    const git = gitMock({
+      currentBranch: vi.fn().mockResolvedValue('agent/1682'),
+      listBranchRefs: vi
+        .fn()
+        .mockResolvedValue([
+          { name: 'agent/1682', upstream: 'refs/remotes/origin/agent/1682', track: '[gone]' },
+        ]),
+      listWorktrees: vi.fn().mockResolvedValue([]),
+    })
+    const github = githubMock()
+
+    const facts = await gatherRepoFacts({ cwd, fetch: true }, { git: git as never })
+    const outcomes = await runDoctorFixBranches(cwd, facts, {
+      git: git as never,
+      github: github as never,
+    })
 
     expect(outcomes).toEqual([])
     expect(github.prVerdictForBranch).not.toHaveBeenCalled()
@@ -433,6 +556,76 @@ describe('printReapOutcomes', () => {
     )
     expect(out).toContain(
       'kept     /wt/merged (chore/merged) — could not confirm worktree HEAD is contained in what merged',
+    )
+  })
+})
+
+/**
+ * `printBranchReapOutcomes` (#1682 milestone 2) — the branch counterpart to
+ * `printReapOutcomes`, same denominator-honesty rule (#1413/#1805): the
+ * summary must be built from `branchDeleted`, never from `verdict.action`
+ * alone.
+ */
+describe('printBranchReapOutcomes', () => {
+  let logSpy: ReturnType<typeof vi.spyOn>
+
+  beforeEach(() => {
+    logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+  })
+
+  afterEach(() => {
+    logSpy.mockRestore()
+  })
+
+  it('does not fold a failed deletion into the "deleted" count', () => {
+    const outcomes: BareBranchReapOutcome[] = [
+      {
+        candidate: { branch: 'fix/locked-somehow' },
+        verdict: { action: 'reap' },
+        branchDeleted: false,
+      },
+      {
+        candidate: { branch: 'fix/orphan-bare' },
+        verdict: { action: 'reap' },
+        branchDeleted: true,
+      },
+    ]
+
+    printBranchReapOutcomes(outcomes)
+
+    const out = capturedOutput(logSpy)
+    expect(out).toContain('FAILED   fix/locked-somehow')
+    expect(out).toContain('deleted  fix/orphan-bare')
+    expect(out).toContain(
+      '--fix (branches): 1 deleted, 1 failed, 0 kept, of 2 branch(es) considered.',
+    )
+  })
+
+  it('reports "0 failed" honestly when every deletion actually succeeded', () => {
+    const outcomes: BareBranchReapOutcome[] = [
+      {
+        candidate: { branch: 'fix/orphan-bare' },
+        verdict: { action: 'reap' },
+        branchDeleted: true,
+      },
+      {
+        candidate: { branch: 'security/undici-advisories' },
+        verdict: { action: 'keep', reason: 'pr-closed' },
+        branchDeleted: null,
+      },
+    ]
+
+    printBranchReapOutcomes(outcomes)
+
+    expect(capturedOutput(logSpy)).toContain(
+      '--fix (branches): 1 deleted, 0 failed, 1 kept, of 2 branch(es) considered.',
+    )
+  })
+
+  it('reports nothing-to-do plainly when there are no bare-branch candidates', () => {
+    printBranchReapOutcomes([])
+    expect(capturedOutput(logSpy)).toContain(
+      '--fix (branches): no bare branch with a gone upstream to consider.',
     )
   })
 })

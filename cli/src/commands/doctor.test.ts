@@ -33,6 +33,10 @@ function gitMock(overrides: Record<string, unknown> = {}) {
     countBehind: vi.fn().mockResolvedValue(0),
     showFileAtRef: vi.fn().mockResolvedValue(null),
     removeWorktree: vi.fn().mockResolvedValue(true),
+    // #1810: defaults model the safe case — the worktree's HEAD IS the
+    // commit the merged PR shipped (self-is-ancestor-of-self).
+    headSha: vi.fn().mockResolvedValue('merged-tip-sha'),
+    isAncestor: vi.fn().mockResolvedValue(true),
     ...overrides,
   }
 }
@@ -41,6 +45,7 @@ function gitMock(overrides: Record<string, unknown> = {}) {
 function githubMock(overrides: Record<string, unknown> = {}) {
   return {
     prVerdictForBranch: vi.fn().mockResolvedValue('merged'),
+    mergedHeadSha: vi.fn().mockResolvedValue('merged-tip-sha'),
     ...overrides,
   }
 }
@@ -236,6 +241,42 @@ describe('runDoctorFix', () => {
     expect(git.removeWorktree).toHaveBeenCalledWith(cwd, '/wt/merged')
   })
 
+  it('keeps and never removes a worktree carrying commits ahead of its merged PR (#1810)', async () => {
+    const git = gitMock({
+      listBranchRefs: vi.fn().mockResolvedValue([
+        {
+          name: 'fix/1602-orphan-ratchet-divergence',
+          upstream: 'refs/remotes/origin/fix/1602-orphan-ratchet-divergence',
+          track: '[gone]',
+        },
+      ]),
+      listWorktrees: vi.fn().mockResolvedValue([
+        {
+          path: '/wt/realname',
+          branch: 'fix/1602-orphan-ratchet-divergence',
+        },
+      ]),
+      headSha: vi.fn().mockResolvedValue('unpushed-follow-up-sha'),
+      isAncestor: vi.fn().mockResolvedValue(false),
+    })
+    const github = githubMock({ mergedHeadSha: vi.fn().mockResolvedValue('merged-tip-sha') })
+
+    const facts = await gatherRepoFacts({ cwd, fetch: true }, { git: git as never })
+    const outcomes = await runDoctorFix(cwd, facts, { git: git as never, github: github as never })
+
+    expect(outcomes).toEqual([
+      {
+        candidate: {
+          branch: 'fix/1602-orphan-ratchet-divergence',
+          worktreePath: '/wt/realname',
+        },
+        verdict: { action: 'keep', reason: 'commits-not-in-merge' },
+        worktreeRemoved: null,
+      },
+    ])
+    expect(git.removeWorktree).not.toHaveBeenCalled()
+  })
+
   it('keeps a worktree whose branch PR closed unmerged, and never removes it', async () => {
     const git = gitMock({
       listBranchRefs: vi.fn().mockResolvedValue([
@@ -366,6 +407,32 @@ describe('printReapOutcomes', () => {
 
     expect(capturedOutput(logSpy)).toContain(
       '--fix: 1 removed, 0 failed, 1 kept, of 2 worktree(s) considered.',
+    )
+  })
+
+  it('reports the #1810 keep reasons in plain English, not the raw reason code', () => {
+    const outcomes: ReapOutcome[] = [
+      {
+        candidate: { branch: 'fix/1602-orphan-ratchet-divergence', worktreePath: '/wt/realname' },
+        verdict: { action: 'keep', reason: 'commits-not-in-merge' },
+        worktreeRemoved: null,
+      },
+      {
+        candidate: { branch: 'chore/merged', worktreePath: '/wt/merged' },
+        verdict: { action: 'keep', reason: 'unknown-merge-head' },
+        worktreeRemoved: null,
+      },
+    ]
+
+    printReapOutcomes(outcomes)
+
+    const out = capturedOutput(logSpy)
+    expect(out).toContain(
+      'kept     /wt/realname (fix/1602-orphan-ratchet-divergence) — ' +
+        'worktree HEAD includes commits the merged PR never shipped',
+    )
+    expect(out).toContain(
+      'kept     /wt/merged (chore/merged) — could not confirm worktree HEAD is contained in what merged',
     )
   })
 })

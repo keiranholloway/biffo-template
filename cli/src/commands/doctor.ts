@@ -21,9 +21,12 @@ export const doctorCommand = new Command('doctor')
   .option(
     '--fix',
     "Also remove any worktree PROVEN safe: one whose branch's PR merged, verified via GitHub " +
-      '(never local commit reachability — a squash merge rewrites every SHA). Everything else ' +
-      '(no PR, PR open, PR closed unmerged, detached HEAD, uncommitted changes) is reported, ' +
-      'never touched. Branch deletion is not yet automated here — that is #1682 milestone 2.',
+      '(never local commit reachability — a squash merge rewrites every SHA), AND whose current ' +
+      'HEAD is confirmed contained in what that PR actually shipped — not merely on a branch of ' +
+      'the same name (#1810). Everything else (no PR, PR open, PR closed unmerged, detached HEAD, ' +
+      'uncommitted changes, commits ahead of what merged, or that containment could not be ' +
+      'confirmed) is reported, never touched. Branch deletion is not yet automated here — that is ' +
+      '#1682 milestone 2.',
   )
   .action(async (options: { cwd?: string; fetch?: boolean; fix?: boolean }) => {
     const cwd = options.cwd ? resolve(options.cwd) : process.cwd()
@@ -70,8 +73,11 @@ export interface DoctorDeps {
 
 /** What `runDoctorFix` needs beyond `DoctorDeps` — the destructive worktree removal and the GitHub PR lookup that proves it safe. Kept separate from `DoctorDeps` so every plain `runDoctor` caller is unaffected by this milestone (#1682). */
 export interface DoctorFixDeps {
-  git: Pick<GitAdapter, 'hasUncommittedChanges' | 'currentBranch' | 'removeWorktree'>
-  github: Pick<GithubCliAdapter, 'prVerdictForBranch'>
+  git: Pick<
+    GitAdapter,
+    'hasUncommittedChanges' | 'currentBranch' | 'removeWorktree' | 'headSha' | 'isAncestor'
+  >
+  github: Pick<GithubCliAdapter, 'prVerdictForBranch' | 'mergedHeadSha'>
 }
 
 /**
@@ -271,6 +277,8 @@ const KEEP_REASON_TEXT: Record<KeepReason, string> = {
   'pr-closed': 'PR closed unmerged',
   'no-pr': 'no PR was ever opened from this branch',
   'unknown-pr-verdict': "could not read this branch's PR state from GitHub",
+  'commits-not-in-merge': 'worktree HEAD includes commits the merged PR never shipped',
+  'unknown-merge-head': 'could not confirm worktree HEAD is contained in what merged',
 }
 
 /**

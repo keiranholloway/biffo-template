@@ -70,4 +70,59 @@ export class GithubCliAdapter {
     // unknown rather than assume it is safe.
     return 'unknown'
   }
+
+  /**
+   * The head commit SHA (`headRefOid`) GitHub recorded for `branch`'s merged
+   * pull request, or `null` when there is none or the lookup could not be
+   * trusted.
+   *
+   * This is the fact `prVerdictForBranch` alone cannot supply, and #1810 is
+   * the reason it must be asked for separately: "a PR merged for this branch
+   * name" proves the branch's history at *some* point merged, never that the
+   * worktree's *current* tip is that same point — a worktree can carry real,
+   * committed, unpushed commits on top of an already-merged branch, and nothing
+   * about the branch name changes. GitHub keeps `headRefOid` pointing at the
+   * PR's last pushed commit even after the remote branch itself is deleted
+   * post-merge (nothing can push to a deleted ref again), so it stays a stable
+   * "this is what actually shipped" marker for the caller to check the
+   * worktree's HEAD against via `GitAdapter.isAncestor`.
+   *
+   * Deliberately a second call rather than folding `headRefOid` into
+   * `prVerdictForBranch`'s existing `--json state` query: that function's
+   * return type and every existing caller are already covered by tests
+   * written against `Promise<PrVerdict>`, and this fact is only ever needed
+   * once a verdict of `'merged'` is already in hand.
+   */
+  async mergedHeadSha(cwd: string, branch: string): Promise<string | null> {
+    const { stdout, exitCode } = await execa(
+      'gh',
+      [
+        'pr',
+        'list',
+        '--head',
+        branch,
+        '--state',
+        'merged',
+        '--json',
+        'headRefOid',
+        '--limit',
+        '20',
+      ],
+      { cwd, reject: false },
+    )
+    if (exitCode !== 0) return null
+
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(stdout)
+    } catch {
+      return null
+    }
+    if (!Array.isArray(parsed) || parsed.length === 0) return null
+
+    const first = parsed[0] as { headRefOid?: unknown }
+    return typeof first.headRefOid === 'string' && /^[0-9a-f]{7,40}$/i.test(first.headRefOid)
+      ? first.headRefOid
+      : null
+  }
 }

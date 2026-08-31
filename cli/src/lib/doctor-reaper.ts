@@ -9,7 +9,9 @@
  * a bare branch with no worktree at all) and nothing calls it yet (no CI, no
  * hook, no cron) — both are later milestones tracked on #1682. Fail-closed by
  * construction: every candidate that is not provably "PR merged, worktree
- * clean, HEAD not detached" is left alone and reported with a reason, per the
+ * clean, HEAD not detached, and worktree HEAD actually contained in what that
+ * PR shipped" (#1810 — a branch name having a merged PR is not, by itself,
+ * proof of that last part) is left alone and reported with a reason, per the
  * #1413 denominator rule (state what was kept, not only what was removed).
  *
  * ## Why local commit reachability is not the signal
@@ -38,7 +40,14 @@ import type { WorktreeFact } from './doctor.js'
 export type ReapAction = 'reap' | 'keep'
 
 export type KeepReason =
-  'detached-head' | 'uncommitted-changes' | 'pr-open' | 'pr-closed' | 'no-pr' | 'unknown-pr-verdict'
+  | 'detached-head'
+  | 'uncommitted-changes'
+  | 'pr-open'
+  | 'pr-closed'
+  | 'no-pr'
+  | 'unknown-pr-verdict'
+  | 'commits-not-in-merge'
+  | 'unknown-merge-head'
 
 export interface ReapVerdict {
   action: ReapAction
@@ -50,6 +59,18 @@ export interface ReapCandidateFacts {
   isDetached: boolean
   isDirty: boolean
   prVerdict: PrVerdict
+  /**
+   * Whether the worktree's current HEAD is contained within (an ancestor of,
+   * or equal to) the commit the merged PR actually shipped — the fact #1810
+   * exists because "a PR merged for this branch name" does not, by itself,
+   * prove it. `null` means it could not be established (the merged PR's head
+   * SHA could not be read from GitHub, or the local repo has never fetched
+   * that object) and is treated the same as any other unproven case: kept,
+   * not reaped. Only consulted when `prVerdict === 'merged'` — every other
+   * verdict already keeps for its own reason, so `true` is a safe, unused
+   * default for those rows.
+   */
+  mergeContainsHead: boolean | null
 }
 
 /**
@@ -69,10 +90,21 @@ export function classifyReapCandidate(facts: ReapCandidateFacts): ReapVerdict {
 
   switch (facts.prVerdict) {
     case 'merged':
-      // Trusted regardless of local commit reachability: a squash merge
-      // rewrites every SHA, so "exists nowhere else" would wrongly read a
-      // landed branch as unique work.
-      return { action: 'reap' }
+      // "A PR merged for this branch name" is trusted regardless of local
+      // commit reachability — a squash merge rewrites every SHA, so "exists
+      // nowhere else" would wrongly read a landed branch as unique work. But
+      // that is a fact about the BRANCH, not about this worktree's current
+      // HEAD (#1810): a worktree can carry real, committed, unpushed commits
+      // on top of an already-merged tip, and the branch name alone cannot
+      // distinguish that from the safe case. `mergeContainsHead` is the
+      // second, independent proof this needs — checked here, not folded into
+      // `prVerdict`, so a `null` (could not determine) reads the same
+      // fail-closed way `unknown-pr-verdict` already does below.
+      if (facts.mergeContainsHead === true) return { action: 'reap' }
+      if (facts.mergeContainsHead === false) {
+        return { action: 'keep', reason: 'commits-not-in-merge' }
+      }
+      return { action: 'keep', reason: 'unknown-merge-head' }
     case 'open':
       return { action: 'keep', reason: 'pr-open' }
     case 'closed':
@@ -121,8 +153,11 @@ export interface ReapOutcome {
 }
 
 export interface ReapDeps {
-  git: Pick<GitAdapter, 'hasUncommittedChanges' | 'currentBranch' | 'removeWorktree'>
-  github: Pick<GithubCliAdapter, 'prVerdictForBranch'>
+  git: Pick<
+    GitAdapter,
+    'hasUncommittedChanges' | 'currentBranch' | 'removeWorktree' | 'headSha' | 'isAncestor'
+  >
+  github: Pick<GithubCliAdapter, 'prVerdictForBranch' | 'mergedHeadSha'>
 }
 
 /**
@@ -132,6 +167,9 @@ export interface ReapDeps {
  *
  * The GitHub lookup is skipped entirely once the worktree is already known
  * detached or dirty, since neither of those verdicts changes on the PR state.
+ * Likewise, the extra "is HEAD actually contained in what merged" check
+ * (#1810) only ever runs once a `merged` verdict is already in hand — every
+ * other verdict keeps for its own reason regardless.
  */
 export async function reapCandidate(
   cwd: string,
@@ -149,7 +187,22 @@ export async function reapCandidate(
   const prVerdict: PrVerdict =
     isDetached || isDirty ? 'unknown' : await github.prVerdictForBranch(cwd, candidate.branch)
 
-  const verdict = classifyReapCandidate({ isDetached, isDirty, prVerdict })
+  // Unused by classifyReapCandidate unless prVerdict === 'merged' — see that
+  // field's doc comment. `true` here is a harmless default for every other
+  // row of the table.
+  let mergeContainsHead: boolean | null = true
+  if (prVerdict === 'merged') {
+    const [headSha, mergedHeadSha] = await Promise.all([
+      git.headSha(candidate.worktreePath),
+      github.mergedHeadSha(cwd, candidate.branch),
+    ])
+    mergeContainsHead =
+      headSha === null || mergedHeadSha === null
+        ? null
+        : await git.isAncestor(cwd, headSha, mergedHeadSha)
+  }
+
+  const verdict = classifyReapCandidate({ isDetached, isDirty, prVerdict, mergeContainsHead })
 
   if (verdict.action === 'keep') {
     return { candidate, verdict, worktreeRemoved: null }

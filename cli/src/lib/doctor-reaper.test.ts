@@ -12,15 +12,41 @@ import type { WorktreeFact } from './doctor.js'
 
 /** A safe starting point for classifyReapCandidate's facts; override per test. */
 function facts(overrides: Partial<ReapCandidateFacts> = {}): ReapCandidateFacts {
-  return { isDetached: false, isDirty: false, prVerdict: 'merged', ...overrides }
+  return {
+    isDetached: false,
+    isDirty: false,
+    prVerdict: 'merged',
+    mergeContainsHead: true,
+    ...overrides,
+  }
 }
 
 describe('classifyReapCandidate', () => {
   // The must-catch / must-NOT-catch table from the module doc, one row per
   // test — this IS the specification `--fix` acts on.
 
-  it('reaps a worktree whose branch PR merged', () => {
-    expect(classifyReapCandidate(facts({ prVerdict: 'merged' }))).toEqual({ action: 'reap' })
+  it('reaps a worktree whose branch PR merged and whose HEAD is contained in what merged', () => {
+    expect(classifyReapCandidate(facts({ prVerdict: 'merged', mergeContainsHead: true }))).toEqual({
+      action: 'reap',
+    })
+  })
+
+  // #1810: a merged PR for this branch NAME does not prove this worktree's
+  // CURRENT HEAD is what merged — it can carry real, committed, unpushed
+  // commits on top. This is the fail-first case: before the fix, the
+  // classifier reaped on `prVerdict === 'merged'` alone and never looked at
+  // `mergeContainsHead` at all.
+  it('keeps a worktree whose branch PR merged but whose HEAD carries commits ahead of it', () => {
+    expect(classifyReapCandidate(facts({ prVerdict: 'merged', mergeContainsHead: false }))).toEqual(
+      { action: 'keep', reason: 'commits-not-in-merge' },
+    )
+  })
+
+  it('keeps a worktree whose branch PR merged when containment could not be established', () => {
+    expect(classifyReapCandidate(facts({ prVerdict: 'merged', mergeContainsHead: null }))).toEqual({
+      action: 'keep',
+      reason: 'unknown-merge-head',
+    })
   })
 
   it('keeps a worktree whose branch PR is still open', () => {
@@ -113,10 +139,15 @@ function reapDeps(
       currentBranch: vi.fn().mockResolvedValue('chore/merged'),
       hasUncommittedChanges: vi.fn().mockResolvedValue(false),
       removeWorktree: vi.fn().mockResolvedValue(true),
+      // Defaults model the safe case: the worktree's HEAD IS the commit the
+      // merged PR shipped, so `isAncestor` (self-is-ancestor-of-self) is true.
+      headSha: vi.fn().mockResolvedValue('deadbeef'),
+      isAncestor: vi.fn().mockResolvedValue(true),
       ...overrides.git,
     } as never,
     github: {
       prVerdictForBranch: vi.fn().mockResolvedValue('merged'),
+      mergedHeadSha: vi.fn().mockResolvedValue('deadbeef'),
       ...overrides.github,
     } as never,
   }
@@ -134,6 +165,61 @@ describe('reapCandidate', () => {
     expect(outcome.verdict).toEqual({ action: 'reap' })
     expect(outcome.worktreeRemoved).toBe(true)
     expect(deps.git.removeWorktree).toHaveBeenCalledWith('/repo', '/wt/merged')
+  })
+
+  // #1810: the branch's PR merged, but this worktree's HEAD carries a real,
+  // committed, unpushed commit on top of the commit that actually merged.
+  // Before the fix, `reapCandidate` never asked for `mergedHeadSha` or
+  // `headSha` at all and removed the worktree on `prVerdict === 'merged'`
+  // alone — this is the exact defect the issue reproduced live.
+  it('keeps and never removes a worktree with commits ahead of what its merged PR shipped', async () => {
+    const deps = reapDeps({
+      git: {
+        headSha: vi.fn().mockResolvedValue('unpushed-follow-up-sha'),
+        // The worktree's HEAD is NOT an ancestor of the merged PR's head —
+        // there is a real commit on top of it.
+        isAncestor: vi.fn().mockResolvedValue(false),
+      },
+      github: { mergedHeadSha: vi.fn().mockResolvedValue('merged-tip-sha') },
+    })
+
+    const outcome = await reapCandidate(
+      '/repo',
+      { branch: 'fix/1602-orphan-ratchet-divergence', worktreePath: '/wt/realname' },
+      deps,
+    )
+
+    expect(outcome.verdict).toEqual({ action: 'keep', reason: 'commits-not-in-merge' })
+    expect(outcome.worktreeRemoved).toBeNull()
+    expect(deps.git.removeWorktree as ReturnType<typeof vi.fn>).not.toHaveBeenCalled()
+    expect(deps.git.isAncestor).toHaveBeenCalledWith(
+      '/repo',
+      'unpushed-follow-up-sha',
+      'merged-tip-sha',
+    )
+  })
+
+  it('keeps a merged-PR worktree, never removing it, when the merged head SHA cannot be read', async () => {
+    const deps = reapDeps({ github: { mergedHeadSha: vi.fn().mockResolvedValue(null) } })
+
+    const outcome = await reapCandidate(
+      '/repo',
+      { branch: 'chore/merged', worktreePath: '/wt/merged' },
+      deps,
+    )
+
+    expect(outcome.verdict).toEqual({ action: 'keep', reason: 'unknown-merge-head' })
+    expect(outcome.worktreeRemoved).toBeNull()
+    expect(deps.git.removeWorktree as ReturnType<typeof vi.fn>).not.toHaveBeenCalled()
+    // No point asking merge-base to compare against a SHA we don't have.
+    expect(deps.git.isAncestor as ReturnType<typeof vi.fn>).not.toHaveBeenCalled()
+  })
+
+  it('does not ask for a merged head SHA at all unless the PR verdict is merged', async () => {
+    const deps = reapDeps({ github: { prVerdictForBranch: vi.fn().mockResolvedValue('closed') } })
+    await reapCandidate('/repo', { branch: 'fix/abandoned', worktreePath: '/wt/x' }, deps)
+    expect(deps.github.mergedHeadSha as ReturnType<typeof vi.fn>).not.toHaveBeenCalled()
+    expect(deps.git.headSha as ReturnType<typeof vi.fn>).not.toHaveBeenCalled()
   })
 
   it('keeps a worktree whose branch PR closed unmerged, and never removes it', async () => {
@@ -205,11 +291,15 @@ describe('reapAll', () => {
       prVerdictForBranch: vi.fn(async (_cwd: string, branch: string) =>
         branch === 'chore/merged' ? 'merged' : 'closed',
       ),
+      mergedHeadSha: vi.fn().mockResolvedValue('merged-tip-sha'),
     }
     const git = {
       currentBranch: vi.fn().mockResolvedValue('chore/merged'),
       hasUncommittedChanges: vi.fn().mockResolvedValue(false),
       removeWorktree: vi.fn().mockResolvedValue(true),
+      // The worktree's HEAD IS what merged — no follow-up commits.
+      headSha: vi.fn().mockResolvedValue('merged-tip-sha'),
+      isAncestor: vi.fn().mockResolvedValue(true),
     }
 
     const outcomes = await reapAll('/repo', branches, worktrees, 'agent/1682', {

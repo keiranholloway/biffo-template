@@ -1714,12 +1714,40 @@ reclaim_sync_branch() {
   _rc_d="$1"
   _rc_expected="$2"
   _rc_label="$3"
+  _rc_base="$4"
   _rc_holder=$(git -C "$_rc_d" worktree list --porcelain | awk '
     /^worktree / { path = $0; sub(/^worktree /, "", path) }
     /^branch refs\/heads\/chore\/sync-shared$/ { print path }
   ')
   [ -n "$_rc_holder" ] || return 0
   [ "$_rc_holder" != "$_rc_expected" ] || return 0
+
+  # biffo-template#1829: a foreign worktree holding this branch can be doing
+  # real, unfinished work -- an abandoned `Enter Worktree` investigation left
+  # open is exactly this shape, and the PR that introduced force-reclaiming
+  # named that case without guarding it. Force-removing unconditionally
+  # destroys uncommitted changes, untracked files, and any commit unreachable
+  # from origin/$_rc_base, with no confirmation. Check what the human reporter
+  # checked by hand before deleting anything -- `git status --porcelain`
+  # empty, and the branch tip merged into origin/$_rc_base -- and refuse
+  # loudly (return 1, the same CANNOT STAGE path a staging failure already
+  # takes) rather than silently destroying content or silently no-op-ing back
+  # into the original #1785 bug.
+  _rc_dirty=$(git -C "$_rc_holder" status --porcelain --untracked-files=all 2>/dev/null)
+  _rc_tip=$(git -C "$_rc_d" rev-parse --verify refs/heads/chore/sync-shared 2>/dev/null)
+  _rc_merged=1
+  if [ -n "$_rc_tip" ] && [ -n "$_rc_base" ]; then
+    git -C "$_rc_d" merge-base --is-ancestor "$_rc_tip" "origin/$_rc_base" 2>/dev/null && _rc_merged=0
+  fi
+  if [ -n "$_rc_dirty" ] || [ "$_rc_merged" != 0 ]; then
+    _rc_why="commits not merged into origin/$_rc_base"
+    [ -n "$_rc_dirty" ] && _rc_why="uncommitted or untracked changes"
+    wt_log reclaim-refused-unsafe "$_rc_label" "$_rc_holder"
+    printf '%-26s \033[31mCANNOT STAGE\033[0m - chore/sync-shared is held by a foreign worktree at %s with %s -- refusing to force-remove it; investigate and clear it by hand\n' \
+      "$_rc_label" "$_rc_holder" "$_rc_why" >&2
+    return 1
+  fi
+
   wt_log remove-foreign-worktree "$_rc_label" "$_rc_holder"
   printf '%-26s \033[33mreclaiming\033[0m chore/sync-shared, held by a foreign worktree at %s\n' \
     "$_rc_label" "$_rc_holder" >&2
@@ -1755,7 +1783,12 @@ reset_sync_worktree() {
   _rsw_label="$3"
   _rsw_base="$4"
   git -C "$_rsw_d" worktree remove --force "$_rsw_wt" 2>/dev/null
-  reclaim_sync_branch "$_rsw_d" "$_rsw_wt" "$_rsw_label"
+  # biffo-template#1829: reclaim_sync_branch now refuses (non-zero) rather
+  # than reclaiming a foreign worktree it cannot prove is safe to destroy --
+  # propagate that refusal instead of falling through to `branch -D`, which
+  # would otherwise still no-op harmlessly (a checked-out branch can't be
+  # deleted) but mask the real reason staging failed.
+  reclaim_sync_branch "$_rsw_d" "$_rsw_wt" "$_rsw_label" "$_rsw_base" || return 1
   # `branch -D` reports on STDOUT, so a quiet run printed "Deleted branch
   # chore/sync-shared" in the middle of the rehearsal table.
   git -C "$_rsw_d" branch -D chore/sync-shared >/dev/null 2>&1

@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { makeTmpDir } from '../test-utils/tmp.js'
@@ -44,6 +44,29 @@ import { makeTmpDir } from '../test-utils/tmp.js'
  * tested in isolation in shared-sync-stage-lock.test.ts, rather than driving
  * the whole script (which also needs a fixture template, manifest and `gh`
  * stub unrelated to this bug).
+ *
+ * ## biffo-template#1829: the fix mechanism's own defect
+ *
+ * The force-remove above has zero check for uncommitted changes, untracked
+ * files, or commits unreachable from `origin/<base>` before it destroys the
+ * foreign worktree, then `reset_sync_worktree` runs `branch -D` on what is now
+ * freed. Pre-#1785-fix this was safe-but-blocking (`branch -D` against a
+ * checked-out branch no-ops); post-fix the worktree is freed first so
+ * `branch -D` actually succeeds, silently destroying content. Reproduced live
+ * against the shipped #1785 fix: a committed file plus an untracked file
+ * inside a foreign worktree on `chore/sync-shared` were both destroyed with no
+ * confirmation, exit 0, and only a bare path logged — exactly the "abandoned
+ * `Enter Worktree` investigation left open" case the #1785 commit message
+ * itself named without guarding.
+ *
+ * `reclaim_sync_branch` now takes a fourth argument, the base ref to check
+ * mergedness against, and refuses (returns 1, logged as `CANNOT STAGE` the
+ * same way any other staging failure is) unless BOTH of the checks the
+ * issue's own human reporter made by hand before deleting anything by hand
+ * pass: `git status --porcelain` is empty in the foreign worktree, and its
+ * `chore/sync-shared` tip is an ancestor of (fully merged into)
+ * `origin/<base>`. `reset_sync_worktree` propagates that refusal instead of
+ * falling through to `branch -D`.
  */
 const script = join(import.meta.dirname, '..', '..', '..', 'scripts', 'shared-sync.sh')
 
@@ -114,7 +137,7 @@ function makeSatellite(): string {
 describe('reclaim_sync_branch', () => {
   it('is a no-op when chore/sync-shared is not checked out anywhere', () => {
     const sat = makeSatellite()
-    const program = `cd ${JSON.stringify(sat)}\n${preamble()}\nreclaim_sync_branch . ".worktrees/shared-sync" test-label\n`
+    const program = `cd ${JSON.stringify(sat)}\n${preamble()}\nreclaim_sync_branch . ".worktrees/shared-sync" test-label trunk\n`
     const { code, out } = run(program)
 
     expect(code).toBe(0)
@@ -134,7 +157,7 @@ describe('reclaim_sync_branch', () => {
       'chore/sync-shared',
       'origin/trunk',
     ])
-    const program = `cd ${JSON.stringify(sat)}\n${preamble()}\nreclaim_sync_branch . "$(pwd)/.worktrees/shared-sync" test-label\n`
+    const program = `cd ${JSON.stringify(sat)}\n${preamble()}\nreclaim_sync_branch . "$(pwd)/.worktrees/shared-sync" test-label trunk\n`
     const { code, out } = run(program)
 
     expect(code).toBe(0)
@@ -159,7 +182,7 @@ describe('reclaim_sync_branch', () => {
       'chore/sync-shared',
       'origin/trunk',
     ])
-    const program = `cd ${JSON.stringify(sat)}\n${preamble()}\nreclaim_sync_branch . "$(pwd)/.worktrees/shared-sync" test-label\n`
+    const program = `cd ${JSON.stringify(sat)}\n${preamble()}\nreclaim_sync_branch . "$(pwd)/.worktrees/shared-sync" test-label trunk\n`
     const { code, out } = run(program)
 
     expect(code).toBe(0)
@@ -172,6 +195,209 @@ describe('reclaim_sync_branch', () => {
       `cd ${JSON.stringify(sat)}\ngit branch -D chore/sync-shared >/dev/null 2>&1; echo $?`,
     )
     expect(canDelete.out.trim()).toBe('0')
+  })
+
+  // biffo-template#1829. Case matrix (must-catch = refuse and preserve;
+  // must-NOT-catch = the safe reclaim above, which stays green):
+  //   1. dirty tracked file, branch tip merged      -> refuse (below)
+  //   2. untracked file only, branch tip merged     -> refuse (below)
+  //   3. clean working tree, branch tip NOT merged  -> refuse (below)
+  //   4. committed-unmerged + untracked together    -> refuse (below; the
+  //      exact shape #1829's prosecution reproduced live against the
+  //      shipped #1785 fix)
+  //   5. clean working tree, branch tip merged      -> reclaim (test above)
+
+  it('refuses a foreign worktree with an uncommitted (dirty) tracked-file change', () => {
+    const sat = makeSatellite()
+    const foreign = join(sat, '.worktrees', 'pr379-gh-fix')
+    execFileSync('git', [
+      '-C',
+      sat,
+      'worktree',
+      'add',
+      '-q',
+      foreign,
+      '-b',
+      'chore/sync-shared',
+      'origin/trunk',
+    ])
+    // Modify a file the branch already tracks (README/whatever `init` made) --
+    // no new commit, so the branch tip is still identical to origin/trunk.
+    const tracked = execFileSync('git', ['-C', foreign, 'ls-files'], { encoding: 'utf8' })
+      .split('\n')
+      .find((f) => f.length > 0)
+    if (tracked) {
+      writeFileSync(join(foreign, tracked), 'dirtied by a live investigation\n')
+    } else {
+      // The bare `init --allow-empty` commit tracks nothing -- give it
+      // something to dirty rather than skip the case.
+      writeFileSync(join(foreign, 'tracked.txt'), 'v1\n')
+      execFileSync('git', [
+        '-C',
+        foreign,
+        '-c',
+        'user.email=t@t',
+        '-c',
+        'user.name=t',
+        'add',
+        'tracked.txt',
+      ])
+      execFileSync('git', [
+        '-C',
+        foreign,
+        '-c',
+        'user.email=t@t',
+        '-c',
+        'user.name=t',
+        'commit',
+        '-qm',
+        'seed',
+      ])
+      execFileSync('git', ['-C', foreign, 'push', '-q', 'origin', 'chore/sync-shared:trunk'])
+      writeFileSync(join(foreign, 'tracked.txt'), 'dirtied\n')
+    }
+
+    const program = `cd ${JSON.stringify(sat)}\n${preamble()}\nreclaim_sync_branch . "$(pwd)/.worktrees/shared-sync" test-label trunk\n`
+    const { code, out } = run(program)
+
+    expect(code).toBe(1)
+    expect(out).toContain('CANNOT STAGE')
+    expect(out).toContain('pr379-gh-fix')
+    const list = execFileSync('git', ['-C', sat, 'worktree', 'list'], { encoding: 'utf8' })
+    expect(list).toContain('pr379-gh-fix')
+  })
+
+  it('refuses a foreign worktree holding only an untracked file', () => {
+    const sat = makeSatellite()
+    const foreign = join(sat, '.worktrees', 'pr379-gh-fix')
+    execFileSync('git', [
+      '-C',
+      sat,
+      'worktree',
+      'add',
+      '-q',
+      foreign,
+      '-b',
+      'chore/sync-shared',
+      'origin/trunk',
+    ])
+    writeFileSync(join(foreign, 'scratch-notes.txt'), 'still investigating\n')
+
+    const program = `cd ${JSON.stringify(sat)}\n${preamble()}\nreclaim_sync_branch . "$(pwd)/.worktrees/shared-sync" test-label trunk\n`
+    const { code, out } = run(program)
+
+    expect(code).toBe(1)
+    expect(out).toContain('CANNOT STAGE')
+    const list = execFileSync('git', ['-C', sat, 'worktree', 'list'], { encoding: 'utf8' })
+    expect(list).toContain('pr379-gh-fix')
+    expect(readFileSync(join(foreign, 'scratch-notes.txt'), 'utf8')).toBe('still investigating\n')
+  })
+
+  it('refuses a foreign worktree whose branch tip is a clean but UNMERGED commit', () => {
+    const sat = makeSatellite()
+    const foreign = join(sat, '.worktrees', 'pr379-gh-fix')
+    execFileSync('git', [
+      '-C',
+      sat,
+      'worktree',
+      'add',
+      '-q',
+      foreign,
+      '-b',
+      'chore/sync-shared',
+      'origin/trunk',
+    ])
+    // A real commit that never made it to origin/trunk -- the "abandoned
+    // Enter Worktree investigation left open" case named in the #1785 commit
+    // message. Working tree is clean: this isolates the merge check from the
+    // dirty-tree check above.
+    writeFileSync(join(foreign, 'wip.txt'), 'work in progress\n')
+    execFileSync('git', [
+      '-C',
+      foreign,
+      '-c',
+      'user.email=t@t',
+      '-c',
+      'user.name=t',
+      'add',
+      'wip.txt',
+    ])
+    execFileSync('git', [
+      '-C',
+      foreign,
+      '-c',
+      'user.email=t@t',
+      '-c',
+      'user.name=t',
+      'commit',
+      '-qm',
+      'wip',
+    ])
+
+    const program = `cd ${JSON.stringify(sat)}\n${preamble()}\nreclaim_sync_branch . "$(pwd)/.worktrees/shared-sync" test-label trunk\n`
+    const { code, out } = run(program)
+
+    expect(code).toBe(1)
+    expect(out).toContain('CANNOT STAGE')
+    expect(out).toContain('not merged')
+    const list = execFileSync('git', ['-C', sat, 'worktree', 'list'], { encoding: 'utf8' })
+    expect(list).toContain('pr379-gh-fix')
+    const tip = execFileSync('git', ['-C', sat, 'rev-parse', 'chore/sync-shared'], {
+      encoding: 'utf8',
+    }).trim()
+    expect(tip).not.toBe('')
+  })
+
+  it('refuses the exact reproduced shape: a committed-unmerged file plus an untracked file', () => {
+    const sat = makeSatellite()
+    const foreign = join(sat, '.worktrees', 'pr379-gh-fix')
+    execFileSync('git', [
+      '-C',
+      sat,
+      'worktree',
+      'add',
+      '-q',
+      foreign,
+      '-b',
+      'chore/sync-shared',
+      'origin/trunk',
+    ])
+    writeFileSync(join(foreign, 'committed.txt'), 'unmerged work\n')
+    execFileSync('git', [
+      '-C',
+      foreign,
+      '-c',
+      'user.email=t@t',
+      '-c',
+      'user.name=t',
+      'add',
+      'committed.txt',
+    ])
+    execFileSync('git', [
+      '-C',
+      foreign,
+      '-c',
+      'user.email=t@t',
+      '-c',
+      'user.name=t',
+      'commit',
+      '-qm',
+      'unmerged work',
+    ])
+    writeFileSync(join(foreign, 'untracked.txt'), 'scratch\n')
+
+    const program = `cd ${JSON.stringify(sat)}\n${preamble()}\nreclaim_sync_branch . "$(pwd)/.worktrees/shared-sync" test-label trunk\n`
+    const { code, out } = run(program)
+
+    expect(code).toBe(1)
+    expect(out).toContain('CANNOT STAGE')
+    // Nothing destroyed: the worktree, its committed file, and its untracked
+    // file all survive -- this is the exact reproduction #1829's prosecution
+    // ran live against the shipped #1785 fix and found destroyed with exit 0.
+    const list = execFileSync('git', ['-C', sat, 'worktree', 'list'], { encoding: 'utf8' })
+    expect(list).toContain('pr379-gh-fix')
+    expect(readFileSync(join(foreign, 'committed.txt'), 'utf8')).toBe('unmerged work\n')
+    expect(readFileSync(join(foreign, 'untracked.txt'), 'utf8')).toBe('scratch\n')
   })
 })
 
@@ -227,5 +453,59 @@ describe('reset_sync_worktree', () => {
     const list = execFileSync('git', ['-C', sat, 'worktree', 'list'], { encoding: 'utf8' })
     expect(list).toContain('shared-sync')
     expect(list).not.toContain('pr379-gh-fix')
+  })
+
+  it('biffo-template#1829: aborts (does not stage, does not destroy) when the foreign worktree has real unmerged content', () => {
+    const sat = makeSatellite()
+    const foreign = join(sat, '.worktrees', 'pr379-gh-fix')
+    execFileSync('git', [
+      '-C',
+      sat,
+      'worktree',
+      'add',
+      '-q',
+      foreign,
+      '-b',
+      'chore/sync-shared',
+      'origin/trunk',
+    ])
+    writeFileSync(join(foreign, 'committed.txt'), 'unmerged work\n')
+    execFileSync('git', [
+      '-C',
+      foreign,
+      '-c',
+      'user.email=t@t',
+      '-c',
+      'user.name=t',
+      'add',
+      'committed.txt',
+    ])
+    execFileSync('git', [
+      '-C',
+      foreign,
+      '-c',
+      'user.email=t@t',
+      '-c',
+      'user.name=t',
+      'commit',
+      '-qm',
+      'unmerged work',
+    ])
+    writeFileSync(join(foreign, 'untracked.txt'), 'scratch\n')
+    const wt = join(sat, '.worktrees', 'shared-sync')
+
+    const program = `cd ${JSON.stringify(sat)}\n${preamble()}\nreset_sync_worktree . ${JSON.stringify(wt)} test-label trunk\n`
+    const { code, out } = run(program)
+
+    // This is the fixed shape: pre-fix-for-#1829, the shipped #1785 code
+    // reached this same call with exit 0, having already force-removed the
+    // foreign worktree and destroyed both files before `branch -D` ran.
+    expect(code, out).toBe(1)
+    expect(out).toContain('CANNOT STAGE')
+    const list = execFileSync('git', ['-C', sat, 'worktree', 'list'], { encoding: 'utf8' })
+    expect(list).toContain('pr379-gh-fix')
+    expect(list).not.toContain('shared-sync')
+    expect(readFileSync(join(foreign, 'committed.txt'), 'utf8')).toBe('unmerged work\n')
+    expect(readFileSync(join(foreign, 'untracked.txt'), 'utf8')).toBe('scratch\n')
   })
 })

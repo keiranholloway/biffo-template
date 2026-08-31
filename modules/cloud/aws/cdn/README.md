@@ -16,7 +16,7 @@ module "cdn" {
 }
 ```
 
-## API 403/404 bodies (`error_status_restore_lambda_arn`) — biffo-template#1529
+## API 403/404 bodies (`error_status_demote_lambda_arn`) — biffo-template#1529
 
 `custom_error_response` (in `main.tf`, below the behaviours) exists so a deep
 link to a client-routed portal/sibling path — a real URL, no corresponding
@@ -54,14 +54,17 @@ Neither function ever reads or sets `response.body` (Lambda@Edge
 origin-response and CloudFront Functions viewer-response don't expose the
 origin's body to begin with) — the real JSON survives untouched end to end.
 
-`error_status_restore_lambda_arn` (the Lambda's qualified, versioned ARN) is
-empty by default, matching every other API-behaviour variable in this
-module: an instance with none of `plugin_host_api_domain`,
-`core_api_health_domain` or `tracked_link_api_domain` set has no API
-behaviour for this to protect. `infra/global` creates the function (see the
-comment there for why it can't live in this module) and outputs the ARN for
-each environment to pass in, the same wiring `acm_certificate_arn` already
-uses.
+`error_status_demote_lambda_arn` (the demote Lambda's qualified, versioned
+ARN — named after the only half of the pair that is a Lambda@Edge with an
+ARN worth passing; restore is a CloudFront Function created in-region with
+no ARN of its own) gates **both** associations, deliberately coupled behind
+this one variable (biffo-template#1576), and is empty by default, matching
+every other API-behaviour variable in this module: an instance with none of
+`plugin_host_api_domain`, `core_api_health_domain` or
+`tracked_link_api_domain` set has no API behaviour for this to protect.
+`infra/global` creates the function (see the comment there for why it can't
+live in this module) and outputs the ARN for each environment to pass in,
+the same wiring `acm_certificate_arn` already uses.
 
 **Live verification is outstanding** — Terraform `plan`/`validate` cannot see
 CloudFront's own error-page substitution, only a real request against a

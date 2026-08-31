@@ -42,7 +42,47 @@ from .routing.owner_data_router import build_owner_data_router
 from .routing.plugin_router import build_plugin_router
 
 logger = Logger()
-tracer = Tracer()
+
+# `tracer` is constructed lazily and cached as a module singleton (see
+# `_get_tracer()`/`__getattr__` below, and the comment at the module-level
+# `tracer = _get_tracer()` assignment near the bottom of this file) so that
+# Tracer()'s eager aws_xray_sdk/botocore import (#1779) happens after route
+# registration in the common case, while `from api.main import tracer` still
+# resolves correctly for a product domain imported during
+# `build_domain_router()`, which runs *before* the bottom-of-file assignment
+# executes (#1808).
+_tracer: Tracer | None = None
+
+
+def _get_tracer() -> Tracer:
+    """Construct `tracer` on first use and reuse it afterwards.
+
+    Called either by `__getattr__` below (when something -- typically a
+    product domain's `__init__.py`, imported by `build_domain_router()` --
+    reaches for `tracer` before this module has finished executing) or by the
+    module-level `tracer = _get_tracer()` assignment near the bottom, whichever
+    happens first. Either way there is exactly one `Tracer()` instance for the
+    process, so `main.tracer` and whatever a domain imported are always the
+    same object, not merely the same underlying X-Ray provider.
+    """
+    global _tracer
+    if _tracer is None:
+        _tracer = Tracer()
+    return _tracer
+
+
+def __getattr__(name: str) -> Tracer:
+    """PEP 562 module fallback: resolves `tracer` for any lookup that happens
+    before the real `tracer = _get_tracer()` assignment below has executed --
+    i.e. during `build_domain_router()`'s domain imports, which run earlier in
+    this module's own top-to-bottom execution (#1808). Once that assignment
+    has run, `tracer` is a normal module attribute and this is never consulted
+    for it again.
+    """
+    if name == "tracer":
+        return _get_tracer()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 app = FastAPI(
     title="Biffo Core API",
@@ -216,6 +256,33 @@ def _ensure_event_loop() -> asyncio.AbstractEventLoop:
         _event_loop = asyncio.new_event_loop()
     asyncio.set_event_loop(_event_loop)
     return _event_loop
+
+
+# Assigned here, after every app.include_router() call above, not at module
+# top as a Logger()-style module constant (#1779). Tracer()'s __init__
+# unconditionally calls aws_lambda_powertools' own _patch_xray_provider(),
+# which does `from aws_xray_sdk.core import xray_recorder` -- an eager,
+# non-lazy import that pulls in the full botocore session/client/config/
+# credentials/args chain (measured 64-101ms; see the issue for the full
+# import-time trace). That happened whether or not tracing ends up enabled,
+# and unconditionally-before-registration, so it silently "pre-warmed"
+# botocore for every router/domain import below it -- masking the cost of
+# whatever imports botocore next, most importantly build_domain_router()'s
+# instance-owned domain code (services/api/src/api/domains/), which cannot
+# fix a cost this template-owned file has already paid on its behalf.
+#
+# This is *not* the first place `tracer` gets resolved, though: if a product
+# domain imported by build_domain_router() above did `from api.main import
+# tracer` (symmetric with the sanctioned `set_identity_provider` pattern in
+# domains/README.md), that lookup already ran through `__getattr__` above and
+# constructed the real Tracer() at that point (#1808) -- so the eager import
+# cost lands on the domain that actually asked for tracing, not on whichever
+# router/domain happened to be imported next regardless of whether it uses
+# tracing at all. `_get_tracer()` memoizes, so this assignment reuses that
+# same instance rather than constructing a second one; only when *nothing*
+# reached for `tracer` earlier does construction genuinely happen here, right
+# before its only in-module use decorating lambda_handler.
+tracer = _get_tracer()
 
 
 @logger.inject_lambda_context

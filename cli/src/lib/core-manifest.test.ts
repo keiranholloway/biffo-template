@@ -307,7 +307,7 @@ describe('real repo core-manifest.json', () => {
     // infra/ is user-owned wholesale. main.tf holds the error_status_demote
     // Lambda@Edge (IAM role + policy attachment + function) that pairs with
     // modules/cloud/aws/cdn/variables.tf's template-owned
-    // error_status_restore_lambda_arn plumbing -- before this carve-out the
+    // error_status_demote_lambda_arn plumbing -- before this carve-out the
     // enabling half of that mechanism lived on the opposite side of the
     // ownership boundary from the module that consumes it, so a template fix
     // to the demote Lambda had no distribution channel into an already
@@ -316,7 +316,7 @@ describe('real repo core-manifest.json', () => {
     expect(isTemplateOwned('infra/global/main.tf', manifest)).toBe(true)
     // The carve-out is that one file, not the whole infra/global/ directory:
     // outputs.tf and variables.tf carry the rest of the same
-    // error_status_restore_lambda_arn plumbing and were deliberately left
+    // error_status_demote_lambda_arn plumbing and were deliberately left
     // user-owned, not surveyed for cross-instance divergence by this change.
     expect(isTemplateOwned('infra/global/outputs.tf', manifest)).toBe(false)
     expect(isTemplateOwned('infra/global/variables.tf', manifest)).toBe(false)

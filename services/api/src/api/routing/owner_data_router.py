@@ -63,7 +63,21 @@ def build_owner_data_router(manifests: Sequence[dict[str, Any]] | None = None) -
             access = table_def.owner_scoped_service
             if access is None:
                 continue
-            model = _get_model(table_def)
+            try:
+                model = _get_model(table_def, name)
+            except (ValueError, TypeError) as exc:
+                # Same collision _get_model can raise for the plugin router
+                # (a table name colliding with Core or another plugin,
+                # biffo-template#1459) reaches this router too, since both
+                # build from the same discovered manifests and share
+                # _get_model's cache. Skip just this table's owner-data
+                # routes rather than letting one bad manifest take down
+                # every plugin's owner-scoped surface (or Core's own
+                # startup, since main.py builds this router at import time).
+                logger.warning(
+                    f"Skipping owner-data for plugin {name!r}, table {table_def.name!r}: {exc}"
+                )
+                continue
             user_columns = user_columns_from_model(model)
             allowed = frozenset(access.allowed_principals)
             owner_column = access.owner_column

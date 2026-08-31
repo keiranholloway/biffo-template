@@ -91,6 +91,11 @@ def build_domain_router() -> APIRouter:
     their own paths (no ``/domains/<name>`` namespacing), so a domain relocated
     into this tree serves the *same* paths it did as a native router — the API
     contract to siblings is unchanged (ADR-0022). Empty in the base deployment.
+
+    Domain packages import here, at this call, before ``main.py`` has finished
+    executing (#1779) — including any that do ``from ...main import tracer``.
+    That resolves correctly via ``main.__getattr__`` (#1808) rather than
+    raising, so no special handling is needed here for it.
     """
     router = APIRouter()
     for name in _discover_domain_names():

@@ -22,7 +22,7 @@
  * ## Why the invariant is asserted HERE
  *
  * The module makes the half-configured state unrepresentable by construction:
- * ONE variable (`error_status_restore_lambda_arn`) gates BOTH associations on
+ * ONE variable (`error_status_demote_lambda_arn`) gates BOTH associations on
  * all three API behaviours, so there is no second switch to forget. That is a
  * property of how main.tf happens to be written today, and nothing but this
  * test stops a later refactor — splitting the variable in two, adding a fourth
@@ -51,7 +51,7 @@ const repoRoot = join(__dirname, '..', '..', '..')
 const cdnDir = join(repoRoot, 'modules', 'cloud', 'aws', 'cdn')
 
 /** The single variable that arms both halves. */
-const GATE = 'var.error_status_restore_lambda_arn'
+const GATE = 'var.error_status_demote_lambda_arn'
 
 /**
  * Extract balanced `{ … }` blocks whose opening line matches `header`.
@@ -170,7 +170,7 @@ describe('CDN error-status demote/restore coupling (#1529, #1574)', () => {
   })
 })
 
-describe('error_status_restore_lambda_arn rejects a set-but-unusable value (#1574)', () => {
+describe('error_status_demote_lambda_arn rejects a set-but-unusable value (#1574)', () => {
   /**
    * Pull the validation regex out of the module and exercise it directly, so
    * this asserts the rule's BEHAVIOUR rather than the presence of a block.
@@ -179,10 +179,10 @@ describe('error_status_restore_lambda_arn rejects a set-but-unusable value (#157
    * error that names neither the variable nor the reason.
    */
   const pattern = () => {
-    const block = blocksMatching(variablesTf, /variable\s+"error_status_restore_lambda_arn"/)[0]
-    expect(block, 'variable error_status_restore_lambda_arn not found').toBeTruthy()
+    const block = blocksMatching(variablesTf, /variable\s+"error_status_demote_lambda_arn"/)[0]
+    expect(block, 'variable error_status_demote_lambda_arn not found').toBeTruthy()
     const src = /regex\("([^"]+)"/.exec(block)?.[1]
-    expect(src, 'no validation regex on error_status_restore_lambda_arn').toBeTruthy()
+    expect(src, 'no validation regex on error_status_demote_lambda_arn').toBeTruthy()
     return new RegExp(src as string)
   }
 
@@ -196,14 +196,14 @@ describe('error_status_restore_lambda_arn rejects a set-but-unusable value (#157
     ['unqualified (no version)', 'arn:aws:lambda:us-east-1:123456789012:function:demote'],
     ['$LATEST', 'arn:aws:lambda:us-east-1:123456789012:function:demote:$LATEST'],
     ['wrong region', 'arn:aws:lambda:eu-west-1:123456789012:function:demote:7'],
-    ['not an ARN at all', 'error: Output "error_status_restore_lambda_arn" not found'],
+    ['not an ARN at all', 'error: Output "error_status_demote_lambda_arn" not found'],
   ])('rejects %s', (_label, value) => {
     expect(pattern().test(value)).toBe(false)
   })
 
   it('still allows empty, which is the safe off-state', () => {
-    const block = blocksMatching(variablesTf, /variable\s+"error_status_restore_lambda_arn"/)[0]
-    expect(block).toContain('var.error_status_restore_lambda_arn == ""')
+    const block = blocksMatching(variablesTf, /variable\s+"error_status_demote_lambda_arn"/)[0]
+    expect(block).toContain('var.error_status_demote_lambda_arn == ""')
     expect(block).toContain('default     = ""')
   })
 })

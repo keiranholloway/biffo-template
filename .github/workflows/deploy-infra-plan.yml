@@ -96,7 +96,11 @@ jobs:
           # See deploy-infra.yml's plan-dev job for why this is wired —
           # identical rationale, kept in step so a plan preview never diverges
           # from what the real apply would compute.
-          TF_VAR_error_status_restore_lambda_arn: ${{ vars.ERROR_STATUS_RESTORE_LAMBDA_ARN }}
+          # Falls back to the pre-rename repo variable
+          # (ERROR_STATUS_RESTORE_LAMBDA_ARN) for the same reason as
+          # deploy-infra.yml's own copy of this comment — see there, and
+          # docs/guides/core-upgrade.md's 0.298.43 entry.
+          TF_VAR_error_status_demote_lambda_arn: ${{ vars.ERROR_STATUS_DEMOTE_LAMBDA_ARN || vars.ERROR_STATUS_RESTORE_LAMBDA_ARN }}
           TF_VAR_enable_pr_signer: ${{ vars.ENABLE_PR_SIGNER || 'false' }}
           TF_VAR_pr_signer_github_app_id: ${{ vars.PR_SIGNER_GITHUB_APP_ID }}
           TF_VAR_pr_signer_github_installation_id: ${{ vars.PR_SIGNER_GITHUB_INSTALLATION_ID }}
@@ -155,7 +159,11 @@ jobs:
           # See deploy-infra.yml's plan-staging job for why this is wired —
           # identical rationale, kept in step so a plan preview never diverges
           # from what the real apply would compute.
-          TF_VAR_error_status_restore_lambda_arn: ${{ vars.ERROR_STATUS_RESTORE_LAMBDA_ARN }}
+          # Falls back to the pre-rename repo variable
+          # (ERROR_STATUS_RESTORE_LAMBDA_ARN) for the same reason as
+          # deploy-infra.yml's own copy of this comment — see there, and
+          # docs/guides/core-upgrade.md's 0.298.43 entry.
+          TF_VAR_error_status_demote_lambda_arn: ${{ vars.ERROR_STATUS_DEMOTE_LAMBDA_ARN || vars.ERROR_STATUS_RESTORE_LAMBDA_ARN }}
           TF_VAR_enable_pr_signer: ${{ vars.ENABLE_PR_SIGNER || 'false' }}
           TF_VAR_pr_signer_github_app_id: ${{ vars.PR_SIGNER_GITHUB_APP_ID }}
           TF_VAR_pr_signer_github_installation_id: ${{ vars.PR_SIGNER_GITHUB_INSTALLATION_ID }}
@@ -210,7 +218,11 @@ jobs:
           # See deploy-infra.yml's plan-prod job for why this is wired —
           # identical rationale, kept in step so a plan preview never diverges
           # from what the real apply would compute.
-          TF_VAR_error_status_restore_lambda_arn: ${{ vars.ERROR_STATUS_RESTORE_LAMBDA_ARN }}
+          # Falls back to the pre-rename repo variable
+          # (ERROR_STATUS_RESTORE_LAMBDA_ARN) for the same reason as
+          # deploy-infra.yml's own copy of this comment — see there, and
+          # docs/guides/core-upgrade.md's 0.298.43 entry.
+          TF_VAR_error_status_demote_lambda_arn: ${{ vars.ERROR_STATUS_DEMOTE_LAMBDA_ARN || vars.ERROR_STATUS_RESTORE_LAMBDA_ARN }}
           TF_VAR_enable_pr_signer: ${{ vars.ENABLE_PR_SIGNER || 'false' }}
           TF_VAR_pr_signer_github_app_id: ${{ vars.PR_SIGNER_GITHUB_APP_ID }}
           TF_VAR_pr_signer_github_installation_id: ${{ vars.PR_SIGNER_GITHUB_INSTALLATION_ID }}

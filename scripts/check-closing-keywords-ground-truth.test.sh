@@ -151,6 +151,30 @@ _assert_case \
   '[{"number":42}]' \
   'infra/main.tf'
 
+# Real text: PR #1789's own body (`gh pr view 1789 --json body`), a real
+# deploy-only-path PR (.github/workflows/orphan-ratchet-report.yml). A
+# genuine `Closes #1718` trailer sits in the same body as a markdown heading
+# ending in a closing keyword ("## What this fixes") immediately followed by
+# a blank line and then an unrelated paragraph starting `#1717 fixed...`.
+# GitHub's own ground truth for this real PR (`gh pr view 1789 --json
+# closingIssuesReferences`) returns only #1718 -- #1717 was never something
+# GitHub was about to act on. The deploy-only-path check must still fire
+# (a genuine deliberate close on a deploy-only path is exactly its job) --
+# this harness only asserts ok/kind, not which references it names; see
+# cli/src/lib/closing-keywords.test.ts's own PR #1789 case for the
+# assertion that only #1718, not #1717, is reported.
+_assert_case \
+  'real PR #1789 shape: genuine "Closes #1718" trailer plus a heading/paragraph false-positive #1717' \
+  false 'deploy-only-path' \
+  'Closes #1718
+
+## What this fixes
+
+#1717 fixed one of two acceptance routes for a template-owned-path divergence:
+unrelated prose that happens to start with an issue reference.' \
+  '[{"number":1718}]' \
+  '.github/workflows/orphan-ratchet-report.yml'
+
 # No ground truth available (closingIssuesReferences empty) -- the new check
 # must not fire even though the lexical scan finds a mid-sentence hit; this
 # is the additive/backward-compatible contract every existing caller (and

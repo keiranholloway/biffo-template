@@ -2747,6 +2747,7 @@ else
   printf '\nrehearsing %s repos - staging the candidates and running each gate\n\n' \
     "$(wc -l < "$TARGETS" | tr -d ' ')"
   rehearsal_failures=0
+  blocked=0
   while IFS="$TAB" read -r label d slug base; do
     # Read the status IMMEDIATELY. `if ! stage_repo ...` would have collapsed
     # "could not stage" (1) and "nothing to sync" (2) into one branch, and
@@ -2772,10 +2773,31 @@ else
       rehearsal_failures=$((rehearsal_failures + 1))
       continue
     fi
+    # biffo-template#1836: everything else stage_repo returns 1 for (a fetch
+    # blip, a stale lock, or -- the #1785/#1829 case -- `reclaim_sync_branch`
+    # correctly refusing to force-remove a foreign worktree it cannot prove is
+    # safe to destroy) says only that THIS repo's own local git state could
+    # not be brought to a stageable tree. None of those are evidence that the
+    # CANDIDATE FILES are broken -- that is what `rehearsal_failures` exists to
+    # gate the whole round on, per the comment above this loop ("staging repo
+    # 7 and finding the gate broken there must not leave six PRs already open
+    # in repos 1-6"). Folding a staging failure into that same counter was
+    # itself the #1785 bug (one stray tabsii-crm worktree aborted estate-wide
+    # distribution for 5 days) and, left unfixed here, #1829's safety refusal
+    # reintroduces the identical shape for debris from a rejected PR attempt
+    # (#1836): "clean tree, unmerged commit" cannot be told apart from real
+    # unfinished work by git plumbing alone (see the comment on
+    # `reclaim_sync_branch`), so the refusal must stay -- but its blast radius
+    # must not. This is BLOCKED, not FAIL: excluded from THIS repo's own
+    # shipment (see the phase 2 skip check below) and counted in the overall
+    # `failed` tally so the run never reports quiet success, but it does not
+    # touch `rehearsal_failures` and so cannot block any other repo's PR.
     if [ "$stage_rc" -ne 0 ]; then
-      printf '%-26s \033[31mCANNOT STAGE\033[0m - fetch or worktree failed\n' "$label"
-      printf '%s%s%s%s%s\n' "$label" "$TAB" FAIL "$TAB" 'could not stage' >> "$VERDICTS"
-      rehearsal_failures=$((rehearsal_failures + 1))
+      printf '%-26s \033[31mCANNOT STAGE\033[0m - fetch or worktree failed; skipping only this repo, round continues\n' "$label"
+      printf '%s%s%s%s%s\n' "$label" "$TAB" BLOCKED "$TAB" \
+        'could not stage -- needs manual investigation, see log above' >> "$VERDICTS"
+      blocked=$((blocked + 1))
+      failed=$((failed + 1))
       continue
     fi
     verdict_line=$(rehearse_repo "$d/.worktrees/shared-sync")
@@ -2818,7 +2840,18 @@ else
     done < "$TARGETS"
     exit 1
   fi
-  printf '\nrehearsal clean in every repo\n'
+  if [ "$blocked" -gt 0 ]; then
+    printf '\n\033[33m%s repo(s) blocked from staging\033[0m -- their own local git state could not\n' \
+      "$blocked"
+    printf 'be made ready (see CANNOT STAGE lines above); they are excluded from this\n'
+    printf 'round and counted in the failure total below. Investigate each by hand --\n'
+    printf 'nothing here pages on it, so it will keep recurring silently until someone\n'
+    printf 'does. Every other repo still ships: a staging problem local to one repo is\n'
+    printf 'not evidence the candidate files are unsafe anywhere else.\n'
+    printf '\nrehearsal clean in every other repo\n'
+  else
+    printf '\nrehearsal clean in every repo\n'
+  fi
 fi
 
 if [ -n "$REHEARSE_ONLY" ]; then
@@ -2833,6 +2866,11 @@ fi
 printf '\nopening PRs\n\n'
 while IFS="$TAB" read -r label d slug base; do
   grep -q "^$label${TAB}SKIP${TAB}" "$VERDICTS" 2>/dev/null && continue
+  # biffo-template#1836: BLOCKED repos were already counted in `failed` when
+  # phase 1 found them un-stageable, and stage_repo already cleaned up after
+  # itself on that path -- there is no staged worktree here to ship. Re-running
+  # stage_repo would just reproduce the identical refusal a second time.
+  grep -q "^$label${TAB}BLOCKED${TAB}" "$VERDICTS" 2>/dev/null && continue
   # --no-rehearse skips phase 1 entirely, so nothing has staged these yet.
   if [ -n "$NO_REHEARSE" ]; then
     stage_repo "$d" "$label" "$base"

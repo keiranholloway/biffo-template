@@ -235,6 +235,16 @@ def _ensure_event_loop() -> asyncio.AbstractEventLoop:
 # past route/domain registration without needing a lazy proxy: nothing
 # between the old and new position references `tracer`, so this is a pure
 # reorder, not a behavior change.
+#
+# A consequence, not a bug: `tracer` does not exist on this module at the
+# moment build_domain_router() imports a domain's __init__.py above, so a
+# domain doing `from api.main import tracer` (issue #1808) always raises
+# ImportError there. Domain code must construct its own `Tracer()` instead --
+# aws_lambda_powertools caches the underlying provider as a class attribute,
+# so it resolves to this exact same tracer. See
+# services/api/src/api/domains/README.md's "Tracing your own domain code"
+# section; build_domain_router() detects and translates this specific
+# ImportError into a message pointing there.
 tracer = Tracer()
 
 

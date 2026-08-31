@@ -308,7 +308,16 @@ jobs:
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     timeout-minutes: 20
     steps:
+      # `fetch-depth: 0` matches the root repo's own `python` job (#1692) and is
+      # required by the Dependency audit step below: py-dependency-audit.sh's
+      # pre-existing-vs-introduced comparison (#1673) only activates when
+      # `origin/${GITHUB_BASE_REF}` resolves locally, which a shallow (depth-1,
+      # single-ref) checkout never provides. Without this, every finding blocks,
+      # identical to pre-#1673 behaviour, on every repo scaffolded from this
+      # skeleton (biffo-template#1803).
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 0
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true

@@ -103,6 +103,20 @@ python_files = ["test_*.py", "*_test.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 asyncio_mode = "auto"
+addopts = ["-ra"]
+# `-ra` -- short test summary for everything except passes -- is here, not on
+# the individual `pytest` invocations in `ci.yml`/`scripts/verify.sh`, so it
+# applies uniformly wherever pytest runs (CI's `uv run pytest --cov ...`, the
+# local gate's `pytest -q`, a bare `uv run pytest`) without needing every call
+# site edited and kept in step. Without it, a skip's `reason=` string --
+# including the "NEVER EXECUTED IN THIS REPO" markers `test_*_pg.py` carries
+# (biffo-template#1648) -- is a data field pytest never prints; the run just
+# reports a bare skipped count and the reason is invisible in the one place a
+# human actually reads, the CI log. Confirmed round-trip: `uv run pytest
+# services/api/tests/test_media_generation_idempotency_pg.py --cov
+# --cov-report=xml --cov-report=json` now prints the reason string in a
+# "short test summary info" section; without `-ra` it printed only "ssssssss"
+# / "8 skipped".
 markers = [
     # A pg-lane module that cannot share the database with a concurrent worker
     # -- it performs DDL with fixed object names, or sweeps `pg_class` /

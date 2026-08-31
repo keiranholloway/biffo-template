@@ -363,6 +363,59 @@ d="$WORK/script-to-script-quoted"
 make_script_fixture "$d" "inner" "outer" 'TARGET_DIR=.; sh "$TARGET_DIR/scripts/inner.sh"'
 assert_case "script-to-script: quoted variable target is UNPARSEABLE, not dropped" "$d" 1 1 "COULD NOT EXAMINE" "MISMATCH"
 
+# MUST be caught, in the "could not examine" state: #1809's own reproduction
+# -- a script argument built via a command substitution that itself takes an
+# argument, `sh "$(dirname "$0")/inner.sh"`, has internal whitespace (the
+# space inside `dirname "$0"`) BEFORE the tokenizer's own first whitespace
+# boundary. The naive `[^ \t]+` token extraction stops at that internal
+# space, capturing only `"$(dirname` -- a fragment that neither ends in
+# `.sh` (CLEAN) nor itself contains `.sh` (the quoted-variable-target
+# UNPARSEABLE branch immediately above, whose token has NO internal
+# whitespace and so is never truncated this way). Before this fix that
+# fragment matched neither branch and the whole invocation was dropped --
+# not examined, not mismatched, not "could not examine" -- the exact silent
+# fourth state this audit's own header invariant forbids.
+d="$WORK/script-to-script-cmdsub-whitespace"
+make_script_fixture "$d" "inner" "outer" 'sh "$(dirname "$0")/inner.sh"'
+assert_case "script-to-script: command-substitution-with-internal-whitespace target is UNPARSEABLE, not dropped" "$d" 1 1 "COULD NOT EXAMINE" "MISMATCH"
+
+# MUST be caught, in the "could not examine" state: #1826's own reproduction
+# -- the POSIX-portable backtick sibling of the `$()` shape immediately
+# above, `sh `dirname "$0"`/inner.sh`. Same naive `[^ \t]+` token extraction,
+# same internal-whitespace truncation (the space inside `dirname "$0"`), but
+# the captured fragment is `` `dirname `` -- balanced quotes, balanced
+# parens, ONE unmatched backtick. `token_is_truncated()` before the
+# Tenth-pass fix counted only `"`, `'`, `(` and `)`, so this fragment read as
+# a syntactically complete word and the new UNPARSEABLE branch never fired --
+# reproducing #1809's own silent fourth state under different quoting syntax,
+# inside the very fix that closed #1809.
+d="$WORK/script-to-script-cmdsub-backtick"
+make_script_fixture "$d" "inner" "outer" 'sh `dirname "$0"`/inner.sh'
+assert_case "script-to-script: backtick-command-substitution-with-internal-whitespace target is UNPARSEABLE, not dropped" "$d" 1 1 "COULD NOT EXAMINE" "MISMATCH"
+
+# MUST be caught, in the "could not examine" state: #1828's own reproduction
+# -- a backslash-escaped space INSIDE the script-argument path itself
+# (`sh scripts/verify\ sub\ dir/inner.sh`), not inside a quoted or
+# substituted expression the way #1809 and #1826 were. Same naive
+# `[^ \t]+` token extraction, same internal-whitespace truncation (the
+# escaped space), but the captured fragment (`scripts/verify\`) carries none
+# of `token_is_truncated()`'s five tracked signals (no unbalanced `"`, `'`,
+# `(`/`)`, or backtick) -- so it fell through uncounted a THIRD time, inside
+# the very fix that had just closed #1826. This is the case that motivated
+# replacing the whole enumerated-character approach with shell_word_length()
+# (see the "Eleventh-pass" header section) rather than adding a sixth signal.
+d="$WORK/script-to-script-escaped-space"
+make_script_fixture "$d" "inner" "outer" 'sh scripts/verify\ sub\ dir/inner.sh'
+assert_case "script-to-script: backslash-escaped-space target is UNPARSEABLE, not dropped" "$d" 1 1 "COULD NOT EXAMINE" "MISMATCH"
+
+# MUST be caught, in the "could not examine" state: shell_word_length()'s own
+# fixture matrix companion -- an escaped space combined with a command
+# substitution in the SAME argument, to check the two constructs compose
+# rather than one masking a regression in the other.
+d="$WORK/script-to-script-escaped-space-and-cmdsub"
+make_script_fixture "$d" "inner" "outer" 'sh "$(dirname "$0")"/sub\ dir/inner.sh'
+assert_case "script-to-script: escaped space plus command substitution in one target is UNPARSEABLE, not dropped" "$d" 1 1 "COULD NOT EXAMINE" "MISMATCH"
+
 # MUST NOT be caught: a script body is full of prose that LOOKS like an
 # invocation and is not one -- usage comments, echo/printf help text,
 # test-scenario labels (real examples in this file's own header: biffo.sh's

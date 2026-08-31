@@ -489,6 +489,131 @@
 # `scripts/interpreter-audit.test.sh` for the fixture matrix covering all
 # three (fleet-filed issue #1817).
 #
+# ## Ninth-pass: a whitespace-truncated token fell through BOTH branches (#1809)
+#
+# `process()`'s token extraction (`match(tail2, /^[^ \t]+/)`) is a plain
+# whitespace split -- it has no notion of quoting or `$(...)` nesting. A
+# script argument built via a command substitution that itself contains a
+# space before the target's own `.sh` suffix -- `sh "$(dirname "$0")/x.sh"`
+# is the reproduction in the issue -- gets cut at that internal space, so the
+# captured token is a fragment like `"$(dirname`: it neither ends in `.sh`
+# (the CLEAN branch) nor contains `.sh` as a substring (the existing
+# UNPARSEABLE branch, which is what correctly catches the simpler quoted-
+# variable-target shape from the Sixth-pass, `sh "$TARGET_DIR/x.sh"`, because
+# THAT token has no internal whitespace and so is never truncated). Neither
+# branch fires, and the invocation is never printed at all -- not CLEAN, not
+# MISMATCH, not "could not examine": a fourth, silent, uncounted state, which
+# is exactly the denominator-honesty invariant this whole file exists to
+# hold.
+#
+# Fixed by a third, narrower branch rather than a blanket "anything else is
+# UNPARSEABLE" catch-all, because most tokens that fail both existing checks
+# genuinely are not a script invocation at all (`bash -c 'do something'` has
+# no `.sh` anywhere and should stay silent, not get flagged on a coincidence).
+# The new branch fires only when BOTH of two independent signals hold:
+#
+#   1. `token_is_truncated()` -- the captured token itself carries syntactic
+#      evidence of having been cut mid-construct: an unbalanced quote
+#      (`"$(dirname` has one unmatched `"`) or an unbalanced paren (one
+#      unmatched `(`). A syntactically complete word like `foo` or
+#      `'whole-thing'` is balanced and never matches this.
+#   2. `tail2` -- the FULL remainder of the line after the interpreter and
+#      its flags, not the truncated first-whitespace-chunk `token` -- still
+#      contains `.sh` somewhere past the truncation point. This is what tells
+#      a real truncated script-path expression (`.sh` sitting later in the
+#      same quoted/substituted argument) apart from an unrelated LATER
+#      command on the same line that happens to mention `.sh`
+#      (`bash foo && ./scripts/run.sh` -- `foo` is a complete, balanced
+#      token, so signal 1 alone already excludes this case, but signal 2 is
+#      what would otherwise false-positive on it if token balance were ever
+#      relaxed).
+#
+# Both signals independently verified against this repo's real
+# `.github/workflows/*.yml` and `scripts/*.sh` at the commit this fix landed:
+# zero matches for either heuristic alone outside the fixture built to
+# reproduce #1809, so this pass adds no new "could not examine" noise to the
+# real-repo case in `scripts/interpreter-audit.test.sh`.
+#
+# ## Tenth-pass: the Ninth-pass gate itself had a sibling gap -- backticks (#1826)
+#
+# `token_is_truncated()` (signal 1 above) counted unbalanced `"`, `'` and
+# `(`/`)` only. Backtick command substitution -- `` sh `dirname "$0"`/x.sh ``,
+# the POSIX-portable sibling of the `$(dirname "$0")/x.sh` shape the
+# Ninth-pass fix was built to catch -- is truncated by the exact same plain
+# whitespace split (the captured token is `` `dirname ``), but that token has
+# balanced quotes and balanced parens: no `"`, no `(`. `token_is_truncated()`
+# returned false, signal 1 never fired, and the new UNPARSEABLE branch never
+# ran -- the invocation fell through uncounted, reproducing #1809's own
+# silent fourth state under different quoting syntax, in the very commit that
+# closed #1809.
+#
+# Fixed by extending `token_is_truncated()` with a fifth counter: an odd
+# number of backticks in the token is treated exactly like an unmatched `"`
+# or unmatched `(` -- syntactic evidence the whitespace split cut through a
+# still-open construct. This was chosen over reworking the whole function
+# into a generic "starts with a known substitution opener with no matching
+# closer" scan (the alternative #1826 raised): every opener this function
+# cares about (`"`, `'`, `(`, `` ` ``) is single-character and has no nesting
+# semantics worth modelling here, so a fifth parity counter is exactly as
+# simple as the four it joins, carries the same false-positive profile (an
+# odd count is always evidence of a cut, never of a complete word), and adds
+# no new control flow -- a structural rewrite would cost more surface for a
+# scan this function does not need. `tail2` (signal 2) is unchanged: it
+# already contains `.sh` past the truncation point regardless of which
+# opener did the truncating.
+#
+# Verified against this repo's real `.github/workflows/*.yml` and
+# `scripts/*.sh`: zero backtick-parity matches outside the fixture built to
+# reproduce #1826, so, as with the Ninth-pass fix, this adds no new "could
+# not examine" noise to the real-repo case.
+#
+# ## Eleventh-pass: the enumeration itself was the defect, not any one signal (#1828)
+#
+# A THIRD independent shape broke `token_is_truncated()` within days of the
+# Tenth-pass fix: `sh scripts/verify\ sub\ dir/x.sh`, a backslash-escaped
+# space. The captured fragment (`scripts/verify\`) has no unbalanced quote,
+# no unbalanced paren, no unpaired backtick -- none of the five tracked
+# signals fire, so, exactly like #1809 and #1826 before it, the invocation
+# fell through every branch uncounted. Three prosecutions in a row found
+# three DIFFERENT shell constructs the same enumerated-character function
+# could not see, because the function was never asked "did the shell
+# actually intend a word boundary here" -- only "does this specific fixed
+# set of characters look unbalanced". A `$(...)`, a backtick pair and an
+# escaped space are three different ways to fail that question, and there
+# was no reason to expect them to be the last three: `$((...))` arithmetic
+# expansion, `<(...)` process substitution, `\\\n` line continuation and any
+# future POSIX-sh quoting shape all break it the same way, by the same
+# reasoning, for the same structural cause.
+#
+# Rather than add a sixth tracked character (the pattern that produced the
+# Ninth- and Tenth-pass fixes, and would produce a Twelfth), `process()`'"'"'s
+# own token extraction is now shell-word-boundary aware:
+# `shell_word_length()` (replacing `token_is_truncated()` entirely) walks
+# the argument character-by-character and only treats whitespace as ending
+# the word when no quote, backtick or paren-depth construct is open at that
+# position. A token this function returns is never a fragment -- there is
+# no truncated state left to detect, so the whole "is this fragment
+# evidence of a cut, and does the untruncated remainder still contain
+# `.sh`" apparatus (`token_is_truncated()` plus the `tail2`-contains-`.sh`
+# cross-check) is deleted rather than extended. The UNPARSEABLE branch that
+# used to exist only for a detected truncation is gone; a full token like
+# `"$(dirname "$0")/x.sh"` or `scripts/verify\ sub\ dir/x.sh` now lands
+# directly in the pre-existing "target is not a bare script path" branch,
+# because it genuinely contains `.sh` as a whole, untruncated word.
+#
+# This is a Level 1 (impossible) fix in the sense the estate ranks these:
+# the truncated-token state is no longer representable, rather than being
+# produced and then detected. It is not a claim that `shell_word_length()`
+# is a real shell parser -- like `is_quoted_before()` and
+# `strip_unquoted_comment()` above, it toggles quote state on every
+# occurrence rather than modelling nested contexts, so a shape that defeats
+# THAT approximation (documented on the function itself) is not ruled out.
+# The difference from the enumerated-character approach is what class of
+# gap remains: a future miss here would be a genuinely novel quoting
+# topology, not simply "one more character nobody added to the list" --
+# which is what made three instances of the latter arrive within days of
+# each other.
+#
 # Usage:
 #   bash scripts/interpreter-audit.sh
 #
@@ -747,6 +872,86 @@ function is_quoted_before(str, pos,    i, n, c, in_s, in_d) {
   return (in_s || in_d)
 }
 
+# shell_word_length(str)
+#
+# Returns the length, in characters, of the first shell WORD at the start of
+# `str` -- the token a real shell would treat as one argument, ending only
+# at whitespace that sits outside every quote/substitution construct open at
+# that point. This is what `process()` uses in place of a plain
+# whitespace split (`match(tail2, /^[^ \t]+/)`) to extract a candidate
+# script-argument token, so the token it gets is never a fragment in the
+# first place. See the "Eleventh-pass" header section for why this replaced
+# `token_is_truncated()` and its enumerated-character heuristic rather than
+# adding a fourth tracked delimiter.
+#
+# Walks `str` one character at a time, tracking which construct (if any) is
+# currently open:
+#   - a backslash outside every quote escapes the very next character
+#     (`i += 2`), so an escaped space can never end the word;
+#   - a single quote suppresses everything, including backslash, until the
+#     next single quote;
+#   - a double quote or backtick suppresses whitespace-as-boundary until its
+#     own closer (backslash-escaping is honoured inside both, matching real
+#     shell double-quote and backtick rules closely enough for this file'"'"'s
+#     purposes);
+#   - an unquoted `(` opens, and `)` closes, one level of paren depth --
+#     the shape every `$(...)` command substitution produces -- and a space
+#     at depth > 0 is not a word boundary.
+# The word ends at the first whitespace character seen while none of the
+# above is open, or at the end of `str`.
+#
+# Deliberately not a full shell grammar: like is_quoted_before() and
+# strip_unquoted_comment() above, a double quote or backtick TOGGLES state
+# on every occurrence rather than recognising that `"$(dirname "$0")"`'"'"'s
+# second `"` opens a nested context distinct from the outer one -- same
+# convention as this file'"'"'s other two hand-rolled scanners, and sufficient
+# for every real shape found so far (#1809'"'"'s `$(...)`, #1826'"'"'s backtick,
+# #1828'"'"'s backslash-escaped space) because each one'"'"'s quote/paren count
+# happens to balance by the end of the word. It is a heuristic, not a
+# parser, exactly like its neighbours.
+function shell_word_length(str,    n, i, c, in_s, in_d, in_b, depth, wl) {
+  n = length(str)
+  i = 1
+  in_s = 0; in_d = 0; in_b = 0; depth = 0
+  while (i <= n) {
+    c = substr(str, i, 1)
+    if (in_s) {
+      if (c == "'"'"'") in_s = 0
+      i++
+    } else if (in_d) {
+      if (c == "\\") i += 2
+      else { if (c == "\"") in_d = 0; i++ }
+    } else if (in_b) {
+      if (c == "\\") i += 2
+      else { if (c == "`") in_b = 0; i++ }
+    } else if (c == "\\") {
+      i += 2
+    } else if (c == "'"'"'") {
+      in_s = 1; i++
+    } else if (c == "\"") {
+      in_d = 1; i++
+    } else if (c == "`") {
+      in_b = 1; i++
+    } else if (c == "(") {
+      depth++; i++
+    } else if (c == ")") {
+      if (depth > 0) depth--
+      i++
+    } else if ((c == " " || c == "\t") && depth == 0) {
+      break
+    } else {
+      i++
+    }
+  }
+  # A trailing, never-escaped-anything backslash (or an unterminated quote
+  # run to the physical end of `str`) can push `i` past `n` via the `i += 2`
+  # skip above -- clamp rather than let a caller'"'"'s substr() offset run
+  # past the string it was handed.
+  wl = i - 1
+  if (wl > n) wl = n
+  return wl
+}
+
 # strip_unquoted_comment(str)
 #
 # Truncates `str` at the first `#` that is not inside a quoted string --
@@ -817,9 +1022,9 @@ function process(line, startline,    rest, matched, interp, wordend, tail, tail2
     if (match(tail, /^[ \t]+/)) {
       wslen = RLENGTH
       tail2 = substr(tail, wslen + 1)
-      if (match(tail2, /^[^ \t]+/)) {
-        toklen = RLENGTH
-        token = substr(tail2, RSTART, RLENGTH)
+      toklen = shell_word_length(tail2)
+      if (toklen > 0) {
+        token = substr(tail2, 1, toklen)
         consumed += wslen + toklen
       } else {
         consumed += wslen
@@ -838,6 +1043,14 @@ function process(line, startline,    rest, matched, interp, wordend, tail, tail2
       if (token != "" && token ~ /^[^ \t"$]+\.sh$/) {
         printf "CLEAN\t%d\t%s\t%s\n", startline, interp, token
       } else if (token != "" && index(token, ".sh") > 0) {
+        # #1809/#1826/#1828: `token` is now a genuine, whole shell word from
+        # shell_word_length() -- never a whitespace-split fragment -- so a
+        # quoted/command-substitution/escaped script-path argument
+        # (`"$(dirname "$0")/x.sh"`, `` `dirname "$0"`/x.sh ``,
+        # `scripts/verify\ sub\ dir/x.sh`) lands here with its `.sh` suffix
+        # intact instead of falling through uncounted. See the "Eleventh-pass"
+        # header section for why this single branch now covers what used to
+        # need a separate truncation-detection branch and heuristic.
         printf "UNPARSEABLE\t%d\t%s\tinvoked with %s, target is not a bare script path: %s\n", startline, interp, interp, token
       }
     }

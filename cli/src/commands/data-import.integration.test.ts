@@ -7,12 +7,12 @@
  * command (unlike plugin-install's equivalent), so no MSW setup needed.
  */
 import { execa } from 'execa'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { GitAdapter } from '../adapters/git/index.js'
 import { runDataImport } from './data-import.js'
-import { makeTmpDir } from '../test-utils/tmp.js'
+import { makeTmpDir, removeTmpDir } from '../test-utils/tmp.js'
 
 async function initGitRepo(dir: string): Promise<void> {
   await execa('git', ['init', '--initial-branch=main'], { cwd: dir })
@@ -54,8 +54,10 @@ describe('runDataImport — end-to-end', () => {
   })
 
   afterEach(() => {
-    rmSync(dataSourceRepo, { recursive: true, force: true })
-    rmSync(projectRoot, { recursive: true, force: true })
+    // Both were just written to by real `git` subprocesses -- see
+    // `removeTmpDir`'s docstring for why a bare `rmSync` here is racy.
+    removeTmpDir(dataSourceRepo)
+    removeTmpDir(projectRoot)
   })
 
   // Explicit `token` on every file:// case below: without it, runDataImport

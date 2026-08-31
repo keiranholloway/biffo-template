@@ -1,9 +1,9 @@
 import { execFileSync } from 'node:child_process'
-import { rmSync, writeFileSync } from 'node:fs'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { GitAdapter } from './index.js'
-import { makeTmpDir } from '../../test-utils/tmp.js'
+import { makeTmpDir, removeTmpDir } from '../../test-utils/tmp.js'
 
 /**
  * #758, proven end to end against real repositories.
@@ -37,8 +37,10 @@ describe('push leaves a branch that can be found once merged (#758)', () => {
     git(work, 'push', '-q', 'origin', 'dev')
   })
   afterEach(() => {
-    rmSync(remote, { recursive: true, force: true })
-    rmSync(work, { recursive: true, force: true })
+    // Both were just written to by real `git` subprocesses -- see
+    // `removeTmpDir`'s docstring for why a bare `rmSync` here is racy.
+    removeTmpDir(remote)
+    removeTmpDir(work)
   })
 
   /** Simulate a squash-merge: the content lands on dev as a NEW commit, and the

@@ -34,12 +34,47 @@ export function makeTmpDir(prefix: string): string {
   return dir
 }
 
+/**
+ * Recursively remove a directory a test is done with, tolerating a
+ * transient `EBUSY`/`ENOTEMPTY`/`EPERM` removing a fixture that a real `git`
+ * subprocess just wrote to. CI hit
+ * `ENOTEMPTY: directory not empty, rmdir '.../.git/info'` removing a project
+ * fixture immediately after `git commit` in
+ * `plugin-install.integration.test.ts`, on the very next commit after this
+ * one, and re-running the same check failed the same way twice.
+ *
+ * Not reproduced locally despite ~150 attempts (sequential, CPU-loaded,
+ * and up to 6-way concurrent, all on this workstation's tmpfs `/tmp`) — a
+ * `git` subprocess `execa` has already awaited to exit cannot still be
+ * writing (POSIX write()s are durable in the VFS the instant the writing
+ * process exits), so a *continuously racing writer* is not the mechanism.
+ * The more plausible cause is the CI runner's real (non-tmpfs) disk taking
+ * measurable time to apply a just-finished directory mutation under the I/O
+ * load this suite's own `vitest.config.ts` docstring already documents
+ * (several subprocess-heavy packages running concurrently) — a *bounded*
+ * catch-up delay, not an indefinitely-growing directory. A synthetic repro
+ * confirmed the distinction matters: `maxRetries`/`retryDelay` does **not**
+ * reliably recover a directory some other process keeps writing new entries
+ * into for the entire retry budget, but that isn't the shape this fix
+ * targets — `maxRetries`/`retryDelay` are Node's own `fs.rmSync` options
+ * built for exactly a brief, bounded ENOTEMPTY/EBUSY, which is the shape a
+ * one-off metadata-write delay actually has.
+ *
+ * This is a plausible, principled fix for the documented error class — not
+ * a confirmed-by-local-reproduction one. Every fixture directory this suite
+ * recursively removes right after a real `git` subprocess should go through
+ * this rather than a bare `rmSync(dir, { recursive: true, force: true })`.
+ */
+export function removeTmpDir(dir: string): void {
+  rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
+}
+
 /** Remove every directory `makeTmpDir` has created in this process and forget
  * them. Called once per test file from `test-setup.ts`; exported separately
  * so the guard/unit tests can exercise it directly. */
 export function sweepTmpDirs(): void {
   for (const dir of created) {
-    rmSync(dir, { recursive: true, force: true })
+    removeTmpDir(dir)
   }
   created.clear()
 }

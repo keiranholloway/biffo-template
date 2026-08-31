@@ -296,6 +296,66 @@ describe('pathHasDivergenceTrailerInHistory — the pure lookup, with a fake git
       )
     })
   })
+
+  describe(
+    '#1822 — the basename fallback must not collide across DIFFERENT template-owned ' +
+      'paths that happen to share a basename',
+    () => {
+      // Real shape: biffo-platform's actual 3f27545e commit touches both root
+      // package.json and _skeletons/sibling-template/apps/frontend/package.json
+      // — two DIFFERENT template-owned paths sharing the basename
+      // `package.json` — and its trailer names only the root file by basename.
+      const manifest: CoreManifest = {
+        version: 1,
+        templateOwned: ['package.json', '_skeletons/sibling-template/apps/frontend/package.json'],
+        userOwned: [],
+      }
+      const log =
+        '\x023f27545e\x01' +
+        'chore(core): upgrade template core 0.204.3 -> 0.249.8 (#152)\n\n' +
+        "Core-Divergence: package.json keeps this instance's bounded undici override\n"
+      const diffTree = (): string =>
+        'package.json\n_skeletons/sibling-template/apps/frontend/package.json\n'
+
+      it('recognises the root path the trailer actually names', () => {
+        const git = fakeGit({ log, isShallow: 'false', diffTree })
+        expect(pathHasDivergenceTrailerInHistory('/repo', 'package.json', manifest, git)).toBe(true)
+      })
+
+      it(
+        'does NOT amnesty the co-touched sibling that merely shares a basename with the ' +
+          'genuinely-declared path — this is the line that fails against the pre-#1822-fix code',
+        () => {
+          const git = fakeGit({ log, isShallow: 'false', diffTree })
+          expect(
+            pathHasDivergenceTrailerInHistory(
+              '/repo',
+              '_skeletons/sibling-template/apps/frontend/package.json',
+              manifest,
+              git,
+            ),
+          ).toBe(false)
+        },
+      )
+
+      it("a basename that is unique among the commit's touched template-owned paths still matches", () => {
+        // Control: with only ONE template-owned path in the diff sharing that
+        // basename, the basename fallback must keep working exactly as #1815
+        // established — this proves the uniqueness check does not regress the
+        // ordinary, unambiguous case.
+        const uniqueManifest: CoreManifest = {
+          version: 1,
+          templateOwned: ['package.json', 'core-manifest.json', 'AGENTS.md'],
+          userOwned: [],
+        }
+        const uniqueDiffTree = (): string => 'package.json\ncore-manifest.json\nAGENTS.md\n'
+        const git = fakeGit({ log, isShallow: 'false', diffTree: uniqueDiffTree })
+        expect(
+          pathHasDivergenceTrailerInHistory('/repo', 'package.json', uniqueManifest, git),
+        ).toBe(true)
+      })
+    },
+  )
 })
 
 describe('checkOrphanRatchet vs the Core-Divergence TRAILER route (#1718)', () => {
@@ -538,6 +598,53 @@ describe('checkOrphanRatchet vs the Core-Divergence TRAILER route (#1718)', () =
     expect(rlsEntry?.orphaned).toBe(true)
     expect(plan.orphaned.map((e) => e.path)).toContain(DIVERGED)
   })
+
+  it(
+    '#1822 end-to-end: two different template-owned paths sharing a basename in the same ' +
+      'commit are not both amnestied by a trailer naming only one of them',
+    async () => {
+      // Matches the issue's own minimal synthetic reproduction: a root
+      // package.json and a nested sub/package.json, both template-owned,
+      // touched by the same commit, whose trailer names only the basename —
+      // which is unambiguous for the root file but NOT for the nested one.
+      const manifest: CoreManifest = {
+        version: 1,
+        templateOwned: ['package.json', 'sub/package.json'],
+        userOwned: [],
+      }
+      initRepo(ours)
+      w(ours, 'package.json', 'root\n')
+      w(ours, 'sub/package.json', 'sub\n')
+      commit(ours, 'chore: init\n')
+      w(ours, 'package.json', 'root2\n')
+      w(ours, 'sub/package.json', 'sub2\n')
+      commit(
+        ours,
+        'chore(core): upgrade\n\n' +
+          "Core-Divergence: package.json keeps this instance's bounded undici override\n",
+      )
+
+      const plan = await planCoreUpgrade({
+        baseDir: base,
+        oursDir: ours,
+        theirsDir: theirs,
+        manifest,
+        mergeFile: neverMerges,
+      })
+
+      const rootEntry = plan.entries.find((e) => e.path === 'package.json')
+      expect(rootEntry?.orphaned).not.toBe(true)
+
+      // This is the line that fails against the pre-#1822-fix code:
+      // sub/package.json was never declared divergent anywhere in history,
+      // yet the basename fallback (added for #1815) reads it as declared
+      // purely because it shares a basename with the genuinely-declared root
+      // file.
+      const subEntry = plan.entries.find((e) => e.path === 'sub/package.json')
+      expect(subEntry?.orphaned).toBe(true)
+      expect(plan.orphaned.map((e) => e.path)).toContain('sub/package.json')
+    },
+  )
 
   it(
     'cross-guard agreement (#1718 acceptance criterion): checkCoreOwnership accepts the same ' +

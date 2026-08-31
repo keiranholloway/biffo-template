@@ -280,7 +280,14 @@ const EMPTY_SUMMARY: () => Record<MergeStatus, number> = () => ({
  *    history actually refers to a file: `"package.json keeps this instance's
  *    bounded undici override"`, `"adds an instance-owned
  *    .github/workflows/rls-tests.yml under a"`) at a token boundary, so
- *    `manifest.json` cannot be read out of `core-manifest.json`.
+ *    `manifest.json` cannot be read out of `core-manifest.json` — AND, when
+ *    the match is by basename only, that basename must be unique among the
+ *    OTHER template-owned paths the same commit touched (#1822): a bare
+ *    basename mention cannot disambiguate `package.json` from
+ *    `_skeletons/sibling-template/apps/frontend/package.json` when both are
+ *    touched by the same commit, so a basename shared by two or more touched
+ *    template-owned paths is not accepted for either on that basis alone
+ *    (fails closed). A full-path mention has no such ambiguity.
  *
  * (1) alone covers every fixture in this module's own tests (each commits
  * exactly one file). (2) is what recovers `package.json` from the real
@@ -383,7 +390,7 @@ export function pathHasDivergenceTrailerInHistory(
     if (templateOwnedTouched.length === 1 && templateOwnedTouched[0] === path) return true
 
     const reason = parseDivergenceTrailer(message)
-    if (reason !== null && trailerNamesPath(reason, path)) return true
+    if (reason !== null && trailerNamesPath(reason, path, templateOwnedTouched)) return true
   }
   return false
 }
@@ -434,8 +441,25 @@ function shallowGraftCommits(oursDir: string, git: GitRunner): Set<string> {
  * `practices-daily.sh` correctly, because the character before it is a slash
  * separating list items, not a character that would make it part of a longer,
  * different filename.
+ *
+ * ## The basename collision problem (#1822)
+ *
+ * A bare basename mention cannot disambiguate between two DIFFERENT
+ * template-owned paths that happen to share one — real shape:
+ * `biffo-platform`'s actual `3f27545e` commit touches both root
+ * `package.json` and `_skeletons/sibling-template/apps/frontend/package.json`
+ * in the same diff, and its trailer ("`package.json` keeps this instance's
+ * bounded undici override") is unambiguously about the root file, but a
+ * bare-basename match previously accepted it for BOTH. `templateOwnedTouched`
+ * — the same list criterion (1) above already computes for this commit — is
+ * passed in so a basename match can check whether it is actually unique among
+ * the paths this commit's diff touched: if two or more of them share `path`'s
+ * basename, the mention cannot tell them apart and neither is accepted on
+ * that basis alone (fails closed, same contract as the rest of this
+ * function). A full-path mention has no such ambiguity and is always
+ * sufficient regardless of what else the commit touched.
  */
-function trailerNamesPath(reason: string, path: string): boolean {
+function trailerNamesPath(reason: string, path: string, templateOwnedTouched: string[]): boolean {
   const isBoundary = (ch: string | undefined): boolean =>
     ch === undefined || !/[A-Za-z0-9_.-]/.test(ch)
   const namedAt = (needle: string): boolean => {
@@ -448,7 +472,11 @@ function trailerNamesPath(reason: string, path: string): boolean {
       idx += 1
     }
   }
-  return namedAt(path) || namedAt(basename(path))
+  if (namedAt(path)) return true
+  const base = basename(path)
+  if (!namedAt(base)) return false
+  const sharingBasename = templateOwnedTouched.filter((p) => basename(p) === base)
+  return sharingBasename.length <= 1
 }
 
 /**

@@ -70,15 +70,54 @@ _SALVAGEABLE_FIELDS = frozenset({"user_ingress", "admin_ingress"})
 
 @dataclass(frozen=True)
 class DeclaredRoute:
-    """One manifest-declared ``api_routes`` entry (ADR-0003).
+    """One manifest-declared ``api_routes`` entry (ADR-0003), with the table rule
+    that authorises it.
 
     These are NOT served by the plugin's own app — Core generates handlers for
     them from the table declaration. The host only needs to recognise them so it
     can forward them to Core (#652); it never implements them.
+
+    The three permission fields are the ADR-0004 rule for this route's own
+    ``operation``, resolved at discovery from the same manifest's ``tables``
+    (``PluginManifest`` already guarantees the table is declared). They are the
+    **raw** rule rather than a single derived flag on purpose: they are what the
+    manifest actually said, so they stay meaningful if the predicate below is
+    ever refined, and they age better than a boolean whose reasoning has been
+    thrown away.
+
+    Defaults mirror ``PermissionRule``'s own (``allowed=False``, no role, no
+    code), so ``DeclaredRoute(method=..., path=...)`` still constructs and lands
+    in the leave-alone case of :attr:`authorises_nobody` — every construction
+    that predates #1837 keeps behaving exactly as it did.
     """
 
     method: str
     path: str
+    #: ADR-0004: whether the generic CRUD layer exposes this operation at all.
+    allowed: bool = False
+    #: Any-of role allow-list. Empty means any authenticated caller.
+    required_role: tuple[str, ...] = ()
+    #: ADR-0004's second axis — a DB-held permission code (#1606). Empty means
+    #: not checked.
+    permission_code: str = ""
+
+    @property
+    def authorises_nobody(self) -> bool:
+        """Whether this route's table rule expresses no authorisation of its own
+        — #1837's "the rule authorises nobody" (it names nobody in particular, so
+        Core admits *any* authenticated caller of the tenant).
+
+        Both ADR-0004 axes, because Core's ``require_principal_crud_permission``
+        **ANDs** them: a table gated only by a ``permission_code`` HAS expressed
+        authorisation, and treating it as open would make the host reject a
+        caller who holds the code but is not in the plugin's group — the same
+        class of regression as rejecting ``admin`` on ``marketing_click``.
+
+        ``allowed: false`` is deliberately not this case (#1837 decision 2):
+        Core answers 404 for it, and the host must not turn that into a 403 that
+        leaks the route's existence.
+        """
+        return self.allowed and not self.required_role and not self.permission_code
 
 
 @dataclass(frozen=True)
@@ -144,6 +183,53 @@ def _load_manifest_tolerant(manifest_path: Path) -> PluginManifest | None:
             return None
 
 
+def _declared_routes(
+    manifest: PluginManifest, required_group: str | None
+) -> tuple[DeclaredRoute, ...]:
+    """Each declared ``api_route`` carrying its table's ADR-0004 rule for that
+    route's own ``operation``.
+
+    Resolved here, from data this module already parses — ``PluginManifest``
+    validates that every route's ``table`` is declared in the same manifest's
+    ``tables``, so there is no new manifest field and no second parser.
+
+    Also logs, at ERROR, the one case the #1837 fallback cannot fix: a route
+    whose rule authorises nobody on a plugin with no ``user_ingress.required_group``
+    to fall back to. No group is invented (decision 3), so such a route stays
+    open — but it must not stay *silent*: silence is how this defect survived in
+    the first place.
+    """
+    tables = {t.name: t for t in manifest.tables}
+    routes: list[DeclaredRoute] = []
+    for route in manifest.api_routes:
+        table = tables.get(route.table)
+        # Validation guarantees the table exists; a miss could only come from a
+        # future model change, and default-deny is the safe read of "unknown".
+        rule = getattr(table.permissions, route.operation, None) if table else None
+        declared = DeclaredRoute(
+            method=route.method,
+            path=route.path,
+            allowed=bool(rule.allowed) if rule is not None else False,
+            required_role=tuple(rule.required_role) if rule is not None else (),
+            permission_code=rule.permission_code if rule is not None else "",
+        )
+        if declared.authorises_nobody and not required_group:
+            _LOGGER.error(
+                "Plugin %r declares route %s %s on table %r (operation %r) whose "
+                "permission rule authorises nobody, and the plugin declares no "
+                "user_ingress.required_group to fall back to. The host cannot "
+                "refuse an unauthorised caller on this route "
+                "(biffo-template#1837, decision 3).",
+                manifest.name,
+                route.method,
+                route.path,
+                route.table,
+                route.operation,
+            )
+        routes.append(declared)
+    return tuple(routes)
+
+
 def discover_plugins(services_root: str | Path) -> list[DiscoveredPlugin]:
     """Every user-facing or admin-facing plugin under ``services_root``, sorted by
     name. A directory without a ``biffo.plugin.json``, or whose manifest declares
@@ -168,17 +254,14 @@ def discover_plugins(services_root: str | Path) -> list[DiscoveredPlugin]:
         if manifest.user_ingress is None and manifest.admin_ingress is None:
             continue  # data/event-only plugin — nothing for the host to mount
 
-        declared = tuple(
-            DeclaredRoute(method=route.method, path=route.path) for route in manifest.api_routes
-        )
+        required_group = manifest.user_ingress.required_group if manifest.user_ingress else None
+        declared = _declared_routes(manifest, required_group)
 
         found.append(
             DiscoveredPlugin(
                 name=manifest.name,
                 app_ref=manifest.user_ingress.app if manifest.user_ingress else None,
-                required_group=(
-                    manifest.user_ingress.required_group if manifest.user_ingress else None
-                ),
+                required_group=required_group,
                 admin_app_ref=manifest.admin_ingress.app if manifest.admin_ingress else None,
                 admin_required_group=(
                     manifest.admin_ingress.required_group if manifest.admin_ingress else None

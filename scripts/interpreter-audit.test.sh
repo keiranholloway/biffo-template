@@ -393,6 +393,29 @@ d="$WORK/script-to-script-cmdsub-backtick"
 make_script_fixture "$d" "inner" "outer" 'sh `dirname "$0"`/inner.sh'
 assert_case "script-to-script: backtick-command-substitution-with-internal-whitespace target is UNPARSEABLE, not dropped" "$d" 1 1 "COULD NOT EXAMINE" "MISMATCH"
 
+# MUST be caught, in the "could not examine" state: #1828's own reproduction
+# -- a backslash-escaped space INSIDE the script-argument path itself
+# (`sh scripts/verify\ sub\ dir/inner.sh`), not inside a quoted or
+# substituted expression the way #1809 and #1826 were. Same naive
+# `[^ \t]+` token extraction, same internal-whitespace truncation (the
+# escaped space), but the captured fragment (`scripts/verify\`) carries none
+# of `token_is_truncated()`'s five tracked signals (no unbalanced `"`, `'`,
+# `(`/`)`, or backtick) -- so it fell through uncounted a THIRD time, inside
+# the very fix that had just closed #1826. This is the case that motivated
+# replacing the whole enumerated-character approach with shell_word_length()
+# (see the "Eleventh-pass" header section) rather than adding a sixth signal.
+d="$WORK/script-to-script-escaped-space"
+make_script_fixture "$d" "inner" "outer" 'sh scripts/verify\ sub\ dir/inner.sh'
+assert_case "script-to-script: backslash-escaped-space target is UNPARSEABLE, not dropped" "$d" 1 1 "COULD NOT EXAMINE" "MISMATCH"
+
+# MUST be caught, in the "could not examine" state: shell_word_length()'s own
+# fixture matrix companion -- an escaped space combined with a command
+# substitution in the SAME argument, to check the two constructs compose
+# rather than one masking a regression in the other.
+d="$WORK/script-to-script-escaped-space-and-cmdsub"
+make_script_fixture "$d" "inner" "outer" 'sh "$(dirname "$0")"/sub\ dir/inner.sh'
+assert_case "script-to-script: escaped space plus command substitution in one target is UNPARSEABLE, not dropped" "$d" 1 1 "COULD NOT EXAMINE" "MISMATCH"
+
 # MUST NOT be caught: a script body is full of prose that LOOKS like an
 # invocation and is not one -- usage comments, echo/printf help text,
 # test-scenario labels (real examples in this file's own header: biffo.sh's

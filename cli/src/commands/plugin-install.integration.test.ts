@@ -9,7 +9,7 @@
  * adapter, a manifest shape the real validator rejects, etc.
  */
 import { execa } from 'execa'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { http, HttpResponse } from 'msw'
 import { setupServer } from 'msw/node'
@@ -17,7 +17,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { GitAdapter } from '../adapters/git/index.js'
 import { RegistryAdapter } from '../adapters/registry/index.js'
 import { runPluginInstall } from './plugin-install.js'
-import { makeTmpDir } from '../test-utils/tmp.js'
+import { makeTmpDir, removeTmpDir } from '../test-utils/tmp.js'
 
 const REGISTRY_URL = 'https://example.com/registry/plugins.json'
 const server = setupServer()
@@ -118,8 +118,11 @@ describe('runPluginInstall — end-to-end', () => {
   })
 
   afterEach(() => {
-    rmSync(pluginSourceRepo, { recursive: true, force: true })
-    rmSync(projectRoot, { recursive: true, force: true })
+    // Both fixtures were just written to by real `git` subprocesses (clone,
+    // init, add, commit) -- see `removeTmpDir`'s docstring for why a bare
+    // `rmSync` here is racy.
+    removeTmpDir(pluginSourceRepo)
+    removeTmpDir(projectRoot)
   })
 
   it('resolves the registry, clones the real plugin repo, installs it, and commits', async () => {

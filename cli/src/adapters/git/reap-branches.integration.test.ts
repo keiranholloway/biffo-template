@@ -1,11 +1,11 @@
 import { execFileSync } from 'node:child_process'
-import { rmSync, writeFileSync } from 'node:fs'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { classifyUpgradeBranches } from '../../lib/upgrade-branch-reaper.js'
 import { upgradeBranchName } from '../../lib/core-upgrade.js'
 import { GitAdapter } from './index.js'
-import { makeTmpDir } from '../../test-utils/tmp.js'
+import { makeTmpDir, removeTmpDir } from '../../test-utils/tmp.js'
 
 /**
  * Reaping the branches `core upgrade` leaves behind (#758), proven end to end.
@@ -39,8 +39,10 @@ describe('reaping merged upgrade branches (#758)', () => {
     git(work, 'push', '-qu', 'origin', 'dev')
   })
   afterEach(() => {
-    rmSync(remote, { recursive: true, force: true })
-    rmSync(work, { recursive: true, force: true })
+    // Both were just written to by real `git` subprocesses -- see
+    // `removeTmpDir`'s docstring for why a bare `rmSync` here is racy.
+    removeTmpDir(remote)
+    removeTmpDir(work)
   })
 
   /** Create an upgrade branch and push it the way the tool does. */

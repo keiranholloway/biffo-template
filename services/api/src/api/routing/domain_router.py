@@ -84,43 +84,6 @@ def _discover_domain_names() -> list[str]:
     )
 
 
-def _translate_tracer_import_error(name: str, err: ImportError) -> ImportError | None:
-    """Turn the generic partial-init crash from ``from ...main import tracer``
-    into an actionable one, or return ``None`` to let an unrelated import
-    failure propagate unchanged.
-
-    ``main.py`` constructs its module-level ``tracer`` *after* this function
-    runs (issue #1779), deliberately: ``Tracer()``'s own ``__init__`` eagerly
-    imports ``aws_xray_sdk``/``botocore``, and constructing it before domain
-    registration used to silently pre-warm that cost onto whichever domain got
-    imported next, masking it from any downstream fix trying to measure its
-    own import weight (issue #1808, tabsii-platform#1238). A domain that reaches
-    for the shared instance the same way it reaches for ``api.identity``'s
-    registry (see ``domains/README.md``) therefore always fails here, with
-    Python's stock "partially initialized module" message — which names
-    neither the real cause nor the fix.
-
-    Detected narrowly: only the exact shape that produces (an ``ImportError``
-    naming ``api.main`` itself, whose message mentions ``tracer``), so any
-    other genuine import failure inside a domain package still surfaces with
-    its own real message.
-    """
-    if err.name == f"{_ROOT_PACKAGE}.main" and "tracer" in str(err):
-        return ImportError(
-            f"product domain {name!r} imports `tracer` from {_ROOT_PACKAGE}.main "
-            "at import time, but main.py constructs it AFTER build_domain_router() "
-            "runs -- deliberately, so Tracer()'s eager aws_xray_sdk/botocore import "
-            "cost is not pre-warmed onto every domain (issue #1779). Construct your "
-            "own `Tracer()` in this domain instead: aws_lambda_powertools caches its "
-            "underlying provider as a class attribute, so a `Tracer()` built here "
-            "resolves to the exact same tracer as main.py's, without importing a "
-            "partially-initialized module. See services/api/src/api/domains/"
-            'README.md\'s "Tracing your own domain code" section.',
-            name=err.name,
-        )
-    return None
-
-
 def build_domain_router() -> APIRouter:
     """One ``APIRouter`` aggregating every product domain's exported routers.
 
@@ -128,16 +91,15 @@ def build_domain_router() -> APIRouter:
     their own paths (no ``/domains/<name>`` namespacing), so a domain relocated
     into this tree serves the *same* paths it did as a native router — the API
     contract to siblings is unchanged (ADR-0022). Empty in the base deployment.
+
+    Domain packages import here, at this call, before ``main.py`` has finished
+    executing (#1779) — including any that do ``from ...main import tracer``.
+    That resolves correctly via ``main.__getattr__`` (#1808) rather than
+    raising, so no special handling is needed here for it.
     """
     router = APIRouter()
     for name in _discover_domain_names():
-        try:
-            module = importlib.import_module(f"{_DOMAINS_PACKAGE}.{name}")
-        except ImportError as err:
-            translated = _translate_tracer_import_error(name, err)
-            if translated is not None:
-                raise translated from err
-            raise
+        module = importlib.import_module(f"{_DOMAINS_PACKAGE}.{name}")
         domain_routers: Sequence[APIRouter] = getattr(module, "routers", ())
         for sub in domain_routers:
             router.include_router(sub)

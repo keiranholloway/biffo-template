@@ -147,27 +147,12 @@ every change needs a per-commit `Core-Divergence` trailer.
 
 ## Tracing your own domain code
 
-`main.py` builds a module-level `tracer = aws_lambda_powertools.Tracer()`, but
-constructs it **after** `build_domain_router()` runs — i.e. after your
-domain's `__init__.py` has already been imported (issue #1779).
-`Tracer()`'s own `__init__` eagerly imports `aws_xray_sdk`/`botocore`
-regardless of whether tracing ends up enabled; constructing it before domain
-registration used to silently pre-warm that cost onto whichever domain
-happened to import next, masking it from any downstream fix trying to
-measure its own import weight. Deferring it fixed that, but it also means
-`from api.main import tracer` — the obvious move, symmetric with the
-identity-provider example above — **always raises** `ImportError: cannot
-import name 'tracer' from partially initialized module 'api.main'` at
-deploy-time import: `main.tracer` genuinely does not exist yet at the moment
-your package is imported.
-
-**Do not import `main.tracer`. Construct your own instead:**
+`main.py` builds a module-level `tracer`, and — symmetric with the
+identity-provider example above — you can reach for it the obvious way:
 
 ```python
 # domains/<name>/__init__.py
-from aws_lambda_powertools import Tracer
-
-tracer = Tracer()
+from ...main import tracer
 
 
 @tracer.capture_method
@@ -175,17 +160,21 @@ def some_handler_helper(...):
     ...
 ```
 
-This is not a second, divergent tracer — `aws_lambda_powertools` caches the
-underlying X-Ray provider as a class attribute shared by every `Tracer()`
-instance in the process, so whichever one is constructed first (your
-domain's, since it runs before `main.py`'s) does the real
-`aws_xray_sdk`/`botocore` import and every later `Tracer()` — including
-`main.py`'s own, further down the module — reuses that same provider for
-free. The two objects are different instances but the same tracer: no
-double-patching, no behavioural difference from importing a shared instance,
-and the import cost is now correctly attributed to the domain that actually
-wants tracing instead of silently absorbed by whichever router happened to
-load first. `build_domain_router()` detects the disallowed `main.tracer`
-import specifically and re-raises it with a message pointing back here,
-rather than the raw partial-init text, so this is not a trap left for the
-next author to discover by cold-start crash.
+Its *construction* is deliberately deferred to just before its only in-module
+use, decorating `lambda_handler`, which is textually **after**
+`build_domain_router()` — i.e. after your `__init__.py` has already been
+imported (issue #1779): `Tracer()`'s own `__init__` eagerly imports
+`aws_xray_sdk`/`botocore` regardless of whether tracing ends up enabled, and
+constructing it before domain registration used to silently pre-warm that
+cost onto whichever domain happened to import next, masking it from any
+downstream fix trying to measure its own import weight.
+
+That deferral does not break the import above (issue #1808): `main.py`
+resolves `tracer` lazily via a module-level `__getattr__` (PEP 562), so
+whichever import reaches for it first — your domain's, since it runs before
+`main.py`'s own bottom-of-file assignment — constructs the one real `Tracer()`
+instance for the process there, and every later reference (including
+`main.py`'s own) reuses that same object. So the import cost lands on the
+domain that actually wants tracing, not on whichever router/domain happened
+to load next regardless of whether it traces at all — and a domain that never
+touches `tracer` never pays for it.

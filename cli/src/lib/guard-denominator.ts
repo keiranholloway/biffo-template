@@ -380,6 +380,78 @@ function adjacentWord(line: string, digitStart: number): string | undefined {
 }
 
 /**
+ * The hard right-hand boundary of the CLAUSE a count belongs to — `,`, `;`
+ * or `:`, or a period that plausibly ends a sentence rather than continues
+ * one (followed by whitespace or end-of-string, so a file extension like
+ * `.tf` — period immediately followed by a letter, no space — is not a
+ * boundary here any more than it is a boundary for `BARE_COUNT` itself).
+ *
+ * ### #1797: Shape B's unbounded scan, closed with a CLAUSE bound, not a distance one
+ *
+ * #1649's prosecution measured, with real corpus and constructed
+ * counter-examples (see that block's own `#1649` describe below), that a
+ * WORD- or CHARACTER-distance window cannot separate a genuine right-side
+ * match from a forge: the real corpus's own widest gap
+ * (`core-direct-paths`, ~9 tokens) is already wider than the narrowest forge
+ * (`listening on port 8080 today; audited separately`, 2 tokens), so no
+ * single window admits one and excludes the other, and a forge can always be
+ * written longer still. That is still true, and this fix does not attempt
+ * it.
+ *
+ * What separates every must-accept line in the real, CI-wired corpus from
+ * both of #1797's reported forges is not distance — it is that the forges
+ * put the vocabulary word in a CLAUSE OF ITS OWN, introduced by a hard
+ * separator, while every real accept's vocabulary word sits in the SAME
+ * clause as its count, however many words away:
+ *
+ *     70 .tf file(s) scanned under /repo                    — same clause, 3 words
+ *     7 declared model id(s) checked against 400 known...   — same clause, 3 words
+ *     0 core-direct call site(s) found under .../src         — same clause, ~9 words
+ *       (9 file(s) scanned)
+ *     listening on port 8080 today; audited separately       — NEW clause after `;`
+ *     connected to host1: 8080, examined nothing else        — NEW clause after `,`
+ *
+ * So Shape B's right-hand scan is now truncated at the first `,`, `;`, `:` or
+ * sentence-ending `.` reached — not at a fixed distance, but at the same
+ * kind of boundary `BARE_COUNT` already uses to decide where a COUNT ends
+ * (its own char class is `[\s),;:]` plus the decimal-aware `\.(?!\d)`). A
+ * closing `)` is deliberately NOT a boundary here even though `BARE_COUNT`
+ * treats it as one on the count's own right edge: the real
+ * `core-direct-paths` accept above crosses one (`site(s)` before reaching
+ * `found`/`scanned`), so treating it as a clause break would reject a
+ * genuine, currently-credited, CI-required line.
+ *
+ * Checked against all 18 of this repo's real, CI-wired bare check
+ * invocations, run live (`sh scripts/biffo.sh check <name>`, #1649's own
+ * method) and fed through `lineStatesADenominator`: zero verdicts changed —
+ * every currently-credited real line stays credited. See
+ * `guard-denominator.test.ts`'s `#1797` block for the full corpus and the
+ * two forges from #1797's issue text, both now rejected.
+ *
+ * **What this deliberately leaves open, named rather than hidden.** A forge
+ * that joins the two clauses WITHOUT any of `,`/`;`/`:`/sentence-`.` — e.g.
+ * `listening on port 8080 today and audited separately` — still forges
+ * credit, because English has no hard delimiter there for this function to
+ * see. Closing that needs the same signal #1649 already named for the
+ * distance case: which PROCESS emitted the line, or a real parse of clause
+ * structure, neither of which this per-line text scan has. Not invented to
+ * pre-empt — no guard in this repo's real output does this today (checked
+ * against the same live corpus above).
+ */
+const CLAUSE_BOUNDARY = /[,;:]|\.(?=\s|$)/
+
+/**
+ * `line.slice(digitEnd)`, truncated at the first `CLAUSE_BOUNDARY` — the
+ * text Shape B is allowed to search for a vocabulary word, i.e. only the
+ * REST OF THE SAME CLAUSE the count itself sits in.
+ */
+function sameClauseRightSlice(line: string, digitEnd: number): string {
+  const rest = line.slice(digitEnd)
+  const boundary = CLAUSE_BOUNDARY.exec(rest)
+  return boundary ? rest.slice(0, boundary.index) : rest
+}
+
+/**
  * Does one line of REAL, EMITTED output state a denominator? Denominator
  * vocabulary AND a bare count on the same line — `audited 30 shell file(s)`
  * passes, `audited the plugin-allowlist naming convention under /repo-2` does
@@ -423,37 +495,41 @@ function adjacentWord(line: string, digitStart: number): string | undefined {
  * vocabulary, which `port`, `line`, `host1`, `ipv4`, `eth0` and `worker3`
  * never are, whatever punctuation or digit separates them from their count.
  *
- * **Shape B — the vocabulary sits somewhere to the RIGHT of the count, on
- * the same line.** This is what the pre-existing non-adjacent design
+ * **Shape B — the vocabulary sits somewhere to the RIGHT of the count, IN
+ * THE SAME CLAUSE.** This is what the pre-existing non-adjacent design
  * (`12 path(s) reached`, `70 .tf file(s) scanned…`) actually needs, and it is
- * kept — deliberately not bounded to a fixed word window, for the reason the
- * original non-adjacency design already gave: a tuned window is the
- * sharpening-the-detector move this file exists to stop making. What changes
- * is the DIRECTION. The old design accepted a count if vocabulary sat
- * anywhere on the LINE — left or right, adjacent or not — and relied on the
- * noun-blocklist to claw back the cases that broke. The new design only ever
- * looks right of the count. Checked against every round-3 forge:
- * `audited host1: 8080 for issues`, `audited ipv4: 8080 for issues`,
- * `audited eth0: 100 packets for issues` and `audited worker3, 42 jobs for
- * issues` all have their vocabulary word (`audited`) to the LEFT of the
- * incidental number, and nothing vocabulary-shaped to its right — `for
- * issues` / `packets for issues` / `jobs for issues` contain none of
- * `DENOMINATOR_VOCABULARY`'s words. Neither shape fires, so none of the four
- * is credited. This is not a further-tightened rule about these four
- * specific strings; it is the general consequence of requiring a positive
- * touching-vocabulary or right-side signal, which nothing shaped like them
- * has.
+ * kept — deliberately not bounded to a fixed word window (see
+ * `CLAUSE_BOUNDARY`'s docstring for why a distance window cannot work; #1649
+ * measured it). What changes from the pre-#1617 design is the DIRECTION: the
+ * old design accepted a count if vocabulary sat anywhere on the LINE — left
+ * or right, adjacent or not — and relied on the noun-blocklist to claw back
+ * the cases that broke. This design only ever looks right of the count, and
+ * only within the count's own clause (`sameClauseRightSlice`, #1797).
+ * Checked against every round-3 forge: `audited host1: 8080 for issues`,
+ * `audited ipv4: 8080 for issues`, `audited eth0: 100 packets for issues` and
+ * `audited worker3, 42 jobs for issues` all have their vocabulary word
+ * (`audited`) to the LEFT of the incidental number, and nothing
+ * vocabulary-shaped to its right — `for issues` / `packets for issues` /
+ * `jobs for issues` contain none of `DENOMINATOR_VOCABULARY`'s words.
+ * Neither shape fires, so none of the four is credited. This is not a
+ * further-tightened rule about these four specific strings; it is the
+ * general consequence of requiring a positive touching-vocabulary or
+ * same-clause right-side signal, which nothing shaped like them has.
  *
  * **What this deliberately leaves open, named rather than hidden.** Shape B
- * has no proximity bound, so a line that puts unrelated vocabulary anywhere
- * to the right of an incidental number — `audited host1: 8080, examined
- * further` — would still be credited. No guard in this repo's real,
- * CI-driven output does this today (checked against the full corpus this
- * module's own sweep drives), and bounding the window is exactly the
- * sharpening move this file has now stopped making twice over. If a real
- * guard ever does this, it is a new, real forge to fix when it is observed —
- * against real output, per this file's whole operating premise — not a
- * hypothetical to design against pre-emptively.
+ * is now bounded to the count's own clause, not the whole line — closing
+ * #1649's `listening on port 8080 today; audited separately` /
+ * `connected to host1: 8080, examined nothing else` — but a forge that joins
+ * an incidental number to unrelated vocabulary with NO hard separator at all
+ * (`listening on port 8080 today and audited separately`) still forges,
+ * because nothing marks a clause boundary there for this function to see. No
+ * guard in this repo's real, CI-driven output does this today (checked
+ * against the full corpus this module's own sweep drives), and going further
+ * would need knowing which PROCESS emitted the line or a real clause parse —
+ * neither of which a per-line text scan has. If a real guard ever does this,
+ * it is a new, real forge to fix when it is observed — against real output,
+ * per this file's whole operating premise — not a hypothetical to design
+ * against pre-emptively.
  *
  * ### The three disclosed ambiguous lines, decided under the new rule
  *
@@ -492,7 +568,7 @@ export function lineStatesADenominator(line: string): boolean {
     const digitEnd = digitStart + match[0].length
     const leftWord = adjacentWord(line, digitStart)
     if (leftWord !== undefined && DENOMINATOR_VOCABULARY.test(leftWord)) return true // Shape A
-    if (DENOMINATOR_VOCABULARY.test(line.slice(digitEnd))) return true // Shape B
+    if (DENOMINATOR_VOCABULARY.test(sameClauseRightSlice(line, digitEnd))) return true // Shape B
   }
   return false
 }

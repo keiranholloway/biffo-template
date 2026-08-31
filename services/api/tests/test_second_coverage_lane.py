@@ -17,6 +17,8 @@ from pathlib import Path
 
 import yaml
 
+from ._gate_shell_exec import extract_gate_script, run_gate_script
+
 _ROOT = Path(__file__).resolve().parents[3]
 _SCRIPT = _ROOT / "scripts" / "second_coverage_lane.py"
 _spec = importlib.util.spec_from_file_location("second_coverage_lane", _SCRIPT)
@@ -213,11 +215,14 @@ class TestTheGateIsWiredAndTrusted:
                 "under test's own copy of the thing judging it."
             )
 
-    def test_a_gate_that_cannot_run_reports_failure_not_success(self):
-        # Every bail-out in the step must set `state=failure`. The pre-#637
-        # inline version's defect was falling back to Python-only coverage when
-        # the lane artefact was not there, silently — a fail-open. `state=` is
-        # only ever written as success on an assertion that actually ran.
+    def test_the_gate_step_declares_no_new_success_paths(self):
+        # Structural, and deliberately narrow: it only catches a NEW textual
+        # success path being added, not whether the existing two are reached
+        # correctly under real conditions -- that is what
+        # TestTheGateActuallyRuns below is for (#1749). Kept because it is a
+        # real, cheap defence in its own right: a third `echo "state=success"`
+        # is a new way for the gate to pass without having asserted anything,
+        # and grepping for it costs nothing.
         ci = self._ci()
         gate_step = ci[ci.index("- name: Error-branch coverage") :]
         gate_step = gate_step[: gate_step.index("- name: Report Error-branch coverage")]
@@ -226,11 +231,6 @@ class TestTheGateIsWiredAndTrusted:
             f"Expected exactly two success paths in the gate step (no-lane assertion "
             f"passed, combined assertion passed); found {successes}. A new success path "
             "is a new way for the gate to pass without having asserted anything."
-        )
-        assert "did not conclude for" in gate_step, (
-            "The wait for the second lane no longer reports a timeout. A gate that "
-            "cannot assert must say so; timing out silently is the fail-open that "
-            "moved this logic out of ci.yml in the first place (#637)."
         )
 
     def test_the_required_context_is_posted_even_when_the_gate_crashes(self):
@@ -247,3 +247,155 @@ class TestTheGateIsWiredAndTrusted:
             "The reporting step does not default a missing verdict to failure. An "
             "empty state must be a failure, never an absence."
         )
+
+
+class TestTheGateActuallyRuns:
+    """#1749: every test above reads `ci.yml`'s text. None of them EXECUTE the
+    gate step's shell, so none of them can catch a mutation that changes what
+    the shell *does* while leaving the substrings they grep for intact.
+
+    Verified against this repo at `origin/dev` (ec8c50b): inverting the one
+    comparison that decides which of the gate's two code paths runs --
+    `if [ "${present:-false}" != "true" ]` to `=` -- is a complete behavioural
+    regression (every commit on a repo with no second lane starts failing
+    after an 8-minute wait; a repo WITH a lane skips waiting and asserts
+    Python-only coverage, the exact fail-open #1666 exists to remove) and the
+    existing 17-test suite in `TestTheGateIsWiredAndTrusted` passes 100%
+    against it.
+
+    These tests run the REAL shell instead: `_gate_shell_exec.extract_gate_script`
+    pulls the literal `run:` block out of `ci.yml` via `yaml.safe_load` (the
+    exact bytes the runner executes, not a text search), and
+    `_gate_shell_exec.run_gate_script` executes it under `bash` with `gh`/`git`
+    shadowed and the two trusted scripts replaced by env-driven stand-ins --
+    everything else (the `if` branch itself, the `sed` extraction, the real
+    polling loop, the real timeout) runs for real. Six behaviours are exercised
+    this way; the previous suite exercised zero.
+    """
+
+    @staticmethod
+    def _script() -> str:
+        return extract_gate_script()
+
+    def test_no_lane_and_the_check_passes_is_success_without_waiting(self, tmp_path):
+        out = run_gate_script(
+            self._script(),
+            tmp_path,
+            lane_present=False,
+            coverage_exit=0,
+            lane_wait_seconds="120",  # would time the test out if the wait branch ran
+        )
+        assert out.get("state") == "success", out
+        assert "no second coverage lane" in out.get("description", ""), out
+
+    def test_no_lane_and_the_check_fails_is_failure(self, tmp_path):
+        out = run_gate_script(
+            self._script(),
+            tmp_path,
+            lane_present=False,
+            coverage_exit=1,
+            lane_wait_seconds="120",
+        )
+        assert out.get("state") == "failure", out
+        assert "unexecuted error branch" in out.get("description", ""), out
+
+    def test_lane_present_but_never_concludes_is_failure_after_the_real_wait(self, tmp_path):
+        # The behaviour #1666's acceptance criteria named explicitly: a commit
+        # where the second lane has not concluded makes the gate WAIT, and on
+        # timeout reports failure. `lane_wait/poll_seconds` are shortened so the
+        # real polling loop still runs for real, just briefly.
+        out = run_gate_script(
+            self._script(),
+            tmp_path,
+            lane_present=True,
+            lane_name="RLS Tests",
+            runs_json='{"workflow_runs": []}',
+            lane_wait_seconds="2",
+            lane_poll_seconds="1",
+        )
+        assert out.get("state") == "failure", out
+        assert "did not finish within" in out.get("description", ""), out
+        assert "did not conclude for" in out.get("_stdout", ""), out
+
+    def test_lane_present_and_concludes_success_is_combined_success(self, tmp_path):
+        runs_json = (
+            '{"workflow_runs": [{"id": 42, "name": "RLS Tests", '
+            '"created_at": "2026-01-01T00:00:00Z", "status": "completed", '
+            '"conclusion": "success"}]}'
+        )
+        out = run_gate_script(
+            self._script(),
+            tmp_path,
+            lane_present=True,
+            lane_name="RLS Tests",
+            runs_json=runs_json,
+            coverage_exit=0,
+            lane_wait_seconds="10",
+            lane_poll_seconds="1",
+        )
+        assert out.get("state") == "success", out
+        assert "combined this run" in out.get("description", ""), out
+
+    def test_lane_present_and_concludes_failure_is_failure_not_a_fallback(self, tmp_path):
+        # A red lane must not fall back to Python-only coverage -- that
+        # silent fallback is the exact fail-open #637 moved this logic out
+        # of ci.yml to remove.
+        runs_json = (
+            '{"workflow_runs": [{"id": 42, "name": "RLS Tests", '
+            '"created_at": "2026-01-01T00:00:00Z", "status": "completed", '
+            '"conclusion": "failure"}]}'
+        )
+        out = run_gate_script(
+            self._script(),
+            tmp_path,
+            lane_present=True,
+            lane_name="RLS Tests",
+            runs_json=runs_json,
+            lane_wait_seconds="10",
+            lane_poll_seconds="1",
+        )
+        assert out.get("state") == "failure", out
+        assert "cannot be asserted over a lane that did not pass" in out.get("description", ""), out
+
+    def test_the_resolver_failing_is_failure_not_silence(self, tmp_path):
+        out = run_gate_script(
+            self._script(),
+            tmp_path,
+            lane_present=False,
+            lane_exit=1,
+            lane_wait_seconds="120",
+        )
+        assert out.get("state") == "failure", out
+        assert "resolver failed" in out.get("description", ""), out
+
+    def test_inverting_the_lane_presence_check_is_caught(self, tmp_path):
+        # Pins the exact regression reported in #1749: flipping the one
+        # comparison that decides which branch runs. The unmutated step
+        # returns success immediately for a repo with no lane (asserted
+        # above); under the mutation it wrongly takes the wait branch with an
+        # empty lane name, and -- since nothing named "" ever concludes --
+        # times out to failure. If this test ever passes unmodified, the
+        # mutation stopped changing behaviour, which would mean the branch
+        # itself was deleted or restructured; re-derive the mutation rather
+        # than deleting this test.
+        mutated = self._script().replace(
+            'if [ "${present:-false}" != "true" ]; then',
+            'if [ "${present:-false}" = "true" ]; then',
+            1,
+        )
+        assert mutated != self._script(), (
+            "the targeted line was not found -- the step was restructured"
+        )
+        out = run_gate_script(
+            mutated,
+            tmp_path,
+            lane_present=False,
+            coverage_exit=0,
+            lane_wait_seconds="2",
+            lane_poll_seconds="1",
+        )
+        assert out.get("state") == "failure", (
+            "A repo with no second lane should now (wrongly, under the mutation) wait "
+            f"for one and time out to failure, but got: {out}"
+        )
+        assert "did not finish within" in out.get("description", ""), out

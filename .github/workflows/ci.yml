@@ -854,6 +854,41 @@ jobs:
             terraform -chdir="$dir" validate || rc=1
           done < <(find modules -name '*.tf' -exec dirname {} \; | sort -u)
           exit $rc
+      # Terraform's native test framework (*.tftest.hcl), not to be confused
+      # with the `validate` step above. Discovered separately and
+      # deliberately: `find modules -name '*.tf'` above can never reach a
+      # tests/ directory, because tests/ holds only *.tftest.hcl and no *.tf
+      # of its own. That mismatch is exactly how 5 native test files --
+      # a real SES-identity plan-time detector test among them -- shipped to
+      # every instance for months with nothing in any workflow ever invoking
+      # `terraform test` over them (#1661). Discover by the file extension
+      # that actually marks a testable module, strip the trailing `/tests` to
+      # get back to the module root `terraform test` expects to be run from.
+      - name: Terraform test (native test suite)
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        env:
+          TF_PLUGIN_CACHE_DIR: ${{ runner.temp }}/tf-plugin-cache
+        run: |
+          mkdir -p "$TF_PLUGIN_CACHE_DIR"
+          count=0
+          rc=0
+          while IFS= read -r dir; do
+            count=$((count + 1))
+            echo "== testing $dir =="
+            terraform -chdir="$dir" init -backend=false -input=false >/dev/null || { rc=1; continue; }
+            terraform -chdir="$dir" test || rc=1
+          done < <(find modules -name '*.tftest.hcl' -exec dirname {} \; | sed 's:/tests$::' | sort -u)
+          # Fail closed on a zero denominator -- a discovery step that finds
+          # nothing must never be reported as a silent pass (the #1363
+          # class): otherwise this exact bug returns the moment someone
+          # renames tests/ or moves a module, and CI keeps reporting success
+          # while testing nothing, same as before this step existed.
+          if [ "$count" -eq 0 ]; then
+            echo "::error::terraform test: discovery found zero *.tftest.hcl files under modules/ -- either they were removed/renamed without updating this step, or this step itself is broken. Refusing to report success over zero tests run."
+            exit 1
+          fi
+          echo "terraform test: exercised $count module director$([ "$count" -eq 1 ] && echo y || echo ies) with a *.tftest.hcl suite."
+          exit $rc
       - name: Checkov (Terraform SAST)
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         uses: bridgecrewio/checkov-action@v12

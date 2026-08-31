@@ -13,7 +13,13 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { execa } from './exec.js'
 import { z } from 'zod'
-import { type CoreManifest, listTemplateOwnedFiles } from './core-manifest.js'
+import {
+  CORE_MANIFEST_FILE,
+  type CoreManifest,
+  isTemplateOwned,
+  listTemplateOwnedFiles,
+  readCoreManifest,
+} from './core-manifest.js'
 import { parseDivergenceTrailer, readDivergenceConfig } from './core-ownership-guard.js'
 import { defaultGit, type GitRunner, gitTrackedFiles } from './git-tracked-files.js'
 
@@ -301,7 +307,39 @@ export async function planCoreUpgrade(options: PlanCoreUpgradeOptions): Promise<
   // `oursDir` is deliberately NOT filtered: the instance tree is the one thing
   // the merge must see exactly as it is on disk.
   const trackedOnly = { trackedOnly: true }
-  const base = new Set(listTemplateOwnedFiles(options.baseDir, options.manifest, trackedOnly))
+  // A path can be templateOwned in the CURRENT manifest without ever having
+  // been governed by the ownership mechanism at the instance's base version —
+  // exactly what a manifest entry that has just been added produces (#1715).
+  // `listTemplateOwnedFiles(options.baseDir, options.manifest, ...)` alone
+  // would still count such a path as "in base", because it only asks whether
+  // TODAY's globs match a file that happens to already exist on disk at the
+  // base commit — it never asks whether the base commit's OWN manifest
+  // considered the path template-owned at all. That makes a file the instance
+  // diverged on entirely outside the upgrade mechanism look identical to
+  // ordinary steady-state drift, and both currently resolve to a silent
+  // `keep-ours` (excluded from `plan.changes` — no line item, no human ever
+  // sees it).
+  //
+  // Reading the base commit's own core-manifest.json and intersecting on it
+  // tells the two cases apart: a path only the CURRENT manifest owns is
+  // excluded from `base` here, so `classify()` routes it through the "added
+  // upstream" branch instead of the steady-state one — which, when the
+  // instance's copy actually diverges from theirs, surfaces as `add-conflict`
+  // (a real line item requiring human resolution) rather than disappearing.
+  //
+  // `baseManifest` is null when the base checkout predates core-manifest.json
+  // entirely (pre-ADR-0006 Phase 3) — nothing to intersect against, so every
+  // currently-owned path falls back to the prior behavior rather than being
+  // reported as newly-owned noise.
+  const baseManifestPath = join(options.baseDir, CORE_MANIFEST_FILE)
+  const baseManifest: CoreManifest | null = existsSync(baseManifestPath)
+    ? readCoreManifest(options.baseDir)
+    : null
+  const base = new Set(
+    listTemplateOwnedFiles(options.baseDir, options.manifest, trackedOnly).filter(
+      (path) => baseManifest === null || isTemplateOwned(path, baseManifest),
+    ),
+  )
   const ours = new Set(listTemplateOwnedFiles(options.oursDir, options.manifest))
   const theirs = new Set(listTemplateOwnedFiles(options.theirsDir, options.manifest, trackedOnly))
 

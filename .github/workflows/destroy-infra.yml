@@ -113,7 +113,12 @@ jobs:
           # associations and the restore CloudFront Function being removed
           # first, as though a config change were in flight, muddying the one
           # plan a human is expected to read before agreeing to a teardown.
-          TF_VAR_error_status_restore_lambda_arn: ${{ vars.ERROR_STATUS_RESTORE_LAMBDA_ARN }}
+          #
+          # Falls back to the pre-rename repo variable
+          # (ERROR_STATUS_RESTORE_LAMBDA_ARN) for the same reason as
+          # deploy-infra.yml's own copy of this comment — see there, and
+          # docs/guides/core-upgrade.md's 0.298.43 entry.
+          TF_VAR_error_status_demote_lambda_arn: ${{ vars.ERROR_STATUS_DEMOTE_LAMBDA_ARN || vars.ERROR_STATUS_RESTORE_LAMBDA_ARN }}
       # Post-destroy backstop for the flow-logs orphan (#332). The pre-destroy
       # sweep above runs while the flow log is still live, so any group it
       # deletes is immediately re-materialised by the next log delivery. Now
@@ -230,7 +235,12 @@ jobs:
           # associations and the restore CloudFront Function being removed
           # first, as though a config change were in flight, muddying the one
           # plan a human is expected to read before agreeing to a teardown.
-          TF_VAR_error_status_restore_lambda_arn: ${{ vars.ERROR_STATUS_RESTORE_LAMBDA_ARN }}
+          #
+          # Falls back to the pre-rename repo variable
+          # (ERROR_STATUS_RESTORE_LAMBDA_ARN) for the same reason as
+          # deploy-infra.yml's own copy of this comment — see there, and
+          # docs/guides/core-upgrade.md's 0.298.43 entry.
+          TF_VAR_error_status_demote_lambda_arn: ${{ vars.ERROR_STATUS_DEMOTE_LAMBDA_ARN || vars.ERROR_STATUS_RESTORE_LAMBDA_ARN }}
       # Post-destroy backstop for the flow-logs orphan (#332). See the dev job
       # for the full rationale: the pre-destroy sweep runs while the flow log is
       # still live, so it must be repeated once `terraform destroy` has removed
@@ -346,7 +356,12 @@ jobs:
           # associations and the restore CloudFront Function being removed
           # first, as though a config change were in flight, muddying the one
           # plan a human is expected to read before agreeing to a teardown.
-          TF_VAR_error_status_restore_lambda_arn: ${{ vars.ERROR_STATUS_RESTORE_LAMBDA_ARN }}
+          #
+          # Falls back to the pre-rename repo variable
+          # (ERROR_STATUS_RESTORE_LAMBDA_ARN) for the same reason as
+          # deploy-infra.yml's own copy of this comment — see there, and
+          # docs/guides/core-upgrade.md's 0.298.43 entry.
+          TF_VAR_error_status_demote_lambda_arn: ${{ vars.ERROR_STATUS_DEMOTE_LAMBDA_ARN || vars.ERROR_STATUS_RESTORE_LAMBDA_ARN }}
       # Post-destroy backstop for the flow-logs orphan (#332). See the dev job
       # for the full rationale: the pre-destroy sweep runs while the flow log is
       # still live, so it must be repeated once `terraform destroy` has removed

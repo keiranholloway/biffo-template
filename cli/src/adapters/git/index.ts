@@ -310,6 +310,54 @@ export class GitAdapter {
     return exitCode === 0
   }
 
+  /**
+   * Removes a linked worktree, returning whether it went.
+   *
+   * Deliberately NOT `--force`: the caller (`doctor --fix`, #1682) only ever
+   * reaches this after confirming the worktree is clean, so a plain `remove`
+   * should always succeed. If it does not — a lock file, a submodule holding
+   * a reference, something this check did not anticipate — failing rather
+   * than forcing past it is the point: an unexpected refusal is new
+   * information, not an obstacle to blast through on a path that deletes
+   * things.
+   */
+  async removeWorktree(cwd: string, path: string): Promise<boolean> {
+    const { exitCode } = await execa('git', ['worktree', 'remove', path], { cwd, reject: false })
+    return exitCode === 0
+  }
+
+  /**
+   * `HEAD`'s commit SHA at `cwd`, or `null` if it cannot be resolved (an
+   * unborn branch, a path that is not a git repo). Used by `doctor --fix`
+   * (#1810) to prove a worktree's *current* tip — not just its branch name —
+   * is what a merged PR actually shipped, before trusting it is safe to
+   * delete.
+   */
+  async headSha(cwd: string): Promise<string | null> {
+    const { stdout, exitCode } = await execa('git', ['rev-parse', 'HEAD'], { cwd, reject: false })
+    return exitCode === 0 ? stdout.trim() : null
+  }
+
+  /**
+   * Is `ancestor` reachable from `descendant` (including `ancestor ===
+   * descendant`)? Three-valued, not boolean: `git merge-base --is-ancestor`
+   * exits `0` for yes, `1` for no, and anything else — most commonly a SHA
+   * this repo has never fetched the object for — is a genuine "cannot tell",
+   * which callers must treat as unsafe rather than as a "no" (#1810). `cwd`
+   * only needs to be *any* worktree of the same clone: the object database is
+   * shared, so a commit reachable from one worktree's history is visible from
+   * every other.
+   */
+  async isAncestor(cwd: string, ancestor: string, descendant: string): Promise<boolean | null> {
+    const { exitCode } = await execa('git', ['merge-base', '--is-ancestor', ancestor, descendant], {
+      cwd,
+      reject: false,
+    })
+    if (exitCode === 0) return true
+    if (exitCode === 1) return false
+    return null
+  }
+
   /** Create and switch to a new branch. Fails if it already exists. */
   async createBranch(cwd: string, branch: string): Promise<void> {
     await execa('git', ['switch', '-c', branch], { cwd })

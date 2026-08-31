@@ -163,7 +163,7 @@ resource "aws_cloudfront_function" "click_rewrite" {
   code    = file("${path.module}/click-rewrite.js")
 }
 
-# Second half of the biffo-template#1529 fix (see error_status_restore_lambda_arn
+# Second half of the biffo-template#1529 fix (see error_status_demote_lambda_arn
 # in variables.tf and error-status-demote.js/error-status-restore.js for the
 # full mechanism). A viewer-response CloudFront Function, associated with the
 # same three API behaviours as aws_lambda_function.error_status_demote (in
@@ -177,7 +177,7 @@ resource "aws_cloudfront_function" "click_rewrite" {
 # below, so an instance that hasn't wired up the Lambda@Edge function (empty
 # ARN) gets no dangling function referencing it.
 resource "aws_cloudfront_function" "error_status_restore" {
-  count   = var.error_status_restore_lambda_arn == "" ? 0 : 1
+  count   = var.error_status_demote_lambda_arn == "" ? 0 : 1
   name    = "${local.name_prefix}-error-status-restore"
   runtime = "cloudfront-js-2.0"
   publish = true
@@ -485,14 +485,14 @@ resource "aws_cloudfront_distribution" "portal" {
       cache_policy_id          = data.aws_cloudfront_cache_policy.caching_disabled.id
       origin_request_policy_id = data.aws_cloudfront_origin_request_policy.all_viewer_except_host.id
 
-      # biffo-template#1529: see error_status_restore_lambda_arn (variables.tf)
+      # biffo-template#1529: see error_status_demote_lambda_arn (variables.tf)
       # and error-status-demote.js/error-status-restore.js. Both associations
       # are gated on the SAME variable and always added/removed together —
       # the Lambda@Edge trigger does the demotion an origin-response function
       # requires, the CloudFront Function restores the true status a viewer
       # actually sees. Neither is any use without the other.
       dynamic "lambda_function_association" {
-        for_each = var.error_status_restore_lambda_arn == "" ? [] : [var.error_status_restore_lambda_arn]
+        for_each = var.error_status_demote_lambda_arn == "" ? [] : [var.error_status_demote_lambda_arn]
         content {
           event_type   = "origin-response"
           lambda_arn   = lambda_function_association.value
@@ -501,7 +501,7 @@ resource "aws_cloudfront_distribution" "portal" {
       }
 
       dynamic "function_association" {
-        for_each = var.error_status_restore_lambda_arn == "" ? [] : [1]
+        for_each = var.error_status_demote_lambda_arn == "" ? [] : [1]
         content {
           event_type   = "viewer-response"
           function_arn = one(aws_cloudfront_function.error_status_restore[*].arn)
@@ -541,7 +541,7 @@ resource "aws_cloudfront_distribution" "portal" {
       # biffo-template#1529 — see the identical pair on the plugin-host
       # behaviour above for the full comment.
       dynamic "lambda_function_association" {
-        for_each = var.error_status_restore_lambda_arn == "" ? [] : [var.error_status_restore_lambda_arn]
+        for_each = var.error_status_demote_lambda_arn == "" ? [] : [var.error_status_demote_lambda_arn]
         content {
           event_type   = "origin-response"
           lambda_arn   = lambda_function_association.value
@@ -550,7 +550,7 @@ resource "aws_cloudfront_distribution" "portal" {
       }
 
       dynamic "function_association" {
-        for_each = var.error_status_restore_lambda_arn == "" ? [] : [1]
+        for_each = var.error_status_demote_lambda_arn == "" ? [] : [1]
         content {
           event_type   = "viewer-response"
           function_arn = one(aws_cloudfront_function.error_status_restore[*].arn)
@@ -624,7 +624,7 @@ resource "aws_cloudfront_distribution" "portal" {
       # code survives to (past this distribution's own error-page rewrite),
       # never WHAT the two tokens produce.
       dynamic "lambda_function_association" {
-        for_each = var.error_status_restore_lambda_arn == "" ? [] : [var.error_status_restore_lambda_arn]
+        for_each = var.error_status_demote_lambda_arn == "" ? [] : [var.error_status_demote_lambda_arn]
         content {
           event_type   = "origin-response"
           lambda_arn   = lambda_function_association.value
@@ -633,7 +633,7 @@ resource "aws_cloudfront_distribution" "portal" {
       }
 
       dynamic "function_association" {
-        for_each = var.error_status_restore_lambda_arn == "" ? [] : [1]
+        for_each = var.error_status_demote_lambda_arn == "" ? [] : [1]
         content {
           event_type   = "viewer-response"
           function_arn = one(aws_cloudfront_function.error_status_restore[*].arn)
@@ -748,7 +748,7 @@ resource "aws_cloudfront_distribution" "portal" {
   # Lambda@Edge origin-response trigger now demotes a real 403/404 to 200
   # before this block ever evaluates it (so it never fires for them), and a
   # viewer-response CloudFront Function restores the true status afterwards.
-  # See error_status_restore_lambda_arn in variables.tf and
+  # See error_status_demote_lambda_arn in variables.tf and
   # error-status-demote.js / error-status-restore.js for the full mechanism,
   # and read those files' headers before changing either half — the two are
   # coupled by a shared response header and must stay that way.

@@ -1,7 +1,9 @@
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { runDoctor } from './doctor.js'
+import { gatherRepoFacts, printReapOutcomes, runDoctor, runDoctorFix } from './doctor.js'
+import type { ReapOutcome } from '../lib/doctor-reaper.js'
+import { capturedOutput } from '../test-utils/console.js'
 import { makeTmpDir } from '../test-utils/tmp.js'
 
 vi.mock('../lib/logger.js', () => ({
@@ -30,6 +32,20 @@ function gitMock(overrides: Record<string, unknown> = {}) {
     listWorktrees: vi.fn().mockResolvedValue([]),
     countBehind: vi.fn().mockResolvedValue(0),
     showFileAtRef: vi.fn().mockResolvedValue(null),
+    removeWorktree: vi.fn().mockResolvedValue(true),
+    // #1810: defaults model the safe case — the worktree's HEAD IS the
+    // commit the merged PR shipped (self-is-ancestor-of-self).
+    headSha: vi.fn().mockResolvedValue('merged-tip-sha'),
+    isAncestor: vi.fn().mockResolvedValue(true),
+    ...overrides,
+  }
+}
+
+/** A github adapter reporting every branch as merged; override per test. */
+function githubMock(overrides: Record<string, unknown> = {}) {
+  return {
+    prVerdictForBranch: vi.fn().mockResolvedValue('merged'),
+    mergedHeadSha: vi.fn().mockResolvedValue('merged-tip-sha'),
     ...overrides,
   }
 }
@@ -188,5 +204,235 @@ describe('runDoctor', () => {
       'stale-branches',
       'worktree-stale',
     ])
+  })
+})
+
+/**
+ * `runDoctorFix` (#1682, milestone 1) — the command-level wiring from
+ * gathered facts to `reapAll`. The classification table itself is
+ * unit-tested exhaustively in `lib/doctor-reaper.test.ts`; this only proves
+ * the command actually reaches it with the facts `gatherRepoFacts` already
+ * collected, rather than `--fix` existing as a flag with nothing behind it —
+ * and that it never deletes a branch, worktree-only being this milestone's
+ * whole scope.
+ */
+describe('runDoctorFix', () => {
+  it('removes the worktree of a branch whose PR merged', async () => {
+    const git = gitMock({
+      listBranchRefs: vi
+        .fn()
+        .mockResolvedValue([
+          { name: 'chore/merged', upstream: 'refs/remotes/origin/chore/merged', track: '[gone]' },
+        ]),
+      listWorktrees: vi.fn().mockResolvedValue([{ path: '/wt/merged', branch: 'chore/merged' }]),
+    })
+    const github = githubMock()
+
+    const facts = await gatherRepoFacts({ cwd, fetch: true }, { git: git as never })
+    const outcomes = await runDoctorFix(cwd, facts, { git: git as never, github: github as never })
+
+    expect(outcomes).toEqual([
+      {
+        candidate: { branch: 'chore/merged', worktreePath: '/wt/merged' },
+        verdict: { action: 'reap' },
+        worktreeRemoved: true,
+      },
+    ])
+    expect(git.removeWorktree).toHaveBeenCalledWith(cwd, '/wt/merged')
+  })
+
+  it('keeps and never removes a worktree carrying commits ahead of its merged PR (#1810)', async () => {
+    const git = gitMock({
+      listBranchRefs: vi.fn().mockResolvedValue([
+        {
+          name: 'fix/1602-orphan-ratchet-divergence',
+          upstream: 'refs/remotes/origin/fix/1602-orphan-ratchet-divergence',
+          track: '[gone]',
+        },
+      ]),
+      listWorktrees: vi.fn().mockResolvedValue([
+        {
+          path: '/wt/realname',
+          branch: 'fix/1602-orphan-ratchet-divergence',
+        },
+      ]),
+      headSha: vi.fn().mockResolvedValue('unpushed-follow-up-sha'),
+      isAncestor: vi.fn().mockResolvedValue(false),
+    })
+    const github = githubMock({ mergedHeadSha: vi.fn().mockResolvedValue('merged-tip-sha') })
+
+    const facts = await gatherRepoFacts({ cwd, fetch: true }, { git: git as never })
+    const outcomes = await runDoctorFix(cwd, facts, { git: git as never, github: github as never })
+
+    expect(outcomes).toEqual([
+      {
+        candidate: {
+          branch: 'fix/1602-orphan-ratchet-divergence',
+          worktreePath: '/wt/realname',
+        },
+        verdict: { action: 'keep', reason: 'commits-not-in-merge' },
+        worktreeRemoved: null,
+      },
+    ])
+    expect(git.removeWorktree).not.toHaveBeenCalled()
+  })
+
+  it('keeps a worktree whose branch PR closed unmerged, and never removes it', async () => {
+    const git = gitMock({
+      listBranchRefs: vi.fn().mockResolvedValue([
+        {
+          name: 'security/undici-advisories',
+          upstream: 'refs/remotes/origin/security/undici-advisories',
+          track: '[gone]',
+        },
+      ]),
+      listWorktrees: vi
+        .fn()
+        .mockResolvedValue([{ path: '/wt/undici', branch: 'security/undici-advisories' }]),
+    })
+    const github = githubMock({ prVerdictForBranch: vi.fn().mockResolvedValue('closed') })
+
+    const facts = await gatherRepoFacts({ cwd, fetch: true }, { git: git as never })
+    const outcomes = await runDoctorFix(cwd, facts, { git: git as never, github: github as never })
+
+    expect(outcomes).toEqual([
+      {
+        candidate: { branch: 'security/undici-advisories', worktreePath: '/wt/undici' },
+        verdict: { action: 'keep', reason: 'pr-closed' },
+        worktreeRemoved: null,
+      },
+    ])
+    expect(git.removeWorktree).not.toHaveBeenCalled()
+  })
+
+  it('never considers a [gone] branch with no worktree — bare-branch reaping is milestone 2', async () => {
+    const git = gitMock({
+      listBranchRefs: vi.fn().mockResolvedValue([
+        {
+          name: 'chore/bare-merged',
+          upstream: 'refs/remotes/origin/chore/bare-merged',
+          track: '[gone]',
+        },
+      ]),
+      listWorktrees: vi.fn().mockResolvedValue([]),
+    })
+    const github = githubMock()
+
+    const facts = await gatherRepoFacts({ cwd, fetch: true }, { git: git as never })
+    const outcomes = await runDoctorFix(cwd, facts, { git: git as never, github: github as never })
+
+    expect(outcomes).toEqual([])
+    expect(github.prVerdictForBranch).not.toHaveBeenCalled()
+  })
+
+  it('never considers the branch this checkout is currently on', async () => {
+    const git = gitMock({
+      currentBranch: vi.fn().mockResolvedValue('agent/1682'),
+      listBranchRefs: vi
+        .fn()
+        .mockResolvedValue([
+          { name: 'agent/1682', upstream: 'refs/remotes/origin/agent/1682', track: '[gone]' },
+        ]),
+    })
+    const github = githubMock()
+
+    const facts = await gatherRepoFacts({ cwd, fetch: true }, { git: git as never })
+    const outcomes = await runDoctorFix(cwd, facts, { git: git as never, github: github as never })
+
+    expect(outcomes).toEqual([])
+    expect(github.prVerdictForBranch).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * `printReapOutcomes` (#1805) — the trailing summary line must be built from
+ * `worktreeRemoved`, never from `verdict.action === 'reap'` alone. A
+ * candidate judged safe to reap can still fail `git worktree remove`
+ * (locked worktree, permission error); the per-item loop already prints
+ * that as `FAILED`, and the summary used to silently count it as removed
+ * anyway, overstating success in the one line most likely to actually be
+ * read.
+ */
+describe('printReapOutcomes', () => {
+  let logSpy: ReturnType<typeof vi.spyOn>
+
+  beforeEach(() => {
+    logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+  })
+
+  afterEach(() => {
+    logSpy.mockRestore()
+  })
+
+  it('does not fold a failed removal into the "removed" count', () => {
+    const outcomes: ReapOutcome[] = [
+      {
+        candidate: { branch: 'feature-dirty', worktreePath: '/wt/feature-dirty' },
+        verdict: { action: 'reap' },
+        worktreeRemoved: false,
+      },
+      {
+        candidate: { branch: 'feature-open', worktreePath: '/wt/feature-open' },
+        verdict: { action: 'reap' },
+        worktreeRemoved: true,
+      },
+    ]
+
+    printReapOutcomes(outcomes)
+
+    const out = capturedOutput(logSpy)
+    expect(out).toContain('FAILED   /wt/feature-dirty (feature-dirty)')
+    expect(out).toContain('removed  /wt/feature-open (feature-open)')
+    // Exactly one worktree was actually removed, and the failure must not
+    // vanish from the printed denominator: the old `${reaped.length}
+    // removed` computation reported "2 removed, 0 kept" here.
+    expect(out).toContain('--fix: 1 removed, 1 failed, 0 kept, of 2 worktree(s) considered.')
+  })
+
+  it('reports "0 failed" honestly when every reap attempt actually succeeded', () => {
+    const outcomes: ReapOutcome[] = [
+      {
+        candidate: { branch: 'chore/merged', worktreePath: '/wt/merged' },
+        verdict: { action: 'reap' },
+        worktreeRemoved: true,
+      },
+      {
+        candidate: { branch: 'pr-open', worktreePath: '/wt/pr-open' },
+        verdict: { action: 'keep', reason: 'pr-open' },
+        worktreeRemoved: null,
+      },
+    ]
+
+    printReapOutcomes(outcomes)
+
+    expect(capturedOutput(logSpy)).toContain(
+      '--fix: 1 removed, 0 failed, 1 kept, of 2 worktree(s) considered.',
+    )
+  })
+
+  it('reports the #1810 keep reasons in plain English, not the raw reason code', () => {
+    const outcomes: ReapOutcome[] = [
+      {
+        candidate: { branch: 'fix/1602-orphan-ratchet-divergence', worktreePath: '/wt/realname' },
+        verdict: { action: 'keep', reason: 'commits-not-in-merge' },
+        worktreeRemoved: null,
+      },
+      {
+        candidate: { branch: 'chore/merged', worktreePath: '/wt/merged' },
+        verdict: { action: 'keep', reason: 'unknown-merge-head' },
+        worktreeRemoved: null,
+      },
+    ]
+
+    printReapOutcomes(outcomes)
+
+    const out = capturedOutput(logSpy)
+    expect(out).toContain(
+      'kept     /wt/realname (fix/1602-orphan-ratchet-divergence) — ' +
+        'worktree HEAD includes commits the merged PR never shipped',
+    )
+    expect(out).toContain(
+      'kept     /wt/merged (chore/merged) — could not confirm worktree HEAD is contained in what merged',
+    )
   })
 })

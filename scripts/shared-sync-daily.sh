@@ -92,7 +92,15 @@ git pull --ff-only --quiet origin dev
 
 # `--scheduled` is what distinguishes this from an ad-hoc round; it is the one
 # caller allowed through the gate without --now.
-sh scripts/shared-sync.sh --scheduled --estate "$ESTATE"
+#
+# Invoked as a bare executable path, not `sh scripts/shared-sync.sh` --
+# shared-sync.sh declares `#!/usr/bin/env bash` and an explicit `sh` prefix
+# throws that shebang away, handing the script to whatever `sh` resolves to
+# instead (dash on most runners/workstations). A bare path lets the kernel
+# dispatch per the shebang instead -- the same fix already applied to
+# branch-health.sh's own callers (#1582, #1709) and, in this same round, to
+# scripts/shared-sync.sh's own `gate-coverage.sh` call (#1681).
+scripts/shared-sync.sh --scheduled --estate "$ESTATE"
 
 # Written only on success, and only here. A failed round leaves the previous
 # marker in place and therefore ages out on its own after 48 hours, at which

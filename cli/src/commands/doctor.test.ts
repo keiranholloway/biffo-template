@@ -1,7 +1,9 @@
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { gatherRepoFacts, runDoctor, runDoctorFix } from './doctor.js'
+import { gatherRepoFacts, printReapOutcomes, runDoctor, runDoctorFix } from './doctor.js'
+import type { ReapOutcome } from '../lib/doctor-reaper.js'
+import { capturedOutput } from '../test-utils/console.js'
 import { makeTmpDir } from '../test-utils/tmp.js'
 
 vi.mock('../lib/logger.js', () => ({
@@ -298,5 +300,72 @@ describe('runDoctorFix', () => {
 
     expect(outcomes).toEqual([])
     expect(github.prVerdictForBranch).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * `printReapOutcomes` (#1805) — the trailing summary line must be built from
+ * `worktreeRemoved`, never from `verdict.action === 'reap'` alone. A
+ * candidate judged safe to reap can still fail `git worktree remove`
+ * (locked worktree, permission error); the per-item loop already prints
+ * that as `FAILED`, and the summary used to silently count it as removed
+ * anyway, overstating success in the one line most likely to actually be
+ * read.
+ */
+describe('printReapOutcomes', () => {
+  let logSpy: ReturnType<typeof vi.spyOn>
+
+  beforeEach(() => {
+    logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+  })
+
+  afterEach(() => {
+    logSpy.mockRestore()
+  })
+
+  it('does not fold a failed removal into the "removed" count', () => {
+    const outcomes: ReapOutcome[] = [
+      {
+        candidate: { branch: 'feature-dirty', worktreePath: '/wt/feature-dirty' },
+        verdict: { action: 'reap' },
+        worktreeRemoved: false,
+      },
+      {
+        candidate: { branch: 'feature-open', worktreePath: '/wt/feature-open' },
+        verdict: { action: 'reap' },
+        worktreeRemoved: true,
+      },
+    ]
+
+    printReapOutcomes(outcomes)
+
+    const out = capturedOutput(logSpy)
+    expect(out).toContain('FAILED   /wt/feature-dirty (feature-dirty)')
+    expect(out).toContain('removed  /wt/feature-open (feature-open)')
+    // Exactly one worktree was actually removed, and the failure must not
+    // vanish from the printed denominator: the old `${reaped.length}
+    // removed` computation reported "2 removed, 0 kept" here.
+    expect(out).toContain('--fix: 1 removed, 1 failed, 0 kept, of 2 worktree(s) considered.')
+  })
+
+  it('reports "0 failed" honestly when every reap attempt actually succeeded', () => {
+    const outcomes: ReapOutcome[] = [
+      {
+        candidate: { branch: 'chore/merged', worktreePath: '/wt/merged' },
+        verdict: { action: 'reap' },
+        worktreeRemoved: true,
+      },
+      {
+        candidate: { branch: 'pr-open', worktreePath: '/wt/pr-open' },
+        verdict: { action: 'keep', reason: 'pr-open' },
+        worktreeRemoved: null,
+      },
+    ]
+
+    printReapOutcomes(outcomes)
+
+    expect(capturedOutput(logSpy)).toContain(
+      '--fix: 1 removed, 0 failed, 1 kept, of 2 worktree(s) considered.',
+    )
   })
 })

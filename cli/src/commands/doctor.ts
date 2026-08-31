@@ -277,18 +277,29 @@ const KEEP_REASON_TEXT: Record<KeepReason, string> = {
  * Reports what `--fix` removed and, per #1413's denominator rule, exactly
  * what it left alone and why — a reaper that only ever announces successes
  * is as misleading as a check that silently narrows its own scope.
+ *
+ * The summary counts are built from `worktreeRemoved`, never from
+ * `verdict.action` alone: `action === 'reap'` is what the candidate was
+ * *judged* safe to remove, not what actually happened to it. `git worktree
+ * remove` can still fail (locked worktree, permission error, anything the
+ * safety check didn't anticipate) — the per-item loop already prints that as
+ * `FAILED`, and the summary must agree with it rather than silently folding
+ * a failure into "removed" (#1805, the same denominator-honesty class as
+ * #1363: a count reported over a set it never actually verified).
  */
-function printReapOutcomes(outcomes: ReapOutcome[]): void {
+export function printReapOutcomes(outcomes: ReapOutcome[]): void {
   if (outcomes.length === 0) {
     console.log(chalk.dim('  --fix: no worktree with a gone upstream to consider.\n'))
     return
   }
 
-  const reaped = outcomes.filter((o) => o.verdict.action === 'reap')
+  const attempted = outcomes.filter((o) => o.verdict.action === 'reap')
   const kept = outcomes.filter((o) => o.verdict.action === 'keep')
+  const removed = attempted.filter((o) => o.worktreeRemoved === true)
+  const failed = attempted.filter((o) => o.worktreeRemoved !== true)
 
   console.log('')
-  for (const o of reaped) {
+  for (const o of attempted) {
     if (o.worktreeRemoved === true) {
       console.log(chalk.green(`  removed  ${o.candidate.worktreePath} (${o.candidate.branch})`))
     } else {
@@ -308,8 +319,8 @@ function printReapOutcomes(outcomes: ReapOutcome[]): void {
   }
   console.log(
     chalk.dim(
-      `\n  --fix: ${String(reaped.length)} removed, ${String(kept.length)} kept, of ` +
-        `${String(outcomes.length)} worktree(s) considered.\n`,
+      `\n  --fix: ${String(removed.length)} removed, ${String(failed.length)} failed, ` +
+        `${String(kept.length)} kept, of ${String(outcomes.length)} worktree(s) considered.\n`,
     ),
   )
 }

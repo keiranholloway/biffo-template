@@ -253,6 +253,46 @@ An instance forked the module to add a `local.app_db_user` computing exactly tha
 
 ## Breaking changes by version
 
+### 0.298.43 — the CDN module's `error_status_restore_lambda_arn` input is renamed
+
+`modules/cloud/aws/cdn/variables.tf`'s Terraform input renames from
+`error_status_restore_lambda_arn` to `error_status_demote_lambda_arn` (#1583),
+to match what it actually holds: the demote Lambda@Edge's qualified ARN. Only
+demote is a Lambda@Edge with an ARN worth passing — restore is a CloudFront
+Function created in-region with no ARN of its own — so the old name described
+the wrong half of the #1529 demote/restore pair. Pure rename, no behavioural
+change; the one variable still gates both associations (#1576).
+
+**This upgrade alone does not carry the fix into a running instance.**
+`infra/environments/{dev,staging,prod}/main.tf` is entirely user-owned per
+`core-manifest.json`, and `biffo core upgrade` never touches it — only the
+module itself (`modules/cloud/aws/cdn/`) is template-owned and rides the
+upgrade. So after taking this upgrade, your own environment files still call
+the module with the old argument name, and the next `terraform validate` or
+`plan` in any environment fails closed:
+
+```
+Error: Unsupported argument
+
+An argument named "error_status_restore_lambda_arn" is not expected here.
+```
+
+No compatibility alias ships with this change (#1802), so this is a hard
+break, not a deprecation window — the manual edit below is required before
+`terraform plan` succeeds again, in every one of `infra/environments/dev/`,
+`infra/environments/staging/` and `infra/environments/prod/` you actually run:
+
+1. In that environment's `main.tf`, rename the argument passed to the `cdn`
+   module call from `error_status_restore_lambda_arn = ...` to
+   `error_status_demote_lambda_arn = var.error_status_demote_lambda_arn`.
+2. In that environment's own `variables.tf`, rename the
+   `variable "error_status_restore_lambda_arn"` declaration itself to
+   `error_status_demote_lambda_arn` — same type, default and validation, only
+   the name changes.
+3. Re-run `terraform plan`. A clean plan with no diff on the CDN module's
+   Lambda@Edge association confirms the rename is cosmetic: it is the same
+   ARN under a new argument name, not a new resource.
+
 ### 0.298.0 — dispatching Deploy Infrastructure requires `action=apply`
 
 `.github/workflows/deploy-infra.yml`'s `workflow_dispatch` used to take

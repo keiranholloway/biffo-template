@@ -110,13 +110,13 @@
       "notes": "The only pair currently registered in REGISTERED_ADOPTION_PAIRS. Template-owned core-api-environment.core.tf rides every `biffo core upgrade`; Terraform cannot inject an argument into an existing module block from a second file, so the instance's own main.tf must merge it in by hand -- and nothing noticed for 3 days until PR #174."
     },
     {
-      "id": "cdn-error-status-restore-lambda-tf-var",
-      "artifact": "TF_VAR_error_status_restore_lambda_arn, gating every association in modules/cloud/aws/cdn's #1529 Terraform",
+      "id": "cdn-error-status-demote-lambda-tf-var",
+      "artifact": "TF_VAR_error_status_demote_lambda_arn, gating every association in modules/cloud/aws/cdn's #1529 Terraform",
       "channel": "instanceAdoptionPair",
       "targets": ["every instance's infra deploy pipeline"],
       "status": "unregistered",
-      "gapReason": "The mechanism this shape needs (instance-adoption's registered-pair pattern) already exists and already ships one pair (core-api-environment-merge-wiring above), but this artifact has not been registered as a pair -- so checkInstanceAdoption cannot see it and instance-adoption-report.yml never flags it. Filed as #1574 but not yet wired into REGISTERED_ADOPTION_PAIRS. Per #1570's own instance 7: 'the artifact travelled, and the thing that switches it on did not'. #1574 investigated whether this repo's OWN deploy-infra.yml also failed to set the var and found it did not -- both this repo's deploy-infra.yml and biffo-platform's already wire TF_VAR_error_status_restore_lambda_arn (fixed via #1576, 2026-08-17). So the remaining gap is purely the missing REGISTERED_ADOPTION_PAIRS entry, which would catch a FUTURE instance that skips this wiring -- not a currently-unwired instance.",
-      "evidence": ["#1529", "#1574", "#1576"]
+      "gapReason": "The mechanism this shape needs (instance-adoption's registered-pair pattern) already exists and already ships one pair (core-api-environment-merge-wiring above), but this artifact has not been registered as a pair -- so checkInstanceAdoption cannot see it and instance-adoption-report.yml never flags it. Filed as #1574 but not yet wired into REGISTERED_ADOPTION_PAIRS. Per #1570's own instance 7: 'the artifact travelled, and the thing that switches it on did not'. #1574 investigated whether this repo's OWN deploy-infra.yml also failed to set the var and found it did not -- both this repo's deploy-infra.yml and biffo-platform's already wire the var (fixed via #1576, 2026-08-17; renamed from error_status_restore_lambda_arn to error_status_demote_lambda_arn by #1799/#1583, 2026-08-31, with a repo-var fallback so an already-deployed instance keeps working unchanged). So the remaining gap is purely the missing REGISTERED_ADOPTION_PAIRS entry, which would catch a FUTURE instance that skips this wiring -- not a currently-unwired instance.",
+      "evidence": ["#1529", "#1574", "#1576", "#1799"]
     },
     {
       "id": "cdn-error-status-demote-zip-freshness-guard",

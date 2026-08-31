@@ -1023,11 +1023,11 @@ assertFakeThing(['a', 'b', 'c'])
         // head 0b9f1b98) found that round 4's inversion closes only
         // LEFT-adjacency: all four of #1617's own examples put the
         // vocabulary word before the incidental number. Shape B still
-        // credits a count whenever denominator vocabulary sits ANYWHERE to
+        // credited a count whenever denominator vocabulary sat ANYWHERE to
         // its right on the same line, with no window — so an incidental
         // number followed, later in the line, by unrelated vocabulary in a
-        // clause of its own still forges. These two are #1649's own
-        // reproduction lines, run against this exact head:
+        // clause of its own forged credit. These two are #1649's own
+        // reproduction lines, run against that head:
         //
         //   $ npx tsx -e "import { outputStatesADenominator } from
         //     './src/lib/guard-denominator.ts'; console.log(
@@ -1035,24 +1035,69 @@ assertFakeThing(['a', 'b', 'c'])
         //   true
         //
         // Neither line states a real denominator — `8080` is a port number
-        // in one, a hostname's trailing digit in the other — yet both are
-        // credited purely because a vocabulary word exists later in the
+        // in one, a hostname's trailing digit in the other — yet both were
+        // credited purely because a vocabulary word existed later in the
         // string, disconnected from the number.
+        //
+        // CLOSED by #1797: `sameClauseRightSlice` (see `CLAUSE_BOUNDARY`'s
+        // docstring above `lineStatesADenominator`) now truncates Shape B's
+        // right-hand scan at the count's own clause boundary. Both lines put
+        // their vocabulary word in a NEW clause, introduced by `;`/`,`, so
+        // neither is credited any more.
+        it('regression: unbounded Shape B (pre-#1797) forged credit on both #1649 reproduction lines', () => {
+          // Reconstructs the exact pre-#1797 code this PR is built on top
+          // of — Shape B searching the rest of the line with no clause
+          // truncation — not a straw man.
+          const preFixVocabulary =
+            /\b(examined|checked|audited|scanned|covered|considered|classified|discovered|counted|denominator|reached|analysed|analyzed|processed|swept|walked|visited|inspected|assessed|evaluated)\b/i
+          const preFixBareCount = /(?<=^|\s)\d+(?=$|[\s),;:]|\.(?!\d))/g
+          const preFixAdjacentWord = (line: string, digitStart: number): string | undefined => {
+            if (digitStart === 0) return undefined
+            const before = line.slice(0, digitStart - 1)
+            return /([A-Za-z][A-Za-z0-9'-]*)[^A-Za-z0-9]*$/.exec(before)?.[1]
+          }
+          const preFixLineStatesADenominator = (line: string): boolean => {
+            if (!preFixVocabulary.test(line)) return false
+            for (const match of line.matchAll(preFixBareCount)) {
+              const digitStart = match.index as number
+              const digitEnd = digitStart + match[0].length
+              const leftWord = preFixAdjacentWord(line, digitStart)
+              if (leftWord !== undefined && preFixVocabulary.test(leftWord)) return true
+              if (preFixVocabulary.test(line.slice(digitEnd))) return true // unbounded — the bug
+            }
+            return false
+          }
+
+          const reproLines = [
+            'listening on port 8080 today; audited separately',
+            'connected to host1: 8080, examined nothing else',
+          ]
+          // Fail-first: the pre-#1797 logic really does forge on both.
+          expect(reproLines.every(preFixLineStatesADenominator)).toBe(true)
+          // And the fixed function now rejects both.
+          expect(reproLines.some((l) => outputStatesADenominator(`${l}\n`))).toBe(false)
+        })
+
         it.each([
           [
-            'a port number, with unrelated vocabulary in a trailing clause',
+            'a port number, with unrelated vocabulary in a trailing clause (semicolon)',
             'listening on port 8080 today; audited separately',
           ],
           [
-            'a digit-hidden identifier, with unrelated vocabulary in a trailing clause',
+            'a digit-hidden identifier, with unrelated vocabulary in a trailing clause (comma)',
             'connected to host1: 8080, examined nothing else',
           ],
-        ])(
-          'DECLARED GAP (not fixed by this PR — see reasoning below) — still forges: %s: %s',
-          (_label, line) => {
-            expect(outputStatesADenominator(`${line}\n`)).toBe(true)
-          },
-        )
+          [
+            'the same port-number shape, clause introduced by a colon instead',
+            'listening on port 8080 today: audited separately',
+          ],
+          [
+            'the same port-number shape, clause introduced by a sentence-ending period',
+            'listening on port 8080 today. Audited separately.',
+          ],
+        ])('CLOSED by #1797 — no longer forges: %s: %s', (_label, line) => {
+          expect(outputStatesADenominator(`${line}\n`)).toBe(false)
+        })
 
         it('the real Shape B corpus this module credits today, captured live via `sh scripts/biffo.sh check <name>`', () => {
           // Every line any CI-wired check's real, bare invocation actually
@@ -1096,19 +1141,19 @@ assertFakeThing(['a', 'b', 'c'])
           expect(realShapeBLines.every((l) => outputStatesADenominator(`${l}\n`))).toBe(true)
         })
 
-        it('no distance bound separates the real corpus from a forge — natural language has no ceiling on filler', () => {
-          // The obvious next move is to bound Shape B to a window: reject
-          // vocabulary further than N words/characters from the count. That
-          // fails structurally, not just on these two lines. A bound wide
+        it('a WORD/CHARACTER distance window still could not separate the real corpus from a forge — this is why #1797 bounds by clause instead', () => {
+          // This finding (originally #1649) still holds and is why the
+          // eventual #1797 fix is NOT a word/character window: a bound wide
           // enough to keep the real corpus's own maximum (6 words / 87
           // characters, `core-direct-paths` above) is defeated by an
           // equally ordinary forge at the SAME or a LARGER distance —
           // because nothing stops an author writing more words between an
-          // incidental number and an unrelated status clause. These four
-          // are constructed, not captured (labelled as such, per this
-          // file's own corpus-fidelity rule), each one straightforward
-          // English and each one still forging credit against this exact
-          // head:
+          // incidental number and an unrelated status clause. These four are
+          // constructed, not captured (labelled as such, per this file's own
+          // corpus-fidelity rule), and every one of them ALSO happens to
+          // introduce its unrelated clause with a semicolon — which is what
+          // #1797's `sameClauseRightSlice` actually keys on, so all four are
+          // now rejected, but not because of their distance:
           const widerForges = [
             'listening on port 8080 right now; audited separately', // 2 words / 8 chars
             'listening on port 8080 sometime later today; audited separately', // 3 words / 19 chars
@@ -1118,32 +1163,31 @@ assertFakeThing(['a', 'b', 'c'])
               'separately at the end of the shift', // 19 words / 113 chars
           ]
           for (const line of widerForges) {
-            expect(outputStatesADenominator(`${line}\n`)).toBe(true)
+            expect(outputStatesADenominator(`${line}\n`)).toBe(false)
           }
           // The last one alone (19 words / 113 characters) exceeds the real
-          // corpus's own maximum gap in both units at once. A window drawn
-          // at or above the real maximum still admits it and anything
-          // longer; a window drawn below the real minimum (2 words / 13
-          // characters) rejects `eventbridge-log-permissions`'s own
-          // currently-credited, CI-required line. There is no value in
-          // between: the real corpus's minimum gap (2 words) is smaller
-          // than the shortest constructed forge above needs to be to stay
-          // ordinary English, so the two ranges do not merely overlap —
-          // the forge side has no upper bound at all. Sharpening Shape B
-          // with a proximity window is exactly the move this file's own
-          // docstring already declined to make once (round-4 completion
-          // notes); this is the second, measured confirmation of why.
+          // corpus's own maximum gap in both units at once, which is exactly
+          // why a bound keyed to DISTANCE could never have worked here: any
+          // window wide enough to keep `core-direct-paths` (6 words) is
+          // wider than the narrowest forge (2 words) needs to be. The clause
+          // boundary (`;`) is what separates every one of these from the
+          // real corpus, not their length.
         })
 
-        // DECISION (declared, not silent): this PR does not attempt to bound
-        // Shape B. A tighter window costs a real, currently-credited line
-        // (measured above); a looser or equal window is defeated by a
-        // forge of the same or greater distance (also measured above, up to
-        // 19 words / 113 characters — well past the real corpus's 6-word /
-        // 87-character maximum). Closing this needs a signal this file does
-        // not have — which PROCESS emitted the line, or which clause the
-        // count and the vocabulary word belong to — not a sharper distance
-        // rule; see #1617/#1649. The gap stays open and tracked there.
+        it('DECLARED GAP, still open: a forge that joins the two clauses with NO hard separator at all', () => {
+          // #1797's `sameClauseRightSlice` only sees `,`/`;`/`:`/a
+          // sentence-ending `.` as a clause boundary. Ordinary English can
+          // join two unrelated clauses with a conjunction instead, and
+          // nothing here distinguishes that from the same-clause shape
+          // `12 path(s) reached` needs to stay credited — closing this needs
+          // the same signal #1649 already named (which PROCESS emitted the
+          // line, or a real clause parse), not a text-boundary rule. Not
+          // invented to pre-empt: no guard in this repo's real output does
+          // this today (checked against the live corpus below).
+          expect(
+            outputStatesADenominator('listening on port 8080 today and audited separately\n'),
+          ).toBe(true)
+        })
       })
     })
   })

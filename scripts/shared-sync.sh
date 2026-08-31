@@ -1699,6 +1699,102 @@ release_stage_lock() {
   wt_log lock-released "$_rl_label" "$_rl_dir"
 }
 
+# Force-reclaims `chore/sync-shared` wherever it is CURRENTLY checked out, not
+# only at the path this round expects to find it. `chore/sync-shared` is
+# deliberately the same branch name across every round (see the comment above
+# the staging lock for why), so exactly one worktree can ever hold it at a
+# time -- git refuses to check the same branch out twice. That means finding
+# it by BRANCH rather than by the expected path also finds a FOREIGN one: an
+# `Enter Worktree` investigation left open, a killed process's leftover
+# checkout, or -- the real case behind biffo-template#1785 -- an entirely
+# unrelated worktree (`.worktrees/pr379-gh-fix` in tabsii-crm, debris from one
+# of PR#379's rejected remediation attempts) that happened to be sitting on
+# this branch name. See `reset_sync_worktree` below for what this fixes.
+reclaim_sync_branch() {
+  _rc_d="$1"
+  _rc_expected="$2"
+  _rc_label="$3"
+  _rc_base="$4"
+  _rc_holder=$(git -C "$_rc_d" worktree list --porcelain | awk '
+    /^worktree / { path = $0; sub(/^worktree /, "", path) }
+    /^branch refs\/heads\/chore\/sync-shared$/ { print path }
+  ')
+  [ -n "$_rc_holder" ] || return 0
+  [ "$_rc_holder" != "$_rc_expected" ] || return 0
+
+  # biffo-template#1829: a foreign worktree holding this branch can be doing
+  # real, unfinished work -- an abandoned `Enter Worktree` investigation left
+  # open is exactly this shape, and the PR that introduced force-reclaiming
+  # named that case without guarding it. Force-removing unconditionally
+  # destroys uncommitted changes, untracked files, and any commit unreachable
+  # from origin/$_rc_base, with no confirmation. Check what the human reporter
+  # checked by hand before deleting anything -- `git status --porcelain`
+  # empty, and the branch tip merged into origin/$_rc_base -- and refuse
+  # loudly (return 1, the same CANNOT STAGE path a staging failure already
+  # takes) rather than silently destroying content or silently no-op-ing back
+  # into the original #1785 bug.
+  _rc_dirty=$(git -C "$_rc_holder" status --porcelain --untracked-files=all 2>/dev/null)
+  _rc_tip=$(git -C "$_rc_d" rev-parse --verify refs/heads/chore/sync-shared 2>/dev/null)
+  _rc_merged=1
+  if [ -n "$_rc_tip" ] && [ -n "$_rc_base" ]; then
+    git -C "$_rc_d" merge-base --is-ancestor "$_rc_tip" "origin/$_rc_base" 2>/dev/null && _rc_merged=0
+  fi
+  if [ -n "$_rc_dirty" ] || [ "$_rc_merged" != 0 ]; then
+    _rc_why="commits not merged into origin/$_rc_base"
+    [ -n "$_rc_dirty" ] && _rc_why="uncommitted or untracked changes"
+    wt_log reclaim-refused-unsafe "$_rc_label" "$_rc_holder"
+    printf '%-26s \033[31mCANNOT STAGE\033[0m - chore/sync-shared is held by a foreign worktree at %s with %s -- refusing to force-remove it; investigate and clear it by hand\n' \
+      "$_rc_label" "$_rc_holder" "$_rc_why" >&2
+    return 1
+  fi
+
+  wt_log remove-foreign-worktree "$_rc_label" "$_rc_holder"
+  printf '%-26s \033[33mreclaiming\033[0m chore/sync-shared, held by a foreign worktree at %s\n' \
+    "$_rc_label" "$_rc_holder" >&2
+  git -C "$_rc_d" worktree remove --force "$_rc_holder" 2>/dev/null
+  # The directory can be gone without the worktree being properly removed (a
+  # manual `rm -rf` rather than `git worktree remove`) -- `remove --force` can
+  # fail against that too, so prune unconditionally as a second attempt rather
+  # than assuming the first one worked.
+  git -C "$_rc_d" worktree prune 2>/dev/null
+}
+
+# Re-stage `$wt` on a fresh `chore/sync-shared` tip. Split out from
+# `stage_repo` so this sequence -- and `reclaim_sync_branch`'s effect on it --
+# can be tested in isolation the same way `acquire_stage_lock` is
+# (shared-sync-stage-lock.test.ts): see shared-sync-foreign-worktree-
+# reclaim.test.ts.
+#
+# biffo-template#1785: before `reclaim_sync_branch` existed, this block
+# unconditionally removed only `$wt` (a no-op when `chore/sync-shared` was
+# checked out somewhere ELSE) and then ran `branch -D chore/sync-shared`.
+# `branch -D` against a branch checked out in another worktree DOES print
+# `error: cannot delete branch ... checked out at ...` and exit non-zero, but
+# this call redirects both away and never inspects the exit code (see the
+# comment on the line below), so the failure was invisible right up until the
+# following `worktree add -b chore/sync-shared` died with `fatal: a branch
+# named 'chore/sync-shared' already exists` -- which aborted staging for the
+# WHOLE repo, which aborts the ENTIRE estate-wide round by design (nothing is
+# pushed on a partial rehearsal). That happened for real and stayed silent for
+# 5 consecutive days, because nothing polls `$SYNC_WT_LOG`.
+reset_sync_worktree() {
+  _rsw_d="$1"
+  _rsw_wt="$2"
+  _rsw_label="$3"
+  _rsw_base="$4"
+  git -C "$_rsw_d" worktree remove --force "$_rsw_wt" 2>/dev/null
+  # biffo-template#1829: reclaim_sync_branch now refuses (non-zero) rather
+  # than reclaiming a foreign worktree it cannot prove is safe to destroy --
+  # propagate that refusal instead of falling through to `branch -D`, which
+  # would otherwise still no-op harmlessly (a checked-out branch can't be
+  # deleted) but mask the real reason staging failed.
+  reclaim_sync_branch "$_rsw_d" "$_rsw_wt" "$_rsw_label" "$_rsw_base" || return 1
+  # `branch -D` reports on STDOUT, so a quiet run printed "Deleted branch
+  # chore/sync-shared" in the middle of the rehearsal table.
+  git -C "$_rsw_d" branch -D chore/sync-shared >/dev/null 2>&1
+  git -C "$_rsw_d" worktree add -q "$_rsw_wt" -b chore/sync-shared "origin/$_rsw_base"
+}
+
 stage_repo() {
   d="$1"
   label="$2"
@@ -1714,11 +1810,7 @@ stage_repo() {
 
   wt="$d/.worktrees/shared-sync"
   wt_log remove-pre-stage "$label" "$wt"
-  git -C "$d" worktree remove --force "$wt" 2>/dev/null
-  # `branch -D` reports on STDOUT, so a quiet run printed "Deleted branch
-  # chore/sync-shared" in the middle of the rehearsal table.
-  git -C "$d" branch -D chore/sync-shared >/dev/null 2>&1
-  git -C "$d" worktree add -q "$wt" -b chore/sync-shared "origin/$base" || {
+  reset_sync_worktree "$d" "$wt" "$label" "$base" || {
     wt_log add-FAILED "$label" "$wt"
     release_stage_lock "$d" "$label"
     return 1
@@ -2655,6 +2747,7 @@ else
   printf '\nrehearsing %s repos - staging the candidates and running each gate\n\n' \
     "$(wc -l < "$TARGETS" | tr -d ' ')"
   rehearsal_failures=0
+  blocked=0
   while IFS="$TAB" read -r label d slug base; do
     # Read the status IMMEDIATELY. `if ! stage_repo ...` would have collapsed
     # "could not stage" (1) and "nothing to sync" (2) into one branch, and
@@ -2680,10 +2773,31 @@ else
       rehearsal_failures=$((rehearsal_failures + 1))
       continue
     fi
+    # biffo-template#1836: everything else stage_repo returns 1 for (a fetch
+    # blip, a stale lock, or -- the #1785/#1829 case -- `reclaim_sync_branch`
+    # correctly refusing to force-remove a foreign worktree it cannot prove is
+    # safe to destroy) says only that THIS repo's own local git state could
+    # not be brought to a stageable tree. None of those are evidence that the
+    # CANDIDATE FILES are broken -- that is what `rehearsal_failures` exists to
+    # gate the whole round on, per the comment above this loop ("staging repo
+    # 7 and finding the gate broken there must not leave six PRs already open
+    # in repos 1-6"). Folding a staging failure into that same counter was
+    # itself the #1785 bug (one stray tabsii-crm worktree aborted estate-wide
+    # distribution for 5 days) and, left unfixed here, #1829's safety refusal
+    # reintroduces the identical shape for debris from a rejected PR attempt
+    # (#1836): "clean tree, unmerged commit" cannot be told apart from real
+    # unfinished work by git plumbing alone (see the comment on
+    # `reclaim_sync_branch`), so the refusal must stay -- but its blast radius
+    # must not. This is BLOCKED, not FAIL: excluded from THIS repo's own
+    # shipment (see the phase 2 skip check below) and counted in the overall
+    # `failed` tally so the run never reports quiet success, but it does not
+    # touch `rehearsal_failures` and so cannot block any other repo's PR.
     if [ "$stage_rc" -ne 0 ]; then
-      printf '%-26s \033[31mCANNOT STAGE\033[0m - fetch or worktree failed\n' "$label"
-      printf '%s%s%s%s%s\n' "$label" "$TAB" FAIL "$TAB" 'could not stage' >> "$VERDICTS"
-      rehearsal_failures=$((rehearsal_failures + 1))
+      printf '%-26s \033[31mCANNOT STAGE\033[0m - fetch or worktree failed; skipping only this repo, round continues\n' "$label"
+      printf '%s%s%s%s%s\n' "$label" "$TAB" BLOCKED "$TAB" \
+        'could not stage -- needs manual investigation, see log above' >> "$VERDICTS"
+      blocked=$((blocked + 1))
+      failed=$((failed + 1))
       continue
     fi
     verdict_line=$(rehearse_repo "$d/.worktrees/shared-sync")
@@ -2726,7 +2840,18 @@ else
     done < "$TARGETS"
     exit 1
   fi
-  printf '\nrehearsal clean in every repo\n'
+  if [ "$blocked" -gt 0 ]; then
+    printf '\n\033[33m%s repo(s) blocked from staging\033[0m -- their own local git state could not\n' \
+      "$blocked"
+    printf 'be made ready (see CANNOT STAGE lines above); they are excluded from this\n'
+    printf 'round and counted in the failure total below. Investigate each by hand --\n'
+    printf 'nothing here pages on it, so it will keep recurring silently until someone\n'
+    printf 'does. Every other repo still ships: a staging problem local to one repo is\n'
+    printf 'not evidence the candidate files are unsafe anywhere else.\n'
+    printf '\nrehearsal clean in every other repo\n'
+  else
+    printf '\nrehearsal clean in every repo\n'
+  fi
 fi
 
 if [ -n "$REHEARSE_ONLY" ]; then
@@ -2741,6 +2866,11 @@ fi
 printf '\nopening PRs\n\n'
 while IFS="$TAB" read -r label d slug base; do
   grep -q "^$label${TAB}SKIP${TAB}" "$VERDICTS" 2>/dev/null && continue
+  # biffo-template#1836: BLOCKED repos were already counted in `failed` when
+  # phase 1 found them un-stageable, and stage_repo already cleaned up after
+  # itself on that path -- there is no staged worktree here to ship. Re-running
+  # stage_repo would just reproduce the identical refusal a second time.
+  grep -q "^$label${TAB}BLOCKED${TAB}" "$VERDICTS" 2>/dev/null && continue
   # --no-rehearse skips phase 1 entirely, so nothing has staged these yet.
   if [ -n "$NO_REHEARSE" ]; then
     stage_repo "$d" "$label" "$base"

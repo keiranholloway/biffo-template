@@ -271,6 +271,14 @@ function runSync(
     keyMustBeUniform?: Record<string, Record<string, number>>
     overridesCanonical?: string
     satellites?: Array<[string, SatelliteOpts]>
+    /**
+     * Runs after every satellite is cloned and seeded, but before the script
+     * under test is invoked -- the hook point for tests that need to plant
+     * state the script itself never creates (biffo-template#1836: a foreign
+     * worktree already sitting on `chore/sync-shared` before the round even
+     * starts, the real shape of both #1785's incident and #1829's fix).
+     */
+    beforeRun?: (satellites: string[]) => void
   } = {},
 ): {
   run: Run
@@ -300,6 +308,8 @@ function runSync(
       ['sat-beta', { gateFails: opts.failingSatellite }],
     ]
   ).map(([name, satOpts]) => makeSatellite(estate, name, satOpts))
+
+  opts.beforeRun?.(satellites)
 
   const logFile = join(base, 'gh-calls.log')
   writeFileSync(logFile, '')
@@ -611,6 +621,120 @@ describe('shared-sync rehearsal', () => {
     expect(shipRun.run.status).not.toBe(0)
     expect(shipRun.run.out).toMatch(/surveyed zero repos/)
     expect(shipRun.run.ghCalls.filter((c) => c.startsWith('pr create'))).toEqual([])
+  }, 120_000)
+})
+
+/**
+ * biffo-template#1836: a second, independent prosecution of #1827's #1829
+ * fix found it REOPENS the original #1785 bug for #1785's own real-world
+ * case. #1829 made `reclaim_sync_branch` refuse -- correctly -- to
+ * force-remove a foreign worktree it cannot prove is safe: "clean working
+ * tree, unmerged commit" is the exact shape of both real debris from a
+ * rejected PR attempt AND a real abandoned investigation, and git plumbing
+ * alone cannot tell them apart (see the comment on `reclaim_sync_branch`
+ * itself). That refusal has to stay.
+ *
+ * What had to change is what the CALLER did with it. Before this fix, that
+ * refusal fed the exact same `rehearsal_failures` counter a genuinely broken
+ * candidate file does -- and that counter's whole purpose (per the comment
+ * above the phase-1 loop) is to stop the round shipping an UNSAFE CHANGE
+ * anywhere once it is proven unsafe in one repo. A repo's own local git
+ * housekeeping being unable to stage is not that: it says nothing about
+ * whether the candidate files are safe for every OTHER repo. Folding the two
+ * together is exactly how #1785 happened (one stray `tabsii-crm` worktree
+ * blocked shared-file distribution to the entire estate for 5 consecutive
+ * days), and leaving #1829's refusal wired into the same counter reproduces
+ * it for debris instead of for a network blip.
+ *
+ * These tests drive the REAL script exactly as `shared-sync rehearsal` above
+ * does, with one repo's foreign worktree planted before the round starts --
+ * the only way to prove the round-wide blast radius rather than
+ * `reclaim_sync_branch`'s own return value in isolation (already covered by
+ * shared-sync-foreign-worktree-reclaim.test.ts).
+ */
+describe('BLOCKED staging is isolated to its own repo (biffo-template#1836)', () => {
+  /**
+   * Plants a foreign worktree on `chore/sync-shared` holding a clean working
+   * tree but an UNMERGED commit -- #1785's actual reported debris
+   * (`.worktrees/pr379-gh-fix`, "debris from one of PR#379's rejected
+   * remediation attempts") and #1829's refusal case are the same shape.
+   * `reclaim_sync_branch` must refuse to touch this; that refusal is not
+   * what this suite is testing (shared-sync-foreign-worktree-reclaim.test.ts
+   * already proves it in isolation) -- this suite proves the ROUND survives
+   * it.
+   */
+  function plantForeignDebris(satellite: string): void {
+    const foreign = join(satellite, '.worktrees', 'pr379-gh-fix')
+    execFileSync('git', [
+      '-C',
+      satellite,
+      'worktree',
+      'add',
+      '-q',
+      foreign,
+      '-b',
+      'chore/sync-shared',
+      'origin/dev',
+    ])
+    writeFileSync(join(foreign, 'debris.txt'), 'rejected remediation attempt\n')
+    git(foreign, 'add', 'debris.txt')
+    git(foreign, 'commit', '-m', 'debris from a rejected PR attempt')
+  }
+
+  it('ships the healthy repo even though ANOTHER repo has undestroyable foreign debris', () => {
+    const { run, satellites } = runSync([], {
+      satellites: [
+        ['sat-alpha', {}],
+        ['sat-blocked', {}],
+      ],
+      beforeRun: (sats) => plantForeignDebris(sats[1]),
+    })
+
+    // sat-blocked is correctly refused -- reported, not destroyed -- and the
+    // run as a whole still reports failure so this never reads as quietly
+    // clean.
+    expect(run.out).toMatch(/sat-blocked\s+.*CANNOT STAGE/)
+    expect(run.out).toContain('blocked from staging')
+    expect(run.status).toBe(1)
+
+    // The assertion this suite exists for, and the exact inverse of "opens no
+    // PR in ANY repo when the candidate fails its gate in ONE" above: THIS
+    // failure is local to sat-blocked's own git state, not evidence the
+    // candidate files are unsafe, so sat-alpha -- which staged perfectly
+    // cleanly -- still ships. Pre-fix, sat-blocked's CANNOT STAGE fed the
+    // same counter a broken candidate file does, the round printed "NOTHING
+    // was pushed and no PR was opened", and sat-alpha got nothing either.
+    expect(run.out).toMatch(/rehearsal clean in every other repo/)
+    expect(run.ghCalls.filter((c) => c.startsWith('pr create'))).toHaveLength(1)
+    expect(originHasSyncBranch(satellites[0])).toBe(true)
+    expect(originHasSyncBranch(satellites[1])).toBe(false)
+
+    // And #1829's guarantee still holds: the debris itself is exactly where
+    // it was, never force-removed.
+    const list = execFileSync('git', ['-C', satellites[1], 'worktree', 'list'], {
+      encoding: 'utf8',
+    })
+    expect(list).toContain('pr379-gh-fix')
+  }, 120_000)
+
+  it('blocks every repo individually, with no PR anywhere, when EVERY repo has debris', () => {
+    // The degenerate case: nothing to compare against, so nothing should
+    // crash or silently report success either.
+    const { run, satellites } = runSync([], {
+      satellites: [
+        ['sat-blocked-a', {}],
+        ['sat-blocked-b', {}],
+      ],
+      beforeRun: (sats) => {
+        plantForeignDebris(sats[0])
+        plantForeignDebris(sats[1])
+      },
+    })
+
+    expect(run.status).toBe(1)
+    expect(run.out).toContain('2 repo(s) blocked from staging')
+    expect(run.ghCalls.filter((c) => c.startsWith('pr create'))).toEqual([])
+    for (const s of satellites) expect(originHasSyncBranch(s)).toBe(false)
   }, 120_000)
 })
 

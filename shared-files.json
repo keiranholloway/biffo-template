@@ -11,6 +11,7 @@
     "scripts/check-destructive-plan.mjs",
     "scripts/js-dependency-audit.sh",
     "scripts/py-dependency-audit.sh",
+    "scripts/py-dependency-audit-classification.test.sh",
     "scripts/check-closing-keywords.mjs",
     "scripts/routing-smoke-test.sh",
     "scripts/routing-smoke-test.test.sh",

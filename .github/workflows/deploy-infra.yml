@@ -229,6 +229,82 @@ jobs:
           path: infra/environments/dev/tfplan
           retention-days: 1
           if-no-files-found: error
+
+      # Carry whatever `.build/` files this plan generated across to the apply
+      # job too (#1663). `archive_file` data sources materialise
+      # `./.build/<name>.zip` at PLAN time in the plan job's own workspace;
+      # `apply-dev` runs in a separate workspace and needs those same bytes,
+      # not just `tfplan`'s hash of them -- transporting `tfplan` alone (#1148)
+      # solved that one artifact, not the general "apply needs every plan-time
+      # input" problem. Uploading the whole directory rather than naming files
+      # keeps this automatic for any archive_file an instance adds later -- a
+      # hand-maintained file list mirroring a computable fact is the defect
+      # named in #744.
+      #
+      # `if-no-files-found: ignore`, unlike the plan upload above: most
+      # environments' Terraform has no archive_file at all, so no `.build/`
+      # is ever produced, and that absence is normal rather than a failure.
+      - uses: actions/upload-artifact@v5
+        with:
+          name: tfbuild-dev
+          path: infra/environments/dev/.build/
+          retention-days: 1
+          if-no-files-found: ignore
+          # actions/upload-artifact excludes dotfiles/dot-directories by
+          # default (include-hidden-files defaults to false), and .build/ IS
+          # a dot-directory -- the exclusion applies to the search-path root
+          # itself, not just nested descendants, so with the default this
+          # step silently uploaded NOTHING even when .build/ held real
+          # archive_file zips. filesToUpload.length === 0 combined with
+          # if-no-files-found: ignore above logs "No files were found" and
+          # exits success, indistinguishable from the legitimate "no
+          # archive_file in this env" case -- so apply-dev's paired
+          # download-artifact never restored .build/ and `terraform apply`
+          # failed with the exact "no such file or directory" this workflow
+          # exists to prevent (run 32265569287, biffo-template#1774). Same
+          # class already fixed once for a NESTED hidden dir in
+          # deploy-app.yml's portal-build upload (#1159); this one is the
+          # artifact ROOT being hidden, so nothing survived at all.
+          include-hidden-files: true
+
+      # The block above transports ONE assumed location. It does not cover
+      # an `archive_file` declared inside a reusable MODULE with
+      # `output_path = "${path.module}/..."` -- this repo's own former
+      # `modules/cloud/aws/compute/main.tf` did exactly that before
+      # #1457/#1460 -- which writes OUTSIDE `infra/environments/dev/.build/`
+      # entirely. Reproduced against this fixed workflow's own transport
+      # logic in biffo-template#1772: `terraform apply` still fails with
+      # "no such file or directory" for that shape. So compute the file set
+      # from the plan itself instead of assuming a directory:
+      # collect-plan-build-artifacts.mjs reads plan.json (already produced
+      # above for the destructive-plan guard) for every archive_file
+      # `output_path` the plan resolved, wherever it lands, and excludes
+      # anything already under .build/ (transported whole above) so this is
+      # additive rather than duplicating it.
+      - name: Collect other plan-time build artifacts
+        id: tfbuild-extra-dev
+        run: |
+          node "$GITHUB_WORKSPACE/scripts/collect-plan-build-artifacts.mjs" \
+            plan.json "$GITHUB_WORKSPACE" > "$RUNNER_TEMP/tfbuild-extra-dev-paths.txt"
+          if [ -s "$RUNNER_TEMP/tfbuild-extra-dev-paths.txt" ]; then
+            tar -czf "$RUNNER_TEMP/tfbuild-extra-dev.tar.gz" -C "$GITHUB_WORKSPACE" \
+              -T "$RUNNER_TEMP/tfbuild-extra-dev-paths.txt"
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Uploaded only when the collector above found something -- most
+      # environments' Terraform has no archive_file outside .build/ at all,
+      # and that absence is normal, not a failure (mirrors if-no-files-found:
+      # ignore on the tfplan-dev/tfbuild-dev uploads above).
+      - uses: actions/upload-artifact@v5
+        if: steps.tfbuild-extra-dev.outputs.found == 'true'
+        with:
+          name: tfbuild-extra-dev
+          path: ${{ runner.temp }}/tfbuild-extra-dev.tar.gz
+          retention-days: 1
+          if-no-files-found: error
   apply-dev:
     name: Apply (dev)
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
@@ -274,6 +350,33 @@ jobs:
           # Relative to the workspace: `defaults.run.working-directory` governs
           # `run` steps only, never an action's own inputs.
           path: infra/environments/dev
+
+      # Restore the plan-time `.build/` directory, if the plan produced one
+      # (#1663) -- the upload is in plan-dev, right after the tfplan upload.
+      # `if-no-artifact-found: ignore` mirrors that upload's
+      # `if-no-files-found: ignore`: no artifact means the plan's Terraform
+      # has no archive_file, which is the common case, not an error.
+      - uses: actions/download-artifact@v5
+        with:
+          name: tfbuild-dev
+          path: infra/environments/dev/.build
+          if-no-artifact-found: ignore
+
+      # Restore any OTHER plan-time build artifacts the general collector
+      # found (#1663 general case, biffo-template#1772) -- see the matching
+      # step in plan-dev. The upload there is conditional, so a missing
+      # artifact here just means the plan had no archive_file outside
+      # .build/ at all, not a failure.
+      - uses: actions/download-artifact@v5
+        with:
+          name: tfbuild-extra-dev
+          path: ${{ runner.temp }}
+          if-no-artifact-found: ignore
+      - name: Restore other plan-time build artifacts
+        run: |
+          if [ -f "${{ runner.temp }}/tfbuild-extra-dev.tar.gz" ]; then
+            tar -xzf "${{ runner.temp }}/tfbuild-extra-dev.tar.gz" -C "$GITHUB_WORKSPACE"
+          fi
       - run: terraform apply -input=false -auto-approve tfplan
         timeout-minutes: 45
       - name: Export outputs to GitHub Actions variables
@@ -425,6 +528,48 @@ jobs:
           path: infra/environments/staging/tfplan
           retention-days: 1
           if-no-files-found: error
+
+      # Carry whatever `.build/` files this plan generated across to the apply
+      # job too (#1663) -- see the matching comment in plan-dev for the full
+      # explanation. `if-no-files-found: ignore`: most environments' Terraform
+      # has no archive_file at all, so no `.build/` is ever produced.
+      - uses: actions/upload-artifact@v5
+        with:
+          name: tfbuild-staging
+          path: infra/environments/staging/.build/
+          retention-days: 1
+          if-no-files-found: ignore
+          # See the matching comment on tfbuild-dev in plan-dev -- .build/ is
+          # a dot-directory and upload-artifact excludes it by default (root
+          # included, not just nested descendants), which silently uploaded
+          # nothing even when real archive_file zips existed
+          # (biffo-template#1774).
+          include-hidden-files: true
+
+      # See the matching comment in plan-dev -- transports any archive_file
+      # output the plan resolved OUTSIDE .build/ (e.g. a reusable module
+      # using ${path.module}), computed from plan.json rather than assumed
+      # (#1663 general case, biffo-template#1772).
+      - name: Collect other plan-time build artifacts
+        id: tfbuild-extra-staging
+        run: |
+          node "$GITHUB_WORKSPACE/scripts/collect-plan-build-artifacts.mjs" \
+            plan.json "$GITHUB_WORKSPACE" > "$RUNNER_TEMP/tfbuild-extra-staging-paths.txt"
+          if [ -s "$RUNNER_TEMP/tfbuild-extra-staging-paths.txt" ]; then
+            tar -czf "$RUNNER_TEMP/tfbuild-extra-staging.tar.gz" -C "$GITHUB_WORKSPACE" \
+              -T "$RUNNER_TEMP/tfbuild-extra-staging-paths.txt"
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/upload-artifact@v5
+        if: steps.tfbuild-extra-staging.outputs.found == 'true'
+        with:
+          name: tfbuild-extra-staging
+          path: ${{ runner.temp }}/tfbuild-extra-staging.tar.gz
+          retention-days: 1
+          if-no-files-found: error
   apply-staging:
     name: Apply (staging)
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
@@ -470,6 +615,27 @@ jobs:
           # Relative to the workspace: `defaults.run.working-directory` governs
           # `run` steps only, never an action's own inputs.
           path: infra/environments/staging
+
+      # Restore the plan-time `.build/` directory, if the plan produced one
+      # (#1663) -- see the matching comment in apply-dev. `if-no-artifact-found:
+      # ignore` mirrors the upload's `if-no-files-found: ignore`.
+      - uses: actions/download-artifact@v5
+        with:
+          name: tfbuild-staging
+          path: infra/environments/staging/.build
+          if-no-artifact-found: ignore
+
+      # See the matching comment in apply-dev.
+      - uses: actions/download-artifact@v5
+        with:
+          name: tfbuild-extra-staging
+          path: ${{ runner.temp }}
+          if-no-artifact-found: ignore
+      - name: Restore other plan-time build artifacts
+        run: |
+          if [ -f "${{ runner.temp }}/tfbuild-extra-staging.tar.gz" ]; then
+            tar -xzf "${{ runner.temp }}/tfbuild-extra-staging.tar.gz" -C "$GITHUB_WORKSPACE"
+          fi
       - run: terraform apply -input=false -auto-approve tfplan
         timeout-minutes: 45
       - name: Export outputs to GitHub Actions variables
@@ -623,6 +789,48 @@ jobs:
           path: infra/environments/prod/tfplan
           retention-days: 1
           if-no-files-found: error
+
+      # Carry whatever `.build/` files this plan generated across to the apply
+      # job too (#1663) -- see the matching comment in plan-dev for the full
+      # explanation. `if-no-files-found: ignore`: most environments' Terraform
+      # has no archive_file at all, so no `.build/` is ever produced.
+      - uses: actions/upload-artifact@v5
+        with:
+          name: tfbuild-prod
+          path: infra/environments/prod/.build/
+          retention-days: 1
+          if-no-files-found: ignore
+          # See the matching comment on tfbuild-dev in plan-dev -- .build/ is
+          # a dot-directory and upload-artifact excludes it by default (root
+          # included, not just nested descendants), which silently uploaded
+          # nothing even when real archive_file zips existed
+          # (biffo-template#1774).
+          include-hidden-files: true
+
+      # See the matching comment in plan-dev -- transports any archive_file
+      # output the plan resolved OUTSIDE .build/ (e.g. a reusable module
+      # using ${path.module}), computed from plan.json rather than assumed
+      # (#1663 general case, biffo-template#1772).
+      - name: Collect other plan-time build artifacts
+        id: tfbuild-extra-prod
+        run: |
+          node "$GITHUB_WORKSPACE/scripts/collect-plan-build-artifacts.mjs" \
+            plan.json "$GITHUB_WORKSPACE" > "$RUNNER_TEMP/tfbuild-extra-prod-paths.txt"
+          if [ -s "$RUNNER_TEMP/tfbuild-extra-prod-paths.txt" ]; then
+            tar -czf "$RUNNER_TEMP/tfbuild-extra-prod.tar.gz" -C "$GITHUB_WORKSPACE" \
+              -T "$RUNNER_TEMP/tfbuild-extra-prod-paths.txt"
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/upload-artifact@v5
+        if: steps.tfbuild-extra-prod.outputs.found == 'true'
+        with:
+          name: tfbuild-extra-prod
+          path: ${{ runner.temp }}/tfbuild-extra-prod.tar.gz
+          retention-days: 1
+          if-no-files-found: error
   apply-prod:
     name: Apply (prod)
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
@@ -669,6 +877,27 @@ jobs:
           # Relative to the workspace: `defaults.run.working-directory` governs
           # `run` steps only, never an action's own inputs.
           path: infra/environments/prod
+
+      # Restore the plan-time `.build/` directory, if the plan produced one
+      # (#1663) -- see the matching comment in apply-dev. `if-no-artifact-found:
+      # ignore` mirrors the upload's `if-no-files-found: ignore`.
+      - uses: actions/download-artifact@v5
+        with:
+          name: tfbuild-prod
+          path: infra/environments/prod/.build
+          if-no-artifact-found: ignore
+
+      # See the matching comment in apply-dev.
+      - uses: actions/download-artifact@v5
+        with:
+          name: tfbuild-extra-prod
+          path: ${{ runner.temp }}
+          if-no-artifact-found: ignore
+      - name: Restore other plan-time build artifacts
+        run: |
+          if [ -f "${{ runner.temp }}/tfbuild-extra-prod.tar.gz" ]; then
+            tar -xzf "${{ runner.temp }}/tfbuild-extra-prod.tar.gz" -C "$GITHUB_WORKSPACE"
+          fi
       - run: terraform apply -input=false -auto-approve tfplan
         timeout-minutes: 45
       - name: Export outputs to GitHub Actions variables

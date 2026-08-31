@@ -369,7 +369,19 @@ function walkExcluding(root: string, dir: string, excludes: Set<string>): string
   for (const entry of readdirSync(dir)) {
     if (excludes.has(entry) || entry === '.git') continue
     const full = join(dir, entry)
-    const stat = statSync(full)
+    // (#1720) A concurrent process can remove `full` between the
+    // `readdirSync` above and this `statSync` — the entry existed a moment
+    // ago and no longer does. `.venv` is already excluded by name via
+    // `LOCAL_COPY_EXCLUDES`, so this closes the generic race for anything
+    // else (a directory entry deleted, or a symlink target removed), same
+    // convention as `skeleton-drift-guard.ts` / `plugin-collision-guard.ts` /
+    // `terraform-input-guard.ts` (#1713).
+    let stat: ReturnType<typeof statSync>
+    try {
+      stat = statSync(full)
+    } catch {
+      continue
+    }
     if (stat.isDirectory()) {
       out.push(...walkExcluding(root, full, excludes))
     } else {

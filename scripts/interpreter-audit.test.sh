@@ -184,6 +184,53 @@ make_script_fixture() {
   )
 }
 
+# join_lines <line1> <line2> ... -- prints each argument on its own line,
+# newline-joined. POSIX-portable way to build a multi-line string without
+# the bashism `$'"'"'...'"'"'` (this test script runs under real `sh`/dash).
+join_lines() {
+  for _l in "$@"; do
+    printf '%s\n' "$_l"
+  done
+}
+
+# make_script_fixture_multiline <dir> <target-name> <caller-name> <caller-body>
+#
+# Same shape as make_script_fixture, but the caller script'"'"'s body is
+# multiple lines (build with join_lines) rather than one `run_line` -- needed
+# to exercise a heredoc, which by definition spans more than one physical
+# line (#1804).
+make_script_fixture_multiline() {
+  dir=$1
+  target_name=$2
+  caller_name=$3
+  caller_body=$4
+  mkdir -p "$dir/.github/workflows" "$dir/scripts"
+  (
+    cd "$dir" || exit 1
+    git init -q
+    git config user.email test@example.invalid
+    git config user.name test
+    printf '#!/usr/bin/env bash\necho hi\n' >"scripts/${target_name}.sh"
+    chmod +x "scripts/${target_name}.sh"
+    {
+      printf '#!/usr/bin/env sh\n'
+      printf '%s\n' "$caller_body"
+    } >"scripts/${caller_name}.sh"
+    chmod +x "scripts/${caller_name}.sh"
+    {
+      echo 'name: w'
+      echo 'on: push'
+      echo 'jobs:'
+      echo '  j:'
+      echo '    runs-on: ubuntu-latest'
+      echo '    steps:'
+      echo '      - run: echo noop'
+    } >.github/workflows/w.yml
+    git add -A
+    git commit -q -m fixture
+  )
+}
+
 # run_audit <dir> <shell> -- prints "<exit-code>\n<output>"
 run_audit() {
   dir=$1
@@ -333,6 +380,93 @@ assert_case "script-to-script: sh/bash inside a quoted echo string is not an inv
 d="$WORK/script-to-script-comment"
 make_script_fixture "$d" "inner" "outer" "# Run: sh scripts/inner.sh --flag"
 assert_case "script-to-script: a doc comment naming sh scripts/inner.sh is not an invocation" "$d" 0 0 "" "MISMATCH"
+
+# --- #1804: heredoc-body prose false-MISMATCHed as code -------------------
+#
+# is_quoted_before()/strip_unquoted_comment() track shell quoting only per
+# LOGICAL line -- correct for the quoted-echo-prose shapes above, but a
+# heredoc body carries no shell quoting of its own (it is raw text between
+# an opener and its terminator), so every line inside one used to start
+# "unquoted" and any `sh <name>.sh` / `bash <name>.sh`-shaped substring in it
+# read as code. Reproduced live against this exact PR's script before the
+# fix: a heredoc-based usage example naming a real bash-shebang script
+# produced a false MISMATCH, exit 1 (fleet-filed issue #1804). Each case
+# below is one of the three heredoc-terminator quoting shapes named in that
+# issue's fix request.
+
+# MUST NOT be caught: bare, unquoted terminator (`<<EOF2`) -- the exact shape
+# from #1804's own reproduction.
+d="$WORK/heredoc-bare"
+body=$(join_lines \
+  'cat <<EOF2' \
+  'Usage example:' \
+  '  sh scripts/inner.sh --now' \
+  'EOF2')
+make_script_fixture_multiline "$d" "inner" "outer" "$body"
+assert_case "heredoc: bare <<EOF2 terminator, usage prose inside" "$d" 0 0 "" "MISMATCH"
+
+# MUST NOT be caught: single-quoted terminator (`<<'STUB'`).
+d="$WORK/heredoc-single-quoted"
+body=$(join_lines \
+  "cat <<'STUB'" \
+  'Usage example:' \
+  '  sh scripts/inner.sh --now' \
+  'STUB')
+make_script_fixture_multiline "$d" "inner" "outer" "$body"
+assert_case "heredoc: single-quoted <<'STUB' terminator, usage prose inside" "$d" 0 0 "" "MISMATCH"
+
+# MUST NOT be caught: double-quoted terminator (`<<"JSON"`).
+d="$WORK/heredoc-double-quoted"
+body=$(join_lines \
+  'cat <<"JSON"' \
+  'Usage example:' \
+  '  sh scripts/inner.sh --now' \
+  'JSON')
+make_script_fixture_multiline "$d" "inner" "outer" "$body"
+assert_case 'heredoc: double-quoted <<"JSON" terminator, usage prose inside' "$d" 0 0 "" "MISMATCH"
+
+# MUST NOT be caught: tab-indented terminator (`<<-INDENT`), where only
+# leading TABS (never spaces) are stripped before comparing against the
+# terminator -- the fourth real shell heredoc shape, not just the three the
+# issue names verbatim (same "class, not instance" reasoning the fix itself
+# documents).
+TAB=$(printf '\t')
+d="$WORK/heredoc-dash-indented"
+body=$(join_lines \
+  'cat <<-INDENT' \
+  "${TAB}sh scripts/inner.sh --now" \
+  "${TAB}INDENT")
+make_script_fixture_multiline "$d" "inner" "outer" "$body"
+assert_case "heredoc: <<-INDENT with tab-indented body and terminator" "$d" 0 0 "" "MISMATCH"
+
+# MUST be caught, both of them: a real mismatched invocation BEFORE a
+# heredoc opens and another AFTER it closes, in the same file -- the
+# regression this fixture guards against is heredoc-tracking state either
+# never engaging (falls back to the pre-#1804 bug) or getting stuck open
+# forever (a new bug the fix itself could introduce, silently exempting all
+# code after the first heredoc in any script). Exactly 2 invocations
+# expected, not 3 -- the prose line inside the heredoc body must stay
+# uncounted.
+d="$WORK/heredoc-surrounding-code-still-scanned"
+body=$(join_lines \
+  'sh scripts/inner.sh --before' \
+  'cat <<EOF' \
+  '  sh scripts/inner.sh --prose-inside-heredoc-not-real' \
+  'EOF' \
+  'sh scripts/inner.sh --after')
+make_script_fixture_multiline "$d" "inner" "outer" "$body"
+assert_case "heredoc: real invocations before and after are still caught, body is not" "$d" 1 2 "MISMATCH" ""
+
+# MUST be caught: a real invocation sharing its physical line with the
+# heredoc opener itself (piping a heredoc into the invoked command's stdin)
+# -- the opener must not retroactively exempt the very line it appears on.
+d="$WORK/heredoc-opener-shares-line-with-real-invocation"
+body=$(join_lines \
+  'sh scripts/inner.sh --now <<EOF' \
+  '  prose inside, not a real invocation: sh scripts/inner.sh nopeflag' \
+  'EOF')
+make_script_fixture_multiline "$d" "inner" "outer" "$body"
+assert_case "heredoc: real invocation on the opener's own line is still caught" "$d" 1 1 "MISMATCH" "nopeflag"
 
 # --- Must still hold: this repo's own real workflows -----------------------
 # Not pinned to a fixed count (that grows as this repo's workflows do) —

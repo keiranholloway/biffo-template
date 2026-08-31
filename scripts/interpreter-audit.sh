@@ -304,9 +304,13 @@
 #     already-sliced `rest` a repeat match operates on, which would have lost
 #     any quote opened earlier in the line. A match that lands inside an
 #     open quote is a string, not a command, and is never emitted as a
-#     record. Heredocs and multi-line quoting are NOT tracked -- each call
-#     starts fresh per logical line. That is a known, accepted gap (see
-#     "Still out of scope" below), not a silent one.
+#     record. Quoting that opens on one physical line and is still open at
+#     end-of-line, OUTSIDE a heredoc (e.g. an unterminated multi-line
+#     double-quoted string), is NOT tracked -- each call starts fresh per
+#     logical line. That is a known, accepted gap (see "Still out of scope"
+#     below), not a silent one. Heredoc BODIES are tracked separately, by
+#     `detect_heredoc()` in the main record loop below (#1804) -- see the
+#     "Seventh-pass" header section further down.
 #
 # ### Case matrix -- captured live against this repo at the commit this
 # ### landed on, not invented
@@ -387,6 +391,41 @@
 # existing header already gives for never parsing a direct `sh -c "..."`
 # argument, one level further removed. Recorded here rather than silently
 # left for the next reader to rediscover, same as the `$(sh ...)` gap below.
+#
+# ## Seventh-pass: heredoc bodies were scanned as code (#1804)
+#
+# `is_quoted_before()`/`strip_unquoted_comment()` (added for #1681, above)
+# compute shell quoting per LOGICAL line. That is correct for the
+# quoted-echo-prose shapes the case matrix above documents, but a heredoc
+# body carries no shell quoting of its own -- it is raw text between an
+# opener (`<<TOKEN`, `<<-TOKEN`, `<<'TOKEN'`, `<<"TOKEN"`, `<<\TOKEN`) and a
+# terminator line, so every line inside one used to start "unquoted", and
+# any `sh <name>.sh` / `bash <name>.sh`-shaped substring in a heredoc-based
+# usage example read as a real invocation. Reproduced live against this
+# script before this fix: a caller script documenting its own usage via
+# `cat <<EOF2` / `  sh scripts/bash-only.sh --now` / `EOF2` produced a false
+# MISMATCH, exit 1 -- the same MUST-NOT-catch shape the #1681 case matrix
+# already lists for quoted echo prose, just heredoc-shaped instead of
+# quote-shaped, and outside what either existing filter tracks (fleet-filed
+# issue #1804, found by independent prosecution of #1681's own PR).
+#
+# Fix: a third piece of per-file state, `in_heredoc`/`heredoc_term`/
+# `heredoc_strip_tabs`, tracked across the main record loop (NOT per logical
+# line -- a heredoc body is precisely the multi-line case the existing two
+# filters cannot see). `detect_heredoc()` recognises an opener on a physical
+# line -- the line itself is still scanned (a real invocation may precede
+# the opener, or may pipe the heredoc into its own stdin, e.g.
+# `sh scripts/foo.sh <<EOF`) -- and every physical line after it is treated
+# as literal, unscanned text, never comment-stripped or `\`-continuation
+# joined, until a line matching the terminator exactly (leading tabs
+# stripped first, only for `<<-`) is seen. See
+# `scripts/interpreter-audit.test.sh` for the fixture matrix: all three
+# terminator-quoting shapes #1804 names, plus `<<-` indentation, plus two
+# regression guards -- a real mismatched invocation immediately before and
+# immediately after a heredoc in the same file must still be caught (proves
+# the state does not get stuck open), and a real invocation sharing its
+# physical line with the opener itself must still be caught (proves the
+# opener does not retroactively exempt its own line).
 #
 # Usage:
 #   bash scripts/interpreter-audit.sh
@@ -496,9 +535,75 @@ shebang_shell() {
 # case matrix in this file's header for real examples of each).
 find_invocations() {
   awk '
+BEGIN {
+  # Single/double quote characters built via sprintf rather than written
+  # literally -- this whole program is embedded in a single-quoted shell
+  # string (see is_quoted_before()/strip_unquoted_comment() below, which
+  # already use the "'"'"'" idiom for the same reason on plain char
+  # comparisons); a *regex* containing a literal quote character needs the
+  # quote built at runtime instead, so HEREDOC_RE stays a single balanced
+  # shell-quoted awk literal with no embedded quote to escape.
+  SQ = sprintf("%c", 39)
+  DQ = sprintf("%c", 34)
+  # Matches a heredoc opener`s "<<" or "<<-", optional whitespace, and a
+  # bare/`'"'"'`quoted/"-quoted/backslash-escaped terminator word -- the four
+  # shapes real shell scripts use (#1804): `<<EOF`, `<<'"'"'STUB'"'"'`,
+  # `<<"JSON"`, `<<-INDENT`, `<<\EOF`. Not anchored to end-of-line so it
+  # still matches when a real command precedes it on the same line
+  # (`cat <<EOF2` and `TARGET_DIR=.; cat <<EOF2` both match).
+  HEREDOC_RE = "<<-?[ \t]*(" SQ "[A-Za-z_][A-Za-z0-9_]*" SQ "|" DQ "[A-Za-z_][A-Za-z0-9_]*" DQ "|\\\\[A-Za-z_][A-Za-z0-9_]*|[A-Za-z_][A-Za-z0-9_]*)"
+  in_heredoc = 0
+}
+
+# detect_heredoc(str)
+#
+# If `str` opens a heredoc (and none is already open), records its
+# terminator in the global `heredoc_term` and sets `in_heredoc = 1` so
+# subsequent physical lines are treated as literal heredoc body text --
+# never scanned for sh/bash invocations -- until the terminator line is
+# seen. `heredoc_strip_tabs` mirrors `<<-`'"'"'s own semantics: only LEADING
+# TABS (never spaces) are stripped from a body/terminator line before
+# comparing (#1804 fix; see "Sixth-pass" header section for the false
+# MISMATCH this closes -- a heredoc-only usage example naming a real
+# bash-shebang script in prose, indistinguishable at the text level from a
+# genuine invocation without this).
+function detect_heredoc(str,    m, strip_tabs) {
+  if (in_heredoc) return
+  if (match(str, HEREDOC_RE)) {
+    m = substr(str, RSTART, RLENGTH)
+    strip_tabs = (substr(m, 1, 3) == "<<-")
+    sub(/^<<-?[ \t]*/, "", m)
+    if (substr(m, 1, 1) == SQ || substr(m, 1, 1) == DQ) {
+      heredoc_term = substr(m, 2, length(m) - 2)
+    } else if (substr(m, 1, 1) == "\\") {
+      heredoc_term = substr(m, 2)
+    } else {
+      heredoc_term = m
+    }
+    heredoc_strip_tabs = strip_tabs
+    in_heredoc = 1
+  }
+}
+
 {
   startline = NR
   line = $0
+
+  # A heredoc body is literal text read by the shell until its terminator
+  # line, never executed or line-continuation-joined -- so it is excluded
+  # from scanning entirely, before comment-stripping or `\`-continuation
+  # handling ever sees it (#1804). Checked BEFORE opener-detection so a
+  # terminator line itself is consumed here rather than treated as a new
+  # command line.
+  if (in_heredoc) {
+    check_line = line
+    if (heredoc_strip_tabs) { sub(/^\t+/, "", check_line) }
+    if (check_line == heredoc_term) { in_heredoc = 0 }
+    next
+  }
+
+  detect_heredoc(line)
+
   while (match(line, /\\[ \t]*$/)) {
     if ((getline nextline) <= 0) { sub(/\\[ \t]*$/, "", line); break }
     sub(/\\[ \t]*$/, "", line)

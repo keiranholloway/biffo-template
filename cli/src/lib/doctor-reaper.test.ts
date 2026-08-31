@@ -1,9 +1,13 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   classifyReapCandidate,
+  findBareBranchCandidates,
   findReapCandidates,
   reapAll,
+  reapAllBareBranches,
+  reapBareBranch,
   reapCandidate,
+  type BranchReapDeps,
   type ReapCandidateFacts,
   type ReapDeps,
 } from './doctor-reaper.js'
@@ -116,7 +120,7 @@ describe('findReapCandidates', () => {
     expect(candidates).toEqual([{ branch: 'chore/merged', worktreePath: '/wt/merged' }])
   })
 
-  it('excludes a [gone] branch with no worktree — bare-branch reaping is milestone 2', () => {
+  it('excludes a [gone] branch with no worktree — bare-branch reaping is findBareBranchCandidates below', () => {
     const candidates = findReapCandidates(branches, worktrees)
     expect(candidates.map((c) => c.branch)).not.toContain('fix/orphan-bare')
   })
@@ -338,6 +342,201 @@ describe('reapAll', () => {
     ]
 
     const outcomes = await reapAll('/repo', liveBranches, [], 'dev', {
+      git: git as never,
+      github: github as never,
+    })
+
+    expect(outcomes).toEqual([])
+    expect(github.prVerdictForBranch).not.toHaveBeenCalled()
+  })
+})
+
+// --- Milestone 2 (#1682): bare-branch deletion ------------------------------------------
+
+describe('findBareBranchCandidates', () => {
+  const branches: BranchRef[] = [
+    { name: 'dev', upstream: 'refs/remotes/origin/dev', track: '' },
+    { name: 'chore/merged', upstream: 'refs/remotes/origin/chore/merged', track: '[gone]' },
+    { name: 'feat/live', upstream: 'refs/remotes/origin/feat/live', track: '[ahead 1]' },
+    { name: 'fix/orphan-bare', upstream: 'refs/remotes/origin/fix/orphan-bare', track: '[gone]' },
+  ]
+  const worktrees: WorktreeFact[] = [{ path: '/wt/merged', branch: 'chore/merged', behind: 0 }]
+
+  it('finds a [gone] branch with no linked worktree', () => {
+    const candidates = findBareBranchCandidates(branches, worktrees)
+    expect(candidates).toEqual([{ branch: 'fix/orphan-bare' }])
+  })
+
+  it('excludes a [gone] branch that DOES have a linked worktree — that is findReapCandidates', () => {
+    const candidates = findBareBranchCandidates(branches, worktrees)
+    expect(candidates.map((c) => c.branch)).not.toContain('chore/merged')
+  })
+
+  it('excludes a branch with a live (not gone) upstream', () => {
+    const candidates = findBareBranchCandidates(branches, worktrees)
+    expect(candidates.map((c) => c.branch)).not.toContain('feat/live')
+  })
+})
+
+/** A branch-reap deps mock defaulting to a clean, mergeable branch; override per test. */
+function branchReapDeps(
+  overrides: { git?: Record<string, unknown>; github?: Record<string, unknown> } = {},
+): BranchReapDeps {
+  return {
+    git: {
+      branchSha: vi.fn().mockResolvedValue('deadbeef'),
+      isAncestor: vi.fn().mockResolvedValue(true),
+      deleteBranch: vi.fn().mockResolvedValue(true),
+      ...overrides.git,
+    } as never,
+    github: {
+      prVerdictForBranch: vi.fn().mockResolvedValue('merged'),
+      mergedHeadSha: vi.fn().mockResolvedValue('deadbeef'),
+      ...overrides.github,
+    } as never,
+  }
+}
+
+describe('reapBareBranch', () => {
+  it('deletes a bare branch whose PR merged and whose tip is contained in what merged', async () => {
+    const deps = branchReapDeps()
+    const outcome = await reapBareBranch('/repo', { branch: 'fix/orphan-bare' }, deps)
+
+    expect(outcome.verdict).toEqual({ action: 'reap' })
+    expect(outcome.branchDeleted).toBe(true)
+    expect(deps.git.deleteBranch).toHaveBeenCalledWith('/repo', 'fix/orphan-bare')
+  })
+
+  // Same #1810 shape as the worktree case: a merged PR for this branch NAME
+  // does not prove the branch's OWN current tip is what merged — a squash
+  // merge means later local-only commits on the same branch are possible.
+  it('keeps a bare branch whose tip carries commits ahead of what its merged PR shipped', async () => {
+    const deps = branchReapDeps({
+      git: {
+        branchSha: vi.fn().mockResolvedValue('unpushed-follow-up-sha'),
+        isAncestor: vi.fn().mockResolvedValue(false),
+      },
+      github: { mergedHeadSha: vi.fn().mockResolvedValue('merged-tip-sha') },
+    })
+
+    const outcome = await reapBareBranch('/repo', { branch: 'fix/orphan-bare' }, deps)
+
+    expect(outcome.verdict).toEqual({ action: 'keep', reason: 'commits-not-in-merge' })
+    expect(outcome.branchDeleted).toBeNull()
+    expect(deps.git.deleteBranch as ReturnType<typeof vi.fn>).not.toHaveBeenCalled()
+    expect(deps.git.isAncestor).toHaveBeenCalledWith(
+      '/repo',
+      'unpushed-follow-up-sha',
+      'merged-tip-sha',
+    )
+  })
+
+  it('keeps a merged-PR branch, never deleting it, when the merged head SHA cannot be read', async () => {
+    const deps = branchReapDeps({ github: { mergedHeadSha: vi.fn().mockResolvedValue(null) } })
+    const outcome = await reapBareBranch('/repo', { branch: 'fix/orphan-bare' }, deps)
+
+    expect(outcome.verdict).toEqual({ action: 'keep', reason: 'unknown-merge-head' })
+    expect(outcome.branchDeleted).toBeNull()
+    expect(deps.git.deleteBranch as ReturnType<typeof vi.fn>).not.toHaveBeenCalled()
+    expect(deps.git.isAncestor as ReturnType<typeof vi.fn>).not.toHaveBeenCalled()
+  })
+
+  it('does not ask for a merged head SHA at all unless the PR verdict is merged', async () => {
+    const deps = branchReapDeps({
+      github: { prVerdictForBranch: vi.fn().mockResolvedValue('closed') },
+    })
+    await reapBareBranch('/repo', { branch: 'fix/orphan-bare' }, deps)
+    expect(deps.github.mergedHeadSha as ReturnType<typeof vi.fn>).not.toHaveBeenCalled()
+    expect(deps.git.branchSha as ReturnType<typeof vi.fn>).not.toHaveBeenCalled()
+  })
+
+  it('keeps a branch whose PR closed unmerged, and never deletes it', async () => {
+    const deps = branchReapDeps({
+      github: { prVerdictForBranch: vi.fn().mockResolvedValue('closed') },
+    })
+    const outcome = await reapBareBranch('/repo', { branch: 'security/undici-advisories' }, deps)
+
+    expect(outcome.verdict).toEqual({ action: 'keep', reason: 'pr-closed' })
+    expect(outcome.branchDeleted).toBeNull()
+    expect(deps.git.deleteBranch as ReturnType<typeof vi.fn>).not.toHaveBeenCalled()
+  })
+
+  it('keeps a branch with no PR ever, and never deletes it', async () => {
+    const deps = branchReapDeps({
+      github: { prVerdictForBranch: vi.fn().mockResolvedValue('none') },
+    })
+    const outcome = await reapBareBranch('/repo', { branch: 'batch/reconverge' }, deps)
+
+    expect(outcome.verdict).toEqual({ action: 'keep', reason: 'no-pr' })
+    expect(outcome.branchDeleted).toBeNull()
+  })
+
+  it('leaves the branch exactly as it was when git branch -D itself fails', async () => {
+    const deps = branchReapDeps({ git: { deleteBranch: vi.fn().mockResolvedValue(false) } })
+    const outcome = await reapBareBranch('/repo', { branch: 'fix/orphan-bare' }, deps)
+
+    expect(outcome.verdict).toEqual({ action: 'reap' })
+    expect(outcome.branchDeleted).toBe(false)
+  })
+})
+
+describe('reapAllBareBranches', () => {
+  const branches: BranchRef[] = [
+    { name: 'fix/orphan-bare', upstream: 'refs/remotes/origin/fix/orphan-bare', track: '[gone]' },
+    {
+      name: 'security/undici-advisories',
+      upstream: 'refs/remotes/origin/security/undici-advisories',
+      track: '[gone]',
+    },
+    { name: 'agent/1682', upstream: 'refs/remotes/origin/agent/1682', track: '[gone]' },
+  ]
+
+  it('deletes the merged one, keeps the closed-unmerged one, and never touches the current branch', async () => {
+    const github = {
+      prVerdictForBranch: vi.fn(async (_cwd: string, branch: string) =>
+        branch === 'fix/orphan-bare' ? 'merged' : 'closed',
+      ),
+      mergedHeadSha: vi.fn().mockResolvedValue('merged-tip-sha'),
+    }
+    const git = {
+      branchSha: vi.fn().mockResolvedValue('merged-tip-sha'),
+      isAncestor: vi.fn().mockResolvedValue(true),
+      deleteBranch: vi.fn().mockResolvedValue(true),
+    }
+
+    const outcomes = await reapAllBareBranches('/repo', branches, [], 'agent/1682', {
+      git: git as never,
+      github: github as never,
+    })
+
+    // The current branch (agent/1682) never appears as a candidate, even
+    // though its own upstream is [gone] too — never delete the branch this
+    // session is standing on.
+    expect(outcomes.map((o) => o.candidate.branch)).toEqual([
+      'fix/orphan-bare',
+      'security/undici-advisories',
+    ])
+
+    const merged = outcomes.find((o) => o.candidate.branch === 'fix/orphan-bare')
+    expect(merged?.verdict).toEqual({ action: 'reap' })
+    expect(merged?.branchDeleted).toBe(true)
+
+    const undici = outcomes.find((o) => o.candidate.branch === 'security/undici-advisories')
+    expect(undici?.verdict).toEqual({ action: 'keep', reason: 'pr-closed' })
+    expect(undici?.branchDeleted).toBeNull()
+
+    expect(git.deleteBranch).toHaveBeenCalledTimes(1)
+    expect(git.deleteBranch).toHaveBeenCalledWith('/repo', 'fix/orphan-bare')
+  })
+
+  it('reports nothing to do when no bare branch has a gone upstream', async () => {
+    const github = { prVerdictForBranch: vi.fn() }
+    const git = { branchSha: vi.fn(), isAncestor: vi.fn(), deleteBranch: vi.fn() }
+    const liveBranches: BranchRef[] = [
+      { name: 'dev', upstream: 'refs/remotes/origin/dev', track: '' },
+    ]
+
+    const outcomes = await reapAllBareBranches('/repo', liveBranches, [], 'dev', {
       git: git as never,
       github: github as never,
     })

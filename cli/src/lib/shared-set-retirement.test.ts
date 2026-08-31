@@ -201,14 +201,20 @@ describe('the bridge preserves the caller working directory', () => {
 
   it('shared-sync rehearsal measures with the template copy, not the satellite one', () => {
     // It runs inside each STAGED SATELLITE worktree, which no longer carries a
-    // copy — so the old `sh scripts/gate-coverage.sh` would report "coverage
+    // copy — so a bare `scripts/gate-coverage.sh` would report "coverage
     // unknown" for every repo and the rehearsal would stop discriminating.
     //
     // Going through the satellite's own bridge would work but would resolve
     // `npx @biffo/cli@<pin>` once per repo: 14 network round trips, and a
     // measurement that fails when the registry is unreachable.
+    //
+    // Invoked as a bare executable, not `sh "$TEMPLATE_ROOT/scripts/
+    // gate-coverage.sh"`, since #1681: gate-coverage.sh declares
+    // `#!/usr/bin/env bash`, and an explicit `sh` prefix threw that shebang
+    // away. The property this test actually cares about — resolving through
+    // $TEMPLATE_ROOT, not a bare satellite-relative path — is unchanged.
     const sync = readFileSync(join(repoRoot, 'scripts/shared-sync.sh'), 'utf8')
-    expect(sync).toContain('sh "$TEMPLATE_ROOT/scripts/gate-coverage.sh"')
+    expect(sync).toContain('"$TEMPLATE_ROOT/scripts/gate-coverage.sh"')
     expect(sync).not.toContain('cd "$wt" && sh scripts/gate-coverage.sh')
   })
 })

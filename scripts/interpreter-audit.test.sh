@@ -141,6 +141,96 @@ make_fixture() {
   )
 }
 
+# make_script_fixture <dir> <target-name> <caller-name> <caller-line>
+#
+# Same disposable git repo as make_fixture, but the interpreter mismatch (or
+# the deliberately-not-a-mismatch prose) lives inside a SECOND file under
+# scripts/ -- a script invoking another script -- not inside the workflow
+# YAML. This is the shape #1681 closes: every prior version of this audit
+# read only `.github/workflows/*.yml`, so a script-to-script invocation was
+# completely outside what it examined regardless of whether the interpreter
+# and shebang agreed. The workflow file here carries a harmless no-op step
+# (WF_DIR must hold at least one file, but the workflow itself contributes
+# no invocations to count).
+make_script_fixture() {
+  dir=$1
+  target_name=$2
+  caller_name=$3
+  caller_line=$4
+  mkdir -p "$dir/.github/workflows" "$dir/scripts"
+  (
+    cd "$dir" || exit 1
+    git init -q
+    git config user.email test@example.invalid
+    git config user.name test
+    printf '#!/usr/bin/env bash\necho hi\n' >"scripts/${target_name}.sh"
+    chmod +x "scripts/${target_name}.sh"
+    {
+      printf '#!/usr/bin/env sh\n'
+      printf '%s\n' "$caller_line"
+    } >"scripts/${caller_name}.sh"
+    chmod +x "scripts/${caller_name}.sh"
+    {
+      echo 'name: w'
+      echo 'on: push'
+      echo 'jobs:'
+      echo '  j:'
+      echo '    runs-on: ubuntu-latest'
+      echo '    steps:'
+      echo '      - run: echo noop'
+    } >.github/workflows/w.yml
+    git add -A
+    git commit -q -m fixture
+  )
+}
+
+# join_lines <line1> <line2> ... -- prints each argument on its own line,
+# newline-joined. POSIX-portable way to build a multi-line string without
+# the bashism `$'"'"'...'"'"'` (this test script runs under real `sh`/dash).
+join_lines() {
+  for _l in "$@"; do
+    printf '%s\n' "$_l"
+  done
+}
+
+# make_script_fixture_multiline <dir> <target-name> <caller-name> <caller-body>
+#
+# Same shape as make_script_fixture, but the caller script'"'"'s body is
+# multiple lines (build with join_lines) rather than one `run_line` -- needed
+# to exercise a heredoc, which by definition spans more than one physical
+# line (#1804).
+make_script_fixture_multiline() {
+  dir=$1
+  target_name=$2
+  caller_name=$3
+  caller_body=$4
+  mkdir -p "$dir/.github/workflows" "$dir/scripts"
+  (
+    cd "$dir" || exit 1
+    git init -q
+    git config user.email test@example.invalid
+    git config user.name test
+    printf '#!/usr/bin/env bash\necho hi\n' >"scripts/${target_name}.sh"
+    chmod +x "scripts/${target_name}.sh"
+    {
+      printf '#!/usr/bin/env sh\n'
+      printf '%s\n' "$caller_body"
+    } >"scripts/${caller_name}.sh"
+    chmod +x "scripts/${caller_name}.sh"
+    {
+      echo 'name: w'
+      echo 'on: push'
+      echo 'jobs:'
+      echo '  j:'
+      echo '    runs-on: ubuntu-latest'
+      echo '    steps:'
+      echo '      - run: echo noop'
+    } >.github/workflows/w.yml
+    git add -A
+    git commit -q -m fixture
+  )
+}
+
 # run_audit <dir> <shell> -- prints "<exit-code>\n<output>"
 run_audit() {
   dir=$1
@@ -246,6 +336,217 @@ assert_case "flags: sh -e invokes bash-shebang script" "$d" 1 1 "MISMATCH" ""
 d="$WORK/unparseable"
 make_fixture "$d" "foo" 'sh -c "scripts/foo.sh"' '${RUNNER_SHELL} scripts/foo.sh'
 assert_case "unparseable: sh -c \"...\" and a shell-variable interpreter" "$d" 1 2 "COULD NOT EXAMINE" "MISMATCH"
+
+# --- #1681: script-to-script invocations, invisible before this round -----
+#
+# The concrete miss this class produced:
+# `scripts/branch-health-plan-only-detection.test.sh` (#1582) invoked its
+# target with an explicit `sh` prefix the target's own `bash` shebang did
+# not tolerate, and this audit reported `mismatched: 0` throughout because
+# it never read scripts/*.sh at all -- only .github/workflows/*.yml. That
+# specific call site is fixed at the source now (its own fix predates this
+# round), so it cannot serve as fail-first evidence any more; the case below
+# is a deliberately-constructed equivalent: a caller script invoking a
+# bash-shebang target via bare `sh`, inside scripts/, with nothing in any
+# workflow file naming either script.
+
+# MUST be caught: this is exactly the shape this section exists to close.
+d="$WORK/script-to-script-mismatch"
+make_script_fixture "$d" "inner" "outer" "sh scripts/inner.sh"
+assert_case "script-to-script: outer.sh invokes bash-shebang inner.sh via sh" "$d" 1 1 "MISMATCH" ""
+
+# MUST be caught, in the "could not examine" state: the quoted-variable
+# target shape (#1681's own real finding in scripts/shared-sync.sh, fixed in
+# this same round) is exactly as unresolvable from a script body as it is
+# from a workflow's run: line -- counted, never silently dropped.
+d="$WORK/script-to-script-quoted"
+make_script_fixture "$d" "inner" "outer" 'TARGET_DIR=.; sh "$TARGET_DIR/scripts/inner.sh"'
+assert_case "script-to-script: quoted variable target is UNPARSEABLE, not dropped" "$d" 1 1 "COULD NOT EXAMINE" "MISMATCH"
+
+# MUST NOT be caught: a script body is full of prose that LOOKS like an
+# invocation and is not one -- usage comments, echo/printf help text,
+# test-scenario labels (real examples in this file's own header: biffo.sh's
+# `echo "... sh scripts/shared-sync.sh ..."` help text,
+# interpreter-audit.test.sh's own `assert_case "matrix: bash
+# scripts/${name}.sh ..."` labels). A guard that cannot tell those from code
+# is red on every script in this repo, which trains people to stop reading
+# it -- exactly the failure this fix must not introduce.
+d="$WORK/script-to-script-prose-quoted"
+make_script_fixture "$d" "inner" "outer" 'echo "for example: sh scripts/inner.sh --flag"'
+assert_case "script-to-script: sh/bash inside a quoted echo string is not an invocation" "$d" 0 0 "" "MISMATCH"
+
+# MUST NOT be caught: a full-line doc comment naming the exact mismatched
+# shape is not code either.
+d="$WORK/script-to-script-comment"
+make_script_fixture "$d" "inner" "outer" "# Run: sh scripts/inner.sh --flag"
+assert_case "script-to-script: a doc comment naming sh scripts/inner.sh is not an invocation" "$d" 0 0 "" "MISMATCH"
+
+# --- #1804: heredoc-body prose false-MISMATCHed as code -------------------
+#
+# is_quoted_before()/strip_unquoted_comment() track shell quoting only per
+# LOGICAL line -- correct for the quoted-echo-prose shapes above, but a
+# heredoc body carries no shell quoting of its own (it is raw text between
+# an opener and its terminator), so every line inside one used to start
+# "unquoted" and any `sh <name>.sh` / `bash <name>.sh`-shaped substring in it
+# read as code. Reproduced live against this exact PR's script before the
+# fix: a heredoc-based usage example naming a real bash-shebang script
+# produced a false MISMATCH, exit 1 (fleet-filed issue #1804). Each case
+# below is one of the three heredoc-terminator quoting shapes named in that
+# issue's fix request.
+
+# MUST NOT be caught: bare, unquoted terminator (`<<EOF2`) -- the exact shape
+# from #1804's own reproduction.
+d="$WORK/heredoc-bare"
+body=$(join_lines \
+  'cat <<EOF2' \
+  'Usage example:' \
+  '  sh scripts/inner.sh --now' \
+  'EOF2')
+make_script_fixture_multiline "$d" "inner" "outer" "$body"
+assert_case "heredoc: bare <<EOF2 terminator, usage prose inside" "$d" 0 0 "" "MISMATCH"
+
+# MUST NOT be caught: single-quoted terminator (`<<'STUB'`).
+d="$WORK/heredoc-single-quoted"
+body=$(join_lines \
+  "cat <<'STUB'" \
+  'Usage example:' \
+  '  sh scripts/inner.sh --now' \
+  'STUB')
+make_script_fixture_multiline "$d" "inner" "outer" "$body"
+assert_case "heredoc: single-quoted <<'STUB' terminator, usage prose inside" "$d" 0 0 "" "MISMATCH"
+
+# MUST NOT be caught: double-quoted terminator (`<<"JSON"`).
+d="$WORK/heredoc-double-quoted"
+body=$(join_lines \
+  'cat <<"JSON"' \
+  'Usage example:' \
+  '  sh scripts/inner.sh --now' \
+  'JSON')
+make_script_fixture_multiline "$d" "inner" "outer" "$body"
+assert_case 'heredoc: double-quoted <<"JSON" terminator, usage prose inside' "$d" 0 0 "" "MISMATCH"
+
+# MUST NOT be caught: tab-indented terminator (`<<-INDENT`), where only
+# leading TABS (never spaces) are stripped before comparing against the
+# terminator -- the fourth real shell heredoc shape, not just the three the
+# issue names verbatim (same "class, not instance" reasoning the fix itself
+# documents).
+TAB=$(printf '\t')
+d="$WORK/heredoc-dash-indented"
+body=$(join_lines \
+  'cat <<-INDENT' \
+  "${TAB}sh scripts/inner.sh --now" \
+  "${TAB}INDENT")
+make_script_fixture_multiline "$d" "inner" "outer" "$body"
+assert_case "heredoc: <<-INDENT with tab-indented body and terminator" "$d" 0 0 "" "MISMATCH"
+
+# MUST be caught, both of them: a real mismatched invocation BEFORE a
+# heredoc opens and another AFTER it closes, in the same file -- the
+# regression this fixture guards against is heredoc-tracking state either
+# never engaging (falls back to the pre-#1804 bug) or getting stuck open
+# forever (a new bug the fix itself could introduce, silently exempting all
+# code after the first heredoc in any script). Exactly 2 invocations
+# expected, not 3 -- the prose line inside the heredoc body must stay
+# uncounted.
+d="$WORK/heredoc-surrounding-code-still-scanned"
+body=$(join_lines \
+  'sh scripts/inner.sh --before' \
+  'cat <<EOF' \
+  '  sh scripts/inner.sh --prose-inside-heredoc-not-real' \
+  'EOF' \
+  'sh scripts/inner.sh --after')
+make_script_fixture_multiline "$d" "inner" "outer" "$body"
+assert_case "heredoc: real invocations before and after are still caught, body is not" "$d" 1 2 "MISMATCH" ""
+
+# MUST be caught: a real invocation sharing its physical line with the
+# heredoc opener itself (piping a heredoc into the invoked command's stdin)
+# -- the opener must not retroactively exempt the very line it appears on.
+d="$WORK/heredoc-opener-shares-line-with-real-invocation"
+body=$(join_lines \
+  'sh scripts/inner.sh --now <<EOF' \
+  '  prose inside, not a real invocation: sh scripts/inner.sh nopeflag' \
+  'EOF')
+make_script_fixture_multiline "$d" "inner" "outer" "$body"
+assert_case "heredoc: real invocation on the opener's own line is still caught" "$d" 1 1 "MISMATCH" "nopeflag"
+
+# --- #1817: a plain (non `-`) heredoc's terminator gets stuck open when it --
+# is indented with SPACES, silently un-scanning the rest of the file -------
+#
+# detect_heredoc()'s original closing check only stripped leading TABS, and
+# only for `<<-`. A heredoc opened WITHOUT `-` whose terminator is indented
+# with SPACES -- the ordinary shape for a heredoc inside an indented shell
+# function, or a YAML `run: |` block whose own block-scalar indentation
+# stripping makes an in-source-indented terminator line up as a real,
+# flush-left terminator at runtime -- never matched `check_line ==
+# heredoc_term`, so `in_heredoc` never cleared and every physical line to
+# EOF was silently excluded, no error, no "could not examine" bump.
+# Reproduced live against this exact PR's own required deploy/destroy
+# workflows (fleet-filed issue #1817, independently gating PR #1782).
+
+# MUST NOT be caught: prose inside a heredoc body still excluded when the
+# terminator is SPACE-indented rather than flush-left or tab-indented.
+d="$WORK/heredoc-space-indented"
+body=$(join_lines \
+  'cat <<INDENT' \
+  '  sh scripts/inner.sh --now' \
+  '  INDENT')
+make_script_fixture_multiline "$d" "inner" "outer" "$body"
+assert_case "heredoc: <<INDENT (no dash) with space-indented body and terminator" "$d" 0 0 "" "MISMATCH"
+
+# MUST be caught, both of them: the exact shape #1817 reproduced -- a real
+# invocation BEFORE a plain heredoc whose terminator is SPACE-indented, and
+# another AFTER it, in the same file. Before the fix, `in_heredoc` never
+# cleared at the indented terminator, so the second invocation (and
+# everything else to EOF) went completely unexamined -- 1 invocation found,
+# not 2, with exit 0 masking a real MISMATCH. Exactly 2 expected here too,
+# not 3 -- the prose line inside the body must stay uncounted.
+d="$WORK/heredoc-space-indented-surrounding-code"
+body=$(join_lines \
+  'sh scripts/inner.sh --before' \
+  'cat <<EOF' \
+  '  sh scripts/inner.sh --prose-inside-heredoc-not-real' \
+  '  EOF' \
+  'sh scripts/inner.sh --after')
+make_script_fixture_multiline "$d" "inner" "outer" "$body"
+assert_case "heredoc: <<EOF (no dash) with space-indented terminator still closes, before/after still caught" "$d" 1 2 "MISMATCH" ""
+
+# --- #1817: two further ways into the same stuck-open state, found by -----
+# attacking this PR's own #1804 heredoc-exclusion fix rather than trusting --
+# its green self-test -------------------------------------------------------
+#
+# detect_heredoc() ran against the RAW physical line, before
+# strip_unquoted_comment() ever saw it -- so a `#`-comment merely NAMING a
+# heredoc opener in prose (this file's own header comments do exactly that,
+# e.g. "`<<TOKEN`") was read as a real opener, whose terminator ("TOKEN")
+# then never legitimately appears alone on a line -- stuck open to EOF, a
+# second independent path into the identical failure this section's first
+# two cases close. Reproduced live: this repo's OWN scripts/interpreter-audit.sh
+# hit this on its own header prose before the fix.
+
+# MUST NOT be caught, and must not swallow what follows: a comment merely
+# naming a heredoc-opener shape in prose is not a real opener.
+d="$WORK/heredoc-opener-inside-comment-not-real"
+body=$(join_lines \
+  '# usage example: `cat <<TOKEN` opens a heredoc' \
+  'sh scripts/inner.sh --after-comment')
+make_script_fixture_multiline "$d" "inner" "outer" "$body"
+assert_case "heredoc: opener-shaped text inside a # comment does not open a fake heredoc" "$d" 1 1 "MISMATCH" ""
+
+# MUST NOT be caught, and must not swallow what follows: heredoc-opener-
+# shaped text sitting inside an already-quoted shell string literal (not a
+# comment) is data, not a real opener either -- the same
+# is_quoted_before()-based quote-parity check `process()` already applies to
+# `sh`/`bash` matches, now also applied to detect_heredoc()'s own candidate
+# matches. Reproduced live: this repo's OWN scripts/interpreter-audit.test.sh
+# hit this on its own 'cat <<EOF2' fixture-building string literal (see the
+# "heredoc: bare <<EOF2 terminator" case near the top of this section) before
+# the fix -- the comment fix alone (case above) was not sufficient, this is a
+# genuinely THIRD, independent path into the same stuck-open state.
+d="$WORK/heredoc-opener-inside-quoted-string-not-real"
+body=$(join_lines \
+  "echo 'cat <<EOF2'" \
+  'sh scripts/inner.sh --after-quoted-string')
+make_script_fixture_multiline "$d" "inner" "outer" "$body"
+assert_case "heredoc: opener-shaped text inside a quoted string literal does not open a fake heredoc" "$d" 1 1 "MISMATCH" ""
 
 # --- Must still hold: this repo's own real workflows -----------------------
 # Not pinned to a fixed count (that grows as this repo's workflows do) —

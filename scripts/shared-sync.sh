@@ -1987,7 +1987,15 @@ rehearse_repo() {
   # either: that would make every rehearsal resolve `npx @biffo/cli@<pin>` once
   # per repo, turning a local measurement into 14 network round trips -- and
   # tying the rehearsal's ability to measure to the registry being reachable.
-  _cov=$( (cd "$wt" && sh "$TEMPLATE_ROOT/scripts/gate-coverage.sh" 2>&1) |
+  #
+  # Invoked as a bare executable path, not `sh "$TEMPLATE_ROOT/scripts/
+  # gate-coverage.sh"` -- gate-coverage.sh declares `#!/usr/bin/env bash`
+  # and an explicit `sh` prefix throws that shebang away (#1681; same class
+  # as #1709's branch-health.sh fix). The quoted variable path also made
+  # this invisible to interpreter-audit.sh before it read scripts/*.sh at
+  # all: not a bare token, so it fell into "could not examine" once the scan
+  # widened, which is why the fix landed alongside the audit that found it.
+  _cov=$( (cd "$wt" && "$TEMPLATE_ROOT/scripts/gate-coverage.sh" 2>&1) |
     sed 's/\x1b\[[0-9;]*m//g' |
     grep -oE '([0-9]+/[0-9]+|no CI to mirror|NO GATE)' | head -1)
   [ -n "$_cov" ] || _cov='coverage unknown'

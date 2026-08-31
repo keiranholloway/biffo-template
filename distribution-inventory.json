@@ -111,11 +111,11 @@
     },
     {
       "id": "cdn-error-status-restore-lambda-tf-var",
-      "artifact": "TF_VAR_error_status_restore_lambda_arn, gating every association in modules/cloud/aws/cdn's #1529 Terraform",
+      "artifact": "TF_VAR_error_status_demote_lambda_arn, gating every association in modules/cloud/aws/cdn's #1529 Terraform",
       "channel": "instanceAdoptionPair",
       "targets": ["every instance's infra deploy pipeline"],
       "status": "unregistered",
-      "gapReason": "The mechanism this shape needs (instance-adoption's registered-pair pattern) already exists and already ships one pair (core-api-environment-merge-wiring above), but this artifact has not been registered as a pair -- so checkInstanceAdoption cannot see it and instance-adoption-report.yml never flags it. Filed as #1574 but not yet wired into REGISTERED_ADOPTION_PAIRS. Per #1570's own instance 7: 'the artifact travelled, and the thing that switches it on did not'. #1574 investigated whether this repo's OWN deploy-infra.yml also failed to set the var and found it did not -- both this repo's deploy-infra.yml and biffo-platform's already wire TF_VAR_error_status_restore_lambda_arn (fixed via #1576, 2026-08-17). So the remaining gap is purely the missing REGISTERED_ADOPTION_PAIRS entry, which would catch a FUTURE instance that skips this wiring -- not a currently-unwired instance.",
+      "gapReason": "The mechanism this shape needs (instance-adoption's registered-pair pattern) already exists and already ships one pair (core-api-environment-merge-wiring above), but this artifact has not been registered as a pair -- so checkInstanceAdoption cannot see it and instance-adoption-report.yml never flags it. Filed as #1574 but not yet wired into REGISTERED_ADOPTION_PAIRS. Per #1570's own instance 7: 'the artifact travelled, and the thing that switches it on did not'. #1574 investigated whether this repo's OWN deploy-infra.yml also failed to set the var and found it did not -- both this repo's deploy-infra.yml and biffo-platform's already wire TF_VAR_error_status_demote_lambda_arn (fixed via #1576, 2026-08-17; the variable itself was later renamed from error_status_restore_lambda_arn to error_status_demote_lambda_arn -- this record updated 2026-08-31 to match, the exact stale-prose class #1570/#1807 exist to catch, caught here in this record about catching it). So the remaining gap is purely the missing REGISTERED_ADOPTION_PAIRS entry, which would catch a FUTURE instance that skips this wiring -- not a currently-unwired instance.",
       "evidence": ["#1529", "#1574", "#1576"]
     },
     {

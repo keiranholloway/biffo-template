@@ -197,18 +197,24 @@ describe('distribution inventory (#1570): every artifact-that-must-travel is reg
   })
 
   describe("gapReason claims about THIS repo's own files are checked against real state (#1807)", () => {
-    it('cdn-error-status-restore-lambda-tf-var: deploy-infra.yml genuinely sets TF_VAR_error_status_restore_lambda_arn, and the gapReason does not claim otherwise', () => {
+    it('cdn-error-status-restore-lambda-tf-var: deploy-infra.yml genuinely sets TF_VAR_error_status_demote_lambda_arn, and the gapReason does not claim otherwise', () => {
       const inv = inventory()
       const entry = inv.entries.find((e) => e.id === 'cdn-error-status-restore-lambda-tf-var')
       expect(entry, 'entry "cdn-error-status-restore-lambda-tf-var" not found').toBeTruthy()
 
       // Real, live check against this checkout's own workflow — #1576 wired
-      // this on 2026-08-17. If this ever regresses, the assertion below is
-      // what should fail, not a human noticing a stale gapReason months later.
-      const wired = deployInfraSetsTfVar(ROOT, 'error_status_restore_lambda_arn')
+      // this on 2026-08-17 under the name `error_status_restore_lambda_arn`;
+      // the variable itself was later renamed to `error_status_demote_lambda_arn`
+      // throughout modules/cloud/aws/cdn, infra/global and this workflow — the
+      // Terraform side (variables.tf, outputs.tf) had already moved, so this
+      // check (and the entry's own prose below) is updated to match reality,
+      // discovered 2026-08-31 when `dev`'s own CI was found red on this exact
+      // mismatch. If this ever regresses, the assertion below is what should
+      // fail, not a human noticing a stale gapReason months later.
+      const wired = deployInfraSetsTfVar(ROOT, 'error_status_demote_lambda_arn')
       expect(
         wired,
-        "TF_VAR_error_status_restore_lambda_arn is no longer set in this repo's own " +
+        "TF_VAR_error_status_demote_lambda_arn is no longer set in this repo's own " +
           'deploy-infra.yml — if this genuinely regressed, update the gapReason to say so ' +
           'again (and this assertion should be flipped to document the regression)',
       ).toBe(true)

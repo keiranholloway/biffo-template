@@ -7,7 +7,7 @@ variable "environment" {
 }
 
 variable "lambda_function_arn" {
-  description = "ARN of the Core API Lambda function to integrate"
+  description = "Unqualified ARN of the Core API Lambda function to integrate — i.e. the compute module's function_arn output, not a version/alias-qualified ARN. The integration itself targets that function's \"live\" alias (#1747): this module appends the alias qualifier internally (local.lambda_alias_arn), so passing an ARN that already carries a qualifier here would produce an invalid double-qualified ARN."
   type        = string
 }
 

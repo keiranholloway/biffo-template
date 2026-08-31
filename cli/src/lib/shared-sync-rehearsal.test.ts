@@ -8,7 +8,9 @@ import { makeTmpDir } from '../test-utils/tmp.js'
 
 /**
  * `scripts/shared-sync.sh` must prove a candidate shared file against every
- * target repo BEFORE it opens a PR in any of them.
+ * target repo's OWN gate before opening a PR there, and a candidate that
+ * fails that proof in one repo must not stop it shipping to every other repo
+ * that proved clean.
  *
  * ## Why
  *
@@ -23,21 +25,34 @@ import { makeTmpDir } from '../test-utils/tmp.js'
  *
  * The script used to be one pass — stage, push, PR, per repo in turn — so a
  * defect found in repo 7 left six PRs already open and the fix meant another
- * round. Now phase 1 rehearses every target and phase 2 ships only if phase 1
- * was clean everywhere.
+ * round. Phase 1 now rehearses every target BEFORE phase 2 opens anything, so
+ * the full verdict table is known first.
+ *
+ * What phase 2 does with that table changed under biffo-template#1632. It
+ * used to ship nothing at all if ANY one target failed rehearsal — including
+ * a stray local clone that was never a real satellite. That is not "prove it
+ * before it ships", it is "one broken candidate holds the whole estate
+ * hostage": measured for real, a single bad local scratch clone blocked the
+ * scheduled round, and with it convergence for every one of 14 genuinely
+ * passing satellites, for 14 consecutive days. Now a rehearsal FAILURE is
+ * contained to its own repo — the same posture the "BLOCKED staging is
+ * isolated to its own repo" describe block below already established for a
+ * STAGING failure (#1836) — and every repo that rehearsed clean still ships.
  *
  * ## Why this drives the real script instead of reading it
  *
- * Because the assertion that matters is *"no PR was opened"*, and no amount of
- * grepping the source establishes that. Every collaborator is faked — `gh` is a
- * stub on `PATH` that logs its argv, the template is a synthetic one carrying
- * this repo's real `shared-sync.sh`, and the satellites are real local git
- * clones — so the thing under test is the actual control flow.
+ * Because the assertion that matters is *"the passing repo still gets a PR,
+ * and the failing one does not"*, and no amount of grepping the source
+ * establishes that. Every collaborator is faked — `gh` is a stub on `PATH`
+ * that logs its argv, the template is a synthetic one carrying this repo's
+ * real `shared-sync.sh`, and the satellites are real local git clones — so
+ * the thing under test is the actual control flow.
  *
  * A stub that made every gate pass would leave the refusal path unproven and
  * green, which is the exact shape of the defects above. So one fixture satellite
- * is deliberately arranged to fail its gate, and the test asserts the *absence*
- * of a push and of a `pr create`.
+ * is deliberately arranged to fail its gate, and the test asserts a push and a
+ * `pr create` for the OTHER, passing satellite, and their absence for the
+ * failing one.
  */
 
 const scriptUnderTest = 'scripts/shared-sync.sh'
@@ -431,17 +446,45 @@ describe('shared-sync rehearsal', () => {
     )
   })
 
-  it('opens no PR in ANY repo when the candidate fails its gate in ONE', () => {
+  it('ships the passing repo even though the candidate fails its gate in ANOTHER (biffo-template#1632)', () => {
     const { run, satellites } = runSync([], { failingSatellite: true })
 
     expect(run.out).toMatch(/rehearsal failed in 1 repo\(s\)/)
     expect(run.out).toMatch(/sat-beta\s+.*FAIL/)
     expect(run.out).toMatch(/verify failed: typecheck/)
+    // A rehearsal failure is still a failure -- the round's exit code says so
+    // -- but it is no longer an ABORT: the round still does everything it can.
     expect(run.status).toBe(1)
 
-    // The assertion this test exists for: sat-alpha rehearsed clean and is
-    // listed FIRST, so a per-repo loop would already have shipped it. Nothing
-    // was pushed and no PR was created anywhere.
+    // The assertion this test exists for, and the exact inverse of what it
+    // asserted before #1632: sat-alpha rehearsed clean and still ships even
+    // though sat-beta, later in the same target list, failed its own gate.
+    // Pre-fix, sat-beta's FAIL fed a counter that aborted the whole round
+    // before phase 2 ever ran -- one bad candidate (in the real incident, a
+    // stray local scratch clone that was never a satellite at all) blocked
+    // convergence for every genuinely passing satellite, for 14 consecutive
+    // days.
+    expect(run.ghCalls.filter((c) => c.startsWith('pr create'))).toHaveLength(1)
+    expect(originHasSyncBranch(satellites[0])).toBe(true)
+    expect(originHasSyncBranch(satellites[1])).toBe(false)
+  }, 120_000)
+
+  it('reports every repo failed, with no PR anywhere, when EVERY repo fails rehearsal', () => {
+    // The degenerate case, mirroring "blocks every repo individually... when
+    // EVERY repo has debris" below: nothing to compare against, so nothing
+    // should crash or silently report success. This is what the round looked
+    // like every night for 14 days under the pre-#1632 behaviour too -- the
+    // difference is that it no longer generalises to "and therefore neither
+    // does any OTHER, unrelated repo" once a real passing satellite exists.
+    const { run, satellites } = runSync([], {
+      satellites: [
+        ['sat-gamma', { gateFails: true }],
+        ['sat-delta', { gateFails: true }],
+      ],
+    })
+
+    expect(run.status).toBe(1)
+    expect(run.out).toMatch(/rehearsal failed in 2 repo\(s\)/)
     expect(run.ghCalls.filter((c) => c.startsWith('pr create'))).toEqual([])
     for (const s of satellites) expect(originHasSyncBranch(s)).toBe(false)
   }, 120_000)

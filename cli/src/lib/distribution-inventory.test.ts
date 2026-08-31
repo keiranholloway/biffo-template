@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { auditClaimInvocationParity, distributedAgentsDocs } from './claim-invocation-parity.js'
 import {
+  deployInfraSetsTfVar,
   type DistributionInventory,
   loadDistributionInventory,
   validateInventory,
@@ -192,6 +193,34 @@ describe('distribution inventory (#1570): every artifact-that-must-travel is reg
         ).not.toBeNull()
         expect(e.gapReason, `"${e.id}" has no gapReason`).toBeTruthy()
       }
+    })
+  })
+
+  describe("gapReason claims about THIS repo's own files are checked against real state (#1807)", () => {
+    it('cdn-error-status-restore-lambda-tf-var: deploy-infra.yml genuinely sets TF_VAR_error_status_restore_lambda_arn, and the gapReason does not claim otherwise', () => {
+      const inv = inventory()
+      const entry = inv.entries.find((e) => e.id === 'cdn-error-status-restore-lambda-tf-var')
+      expect(entry, 'entry "cdn-error-status-restore-lambda-tf-var" not found').toBeTruthy()
+
+      // Real, live check against this checkout's own workflow — #1576 wired
+      // this on 2026-08-17. If this ever regresses, the assertion below is
+      // what should fail, not a human noticing a stale gapReason months later.
+      const wired = deployInfraSetsTfVar(ROOT, 'error_status_restore_lambda_arn')
+      expect(
+        wired,
+        "TF_VAR_error_status_restore_lambda_arn is no longer set in this repo's own " +
+          'deploy-infra.yml — if this genuinely regressed, update the gapReason to say so ' +
+          'again (and this assertion should be flipped to document the regression)',
+      ).toBe(true)
+
+      // #1807: the entry previously claimed the opposite of what the line
+      // above proves. Guard against that exact false claim reappearing.
+      expect(
+        entry!.gapReason,
+        `"${entry!.id}"'s gapReason claims this repo's own deploy-infra.yml doesn't set the ` +
+          'var, but it demonstrably does (#1807) — this is the exact stale-prose class #1570 ' +
+          'was filed to surface, shipping again inside the artifact built to fix it',
+      ).not.toMatch(/this repo.{0,30}deploy-infra\.yml never sets/i)
     })
   })
 })

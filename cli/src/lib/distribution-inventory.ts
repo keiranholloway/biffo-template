@@ -269,6 +269,29 @@ export function workflowInvokesCommand(
   return text.includes(fixedPrefix)
 }
 
+/**
+ * Does THIS repo's own `.github/workflows/deploy-infra.yml` set a given
+ * `TF_VAR_<name>` environment variable?
+ *
+ * Built for #1807: `cdn-error-status-restore-lambda-tf-var`'s `gapReason`
+ * asserted "this repo's OWN deploy-infra.yml never sets the var either" --
+ * already false when the entry shipped (wired via #1576, two weeks earlier)
+ * -- and nothing in this file's own sweep reads `gapReason` prose against
+ * real repository state for anything outside the `selfCheckable`/
+ * workflow-wiring checks. This is deliberately narrow rather than a general
+ * prose-claim parser: it checks the one class of claim a `gapReason` can
+ * make that is cheaply, mechanically falsifiable from this checkout alone --
+ * "this repo's own workflow does/doesn't set env var X" -- the same
+ * substring-on-raw-YAML discipline `workflowInvokesCommand` above already
+ * uses, not a YAML parse.
+ */
+export function deployInfraSetsTfVar(root: string, varName: string): boolean {
+  const path = join(root, '.github/workflows/deploy-infra.yml')
+  if (!existsSync(path)) return false
+  const text = readFileSync(path, 'utf8')
+  return text.includes(`TF_VAR_${varName}:`)
+}
+
 /** Extract the workflow path named in a channel's `wiredIn` prose, e.g.
  * "`.github/workflows/shared-sync-report.yml`, scheduled (...)" -> the path.
  * Returns null when `wiredIn` names no workflow file (self-checkable

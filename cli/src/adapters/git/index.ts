@@ -151,6 +151,26 @@ export class GitAdapter {
     return stdout.trim().length > 0
   }
 
+  /**
+   * True if `worktreePath` is currently held by biffo-fleet's own
+   * `.fleet-worktree-claim` lock (#1833, replaces #1825) — a live session
+   * may hold a worktree open for follow-up work after its PR has already
+   * merged, which is invisible to every other check `doctor --fix` applies
+   * (clean, attached, merged, HEAD contained in what shipped all pass while
+   * this is true).
+   *
+   * Deliberately a plain filesystem existence check, not a shell-out to
+   * `bin/fleet.sh worktree-claim --check` — that verb is not read-only (it
+   * `mkdir`s the lock and only reports "held" on failure), so calling it from
+   * here to merely ask would risk *creating* a claim on a free worktree
+   * rather than answering the question. The lock directory's existence is a
+   * filesystem fact this repo is allowed to read without touching
+   * biffo-fleet's own source (#1833's own routing note).
+   */
+  async hasFleetWorktreeClaim(worktreePath: string): Promise<boolean> {
+    return existsSync(join(worktreePath, '.fleet-worktree-claim'))
+  }
+
   /** Best-effort fetch of the tracking remote, so the ahead/behind check below
    * compares against reality rather than a stale local ref (#394). Never throws:
    * offline or a missing remote must not block an upgrade on its own — the

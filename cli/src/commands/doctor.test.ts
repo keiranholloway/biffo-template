@@ -33,6 +33,9 @@ function gitMock(overrides: Record<string, unknown> = {}) {
     currentBranch: vi.fn().mockResolvedValue('dev'),
     isPrimaryWorktree: vi.fn().mockResolvedValue(true),
     hasUncommittedChanges: vi.fn().mockResolvedValue(false),
+    // #1833: defaults model the safe case — no live fleet worktree-claim
+    // lock held on the candidate.
+    hasFleetWorktreeClaim: vi.fn().mockResolvedValue(false),
     fetchPrune: vi.fn().mockResolvedValue(undefined),
     aheadBehind: vi.fn().mockResolvedValue({ ahead: 0, behind: 0, hasUpstream: true }),
     listBranchRefs: vi.fn().mockResolvedValue([]),

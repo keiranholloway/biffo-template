@@ -19,6 +19,7 @@ function facts(overrides: Partial<ReapCandidateFacts> = {}): ReapCandidateFacts 
   return {
     isDetached: false,
     isDirty: false,
+    hasFleetClaim: false,
     prVerdict: 'merged',
     mergeContainsHead: true,
     ...overrides,
@@ -101,6 +102,19 @@ describe('classifyReapCandidate', () => {
       reason: 'uncommitted-changes',
     })
   })
+
+  // #1833 (replaces #1825): a worktree can be clean, merged, and not
+  // detached — passing every check above — while a live session still holds
+  // it via biffo-fleet's own `.fleet-worktree-claim` lock for follow-up work
+  // after the merge. This is the fail-first case: before the fix,
+  // `classifyReapCandidate` had no `hasFleetClaim` input at all and reaped
+  // on `prVerdict === 'merged'` alone, exactly like #1810 before it.
+  it('keeps a worktree with a live fleet-worktree-claim lock before even asking about the PR', () => {
+    expect(classifyReapCandidate(facts({ hasFleetClaim: true, prVerdict: 'merged' }))).toEqual({
+      action: 'keep',
+      reason: 'fleet-worktree-claimed',
+    })
+  })
 })
 
 describe('findReapCandidates', () => {
@@ -142,6 +156,7 @@ function reapDeps(
     git: {
       currentBranch: vi.fn().mockResolvedValue('chore/merged'),
       hasUncommittedChanges: vi.fn().mockResolvedValue(false),
+      hasFleetWorktreeClaim: vi.fn().mockResolvedValue(false),
       removeWorktree: vi.fn().mockResolvedValue(true),
       // Defaults model the safe case: the worktree's HEAD IS the commit the
       // merged PR shipped, so `isAncestor` (self-is-ancestor-of-self) is true.
@@ -273,6 +288,24 @@ describe('reapCandidate', () => {
     expect(outcome.verdict).toEqual({ action: 'keep', reason: 'uncommitted-changes' })
     expect(deps.github.prVerdictForBranch as ReturnType<typeof vi.fn>).not.toHaveBeenCalled()
   })
+
+  // #1833 (replaces #1825): the worktree is clean, its branch's PR merged,
+  // and its HEAD is contained in what shipped — every check `reapCandidate`
+  // already applied passes. A live `.fleet-worktree-claim` lock must still
+  // stop it, the same way isDetached/isDirty already do, before
+  // `removeWorktree` is ever called.
+  it('keeps a worktree with a live fleet-worktree-claim lock without ever asking GitHub for a verdict', async () => {
+    const deps = reapDeps({ git: { hasFleetWorktreeClaim: vi.fn().mockResolvedValue(true) } })
+    const outcome = await reapCandidate(
+      '/repo',
+      { branch: 'chore/merged', worktreePath: '/wt/claimed' },
+      deps,
+    )
+    expect(outcome.verdict).toEqual({ action: 'keep', reason: 'fleet-worktree-claimed' })
+    expect(outcome.worktreeRemoved).toBeNull()
+    expect(deps.git.removeWorktree as ReturnType<typeof vi.fn>).not.toHaveBeenCalled()
+    expect(deps.github.prVerdictForBranch as ReturnType<typeof vi.fn>).not.toHaveBeenCalled()
+  })
 })
 
 describe('reapAll', () => {
@@ -300,6 +333,7 @@ describe('reapAll', () => {
     const git = {
       currentBranch: vi.fn().mockResolvedValue('chore/merged'),
       hasUncommittedChanges: vi.fn().mockResolvedValue(false),
+      hasFleetWorktreeClaim: vi.fn().mockResolvedValue(false),
       removeWorktree: vi.fn().mockResolvedValue(true),
       // The worktree's HEAD IS what merged — no follow-up commits.
       headSha: vi.fn().mockResolvedValue('merged-tip-sha'),

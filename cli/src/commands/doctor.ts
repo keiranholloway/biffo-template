@@ -83,7 +83,12 @@ export interface DoctorDeps {
 export interface DoctorFixDeps {
   git: Pick<
     GitAdapter,
-    'hasUncommittedChanges' | 'currentBranch' | 'removeWorktree' | 'headSha' | 'isAncestor'
+    | 'hasUncommittedChanges'
+    | 'hasFleetWorktreeClaim'
+    | 'currentBranch'
+    | 'removeWorktree'
+    | 'headSha'
+    | 'isAncestor'
   >
   github: Pick<GithubCliAdapter, 'prVerdictForBranch' | 'mergedHeadSha'>
 }
@@ -305,6 +310,7 @@ function printFindings(findings: DoctorFinding[]): void {
 const KEEP_REASON_TEXT: Record<KeepReason, string> = {
   'detached-head': 'worktree HEAD is detached',
   'uncommitted-changes': 'worktree has uncommitted changes',
+  'fleet-worktree-claimed': 'worktree is held by a live biffo-fleet worktree-claim lock',
   'pr-open': 'PR is still open',
   'pr-closed': 'PR closed unmerged',
   'no-pr': 'no PR was ever opened from this branch',

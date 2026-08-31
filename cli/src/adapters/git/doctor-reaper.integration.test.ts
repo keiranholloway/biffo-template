@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -180,6 +180,80 @@ describe('reapCandidate: worktree HEAD vs. what actually merged (#1810)', () => 
     )
 
     expect(outcome.verdict).toEqual({ action: 'keep', reason: 'unknown-merge-head' })
+    expect(outcome.worktreeRemoved).toBeNull()
+    expect(existsSync(worktreeDir)).toBe(true)
+  })
+})
+
+/**
+ * #1833 (replaces #1825): the fleet's own `.fleet-worktree-claim` lock
+ * directory, checked for real — no mocked filesystem, no mocked `GitAdapter`
+ * method. `bin/fleet.sh worktree-claim` (biffo-fleet, a different repo) is
+ * what actually writes this directory; this repo only needs to prove it
+ * reads the directory's existence correctly, which is the filesystem fact
+ * #1833's own routing note says this repo is allowed to depend on.
+ */
+describe('reapCandidate: a live fleet-worktree-claim lock stops the reap (#1833)', () => {
+  let repo: string
+  let worktreeDir: string
+  const adapter = new GitAdapter()
+
+  const git = (cwd: string, ...args: string[]): string =>
+    execFileSync('git', args, { cwd, encoding: 'utf8' }).trim()
+
+  const githubStub: ReapDeps['github'] = {
+    prVerdictForBranch: async () => 'merged',
+    // Set per-test to the worktree's own HEAD once it exists.
+    mergedHeadSha: async () => null,
+  }
+
+  beforeEach(() => {
+    repo = makeTmpDir('biffo-reap-fleet-claim')
+    git(repo, 'init', '-q', '-b', 'dev')
+    git(repo, 'config', 'user.email', 'test@example.com')
+    git(repo, 'config', 'user.name', 'Test')
+    writeFileSync(join(repo, 'a.txt'), 'base\n')
+    git(repo, 'add', '-A')
+    git(repo, 'commit', '-qm', 'base')
+    worktreeDir = join(repo, '.worktrees', 'claimed')
+    git(repo, 'worktree', 'add', worktreeDir, '-b', 'agent/1833-claimed')
+  })
+  afterEach(() => {
+    rmSync(repo, { recursive: true, force: true })
+  })
+
+  it('reports true from a real lock directory on disk', async () => {
+    mkdirSync(join(worktreeDir, '.fleet-worktree-claim'))
+    expect(await adapter.hasFleetWorktreeClaim(worktreeDir)).toBe(true)
+  })
+
+  it('reports false when no lock directory exists', async () => {
+    expect(await adapter.hasFleetWorktreeClaim(worktreeDir)).toBe(false)
+  })
+
+  // Fail-first shape, proven end to end: a worktree that is clean, whose
+  // branch's PR merged, and whose HEAD is exactly what merged — every check
+  // `reapCandidate` already applied says "safe" — must still be kept because
+  // a live session holds it via the fleet's own lock.
+  it('keeps and never removes a worktree that is clean, merged, and HEAD-current, when a real fleet lock is present', async () => {
+    const mergedHeadSha = git(worktreeDir, 'rev-parse', 'HEAD')
+    mkdirSync(join(worktreeDir, '.fleet-worktree-claim'))
+    writeFileSync(
+      join(worktreeDir, '.fleet-worktree-claim', 'holder'),
+      'some-other-session-0831-abcd\n2026-08-31T12:00:00Z\n',
+    )
+
+    const deps: ReapDeps = {
+      git: adapter,
+      github: { ...githubStub, mergedHeadSha: async () => mergedHeadSha },
+    }
+    const outcome = await reapCandidate(
+      repo,
+      { branch: 'agent/1833-claimed', worktreePath: worktreeDir },
+      deps,
+    )
+
+    expect(outcome.verdict).toEqual({ action: 'keep', reason: 'fleet-worktree-claimed' })
     expect(outcome.worktreeRemoved).toBeNull()
     expect(existsSync(worktreeDir)).toBe(true)
   })

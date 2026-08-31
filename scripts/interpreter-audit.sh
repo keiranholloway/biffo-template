@@ -409,23 +409,85 @@
 # quote-shaped, and outside what either existing filter tracks (fleet-filed
 # issue #1804, found by independent prosecution of #1681's own PR).
 #
-# Fix: a third piece of per-file state, `in_heredoc`/`heredoc_term`/
-# `heredoc_strip_tabs`, tracked across the main record loop (NOT per logical
-# line -- a heredoc body is precisely the multi-line case the existing two
-# filters cannot see). `detect_heredoc()` recognises an opener on a physical
-# line -- the line itself is still scanned (a real invocation may precede
-# the opener, or may pipe the heredoc into its own stdin, e.g.
-# `sh scripts/foo.sh <<EOF`) -- and every physical line after it is treated
-# as literal, unscanned text, never comment-stripped or `\`-continuation
-# joined, until a line matching the terminator exactly (leading tabs
-# stripped first, only for `<<-`) is seen. See
-# `scripts/interpreter-audit.test.sh` for the fixture matrix: all three
-# terminator-quoting shapes #1804 names, plus `<<-` indentation, plus two
-# regression guards -- a real mismatched invocation immediately before and
-# immediately after a heredoc in the same file must still be caught (proves
-# the state does not get stuck open), and a real invocation sharing its
-# physical line with the opener itself must still be caught (proves the
-# opener does not retroactively exempt its own line).
+# Fix: a third piece of per-file state, `in_heredoc`/`heredoc_term`, tracked
+# across the main record loop (NOT per logical line -- a heredoc body is
+# precisely the multi-line case the existing two filters cannot see).
+# `detect_heredoc()` recognises an opener on a physical line -- the line
+# itself is still scanned (a real invocation may precede the opener, or may
+# pipe the heredoc into its own stdin, e.g. `sh scripts/foo.sh <<EOF`) -- and
+# every physical line after it is treated as literal, unscanned text, never
+# comment-stripped or `\`-continuation joined, until a line matching the
+# terminator is seen. See `scripts/interpreter-audit.test.sh` for the
+# fixture matrix: all three terminator-quoting shapes #1804 names, plus
+# `<<-` indentation, plus two regression guards -- a real mismatched
+# invocation immediately before and immediately after a heredoc in the same
+# file must still be caught (proves the state does not get stuck open), and
+# a real invocation sharing its physical line with the opener itself must
+# still be caught (proves the opener does not retroactively exempt its own
+# line). (The terminator-match and opener-detection details below changed
+# again in the Eighth-pass fix, #1817 -- this paragraph describes the
+# CURRENT behaviour, not #1804's original tab-only version.)
+#
+# ## Eighth-pass: three more ways into the same stuck-open state (#1817)
+#
+# Independent prosecution of #1782/#1804's own PR found detect_heredoc()
+# still got stuck open -- silently excluding every physical line from the
+# opener to end-of-file, no error, no "could not examine" bump -- via three
+# distinct mechanisms, none of them the terminator-quoting shapes #1804
+# already covered:
+#
+#   1. **Closing check too strict.** A heredoc opened WITHOUT `-` (`<<EOF`,
+#      `<<'EOF'`, ...) whose terminator is indented with SPACES never
+#      matched `check_line == heredoc_term`, which only stripped leading
+#      TABS, and only when the opener used `<<-`. Space-indented terminators
+#      are the ordinary shape for a heredoc inside an indented shell
+#      function, or inside a YAML `run: |` block -- YAML's block-scalar
+#      indentation stripping makes an in-source-indented terminator line up
+#      as a real, flush-left terminator at runtime, even though the raw text
+#      this audit scans still carries the indent. Reproduced live: 5 of this
+#      repo's own required deploy/destroy workflows got stuck open this way
+#      (`deploy-infra.yml` worst -- 950 lines, only 159 scanned). Fixed by
+#      stripping ALL leading whitespace (spaces and tabs) from the candidate
+#      terminator line before comparing, for every heredoc shape, not just
+#      `<<-`. Deliberately more lenient than POSIX (a plain heredoc's real
+#      terminator match should be exact, with zero stripping) -- this audit
+#      is a textual approximation, not a shell parser, and the cost of being
+#      slightly too eager to close (an indented BODY line coincidentally
+#      equal to the terminator word) is far smaller than the cost of staying
+#      open to EOF.
+#   2. **Opener detected inside a `#` comment.** `detect_heredoc()` ran
+#      against the RAW physical line, before `strip_unquoted_comment()` ever
+#      saw it -- so a comment merely NAMING a heredoc opener in prose (this
+#      very file's own header comments do exactly that, e.g. "`` `<<TOKEN`
+#      ``") was read as a real opener, whose terminator ("TOKEN") then never
+#      legitimately appears alone on a line. Reproduced live: this file
+#      itself, scanning its own header prose describing this very fix, got
+#      stuck open on itself. Fixed by running `detect_heredoc()` against
+#      `strip_unquoted_comment(line)` rather than the raw line -- detection
+#      only, `line` itself is untouched so the existing `\`-continuation
+#      join still sees the raw physical line.
+#   3. **Opener detected inside an already-quoted string literal.** The same
+#      failure, one level further removed: heredoc-opener-shaped text sitting
+#      inside a single- or double-quoted shell/awk string literal -- data,
+#      not code -- with no `#` in sight, so fix 2 above does not touch it.
+#      This audit's OWN test fixtures build heredoc bodies via string
+#      literals like `'cat <<EOF2'`, and `scripts/interpreter-audit.test.sh`
+#      got stuck open scanning itself this way, once fix 2 stopped masking it
+#      with an earlier stuck-open point. Fixed the same way `process()`
+#      already filters `sh`/`bash` matches: `detect_heredoc()` now walks its
+#      own candidate matches and skips (search continues past) any that
+#      `is_quoted_before()` reports as sitting inside an open quote at that
+#      position, rather than treating the first textual match as the opener
+#      unconditionally.
+#
+# All three were found by attacking this PR's own #1804 fix directly rather
+# than trusting its green self-test -- the audit's whole reason for
+# existing (per this header, repeated across seven prior prosecution passes)
+# is that a guard silently dropping what it cannot parse, with an unstated
+# denominator, must never happen again, and it had recurred inside the exact
+# commit meant to close the previous instance. See
+# `scripts/interpreter-audit.test.sh` for the fixture matrix covering all
+# three (fleet-filed issue #1817).
 #
 # Usage:
 #   bash scripts/interpreter-audit.sh
@@ -561,17 +623,45 @@ BEGIN {
 # terminator in the global `heredoc_term` and sets `in_heredoc = 1` so
 # subsequent physical lines are treated as literal heredoc body text --
 # never scanned for sh/bash invocations -- until the terminator line is
-# seen. `heredoc_strip_tabs` mirrors `<<-`'"'"'s own semantics: only LEADING
-# TABS (never spaces) are stripped from a body/terminator line before
-# comparing (#1804 fix; see "Sixth-pass" header section for the false
-# MISMATCH this closes -- a heredoc-only usage example naming a real
-# bash-shebang script in prose, indistinguishable at the text level from a
-# genuine invocation without this).
-function detect_heredoc(str,    m, strip_tabs) {
+# seen. The terminator match itself strips ALL leading whitespace (spaces
+# AND tabs) from the candidate line before comparing, regardless of whether
+# the opener used `<<-` (#1817 fix; see "Eighth-pass" header section). This
+# is deliberately more lenient than POSIX: a plain `<<TOKEN` heredoc'"'"'s
+# terminator is only supposed to close on an EXACT match with no stripping
+# at all, and only `<<-` strips (tabs only). This audit is a textual
+# approximation, not a shell parser, and the shape that actually recurs in
+# this repo'"'"'s own real files is a heredoc opened without `-` whose
+# terminator is indented with SPACES to match its surrounding YAML `run: |`
+# block or shell function -- YAML'"'"'s block-scalar indentation stripping (or,
+# for a script read directly, simple human formatting) makes that terminator
+# real at runtime even though the raw text in the file carries a leading
+# indent. Treating it as non-matching is what silently swallows every line
+# to end-of-file (#1817); treating it as matching costs only the extremely
+# narrow risk of an indented heredoc BODY line coincidentally equal to the
+# terminator word closing early -- far cheaper than the alternative.
+#
+# A candidate match is also skipped, and the search continued past it rather
+# than opening a fictitious heredoc, when it falls inside an open quote at
+# that position (`is_quoted_before()`, same quote-parity check `process()`
+# already uses for `sh`/`bash` matches) -- a THIRD way into the same
+# stuck-open state, sitting right next to the comment case above: this
+# file'"'"'s own test fixtures build heredoc bodies via single-quoted awk/shell
+# string literals like `'"'"'cat <<EOF2'"'"'`, where `<<EOF2` is data inside the
+# quotes, not a real opener. Reproduced live against
+# scripts/interpreter-audit.test.sh'"'"'s own such fixture line (#1817).
+function detect_heredoc(str,    rest, offset, consumed, m, abspos) {
   if (in_heredoc) return
-  if (match(str, HEREDOC_RE)) {
-    m = substr(str, RSTART, RLENGTH)
-    strip_tabs = (substr(m, 1, 3) == "<<-")
+  rest = str
+  offset = 0
+  while (match(rest, HEREDOC_RE)) {
+    abspos = offset + RSTART
+    consumed = RSTART + RLENGTH - 1
+    if (is_quoted_before(str, abspos)) {
+      rest = substr(rest, consumed + 1)
+      offset += consumed
+      continue
+    }
+    m = substr(rest, RSTART, RLENGTH)
     sub(/^<<-?[ \t]*/, "", m)
     if (substr(m, 1, 1) == SQ || substr(m, 1, 1) == DQ) {
       heredoc_term = substr(m, 2, length(m) - 2)
@@ -580,8 +670,8 @@ function detect_heredoc(str,    m, strip_tabs) {
     } else {
       heredoc_term = m
     }
-    heredoc_strip_tabs = strip_tabs
     in_heredoc = 1
+    return
   }
 }
 
@@ -597,12 +687,24 @@ function detect_heredoc(str,    m, strip_tabs) {
   # command line.
   if (in_heredoc) {
     check_line = line
-    if (heredoc_strip_tabs) { sub(/^\t+/, "", check_line) }
+    sub(/^[ \t]+/, "", check_line)
     if (check_line == heredoc_term) { in_heredoc = 0 }
     next
   }
 
-  detect_heredoc(line)
+  # detect_heredoc() runs against the COMMENT-STRIPPED line, not the raw
+  # `line` -- a `#`-comment mentioning heredoc syntax in prose (e.g. this
+  # very file'"'"'s own header naming `` `<<TOKEN` `` as one of the shapes it
+  # handles) is not a real opener, and matching it as one opens a heredoc
+  # whose terminator ("TOKEN") never legitimately appears alone on a line,
+  # so it never closes -- a second, independent way into the same
+  # stuck-open-forever state the whitespace fix above closes (#1817;
+  # reproduced live: this exact file and its own test file both hit it via
+  # their own documentation of the heredoc shapes this audit handles).
+  # `strip_unquoted_comment()` is called here for detection purposes only;
+  # `line` itself is untouched so the backslash-continuation join below
+  # still sees the raw physical line, matching its existing behaviour.
+  detect_heredoc(strip_unquoted_comment(line))
 
   while (match(line, /\\[ \t]*$/)) {
     if ((getline nextline) <= 0) { sub(/\\[ \t]*$/, "", line); break }

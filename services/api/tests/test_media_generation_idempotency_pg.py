@@ -63,7 +63,12 @@ def _pg_dsn() -> str | None:
 
 pytestmark = pytest.mark.skipif(
     _pg_dsn() is None,
-    reason='no real Postgres DSN -- eval "$(sh scripts/pg-test-db.sh --export)"',
+    reason=(
+        "NEVER EXECUTED IN THIS REPO -- biffo-template ships no Postgres CI lane "
+        "(biffo-template#1648), so this test has not run once here; a green suite "
+        "proves nothing about the code it guards. Run it for real: "
+        'eval "$(sh scripts/pg-test-db.sh --export)"'
+    ),
 )
 
 # Deliberately NOT marked `serial`. Every test here works inside a schema whose

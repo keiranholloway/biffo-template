@@ -7,7 +7,7 @@
  * MSW, mirroring plugin-install.integration.test.ts.
  */
 import { execa } from 'execa'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { http, HttpResponse } from 'msw'
 import { setupServer } from 'msw/node'
@@ -15,7 +15,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { GitAdapter } from '../adapters/git/index.js'
 import { RegistryAdapter } from '../adapters/registry/index.js'
 import { runPluginUpgrade } from './plugin-upgrade.js'
-import { makeTmpDir } from '../test-utils/tmp.js'
+import { makeTmpDir, removeTmpDir } from '../test-utils/tmp.js'
 
 const REGISTRY_URL = 'https://example.com/registry/plugins.json'
 const server = setupServer()
@@ -116,8 +116,10 @@ describe('runPluginUpgrade — end-to-end', () => {
   })
 
   afterEach(() => {
-    rmSync(pluginSourceRepo, { recursive: true, force: true })
-    rmSync(projectRoot, { recursive: true, force: true })
+    // Both were just written to by real `git` subprocesses -- see
+    // `removeTmpDir`'s docstring for why a bare `rmSync` here is racy.
+    removeTmpDir(pluginSourceRepo)
+    removeTmpDir(projectRoot)
   })
 
   it('resolves the registry, clones the new version, replaces the install, and commits', async () => {
@@ -233,8 +235,10 @@ describe('runPluginUpgrade --local — end-to-end', () => {
   })
 
   afterEach(() => {
-    rmSync(localCheckout, { recursive: true, force: true })
-    rmSync(projectRoot, { recursive: true, force: true })
+    // Both were just written to by real `git` subprocesses -- see
+    // `removeTmpDir`'s docstring for why a bare `rmSync` here is racy.
+    removeTmpDir(localCheckout)
+    removeTmpDir(projectRoot)
   })
 
   it('refreshes the install from the local checkout, preserves the workspace-source adaptation, and commits', async () => {

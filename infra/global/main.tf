@@ -87,7 +87,7 @@ resource "aws_acm_certificate_validation" "wildcard" {
 # Fixes the CDN replacing every API 403/404 JSON body with the portal's SPA
 # shell (modules/cloud/aws/cdn/main.tf's `custom_error_response`, which is
 # distribution-wide and cannot be scoped away from the API behaviours). See
-# `error_status_restore_lambda_arn` in that module's variables.tf and
+# `error_status_demote_lambda_arn` in that module's variables.tf and
 # error-status-demote.js's own header for the full mechanism.
 #
 # Lambda@Edge functions must be created in us-east-1 REGARDLESS of the

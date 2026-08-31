@@ -98,6 +98,25 @@ function envBlocks(yaml: string): string[] {
 
 const upper = (name: string) => name.toUpperCase()
 
+/**
+ * The RHS each global-derived variable's `TF_VAR_*` should read. Every one
+ * just reads its own repo variable — except `error_status_demote_lambda_arn`,
+ * which additionally falls back to the pre-rename repo variable name
+ * (`ERROR_STATUS_RESTORE_LAMBDA_ARN`, biffo-template#1583) so an
+ * already-deployed instance whose `deploy-infra`/`destroy-infra` runs before
+ * `deploy-global` has re-published under the new name does not silently drop
+ * both CDN associations to `count = 0` with no error (the regression the
+ * rename PR itself introduced — see docs/guides/core-upgrade.md's 0.298.43
+ * entry). GitHub Actions' `||` treats an unset/empty `vars.*` as falsy, the
+ * same pattern already used for `ENABLE_PR_SIGNER` elsewhere in these
+ * workflows.
+ */
+const RHS_OVERRIDES: Record<string, string> = {
+  error_status_demote_lambda_arn:
+    'vars.ERROR_STATUS_DEMOTE_LAMBDA_ARN || vars.ERROR_STATUS_RESTORE_LAMBDA_ARN',
+}
+const rhsFor = (name: string) => RHS_OVERRIDES[name] ?? `vars.${upper(name)}`
+
 describe('infra/global outputs reach the regional stacks (#1574)', () => {
   const names = globalDerivedVariables()
 
@@ -108,7 +127,7 @@ describe('infra/global outputs reach the regional stacks (#1574)', () => {
     expect(names.length).toBeGreaterThanOrEqual(3)
     expect(names).toContain('acm_certificate_arn')
     expect(names).toContain('hosted_zone_id')
-    expect(names).toContain('error_status_restore_lambda_arn')
+    expect(names).toContain('error_status_demote_lambda_arn')
   })
 
   it('every environment declares each of them, so none is dev-only', () => {
@@ -159,7 +178,7 @@ describe('infra/global outputs reach the regional stacks (#1574)', () => {
           `${workflow}: an env block wires some infra/global values but not ` +
             `TF_VAR_${name}. A Terraform variable nothing sets defaults to "" and ` +
             `the feature it gates ships switched off, silently (#1574).`,
-        ).toContain(`TF_VAR_${name}: \${{ vars.${upper(name)} }}`)
+        ).toContain(`TF_VAR_${name}: \${{ ${rhsFor(name)} }}`)
       }
     }
   })
@@ -172,10 +191,10 @@ describe('the error-status fix is wired end to end (#1529, #1574)', () => {
   // of index.html on API errors, with nothing red anywhere to say so.
   it('deploy-global publishes it and deploy-infra consumes it', () => {
     expect(read('.github', 'workflows', 'deploy-global.yml')).toContain(
-      'gh variable set ERROR_STATUS_RESTORE_LAMBDA_ARN',
+      'gh variable set ERROR_STATUS_DEMOTE_LAMBDA_ARN',
     )
     expect(read('.github', 'workflows', 'deploy-infra.yml')).toContain(
-      'TF_VAR_error_status_restore_lambda_arn: ${{ vars.ERROR_STATUS_RESTORE_LAMBDA_ARN }}',
+      'TF_VAR_error_status_demote_lambda_arn: ${{ vars.ERROR_STATUS_DEMOTE_LAMBDA_ARN || vars.ERROR_STATUS_RESTORE_LAMBDA_ARN }}',
     )
   })
 
@@ -185,11 +204,44 @@ describe('the error-status fix is wired end to end (#1529, #1574)', () => {
     // Lambda version, and `infra/` is user-owned, so an instance can genuinely
     // lack the function while running this template-owned workflow.
     const global = read('.github', 'workflows', 'deploy-global.yml')
-    expect(global).toContain('gh variable delete ERROR_STATUS_RESTORE_LAMBDA_ARN')
+    expect(global).toContain('gh variable delete ERROR_STATUS_DEMOTE_LAMBDA_ARN')
   })
 
   it('reads the global output tolerantly, so instances without it still get DNS and certs', () => {
     const global = read('.github', 'workflows', 'deploy-global.yml')
-    expect(global).toMatch(/terraform output -raw error_status_restore_lambda_arn[^\n]*\|\|\s*true/)
+    expect(global).toMatch(/terraform output -raw error_status_demote_lambda_arn[^\n]*\|\|\s*true/)
   })
+
+  /**
+   * biffo-template#1583's own remediation: the rename PR's commit message
+   * claimed "pure rename, no behavioural change", which was false for an
+   * already-deployed instance that had `ERROR_STATUS_RESTORE_LAMBDA_ARN` set
+   * (the pre-rename name) — `deploy-infra`/`deploy-infra-plan`/`destroy-infra`
+   * reading ONLY the new name silently resolves
+   * `TF_VAR_error_status_demote_lambda_arn` to `""` if `deploy-infra` runs
+   * before `deploy-global` re-publishes under the new name, and the CDN
+   * module's `count = var.error_status_demote_lambda_arn == "" ? 0 : 1`
+   * drops both associations with no error (verified directly against the
+   * module's own count expression via a standalone `terraform plan`, not
+   * just asserted here). Every consumer must keep the fallback.
+   */
+  it.each(['deploy-infra.yml', 'deploy-infra-plan.yml', 'destroy-infra.yml'])(
+    '%s falls back to the pre-rename repo variable so an unset new name does not silently zero the association (#1583)',
+    (workflow) => {
+      const yaml = read('.github', 'workflows', workflow)
+      const occurrences = yaml.match(/TF_VAR_error_status_demote_lambda_arn:[^\n]*/g) ?? []
+      expect(
+        occurrences.length,
+        `${workflow} does not wire TF_VAR_error_status_demote_lambda_arn at all`,
+      ).toBeGreaterThan(0)
+      for (const line of occurrences) {
+        expect(
+          line,
+          `${workflow}: ${line} reads only the new repo variable name — an ` +
+            `instance whose deploy-infra runs before deploy-global republishes ` +
+            `under the new name would silently drop the CDN associations to 0.`,
+        ).toContain('vars.ERROR_STATUS_DEMOTE_LAMBDA_ARN || vars.ERROR_STATUS_RESTORE_LAMBDA_ARN')
+      }
+    },
+  )
 })

@@ -35,7 +35,7 @@ variable "acm_certificate_arn" {
   default     = ""
 }
 
-variable "error_status_restore_lambda_arn" {
+variable "error_status_demote_lambda_arn" {
   description = "Qualified ARN (us-east-1, versioned) of the error-status-demote Lambda@Edge function (biffo-template#1529). Output from infra/global. Empty disables the API-error-body fix."
   type        = string
   default     = ""

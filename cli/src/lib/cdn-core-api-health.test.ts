@@ -98,7 +98,7 @@ describe('CloudFront routes the Core API health endpoint', () => {
     // static exports. On an API path it would rewrite the request away. This
     // behaviour DOES carry a viewer-RESPONSE function_association since
     // biffo-template#1529 (error-status-restore.js, gated on
-    // error_status_restore_lambda_arn) — that one only ever reads/writes a
+    // error_status_demote_lambda_arn) — that one only ever reads/writes a
     // status code and one header, never the request, so it doesn't
     // reintroduce the hazard this test guards against. Assert on the
     // specific function rather than the presence of any

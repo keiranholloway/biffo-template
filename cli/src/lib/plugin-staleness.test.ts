@@ -1,6 +1,6 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { makeTmpDir } from '../test-utils/tmp.js'
 import { writePluginProvenance } from './plugin-provenance.js'
 import {
@@ -9,6 +9,42 @@ import {
   formatStalenessReport,
   type PluginStalenessResult,
 } from './plugin-staleness.js'
+
+/**
+ * `vi.hoisted` because `vi.mock` factories are hoisted above ordinary
+ * top-level declarations; a plain `let` read from the factory is in its
+ * temporal dead zone when the factory runs.
+ */
+const race = vi.hoisted(() => ({ statSyncThrowsFor: null as string | null }))
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>()
+  return {
+    ...actual,
+    /**
+     * Pass-through unless a test opts in, so every other consumer of
+     * `node:fs` in this file — including `makeTmpDir` — behaves exactly as
+     * normal. Simulates the real race (#1720): another process removes an
+     * entry between `walkExcluding`'s `readdirSync` and its `statSync` on
+     * that same entry, which throws ENOENT for a path that was real a
+     * moment ago.
+     */
+    statSync: (p: Parameters<typeof actual.statSync>[0]): ReturnType<typeof actual.statSync> => {
+      if (race.statSyncThrowsFor !== null && String(p) === race.statSyncThrowsFor) {
+        const err = new Error(
+          `ENOENT: no such file or directory, stat '${p}'`,
+        ) as NodeJS.ErrnoException
+        err.code = 'ENOENT'
+        throw err
+      }
+      return actual.statSync(p)
+    },
+  }
+})
+
+afterEach(() => {
+  race.statSyncThrowsFor = null
+})
 
 const MANIFEST = { name: 'widgets', version: '1.0.0', tables: [], api_routes: [] }
 
@@ -337,6 +373,53 @@ describe('checkPluginStaleness', () => {
     })
 
     expect(results).toEqual([])
+  })
+})
+
+/**
+ * #1720: `walkExcluding` recurses through both the vendored plugin dir and
+ * (for a non-git local source) the source dir, calling `statSync` on every
+ * entry with no `try`/`catch`. A concurrently-mutated tree — another process
+ * removing a directory or file between `readdirSync` and `statSync` — throws
+ * ENOENT for an entry that existed a moment ago, failing the whole content
+ * diff for a reason unrelated to what it actually checks. `.venv` is already
+ * excluded by name via `LOCAL_COPY_EXCLUDES`, so only the generic try/catch
+ * is needed here (unlike `terraform-input-guard.ts` (#1713), which also
+ * needed `.venv` added to its skip set).
+ */
+describe('walkExcluding tolerates a concurrently-mutated tree (#1720)', () => {
+  it('does not throw when a vendored file is removed between readdirSync and statSync', async () => {
+    const root = makeProjectRoot()
+    const localSource = makeTmpDir('plugin-source')
+    writeFileSync(join(localSource, 'biffo.plugin.json'), JSON.stringify(MANIFEST))
+    writeFileSync(join(localSource, 'main.py'), 'x = 1\n')
+
+    const dir = vendorPlugin(root, 'widgets', {
+      files: { 'main.py': 'x = 1\n', 'transient/gone.py': 'z = 1\n' },
+    })
+    writePluginProvenance(dir, {
+      origin: localSource,
+      ref: null,
+      sha: null,
+      recordedAt: '2026-01-01T00:00:00.000Z',
+      inTree: false,
+    })
+
+    // A plain directory in the vendored copy — not `.venv` — races out from
+    // under statSync while `vendorFileList`'s walk is running.
+    race.statSyncThrowsFor = join(dir, 'transient')
+
+    // Would throw ENOENT and reject before the fix; awaiting it directly
+    // (rather than wrapping in expect().not.toThrow(), which does not apply
+    // to a promise) is itself the assertion that it no longer does.
+    const results = await checkPluginStaleness(root, {
+      registry: makeRegistryMock() as never,
+      git: makeGitMock() as never,
+    })
+    // The vanished directory is simply skipped, same as a real ENOENT would
+    // leave nothing behind to compare — main.py still matches, so the
+    // plugin reads as up to date rather than the whole check crashing.
+    expect(resultFor(results, 'widgets').status).toBe('up-to-date')
   })
 })
 

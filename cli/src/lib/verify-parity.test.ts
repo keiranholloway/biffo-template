@@ -152,6 +152,17 @@ const EXCLUDED: Record<
     kind: 'network',
     why: 'runs immediately after the terraform init on the line above, against providers that init just downloaded from the registry; not runnable standalone without that network-dependent init',
   },
+  // Newly visible after #1775 wired ci.yml's "Terraform test (native test
+  // suite)" step -- its own `terraform -chdir="$dir" init …` line (immediately
+  // above this one in that step) is text-identical to the "Validate modules"
+  // step's init line already excluded above, so only this `test` invocation
+  // is a new string. Same shape as the `validate` exclusion right above: it
+  // runs immediately after that network-dependent init, against providers
+  // init just downloaded, and is not runnable standalone offline.
+  'terraform -chdir="$dir" test || rc=1': {
+    kind: 'network',
+    why: 'runs immediately after the terraform init on the line above (#1775, "Terraform test" step), against providers that init just downloaded from the registry; not runnable standalone without that network-dependent init',
+  },
   'terraform -chdir="infra/global" init -backend=false -input=false': {
     kind: 'network',
     why: 'terraform init downloads provider plugins from the registry on every call; this repo does not run terraform validate locally at all (verify.sh only runs terraform fmt), so there is nothing to pair it with offline',

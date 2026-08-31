@@ -1,0 +1,281 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.8",
+  "planned_values": {
+    "root_module": {
+      "child_modules": [
+        {
+          "resources": [
+            {
+              "address": "module.lambda_thing.aws_lambda_function.thing",
+              "mode": "managed",
+              "type": "aws_lambda_function",
+              "name": "thing",
+              "provider_name": "registry.terraform.io/hashicorp/aws",
+              "schema_version": 0,
+              "values": {
+                "code_signing_config_arn": null,
+                "dead_letter_config": [],
+                "description": null,
+                "environment": [],
+                "file_system_config": [],
+                "filename": "../../../modules/lambda-thing/build/thing.zip",
+                "function_name": "thing",
+                "handler": "index.handler",
+                "image_config": [],
+                "image_uri": null,
+                "kms_key_arn": null,
+                "layers": null,
+                "memory_size": 128,
+                "package_type": "Zip",
+                "publish": false,
+                "replace_security_groups_on_destroy": null,
+                "replacement_security_group_ids": null,
+                "reserved_concurrent_executions": -1,
+                "role": "arn:aws:iam::123456789012:role/thing",
+                "runtime": "nodejs18.x",
+                "s3_bucket": null,
+                "s3_key": null,
+                "s3_object_version": null,
+                "skip_destroy": false,
+                "snap_start": [],
+                "source_code_hash": "vvaCQNruPIwpfOCOzAoyhSA2DF4FamgsX4CsvljWd3s=",
+                "tags": null,
+                "timeout": 3,
+                "timeouts": null,
+                "vpc_config": []
+              },
+              "sensitive_values": {
+                "architectures": [],
+                "dead_letter_config": [],
+                "environment": [],
+                "ephemeral_storage": [],
+                "file_system_config": [],
+                "image_config": [],
+                "logging_config": [],
+                "snap_start": [],
+                "tags_all": {},
+                "tracing_config": [],
+                "vpc_config": []
+              }
+            }
+          ],
+          "address": "module.lambda_thing"
+        }
+      ]
+    }
+  },
+  "resource_changes": [
+    {
+      "address": "module.lambda_thing.aws_lambda_function.thing",
+      "module_address": "module.lambda_thing",
+      "mode": "managed",
+      "type": "aws_lambda_function",
+      "name": "thing",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "code_signing_config_arn": null,
+          "dead_letter_config": [],
+          "description": null,
+          "environment": [],
+          "file_system_config": [],
+          "filename": "../../../modules/lambda-thing/build/thing.zip",
+          "function_name": "thing",
+          "handler": "index.handler",
+          "image_config": [],
+          "image_uri": null,
+          "kms_key_arn": null,
+          "layers": null,
+          "memory_size": 128,
+          "package_type": "Zip",
+          "publish": false,
+          "replace_security_groups_on_destroy": null,
+          "replacement_security_group_ids": null,
+          "reserved_concurrent_executions": -1,
+          "role": "arn:aws:iam::123456789012:role/thing",
+          "runtime": "nodejs18.x",
+          "s3_bucket": null,
+          "s3_key": null,
+          "s3_object_version": null,
+          "skip_destroy": false,
+          "snap_start": [],
+          "source_code_hash": "vvaCQNruPIwpfOCOzAoyhSA2DF4FamgsX4CsvljWd3s=",
+          "tags": null,
+          "timeout": 3,
+          "timeouts": null,
+          "vpc_config": []
+        },
+        "after_unknown": {
+          "architectures": true,
+          "arn": true,
+          "code_sha256": true,
+          "dead_letter_config": [],
+          "environment": [],
+          "ephemeral_storage": true,
+          "file_system_config": [],
+          "id": true,
+          "image_config": [],
+          "invoke_arn": true,
+          "last_modified": true,
+          "logging_config": true,
+          "qualified_arn": true,
+          "qualified_invoke_arn": true,
+          "signing_job_arn": true,
+          "signing_profile_version_arn": true,
+          "snap_start": [],
+          "source_code_size": true,
+          "tags_all": true,
+          "tracing_config": true,
+          "version": true,
+          "vpc_config": []
+        },
+        "before_sensitive": false,
+        "after_sensitive": {
+          "architectures": [],
+          "dead_letter_config": [],
+          "environment": [],
+          "ephemeral_storage": [],
+          "file_system_config": [],
+          "image_config": [],
+          "logging_config": [],
+          "snap_start": [],
+          "tags_all": {},
+          "tracing_config": [],
+          "vpc_config": []
+        }
+      }
+    }
+  ],
+  "prior_state": {
+    "format_version": "1.0",
+    "terraform_version": "1.9.8",
+    "values": {
+      "root_module": {
+        "child_modules": [
+          {
+            "resources": [
+              {
+                "address": "module.lambda_thing.data.archive_file.thing",
+                "mode": "data",
+                "type": "archive_file",
+                "name": "thing",
+                "provider_name": "registry.terraform.io/hashicorp/archive",
+                "schema_version": 0,
+                "values": {
+                  "exclude_symlink_directories": null,
+                  "excludes": null,
+                  "id": "f437fcea78509cc58f8ccc4349a8ce231fe7cc63",
+                  "output_base64sha256": "vvaCQNruPIwpfOCOzAoyhSA2DF4FamgsX4CsvljWd3s=",
+                  "output_base64sha512": "TB6yYB9OUrHOg2xQw1OlArrGrSX4NRIgX++crXumD++5J98iiAkkGXSMf6E+HosKcQM5IhMR7yBLImZfk/t33A==",
+                  "output_file_mode": null,
+                  "output_md5": "556038850019f64684ce534cdd1340e8",
+                  "output_path": "../../../modules/lambda-thing/build/thing.zip",
+                  "output_sha": "f437fcea78509cc58f8ccc4349a8ce231fe7cc63",
+                  "output_sha256": "bef68240daee3c8c297ce08ecc0a328520360c5e056a682c5f80acbe58d6777b",
+                  "output_sha512": "4c1eb2601f4e52b1ce836c50c353a502bac6ad25f83512205fef9cad7ba60fefb927df2288092419748c7fa13e1e8b0a710339221311ef204b22665f93fb77dc",
+                  "output_size": 141,
+                  "source": [{ "content": "hello", "filename": "index.js" }],
+                  "source_content": null,
+                  "source_content_filename": null,
+                  "source_dir": null,
+                  "source_file": null,
+                  "type": "zip"
+                },
+                "sensitive_values": { "source": [{}] }
+              }
+            ],
+            "address": "module.lambda_thing"
+          }
+        ]
+      }
+    }
+  },
+  "configuration": {
+    "provider_config": {
+      "archive": {
+        "name": "archive",
+        "full_name": "registry.terraform.io/hashicorp/archive",
+        "version_constraint": "~\u003e 2.4"
+      },
+      "aws": {
+        "name": "aws",
+        "full_name": "registry.terraform.io/hashicorp/aws",
+        "version_constraint": "~\u003e 5.0",
+        "expressions": {
+          "access_key": { "constant_value": "test" },
+          "region": { "constant_value": "us-east-1" },
+          "secret_key": { "constant_value": "test" },
+          "skip_credentials_validation": { "constant_value": true },
+          "skip_metadata_api_check": { "constant_value": true },
+          "skip_requesting_account_id": { "constant_value": true }
+        }
+      }
+    },
+    "root_module": {
+      "module_calls": {
+        "lambda_thing": {
+          "source": "../../../modules/lambda-thing",
+          "module": {
+            "resources": [
+              {
+                "address": "aws_lambda_function.thing",
+                "mode": "managed",
+                "type": "aws_lambda_function",
+                "name": "thing",
+                "provider_config_key": "aws",
+                "expressions": {
+                  "filename": {
+                    "references": ["data.archive_file.thing.output_path", "data.archive_file.thing"]
+                  },
+                  "function_name": { "constant_value": "thing" },
+                  "handler": { "constant_value": "index.handler" },
+                  "role": { "constant_value": "arn:aws:iam::123456789012:role/thing" },
+                  "runtime": { "constant_value": "nodejs18.x" },
+                  "source_code_hash": {
+                    "references": [
+                      "data.archive_file.thing.output_base64sha256",
+                      "data.archive_file.thing"
+                    ]
+                  }
+                },
+                "schema_version": 0
+              },
+              {
+                "address": "data.archive_file.thing",
+                "mode": "data",
+                "type": "archive_file",
+                "name": "thing",
+                "provider_config_key": "archive",
+                "expressions": {
+                  "output_path": { "references": ["path.module"] },
+                  "source": [
+                    {
+                      "content": { "constant_value": "hello" },
+                      "filename": { "constant_value": "index.js" }
+                    }
+                  ],
+                  "type": { "constant_value": "zip" }
+                },
+                "schema_version": 0
+              }
+            ]
+          }
+        }
+      }
+    }
+  },
+  "relevant_attributes": [
+    { "resource": "module.lambda_thing.data.archive_file.thing", "attribute": ["output_path"] },
+    {
+      "resource": "module.lambda_thing.data.archive_file.thing",
+      "attribute": ["output_base64sha256"]
+    }
+  ],
+  "timestamp": "2026-08-30T00:59:55Z",
+  "applyable": true,
+  "complete": true,
+  "errored": false
+}

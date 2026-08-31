@@ -277,10 +277,12 @@ Error: Unsupported argument
 An argument named "error_status_restore_lambda_arn" is not expected here.
 ```
 
-No compatibility alias ships with this change (#1802), so this is a hard
-break, not a deprecation window — the manual edit below is required before
-`terraform plan` succeeds again, in every one of `infra/environments/dev/`,
-`infra/environments/staging/` and `infra/environments/prod/` you actually run:
+No compatibility alias ships for the **Terraform module's input-variable
+name** itself (#1802) — Terraform has no `moved`-equivalent for a renamed
+module input — so this half is a genuine hard break, not a deprecation
+window. The manual edit below is required before `terraform plan` succeeds
+again, in every one of `infra/environments/dev/`, `infra/environments/staging/`
+and `infra/environments/prod/` you actually run:
 
 1. In that environment's `main.tf`, rename the argument passed to the `cdn`
    module call from `error_status_restore_lambda_arn = ...` to
@@ -292,6 +294,47 @@ break, not a deprecation window — the manual edit below is required before
 3. Re-run `terraform plan`. A clean plan with no diff on the CDN module's
    Lambda@Edge association confirms the rename is cosmetic: it is the same
    ARN under a new argument name, not a new resource.
+
+#### A second seam, more dangerous than the hard break above: run `deploy-global` before your next real `deploy-infra`
+
+The hard break above is *loud* — `terraform plan` errors and blocks every
+change until you make the manual edit. The GitHub Actions **repo variable**
+that actually carries the ARN into `TF_VAR_error_status_demote_lambda_arn` is
+a separate rename bundled into the same commit, and getting its sequencing
+wrong fails *silently* instead — this is the regression the rename PR
+introduced on top of the break it already knew about, found in gating the PR
+itself, not something you can reproduce from the paragraphs above.
+
+`deploy-infra.yml`, `deploy-infra-plan.yml` and `destroy-infra.yml` now read
+`vars.ERROR_STATUS_DEMOTE_LAMBDA_ARN`, falling back to the pre-rename
+`vars.ERROR_STATUS_RESTORE_LAMBDA_ARN` if the new one is unset. The new-named
+repo variable is only ever *published* by `deploy-global.yml`'s "Export
+outputs" step, against the `infra/global` stack. If your instance already had
+`ERROR_STATUS_RESTORE_LAMBDA_ARN` set — i.e. you had already taken #1529/
+#1574's fix before this rename reached you — and `deploy-infra` or
+`destroy-infra` runs before `deploy-global` has run at least once under this
+upgrade, the CDN module's `count = var.error_status_demote_lambda_arn == "" ?
+0 : 1` resolves to `0` for **both** the Lambda@Edge and the CloudFront
+Function associations. Terraform succeeds, exit 0, no warning: the
+associations are simply not (re)created, or are torn down if they already
+existed in state.
+
+The fallback above closes exactly that gap — as long as the pre-rename
+variable is still present, the value resolves correctly regardless of run
+order — but it buys time, it does not remove the requirement:
+
+1. **Run `deploy-global` at least once after taking this upgrade, before you
+   next run `deploy-infra` or `destroy-infra` for real.** That is what
+   actually publishes `ERROR_STATUS_DEMOTE_LAMBDA_ARN` under the new name;
+   nothing else does, and nothing runs it for you automatically.
+2. Once `ERROR_STATUS_DEMOTE_LAMBDA_ARN` shows up in `gh variable list`, the
+   now-redundant `ERROR_STATUS_RESTORE_LAMBDA_ARN` may be deleted — the
+   fallback exists only for the gap between taking this upgrade and your next
+   `deploy-global` run.
+3. If your instance never had `ERROR_STATUS_RESTORE_LAMBDA_ARN` set (you had
+   not yet taken #1529/#1574's fix), there is nothing to fall back to and
+   nothing changes for you: the variable is simply unset, exactly as before,
+   and the associations stay off until you run `deploy-global`.
 
 ### 0.298.0 — dispatching Deploy Infrastructure requires `action=apply`
 

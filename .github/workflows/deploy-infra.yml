@@ -188,7 +188,16 @@ jobs:
           # alone would return HTTP 200 on real API errors, which is worse than
           # the bug this fixes. See modules/cloud/aws/cdn/variables.tf and
           # cli/src/lib/cdn-error-status-coupling.test.ts.
-          TF_VAR_error_status_demote_lambda_arn: ${{ vars.ERROR_STATUS_DEMOTE_LAMBDA_ARN }}
+          #
+          # Falls back to the pre-rename repo variable
+          # (ERROR_STATUS_RESTORE_LAMBDA_ARN) so an instance that already had it
+          # set does not silently drop to the empty/off state the moment this
+          # workflow's own #1583 rename lands: if deploy-infra runs before
+          # deploy-global has re-published under the new name, the new variable
+          # is genuinely unset and, without this fallback, both associations
+          # would count = 0 with no error anywhere. See docs/guides/
+          # core-upgrade.md's 0.298.43 entry for the required sequencing.
+          TF_VAR_error_status_demote_lambda_arn: ${{ vars.ERROR_STATUS_DEMOTE_LAMBDA_ARN || vars.ERROR_STATUS_RESTORE_LAMBDA_ARN }}
           # Endpoint control plane / PR-signer (ADR-0008). All default to empty
           # or false, so a deployment that has not set these GitHub variables is
           # unaffected — but without passing them, an instance could not enable
@@ -487,7 +496,16 @@ jobs:
           # alone would return HTTP 200 on real API errors, which is worse than
           # the bug this fixes. See modules/cloud/aws/cdn/variables.tf and
           # cli/src/lib/cdn-error-status-coupling.test.ts.
-          TF_VAR_error_status_demote_lambda_arn: ${{ vars.ERROR_STATUS_DEMOTE_LAMBDA_ARN }}
+          #
+          # Falls back to the pre-rename repo variable
+          # (ERROR_STATUS_RESTORE_LAMBDA_ARN) so an instance that already had it
+          # set does not silently drop to the empty/off state the moment this
+          # workflow's own #1583 rename lands: if deploy-infra runs before
+          # deploy-global has re-published under the new name, the new variable
+          # is genuinely unset and, without this fallback, both associations
+          # would count = 0 with no error anywhere. See docs/guides/
+          # core-upgrade.md's 0.298.43 entry for the required sequencing.
+          TF_VAR_error_status_demote_lambda_arn: ${{ vars.ERROR_STATUS_DEMOTE_LAMBDA_ARN || vars.ERROR_STATUS_RESTORE_LAMBDA_ARN }}
           # Endpoint control plane / PR-signer (ADR-0008). All default to empty
           # or false, so a deployment that has not set these GitHub variables is
           # unaffected — but without passing them, an instance could not enable
@@ -748,7 +766,16 @@ jobs:
           # alone would return HTTP 200 on real API errors, which is worse than
           # the bug this fixes. See modules/cloud/aws/cdn/variables.tf and
           # cli/src/lib/cdn-error-status-coupling.test.ts.
-          TF_VAR_error_status_demote_lambda_arn: ${{ vars.ERROR_STATUS_DEMOTE_LAMBDA_ARN }}
+          #
+          # Falls back to the pre-rename repo variable
+          # (ERROR_STATUS_RESTORE_LAMBDA_ARN) so an instance that already had it
+          # set does not silently drop to the empty/off state the moment this
+          # workflow's own #1583 rename lands: if deploy-infra runs before
+          # deploy-global has re-published under the new name, the new variable
+          # is genuinely unset and, without this fallback, both associations
+          # would count = 0 with no error anywhere. See docs/guides/
+          # core-upgrade.md's 0.298.43 entry for the required sequencing.
+          TF_VAR_error_status_demote_lambda_arn: ${{ vars.ERROR_STATUS_DEMOTE_LAMBDA_ARN || vars.ERROR_STATUS_RESTORE_LAMBDA_ARN }}
           # Endpoint control plane / PR-signer (ADR-0008). All default to empty
           # or false, so a deployment that has not set these GitHub variables is
           # unaffected — but without passing them, an instance could not enable

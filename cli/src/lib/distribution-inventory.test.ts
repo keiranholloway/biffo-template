@@ -222,5 +222,38 @@ describe('distribution inventory (#1570): every artifact-that-must-travel is reg
           'was filed to surface, shipping again inside the artifact built to fix it',
       ).not.toMatch(/this repo.{0,30}deploy-infra\.yml never sets/i)
     })
+
+    it('gitleaks-toml-plugin-repos: gapReason no longer claims biffo-plugin-marketing carries a live customised copy (#1816)', () => {
+      const inv = inventory()
+      const entry = inv.entries.find((e) => e.id === 'gitleaks-toml-plugin-repos')
+      expect(entry, 'entry "gitleaks-toml-plugin-repos" not found').toBeTruthy()
+
+      // #1816: biffo-plugin-marketing#188 (merged 2026-08-21, commit
+      // 54aa52a9) dropped the deliberately-customised 38-line copy this
+      // gapReason used to describe as current -- its dev .gitleaks.toml is
+      // now the plain 4-line `useDefault = true` stub. Unlike
+      // deployInfraSetsTfVar (#1807) above, that fact lives in a REMOTE
+      // repo, not this checkout's own tree: this repo's CI test job carries
+      // no cross-repo token (ci.yml's test step sets none; the estate's only
+      // precedent for cross-repo reads, BIFFO_GITHUB_TOKEN, is wired into
+      // shared-sync-report.yml, a separate scheduled workflow, not into
+      // `pnpm run test`). So this cannot be a live self-checkable detector
+      // call the way deployInfraSetsTfVar is -- it can only guard against
+      // the exact stale claim reappearing verbatim, the same class #1570
+      // exists to surface, one level less than fully closed.
+      expect(
+        entry!.gapReason,
+        `"${entry!.id}"'s gapReason claims biffo-plugin-marketing still carries a live ` +
+          'deliberately-customised copy, but biffo-plugin-marketing#188 dropped it on ' +
+          '2026-08-21 -- this is the exact stale-prose class #1570 was filed to surface, ' +
+          'shipping again inside the artifact built to fix it',
+      ).not.toMatch(/marketing (?:additionally )?carries a deliberately-customised/i)
+
+      // The corrected text must actually say what changed, not just avoid
+      // the old wording -- otherwise this guard could pass on a DIFFERENT
+      // stale claim that happens not to match the one regex above.
+      expect(entry!.gapReason).toMatch(/biffo-plugin-marketing#188/)
+      expect(entry!.gapReason).toMatch(/useDefault = true/)
+    })
   })
 })

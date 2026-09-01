@@ -43,6 +43,7 @@
 #   sh scripts/claim.sh 1234 --as <token> --check    # report only, change nothing
 #   sh scripts/claim.sh 1234 --as <token> -R owner/repo
 #   sh scripts/claim.sh 1234 --release <token>       # only the holder may clear it
+#   sh scripts/claim.sh 1234 --reaffirm <token>      # keep a claim alive past session-stop
 #   sh scripts/claim.sh --guard <branch>             # pre-push gate — see below
 #
 #   0  free — and claimed, unless --check
@@ -148,6 +149,29 @@
 #     collision caught early (see "What it cannot do" above). Set
 #     `BIFFO_CLAIM_STRICT=1` to make this script itself collapse cannot-tell
 #     into exit 1 instead, for anyone who would rather block than guess.
+#
+# ## `--reaffirm <token>` — keep a claim alive past this session's own stop (#1849)
+#
+# AGENTS.md's own convention is "release it... on merge, or if you stop" —
+# every session, unconditionally, regardless of what it just shipped. That is
+# right for the overwhelming majority of sessions, and wrong for the one that
+# ships a `Refs`-only PR whose whole point is a multi-day review window during
+# which the issue must stay claimed. Nothing distinguished the two: a PR could
+# write, in its own body, "nothing here touches that label or that claim", and
+# the same session's ordinary end-of-session `--release` fired seconds later
+# regardless — the written promise and the actual mechanism disagreed, and
+# nothing reconciled them (biffo-template#1849; the same guard-vs-authority
+# shape already tracked with 8 other instances in this estate).
+#
+# `--reaffirm` gives that session something to actually RUN as a required last
+# step, instead of a promise the next reader has to take on faith. It is
+# deliberately not a fresh claim: it always re-applies the label and posts a
+# comment for `$HOLDER`, whether or not the four signals below would call the
+# issue free — that is the point, the caller is asserting "stays taken", not
+# asking "is this taken". The one thing it refuses is overwriting a DIFFERENT
+# live holder's claim: if the label is already present and the claim-holder
+# comment names someone other than `$HOLDER`, it exits 1 exactly like a
+# mismatched `--release`, rather than silently taking over.
 
 set -u
 
@@ -155,6 +179,7 @@ ISSUE=""
 REPO=""
 HOLDER=""
 RELEASE=""
+REAFFIRM=""
 HOLDER_MARK="claim-holder:"
 BRANCH_MARK="claim-branch:"
 CHECK_ONLY=""
@@ -237,6 +262,17 @@ while [ $# -gt 0 ]; do
         *) HOLDER="$2"; shift 2 ;;
       esac
       ;;
+    --reaffirm)
+      # Mirrors --release's own parsing exactly, and for the identical reason
+      # (#826, the FLAG-IS-NOT-A-TOKEN fix above): `--reaffirm --as <token>`
+      # must not swallow `--as` as the token and push the real token into
+      # ISSUE's positional slot.
+      REAFFIRM=1
+      case "${2:-}" in
+        -*|'') shift ;;
+        *) HOLDER="$2"; shift 2 ;;
+      esac
+      ;;
     --guard)
       [ $# -ge 2 ] || missing_value "$1"
       GUARD_BRANCH="$2"
@@ -255,7 +291,7 @@ while [ $# -gt 0 ]; do
       # Refusing here, at the point the flag is actually unrecognized, says
       # what is really wrong instead of a confusing knock-on error.
       echo "${RED}claim: unrecognized flag '$1'${OFF}" >&2
-      echo "${DIM}  Known flags: -R/--repo, --check, --as, --release, --guard, -h/--help.${OFF}" >&2
+      echo "${DIM}  Known flags: -R/--repo, --check, --as, --release, --reaffirm, --guard, -h/--help.${OFF}" >&2
       exit 2
       ;;
     *)
@@ -1027,6 +1063,65 @@ echo
 if [ "$state" != "OPEN" ]; then
   echo "${RED}Already $state.${OFF} Nothing to claim."
   exit 1
+fi
+
+# --- --reaffirm: keep the claim taken, regardless of what the four signals
+# below would say (#1849) --------------------------------------------------
+#
+# Runs here rather than as an early short-circuit like --release/--guard,
+# specifically so it gets the SAME "--as <token> is required" gate those two
+# are exempted from (above) and the same OPEN-issue check just above: a
+# reaffirm with no identifying token, or of an issue that is already closed,
+# should fail exactly the way a fresh claim would, not slip through on a
+# lighter check because it front-ran the validation.
+#
+# Deliberately does NOT consult the lease/label/PR/branch signals below to
+# decide whether to act — a reaffirm is an assertion ("this stays taken"),
+# not a question ("is this taken"). The one thing it will not do is clobber
+# a claim that already names a DIFFERENT live holder: that would turn
+# "restore my own claim" into "silently steal someone else's".
+if [ -n "$REAFFIRM" ]; then
+  case ",$labels," in
+    *",$LABEL,"*)
+      claim_held_by "$ISSUE" "$HOLDER"
+      _reaffirm_held=$?
+      if [ "$_reaffirm_held" -eq 1 ]; then
+        echo "${RED}claim: #$ISSUE is already labeled '$LABEL', held by someone other than '$HOLDER'.${OFF}" >&2
+        echo "${DIM}  --reaffirm restores YOUR OWN claim; it does not take over someone else's.${OFF}" >&2
+        echo "${DIM}  If that claim is genuinely stale, say so in a comment and steal it via${OFF}" >&2
+        echo "${DIM}  the ordinary claim path instead (AGENTS.md: over an hour, no activity).${OFF}" >&2
+        exit 1
+      fi
+      if [ "$_reaffirm_held" -eq 2 ]; then
+        echo "${RED}claim: cannot tell whether #$ISSUE's '$LABEL' label is yours${OFF} — comments unreadable." >&2
+        echo "${DIM}  Not reaffirming on an unreadable read: that could overwrite someone else's claim.${OFF}" >&2
+        exit 2
+      fi
+      ;;
+  esac
+
+  # Make sure the label exists before applying it — same idempotent,
+  # non-fatal create as the fresh-claim path below.
+  gh_label create "$LABEL" \
+    -c FBCA04 \
+    -d "Claimed by a running agent session -- do not start work on this" \
+    >/dev/null 2>&1 || true
+
+  _claim_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '')
+  case "$_claim_branch" in
+    '' | HEAD) _claim_branch='' ;;
+  esac
+  gh_issue edit "$ISSUE" --add-label "$LABEL" >/dev/null 2>&1 || {
+    echo "${RED}claim: could not apply the '$LABEL' label.${OFF}" >&2
+    echo "${DIM}  Not reaffirmed — do not treat #$ISSUE as still claimed.${OFF}" >&2
+    exit 2
+  }
+  gh_issue comment "$ISSUE" \
+    --body "Reaffirmed at $(date -u +%FT%TZ) by \`$(git config user.name 2>/dev/null || echo agent)\`. ${HOLDER_MARK}${HOLDER}${_claim_branch:+ ${BRANCH_MARK}${_claim_branch}} This is a REAFFIRMED claim, not a fresh one and not a release: a PR or session referencing this issue has stated it must stay claimed beyond this session's own lifetime (e.g. a review-window experiment, or a Refs-only PR that is not yet finished). Do not run --release on ordinary session-stop while that stated condition holds — release only once it genuinely resolves." \
+    >/dev/null 2>&1
+
+  echo "${GREEN}Reaffirmed.${OFF} ${DIM}(#$ISSUE stays claimed by $HOLDER)${OFF}"
+  exit 0
 fi
 
 # --- 0.5. THE LEASE. The one authority for "is this being worked on" ---------

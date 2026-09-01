@@ -28,6 +28,8 @@ Three rules, all of which exist because the alternative is self-congratulation:
 | [H3](H3-relax-strict.md) | Relaxing `strict` removes the race without breaking `dev` | `racedShare` 16.0% → <3% | **running** | 2026-07-28 | 2026-08-04 |
 | [H4](H4-shift-left-gates.md) | A local gate that actually runs removes most of what CI catches | **gate coverage 45% → 100% on day 0**; locally-catchable share of failing CI steps 66% (7d) → <20% | **running** | 2026-07-29 | 2026-08-05 |
 | [H5](H5-gate-residuals.md) | Of H4's four residual gaps, three pay and one does not | gate coverage stays 100%; pytest in 4 fast siblings; 0 prose-only exclusions; **gap 2 declined at 0/165** | **running** | 2026-07-29 | 2026-08-05 |
+| [H6](H6-review-the-diff.md) | A read-your-own-diff step in `biffo-workflow` raises review coverage above zero | `review.reviewedShare` 0% → >25% | **running** | 2026-07-30 | 2026-08-06 |
+| [H7](H7-fail-open-authoring-gate.md) | Asking the fail-open question at authoring time reduces newly-created `fail-open` entries | new fail-open corpus entries per merged PR 0.078 → lower | **running** | 2026-09-01 | 2026-09-08 |
 
 > H2 and H3 were pre-registered on 2026-07-28 and never added here, so for a day
 > this register listed one of three live experiments. An index that is not

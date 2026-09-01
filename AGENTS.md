@@ -229,6 +229,25 @@ only.
 - Mark a PR **ready** (not draft) when it is meant to merge.
 - Behavior changes ship **with tests**. Don't reduce coverage to make CI pass.
 
+### Read your own diff for the fail-open shape
+
+`biffo-workflow`'s Step 4.5 ("read your own diff before you open the PR") asks
+whether the _justification_ was checked. This is its sibling, for a question
+Step 4.5 does not ask:
+
+> **If this reported success, or reported zero, because it could not see its
+> input — would anything look different?**
+
+For any change that reports a count, a status, or an exit code: name what a
+real failure would look like, and confirm it is distinguishable from the empty
+case.
+
+This paragraph is a pre-registered, falsifiable experiment
+(`docs/practices/experiments/H7-fail-open-authoring-gate.md`, issue #1083),
+not an assumed-effective rule. If the review at that experiment's review date
+finds it did not move the metric, this paragraph comes back out rather than
+accumulating.
+
 ### Fixing a bug: reproduce the actual failure, not a theory of it
 
 A green test suite proves your test passes. It does **not** prove the reported

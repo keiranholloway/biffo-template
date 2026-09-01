@@ -875,7 +875,15 @@ diff_files() {
 }
 
 repo_slug() {
-  git -C "$1" remote get-url origin | sed -E 's#.*[:/]([^/]+/[^/]+)$#\1#; s#\.git$##'
+  # Lower-case FIRST, then extract/strip. GitHub slugs are case-insensitive,
+  # and doing this the other way round -- extract, strip a literal (therefore
+  # case-sensitive) `.git`, lower-case last -- leaves an upper-cased `.GIT`
+  # suffix un-stripped, so two URLs differing only in case resolve to
+  # DIFFERENT slugs (`foo/bar` vs `foo/bar.git`) instead of the same one.
+  # Caught live by shared-sync-template-clone-identity.test.ts (#1843).
+  git -C "$1" remote get-url "${2:-origin}" 2>/dev/null |
+    tr '[:upper:]' '[:lower:]' |
+    sed -E 's#.*[:/]([^/]+/[^/]+)$#\1#; s#\.git$##'
 }
 
 # The absolute path of a working tree's shared git directory, which is the same
@@ -887,6 +895,66 @@ repo_dir() {
 
 TEMPLATE_REPO=$(repo_dir "$TEMPLATE_ROOT")
 [ -n "$TEMPLATE_REPO" ] || { echo "$TEMPLATE_ROOT is not a git repository" >&2; exit 2; }
+
+# The template's own `origin` remote, normalised to `owner/repo` by
+# repo_slug() (handles both `git@host:owner/repo.git` and
+# `https://host/owner/repo.git`, and lower-cases the result -- GitHub slugs
+# are case-insensitive, so `KeiranHolloway/Biffo-Template` and
+# `keiranholloway/biffo-template` name the same repo). Empty when the
+# template checkout has no `origin` remote at all -- CI's detached-merge-ref
+# checkout is one such case -- in which case is_template_dir() below falls
+# back to the git-common-dir check alone rather than matching every
+# remote-less directory against every other.
+TEMPLATE_REMOTE_SLUG=$(repo_slug "$TEMPLATE_ROOT")
+
+# Is $1 "the template", for the purpose of excluding it from the estate walk?
+#
+# biffo-template#1785 fixed this for a WORKTREE of the real checkout:
+# `repo_dir()` (git-common-dir) is an identity for one working tree, and a
+# worktree shares its primary's `.git`, so it matches.
+#
+# biffo-template#1841 is the other gap in the same exclusion: an
+# INDEPENDENT second `git clone` of the template's own GitHub remote, sitting
+# anywhere directly under $ESTATE, gets its own `.git` -- a different
+# git-common-dir -- so the worktree check alone never fires for it, and
+# `applies()` then accepts it as a satellite because it carries the same
+# `scripts/biffo.sh` bridge any template clone does. Matching by remote
+# identity in ADDITION to git-common-dir catches both shapes: a worktree of
+# the real checkout (same git-common-dir, remote match is redundant) and an
+# independent clone of the same remote (different git-common-dir, but the
+# same resolved owner/repo).
+#
+# biffo-template#1843 is the residual gap in *that* fix, found live against
+# #1841's own diff: the comparison was a bare case-sensitive `[ = ]`, and the
+# only short-circuit was on the TEMPLATE side having no `origin` -- not on the
+# CANDIDATE side. Two real shapes fell through:
+#
+#   1. A case-differing origin URL for the SAME repo (GitHub is
+#      case-insensitive: `KeiranHolloway/Biffo-Template` and
+#      `keiranholloway/biffo-template` resolve to one repository). repo_slug()
+#      now lower-cases its output, so this compares equal.
+#   2. A candidate clone whose `origin` remote was renamed away (e.g. to
+#      `upstream` -- exactly the shape of #1841's own abandoned scratch
+#      clone). `repo_slug "$1"` alone only ever asks for a remote literally
+#      named `origin`, so a renamed remote made it return empty and the
+#      comparison silently read as "not the template" instead of "cannot
+#      tell". Checking every remote name the candidate carries (not just
+#      `origin`) closes this without inventing a new short-circuit: a clone
+#      with NO remotes at all still falls through to `return 1`, same as
+#      before.
+#
+# Both shapes previously reproduced #1841's exact symptom one layer down:
+# accepted by applies() as an ordinary satellite, then failing to fetch,
+# aborting the whole shipping round fail-closed.
+is_template_dir() {
+  [ "$(repo_dir "$1")" = "$TEMPLATE_REPO" ] && return 0
+  [ -n "$TEMPLATE_REMOTE_SLUG" ] || return 1
+  local _remote
+  for _remote in $(git -C "$1" remote 2>/dev/null); do
+    [ "$(repo_slug "$1" "$_remote")" = "$TEMPLATE_REMOTE_SLUG" ] && return 0
+  done
+  return 1
+}
 
 # Refuse to ship from a stale template checkout.
 #
@@ -961,7 +1029,7 @@ applicable_repo_list() {
   for d in "$ESTATE"/*/; do
     d="${d%/}"
     [ -e "$d/.git" ] || continue
-    [ "$(repo_dir "$d")" = "$TEMPLATE_REPO" ] && continue
+    is_template_dir "$d" && continue
     [ -n "$ONLY" ] && [ "$(basename "$d")" != "$ONLY" ] && continue
     applies "$d" || continue
     git -C "$d" fetch origin --prune --quiet 2>/dev/null
@@ -2323,7 +2391,12 @@ for d in "$ESTATE"/*/; do
   # situation this script is ever run in while iterating on a shared file. The
   # first `--rehearse` from a worktree would have staged the template as a
   # target of its own distribution and opened a sync PR against its own dev.
-  [ "$(repo_dir "$d")" = "$TEMPLATE_REPO" ] && continue
+  #
+  # is_template_dir() also excludes an INDEPENDENT clone of the template's own
+  # remote (biffo-template#1841) -- git-common-dir alone only recognises a
+  # WORKTREE of this checkout (#1785); a second `git clone` gets its own
+  # `.git` and needs the remote-identity match alongside it.
+  is_template_dir "$d" && continue
   [ -n "$ONLY" ] && [ "$label" != "$ONLY" ] && continue
   # Every directory that reaches this line is a genuine candidate this run was
   # asked to look at -- present under --estate, not the template, not excluded

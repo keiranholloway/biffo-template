@@ -592,7 +592,7 @@ async function runCoreUpgradeResolved(
 
   printNewInstanceSeams(newSeams)
   printAdoptionReport(adoption)
-  printOrphanReport(plan.orphaned, orphanRatchet)
+  printOrphanReport(plan.orphaned, orphanRatchet, plan.entries.length)
   if (orphanRatchet.increased) {
     throw new Error(
       `${String(plan.orphaned.length)} unsanctioned instance file(s) under a template-owned ` +
@@ -1689,12 +1689,20 @@ function printTargetFidelity(report: FidelityReport, toVersion: string): void {
   console.log()
 }
 
-function printOrphanReport(orphaned: MergeEntry[], ratchet: OrphanRatchet): void {
+/**
+ * `examined` is `plan.entries.length` — every template-owned path `classify()`
+ * looked at, trailer-history lookups included (#1718) — so the count printed
+ * here is legible as a share of a stated denominator rather than a bare
+ * number nobody can check the scope of (#1363: "a gate reports green over a
+ * denominator it never printed").
+ */
+function printOrphanReport(orphaned: MergeEntry[], ratchet: OrphanRatchet, examined: number): void {
   if (orphaned.length === 0 && ratchet.baseline === null) return
 
   console.log(
     chalk.bold(
-      `  ${String(orphaned.length)} unsanctioned instance file(s) under a template-owned path (#1026):`,
+      `  ${String(orphaned.length)} unsanctioned instance file(s) under a template-owned path ` +
+        `(#1026), of ${String(examined)} template-owned path(s) examined:`,
     ),
   )
   for (const e of orphaned) console.log(`    ${chalk.yellow(e.path)}`)

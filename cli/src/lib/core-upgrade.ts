@@ -10,7 +10,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { execa } from './exec.js'
 import { z } from 'zod'
 import {
@@ -20,8 +20,8 @@ import {
   listTemplateOwnedFiles,
   readCoreManifest,
 } from './core-manifest.js'
-import { readDivergenceConfig } from './core-ownership-guard.js'
-import { type GitRunner, gitTrackedFiles } from './git-tracked-files.js'
+import { parseDivergenceTrailer, readDivergenceConfig } from './core-ownership-guard.js'
+import { defaultGit, type GitRunner, gitTrackedFiles } from './git-tracked-files.js'
 
 /**
  * The three-way merge engine for `biffo core upgrade` (ADR-0006 Phase 3).
@@ -101,11 +101,13 @@ export interface MergeEntry {
    * `orphaned` list — see there for the gitignore/untracked filter applied on
    * top of it.
    *
-   * `false` when the path is instead declared in `biffo.divergence.json`
-   * (#1602): a `warnOnly` entry is the SAME acceptance the commit-time
-   * `checkCoreOwnership` guard already grants the path, so the ratchet
-   * treats it as sanctioned rather than re-deciding the question from a
-   * count nobody reads prose against.
+   * `false` when the path is instead declared divergent — either a `warnOnly`
+   * entry in `biffo.divergence.json` (#1602), or a `Core-Divergence:` trailer
+   * recorded against the path in the instance's own git history (#1718). Both
+   * are the SAME acceptance the commit-time `checkCoreOwnership` guard already
+   * grants the path via its two independent routes, so the ratchet treats
+   * either as sanctioned rather than re-deciding the question from a count
+   * nobody reads prose against.
    */
   orphaned?: boolean
 }
@@ -237,6 +239,247 @@ const EMPTY_SUMMARY: () => Record<MergeStatus, number> = () => ({
 })
 
 /**
+ * Whether a `Core-Divergence:` trailer somewhere in `path`'s history is
+ * actually a declaration *for that path*, not merely a declaration that
+ * happened to share a commit with it (#1718, corrected after #1815/#1812).
+ *
+ * `checkCoreOwnership` (core-ownership-guard.ts) has always accepted a
+ * template-owned path via TWO independent routes: a `biffo.divergence.json`
+ * `warnOnly` entry, or a bare `Core-Divergence: <reason>` trailer on the commit
+ * — and its own printed guidance names the trailer as a way past. #1602/#1717
+ * unified the *first* route into this ratchet's `isDeclaredDivergent`, but never
+ * the second: an operator who declared divergence exactly the way the guard's
+ * own message suggested still hit an "orphan" at the next `biffo core upgrade`,
+ * green at commit time and refused later, in front of whoever else was mid
+ * upgrade. This closes that gap by reusing `parseDivergenceTrailer` — the same
+ * parser the commit-time guard reads — rather than re-deriving trailer parsing
+ * a second time, so the two acceptance routes cannot drift onto different
+ * definitions of "declared".
+ *
+ * ## The path-binding problem (#1815)
+ *
+ * A `Core-Divergence:` trailer is free text with no required binding to any
+ * specific path, but a commit's *diff* can touch many paths. The first version
+ * of this function conflated "this commit's diff touched `path`" with "this
+ * commit's trailer is ABOUT `path`" — so a single, correctly-scoped divergence
+ * declared once on an ordinary multi-file `core-upgrade` squash commit (the
+ * most common real shape carrying this trailer — see `3f27545e` in
+ * `biffo-platform`, which declares divergence for `package.json` alone while
+ * its diff also touches 167 other template-owned paths) permanently amnestied
+ * every OTHER template-owned path that commit happened to also touch, for the
+ * lifetime of the repository. Swept live: 18.6% of `biffo-platform`'s tracked
+ * files read as "declared" purely by this coincidence.
+ *
+ * A commit's trailer is now trusted for `path` only when EITHER:
+ *
+ * 1. **the commit is unambiguous** — its diff touches exactly one
+ *    template-owned path (per `manifest`), so there is nothing else the
+ *    trailer could be about; or
+ * 2. **the trailer names the path** — its reason text contains `path` (or
+ *    just its basename, since that is how every real trailer in this estate's
+ *    history actually refers to a file: `"package.json keeps this instance's
+ *    bounded undici override"`, `"adds an instance-owned
+ *    .github/workflows/rls-tests.yml under a"`) at a token boundary, so
+ *    `manifest.json` cannot be read out of `core-manifest.json` — AND, when
+ *    the match is by basename only, that basename must be unique among the
+ *    OTHER template-owned paths the same commit touched (#1822): a bare
+ *    basename mention cannot disambiguate `package.json` from
+ *    `_skeletons/sibling-template/apps/frontend/package.json` when both are
+ *    touched by the same commit, so a basename shared by two or more touched
+ *    template-owned paths is not accepted for either on that basis alone
+ *    (fails closed). A full-path mention has no such ambiguity.
+ *
+ * (1) alone covers every fixture in this module's own tests (each commits
+ * exactly one file). (2) is what recovers `package.json` from the real
+ * `3f27545e`-shaped squash commit without also amnestying its 167
+ * co-committed, undeclared neighbours — and is why the reason text must
+ * actually name a file for a multi-file commit to count at all.
+ *
+ * ## Shallow clones (#1812)
+ *
+ * `orphan-ratchet-report.yml`, the one caller that runs against real,
+ * unmodified estate data, clones each instance with `--depth 1`. Against a
+ * shallow clone, `git log --follow -- <path>` does not error — instead, with
+ * no local parent to diff the boundary commit against, git conservatively
+ * reports that lone commit as touching EVERY path in the tree, so criterion
+ * (1) above ("exactly one template-owned path") is never satisfied by
+ * accident (a shallow boundary commit's apparent diff is essentially the
+ * whole tree) but criterion (2) could still fire on a coincidental basename
+ * mention. Rather than rely on that, any commit identified as a shallow
+ * grafted boundary (`git rev-list --max-parents=0 HEAD` under
+ * `--is-shallow-repository`) is excluded from consideration entirely — its
+ * file-touch attribution cannot be trusted, so neither criterion may use it.
+ * Under a `--depth 1` clone the only commit visible generally IS that
+ * boundary, so this — correctly — turns the trailer route into a no-op there
+ * rather than a false "declared" for whatever the tip commit's trailer
+ * mentions; a deeper or full clone recovers the real behaviour.
+ *
+ * `git log --follow`, not just the tip commit: the declaration only needs to
+ * have been made once, on whichever commit introduced or last touched the
+ * path, and `--follow` keeps it findable across a rename the same way
+ * `parseNameStatus`'s destination-path convention (core-ownership-guard.ts)
+ * already treats a rename's target as the path of record.
+ *
+ * Fails CLOSED (returns `false`) whenever git cannot answer — no repo, no
+ * history for the path, or any other error. This is the opposite of
+ * `gitTrackedFiles`'s fail-OPEN contract: there, silence means "don't filter",
+ * which is the safe default for a filter. Here, silence must NOT be read as
+ * "declared" — that would turn every un-inspectable tree (exactly the plain
+ * temp directories this module's own tests build) into a free pass for the
+ * orphan ratchet this function feeds, which is the opposite of what #1602
+ * fixed and what #1718 extends.
+ */
+export function pathHasDivergenceTrailerInHistory(
+  oursDir: string,
+  path: string,
+  manifest: CoreManifest,
+  git: GitRunner = defaultGit,
+): boolean {
+  let out: string
+  try {
+    out = git(['-C', oursDir, 'log', '--follow', '--format=%x02%H%x01%B', '--', path])
+  } catch {
+    return false
+  }
+  const entries = out
+    .split('\x02')
+    .map((entry) => entry.split('\x01'))
+    .filter((parts): parts is [string, string] => parts.length === 2 && parts[0] !== '')
+
+  // Commits carrying no trailer at all can never satisfy either criterion —
+  // filter first so the (comparatively expensive) shallow-graft check below
+  // only runs when it could actually change the answer.
+  const withTrailer = entries.filter(([, message]) => parseDivergenceTrailer(message) !== null)
+  if (withTrailer.length === 0) return false
+
+  const graftedBoundary = shallowGraftCommits(oursDir, git)
+
+  for (const [hash, message] of withTrailer) {
+    if (graftedBoundary.has(hash)) continue
+
+    let touched: string[]
+    try {
+      // `--root` is required or a ROOT commit (no parent) reports NO files at
+      // all — diff-tree's default behaviour for a merge/root commit is to
+      // print nothing rather than diff against the empty tree — which would
+      // silently make criterion (1) below untriggerable for the single most
+      // common shape a brand-new fixture (or a squashed repo's own initial
+      // commit) produces.
+      touched = git([
+        '-C',
+        oursDir,
+        'diff-tree',
+        '--no-commit-id',
+        '--name-only',
+        '-r',
+        '--root',
+        hash,
+      ])
+        .split('\n')
+        .filter((p) => p !== '')
+    } catch {
+      touched = []
+    }
+    const templateOwnedTouched = touched.filter((p) => isTemplateOwned(p, manifest))
+    // Not just "exactly one template-owned path in the diff" — that path must
+    // BE the one being queried. Without this, a commit that touches one
+    // template-owned file (e.g. package.json) alongside any number of
+    // user-owned ones (README.md, pnpm-lock.yaml — the real `c88e158a` shape)
+    // would satisfy criterion (1) for every user-owned path it also touched,
+    // not only for the template-owned one it actually applies to.
+    if (templateOwnedTouched.length === 1 && templateOwnedTouched[0] === path) return true
+
+    const reason = parseDivergenceTrailer(message)
+    if (reason !== null && trailerNamesPath(reason, path, templateOwnedTouched)) return true
+  }
+  return false
+}
+
+/**
+ * The commit hashes a `--depth`-limited clone has grafted history onto — the
+ * ones whose file-touch attribution cannot be trusted (see the shallow-clone
+ * section of `pathHasDivergenceTrailerInHistory`'s docstring above). A
+ * genuine, non-shallow repository's own initial commit also has no parent and
+ * would show up here too, but that is harmless: a real root commit's apparent
+ * "touches everything" diff is correct, not an artifact, and `is-shallow-
+ * repository` gates this to only the case where it is not.
+ *
+ * Returns an empty set — trust every commit — whenever git cannot answer, so
+ * a failure here never turns into an *additional* false "declared"; it only
+ * ever removes trust criterion (1)/(2) above already require.
+ */
+function shallowGraftCommits(oursDir: string, git: GitRunner): Set<string> {
+  let isShallow: string
+  try {
+    isShallow = git(['-C', oursDir, 'rev-parse', '--is-shallow-repository']).trim()
+  } catch {
+    return new Set()
+  }
+  if (isShallow !== 'true') return new Set()
+  try {
+    const out = git(['-C', oursDir, 'rev-list', '--max-parents=0', 'HEAD'])
+    return new Set(
+      out
+        .split('\n')
+        .map((s) => s.trim())
+        .filter((s) => s !== ''),
+    )
+  } catch {
+    return new Set()
+  }
+}
+
+/**
+ * Whether a divergence trailer's reason text actually names `path` — either
+ * the full path or just its basename (how every real trailer in this
+ * estate's history refers to a file), at a token boundary so `manifest.json`
+ * cannot be read out of the middle of `core-manifest.json`.
+ *
+ * `/` is deliberately NOT a boundary-breaking character: a trailer that lists
+ * several files as `claim/branch-health/wait-for-checks/practices-daily.sh`
+ * (a real shorthand seen in this estate's history) still resolves
+ * `practices-daily.sh` correctly, because the character before it is a slash
+ * separating list items, not a character that would make it part of a longer,
+ * different filename.
+ *
+ * ## The basename collision problem (#1822)
+ *
+ * A bare basename mention cannot disambiguate between two DIFFERENT
+ * template-owned paths that happen to share one — real shape:
+ * `biffo-platform`'s actual `3f27545e` commit touches both root
+ * `package.json` and `_skeletons/sibling-template/apps/frontend/package.json`
+ * in the same diff, and its trailer ("`package.json` keeps this instance's
+ * bounded undici override") is unambiguously about the root file, but a
+ * bare-basename match previously accepted it for BOTH. `templateOwnedTouched`
+ * — the same list criterion (1) above already computes for this commit — is
+ * passed in so a basename match can check whether it is actually unique among
+ * the paths this commit's diff touched: if two or more of them share `path`'s
+ * basename, the mention cannot tell them apart and neither is accepted on
+ * that basis alone (fails closed, same contract as the rest of this
+ * function). A full-path mention has no such ambiguity and is always
+ * sufficient regardless of what else the commit touched.
+ */
+function trailerNamesPath(reason: string, path: string, templateOwnedTouched: string[]): boolean {
+  const isBoundary = (ch: string | undefined): boolean =>
+    ch === undefined || !/[A-Za-z0-9_.-]/.test(ch)
+  const namedAt = (needle: string): boolean => {
+    if (needle === '') return false
+    let idx = 0
+    for (;;) {
+      idx = reason.indexOf(needle, idx)
+      if (idx === -1) return false
+      if (isBoundary(reason[idx - 1]) && isBoundary(reason[idx + needle.length])) return true
+      idx += 1
+    }
+  }
+  if (namedAt(path)) return true
+  const base = basename(path)
+  if (!namedAt(base)) return false
+  const sharingBasename = templateOwnedTouched.filter((p) => basename(p) === base)
+  return sharingBasename.length <= 1
+}
+
+/**
  * Compute the upgrade plan. Reads all three trees, classifies each
  * template-owned path, and three-way-merges the ones that changed on both
  * sides. Nothing is written.
@@ -301,8 +544,24 @@ export async function planCoreUpgrade(options: PlanCoreUpgradeOptions): Promise<
   // way to keep it deleted. Reuse the same biffo.divergence.json the ownership
   // guard reads; a malformed file throws here too, which is the right failure.
   const divergentPrefixes = readDivergenceConfig(options.oursDir).warnOnly.map((e) => e.prefix)
-  const isDeclaredDivergent = (path: string): boolean =>
-    divergentPrefixes.some((prefix) => path.startsWith(prefix))
+  // Cache the (comparatively expensive) `git log` lookup per path — `classify()`
+  // calls `isDeclaredDivergent` at most twice per path, but there is no reason
+  // to shell out twice for the same answer.
+  const trailerDivergenceCache = new Map<string, boolean>()
+  const isDeclaredDivergent = (path: string): boolean => {
+    if (divergentPrefixes.some((prefix) => path.startsWith(prefix))) return true
+    let viaTrailer = trailerDivergenceCache.get(path)
+    if (viaTrailer === undefined) {
+      viaTrailer = pathHasDivergenceTrailerInHistory(
+        options.oursDir,
+        path,
+        options.manifest,
+        options.git,
+      )
+      trailerDivergenceCache.set(path, viaTrailer)
+    }
+    return viaTrailer
+  }
 
   const paths = [...new Set([...base, ...ours, ...theirs])].sort()
   const entries: MergeEntry[] = []
@@ -355,15 +614,17 @@ async function classify(
   // is no base or upstream version to merge against, so leave it untouched
   // rather than trying to read a non-existent base/theirs copy.
   //
-  // Unsanctioned by default (#1026) — UNLESS this exact path is declared in
-  // `biffo.divergence.json` (#1602, class #1362): the commit-time ownership
-  // guard already accepts such a path via the same `warnOnly` prefixes
-  // (`checkCoreOwnership`, core-ownership-guard.ts), so counting it as an
-  // orphan here re-litigates, from a second document, a question the first
-  // document already answered. `isDeclaredDivergent` is the same closure the
-  // "instance deleted a template file" branch below already reads — reused,
-  // not re-derived, so the two branches cannot drift onto different sources
-  // of truth for the same declaration.
+  // Unsanctioned by default (#1026) — UNLESS this exact path is declared
+  // divergent via either of the commit-time guard's two independent routes:
+  // a `biffo.divergence.json` `warnOnly` prefix (#1602, class #1362), or a
+  // `Core-Divergence:` trailer recorded against the path in history (#1718).
+  // `checkCoreOwnership` (core-ownership-guard.ts) already accepts a path via
+  // either, so counting it as an orphan here re-litigates, from a second
+  // document, a question the first document already answered.
+  // `isDeclaredDivergent` is the same closure the "instance deleted a template
+  // file" branch below already reads — reused, not re-derived, so the two
+  // branches (and the two acceptance routes within it) cannot drift onto
+  // different sources of truth for the same declaration.
   if (!inBase && !inTheirs) {
     if (isDeclaredDivergent(path)) {
       return { path, status: 'keep-ours', conflicted: false, orphaned: false }

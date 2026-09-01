@@ -198,7 +198,25 @@ jobs:
             [ -n "$slug" ] || continue
             name="${slug##*/}"
             echo "cloning ${slug}"
-            if ! gh repo clone "$slug" "$ESTATE/$name" -- --quiet --depth 1 2>&1; then
+            # Full history, NOT --depth 1 (#1823). This is the one production
+            # caller of pathHasDivergenceTrailerInHistory (core-upgrade.ts)
+            # against real, unmodified estate data -- and that function's own
+            # docstring says plainly that a --depth 1 clone turns its
+            # Core-Divergence-trailer route into a permanent no-op, because
+            # `git log --follow` has no parent to diff the lone grafted
+            # boundary commit against. Under a shallow clone here, a path that
+            # genuinely carries a correctly-scoped divergence trailer several
+            # commits back in history (the exact real shape of
+            # biffo-platform's rls-tests.yml) can never be recognised as
+            # declared, so it is reported as a growing orphan forever -- not a
+            # false pass, but a false, permanent fail in the one caller this
+            # report exists to be honest in. instance-adoption-report.yml and
+            # core-direct-paths-report.yml stay --depth 1 deliberately: neither
+            # reads git history, only the working tree, so a shallow clone
+            # costs them nothing. This workflow reads history, so it pays for
+            # it with a full clone instead of silently getting the wrong
+            # answer.
+            if ! gh repo clone "$slug" "$ESTATE/$name" -- --quiet 2>&1; then
               echo "::error title=orphan-ratchet: could not clone ${slug}::A repo this job could see in the listing but could not clone is a LOUD failure, not a skip -- the alternative silently shrinks the denominator the same way #1145 did for branch protection." >&2
               exit 1
             fi

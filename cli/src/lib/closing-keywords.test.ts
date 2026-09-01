@@ -87,6 +87,27 @@ describe('closing-keyword guard', () => {
       expect(closingReferences('Closest #12')).toEqual([])
     })
 
+    // Real text: PR #1789's own body (`gh pr view 1789 --json body`). A
+    // markdown heading ending in a closing keyword, a blank line, then an
+    // entirely unrelated paragraph whose first token is a `#N` reference —
+    // `\s+` used to span the blank line and read the two as one hit.
+    // GitHub's own ground truth for this PR (`gh pr view 1789 --json
+    // closingIssuesReferences`) never included #1717, only the genuine
+    // `Closes #1718` trailer elsewhere in the same body — confirming the
+    // heading/paragraph pair is not one unit to GitHub either.
+    it('does NOT span a blank line — a heading ending in a keyword must not reach into the next paragraph', () => {
+      const body = [
+        '## What this fixes',
+        '',
+        '#1717 fixed one of two acceptance routes for a template-owned-path divergence.',
+      ].join('\n')
+      expect(closingReferences(body)).toEqual([])
+    })
+
+    it('still matches across a SINGLE line break — only a blank line (paragraph break) is excluded', () => {
+      expect(closingReferences('Closes\n#1718')).toEqual(['#1718'])
+    })
+
     // #1732: a commit message has no markdown semantics, so `{ code: false
     // }` must find a hit even inside backticks — the opposite of the
     // default, which correctly models the PR body/title's real markdown
@@ -134,6 +155,22 @@ describe('closing-keyword guard', () => {
       // still act on it, backticks or not, which is exactly why this is not
       // treated as safe.
       expect(closingReferences('`Closes #99`', { code: false })).toEqual(['#99'])
+    })
+
+    // Regression control for the same corpus shape as `closingReferences`'s
+    // blank-line test above, on this function's own (independently patched)
+    // keyword-to-reference tail — both patterns end in the identical
+    // `\b:?<gap>(REFERENCE)` shape. This function already read the shape as
+    // not-deliberate before the fix too (the heading's clause-start
+    // decoration matches `## ` but never reaches the word "fixes" itself,
+    // since only list/heading/bold markers count as decoration, not
+    // arbitrary prose) — recorded here so a future change to
+    // `CLAUSE_DECORATION` can't silently reopen it.
+    it('does NOT span a blank line either — the PR #1789 heading/paragraph shape', () => {
+      const body = ['## What this fixes', '', '#1717 fixed one of two acceptance routes.'].join(
+        '\n',
+      )
+      expect(deliberateClosingReferences(body)).toEqual([])
     })
   })
 
@@ -353,6 +390,33 @@ describe('closing-keyword guard', () => {
       // And says how to proceed, both ways.
       expect(message).toContain('Refs #N')
       expect(message).toContain(VERIFIED_TRAILER)
+    })
+
+    // Real text: PR #1789's own body (`gh pr view 1789 --json body`), a
+    // deploy-only-path PR. `## What this fixes` (heading, ends in a closing
+    // keyword) is followed by a blank line and then an unrelated paragraph
+    // starting `#1717 fixed one of two acceptance routes...`; a genuine
+    // `Closes #1718` sits elsewhere in the same body. Before the fix, the
+    // `deploy-only-path` branch used raw `closingReferences` with no
+    // reconciliation, so it reported BOTH #1718 and #1717 — but GitHub's own
+    // `closingIssuesReferences` for this PR
+    // (`gh pr view 1789 --json closingIssuesReferences`) returns only #1718:
+    // #1717 was never something GitHub was about to act on. The failure must
+    // still fire (a real, deliberate `Closes #1718` on a deploy-only path is
+    // exactly what this check exists to catch) but must name only #1718.
+    it('on the real PR #1789 shape, flags only the genuine close, not the heading/paragraph false positive', () => {
+      const body = [
+        'Closes #1718',
+        '',
+        '## What this fixes',
+        '',
+        '#1717 fixed one of two acceptance routes for a template-owned-path divergence:',
+        'unrelated prose that happens to start with an issue reference.',
+      ].join('\n')
+      const result = assess({ body, changedFiles: ['.github/workflows/orphan-ratchet-report.yml'] })
+      expect(result.ok).toBe(false)
+      expect(result.kind).toBe('deploy-only-path')
+      expect(result.references).toEqual(['#1718'])
     })
   })
 

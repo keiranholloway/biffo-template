@@ -253,6 +253,41 @@ export const DEPLOY_ONLY_PREFIXES = [
 const REFERENCE = '(?:[\\w.-]+/[\\w.-]+)?#\\d+'
 
 /**
+ * The whitespace allowed between a closing keyword (plus its optional `:`)
+ * and the issue reference it governs, in `closingReferences`,
+ * `deliberateClosingReferences` and `negatedClosingReferences` alike — all
+ * three end their pattern with the identical `\b:?\s+(REFERENCE)` tail, and
+ * all three had the identical bug.
+ *
+ * A bare `\s+` matches across an ARBITRARY run of blank lines, so a
+ * markdown heading ending in a closing keyword matched against a `#N` that
+ * starts a completely unrelated paragraph two lines later — nothing in the
+ * character class stopped it from spanning the blank line between them.
+ * Real instance, PR #1789's own body:
+ *
+ *   ## What this fixes
+ *
+ *   #1717 fixed one of two acceptance routes ...
+ *
+ * "fixes" is the last word of the heading; "#1717" is the first token of
+ * the next paragraph's own, unrelated sentence. `closingReferences`
+ * nonetheless reported `#1717` as a hit — `\s+` matched the `"\n\n"`
+ * between them — and that false hit reached the `deploy-only-path` branch
+ * of `assess`, which (unlike the two ground-truth branches) has no
+ * reconciliation step and fails on whatever `closingReferences` reports
+ * verbatim. Confirmed against GitHub's own ground truth for that PR
+ * (`gh pr view 1789 --json closingIssuesReferences`): only `#1718` — the
+ * genuine `Closes #1718` trailer — is ever returned; #1717 never was.
+ *
+ * A single line break is still allowed: nothing in this repo's corpus
+ * needs it, but there is no evidence GitHub REQUIRES same-line adjacency
+ * either, and the conservative/fail-closed choice for a guard whose job is
+ * "don't miss a real close" is to keep allowing one newline and exclude
+ * only a genuine blank line (two or more).
+ */
+const KEYWORD_REFERENCE_GAP = '(?:[ \\t]+|[ \\t]*\\n[ \\t]*)'
+
+/**
  * Blank out fenced code blocks and inline code spans, preserving line count.
  *
  * Not merely a courtesy: GitHub does not linkify `#12` inside backticks, so it
@@ -290,7 +325,10 @@ export function stripCode(body) {
 export function closingReferences(body, { code = true } = {}) {
   if (!body) return []
   const withoutCode = code ? stripCode(body) : body
-  const pattern = new RegExp(`\\b(${CLOSING_KEYWORDS.join('|')})\\b:?\\s+(${REFERENCE})`, 'gi')
+  const pattern = new RegExp(
+    `\\b(${CLOSING_KEYWORDS.join('|')})\\b:?${KEYWORD_REFERENCE_GAP}(${REFERENCE})`,
+    'gi',
+  )
   return [...withoutCode.matchAll(pattern)].map((m) => m[2])
 }
 
@@ -361,7 +399,7 @@ export function deliberateClosingReferences(text, { code = true } = {}) {
   while ((m = boundary.exec(stripped))) starts.add(m.index + m[0].length)
 
   const pattern = new RegExp(
-    `^${CLAUSE_DECORATION}\\s*(${CLOSING_KEYWORDS.join('|')})\\b:?\\s+(${REFERENCE})`,
+    `^${CLAUSE_DECORATION}\\s*(${CLOSING_KEYWORDS.join('|')})\\b:?${KEYWORD_REFERENCE_GAP}(${REFERENCE})`,
     'i',
   )
   const found = []
@@ -435,7 +473,7 @@ export function negatedClosingReferences(body, { code = true } = {}) {
   const text = code ? stripCode(body) : body
   const authored = body.split('\n')
   const pattern = new RegExp(
-    `(?:${NEGATIONS.join('|')})\\s+(?:${CLOSING_KEYWORDS.join('|')})\\b:?\\s+(${REFERENCE})`,
+    `(?:${NEGATIONS.join('|')})\\s+(?:${CLOSING_KEYWORDS.join('|')})\\b:?${KEYWORD_REFERENCE_GAP}(${REFERENCE})`,
     'gi',
   )
   return [...text.matchAll(pattern)].map((m) => {

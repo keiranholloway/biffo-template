@@ -179,9 +179,19 @@ export async function runOrphanRatchetCheck(opts: OrphanRatchetCheckOptions = {}
   // check-instance-adoption.ts and check-core-direct-paths.ts: a clean run
   // that never says how much it looked at is indistinguishable from one that
   // looked at nothing (#1363).
+  //
+  // `plan.entries.length` — not `plan.orphaned.length` — is the true
+  // denominator: it is every template-owned path `classify()` considered
+  // (the union of paths present in base/ours/theirs, per `planCoreUpgrade`),
+  // while `plan.orphaned.length` is only the subset flagged. Printing the
+  // orphan count under "examined" reads as a total-considered figure but is
+  // actually the finding count restated — indistinguishable, on its face,
+  // from a run that only ever considered the flagged paths in the first
+  // place (biffo-template#1844).
   console.log(
-    `examined ${label}: ${plan.orphaned.length} unsanctioned file(s) under a template-owned ` +
-      `path (baseline ${baseline === null ? 'none recorded' : String(baseline.count)}), ` +
+    `examined ${label}: ${plan.entries.length} template-owned path(s) considered, ` +
+      `${plan.orphaned.length} unsanctioned file(s) found ` +
+      `(baseline ${baseline === null ? 'none recorded' : String(baseline.count)}), ` +
       `against template tree ${theirsDir}`,
   )
 

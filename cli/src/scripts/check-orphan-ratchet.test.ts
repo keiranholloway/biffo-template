@@ -167,6 +167,38 @@ describe('runOrphanRatchetCheck', () => {
     expect(reported).toContain('nearest sanctioned carve-out(s): services/api/tests/instance/')
   })
 
+  it('denominator counts every template-owned path examined, not just the flagged ones (#1844)', async () => {
+    const root = makeTmpDir('orphan-ratchet-check-denominator')
+    const { baseDir, theirsDir, instanceDir } = buildTrees(root)
+
+    // Three template-owned paths present identically in all three trees —
+    // unchanged, never flagged — plus one instance-only orphan. classify()
+    // considers all 4 paths; only 1 is orphaned. A denominator line that
+    // actually prints plan.orphaned.length under "examined" would read 1,
+    // indistinguishable from a run that only ever considered the orphan in
+    // the first place — exactly the ambiguity #1363/#1844 exist to end.
+    for (const name of ['a.sh', 'b.sh', 'c.sh']) {
+      const content = `#!/bin/sh\necho ${name}\n`
+      write(baseDir, `scripts/${name}`, content)
+      write(theirsDir, `scripts/${name}`, content)
+      write(instanceDir, `scripts/${name}`, content)
+    }
+    write(instanceDir, 'scripts/orphan.sh', '#!/bin/sh\necho orphan\n')
+    writeFileSync(join(instanceDir, 'biffo.orphan-baseline.json'), JSON.stringify({ count: 5 }))
+
+    await runOrphanRatchetCheck({
+      label: 'fixture-denominator',
+      theirsDir,
+      baseDir,
+      instanceDir,
+    })
+
+    expect(process.exit).not.toHaveBeenCalled()
+    const logged = vi.mocked(console.log).mock.calls.flat().join('\n')
+    expect(logged).toContain('examined fixture-denominator: 4 template-owned path(s) considered')
+    expect(logged).toContain('1 unsanctioned file(s) found')
+  })
+
   it('defaults the label to the basename of --instance-dir when --label is omitted', async () => {
     const root = makeTmpDir('orphan-ratchet-check-label')
     const { baseDir, theirsDir, instanceDir } = buildTrees(root)

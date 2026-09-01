@@ -128,6 +128,22 @@ how old the claim is: an `in-progress` issue with no activity for over an hour i
 probably abandoned. Steal it deliberately and say so in a comment; never steal a
 fresh one.
 
+**A PR that promises an issue stays claimed must reaffirm it, not just say
+so.** The release rule above is unconditional — merge, close, or stop — and
+prose alone cannot carve out an exception to it: PR #1848 stated, in its own
+body, that nothing in it would touch issue #1083's claim, and the same
+session's ordinary end-of-session release removed the label 21 seconds later
+anyway (#1849). The written promise and the actual mechanism disagreed, and
+nothing reconciled them. If a PR is a `Refs`, not a `Closes`, and genuinely
+means to keep its issue claimed past this session's own lifetime — a
+multi-day review window, for instance — do not run `--release` as the last
+step. Run `--reaffirm <token>` instead: it re-applies the `in-progress` label
+and posts a claim comment exactly as a fresh claim would, except that it
+asserts the claim is staying rather than asking whether it is free, and it
+refuses to overwrite a claim a different token already holds. A step that
+actually runs is what makes the promise true; a sentence describing what will
+not happen is not.
+
 **This applies to every workflow, not just backlog grooming.** It used to live
 in one agent skill, which is why the sessions doing the work — running an
 ordinary change, a build, a fix — had never been told about it. That is the same
@@ -228,6 +244,25 @@ only.
 - Link the issue the PR resolves (`Closes #N`) and describe what changed and why.
 - Mark a PR **ready** (not draft) when it is meant to merge.
 - Behavior changes ship **with tests**. Don't reduce coverage to make CI pass.
+
+### Read your own diff for the fail-open shape
+
+`biffo-workflow`'s Step 4.5 ("read your own diff before you open the PR") asks
+whether the _justification_ was checked. This is its sibling, for a question
+Step 4.5 does not ask:
+
+> **If this reported success, or reported zero, because it could not see its
+> input — would anything look different?**
+
+For any change that reports a count, a status, or an exit code: name what a
+real failure would look like, and confirm it is distinguishable from the empty
+case.
+
+This paragraph is a pre-registered, falsifiable experiment
+(`docs/practices/experiments/H7-fail-open-authoring-gate.md`, issue #1083),
+not an assumed-effective rule. If the review at that experiment's review date
+finds it did not move the metric, this paragraph comes back out rather than
+accumulating.
 
 ### Fixing a bug: reproduce the actual failure, not a theory of it
 

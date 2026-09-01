@@ -1399,9 +1399,51 @@ if [ -f scripts/biffo.sh ]; then
   run_check plugin-tf sh scripts/biffo.sh check plugin-terraform
   run_check plugin-names sh scripts/biffo.sh check plugin-collisions
   run_check adr-numbering sh scripts/biffo.sh check adr-numbering
+  # The rest of #1363's five-guard baseline plus everything wired onto the
+  # same dispatcher since -- all offline, all sub-second here (biffo-template
+  # #1773), and all invisible to the parity test's kind-based comparison
+  # because `kindOf()` has no case for `check <name>` beyond the three above.
+  # `core-direct-paths` and `orphan-ratchet` run in their SELF-CHECK mode
+  # (no --instance-dir), which by construction can only ever report zero --
+  # see each command's own --help. That is exactly what CI runs too, so
+  # mirroring it here is still correct parity even though neither can catch
+  # anything in this repo; a real instance checkout is where either earns
+  # its keep.
+  run_check eventbridge-log sh scripts/biffo.sh check eventbridge-log-permissions
+  run_check plugin-tool-supply sh scripts/biffo.sh check plugin-tool-supply
+  run_check core-direct-paths sh scripts/biffo.sh check core-direct-paths
+  run_check orphan-ratchet sh scripts/biffo.sh check orphan-ratchet
+  run_check cognito-invite sh scripts/biffo.sh check cognito-invite-template
+  run_check lambda-output sh scripts/biffo.sh check lambda-output
+  run_check pipe-trap sh scripts/biffo.sh check pipe-trap
+  run_check codeql-suppression sh scripts/biffo.sh check codeql-suppression
+  run_check skeleton-drift sh scripts/biffo.sh check skeleton-drift
+  run_check claim-invocation sh scripts/biffo.sh check claim-invocation
+  run_check terraform-input sh scripts/biffo.sh check terraform-input
+  run_check plugin-allowlist sh scripts/biffo.sh check plugin-allowlist-convention
 else
   skip biffo-guards "no scripts/biffo.sh in this repo"
 fi
+
+# Static workflow/script audits (biffo-template#1773) -- both read the repo's
+# own tree (workflow YAML, script shebangs), need no network, no PR context
+# and no container, and were only ever invisible to the parity test because
+# `kindOf()` has no case for a bare `bash scripts/...` invocation. Measured
+# here: interpreter-audit.sh 1.3s, ci-wiring-audit.sh 0.3s.
+[ -f scripts/interpreter-audit.sh ] && run_check interpreter-audit bash scripts/interpreter-audit.sh
+[ -f scripts/ci-wiring-audit.sh ] && run_check ci-wiring-audit bash scripts/ci-wiring-audit.sh
+
+# Guard self-tests that stub their own dependencies (curl/aws/gh) and need
+# neither network nor a live deployment (biffo-template#1773). Measured here:
+# core-revision-preflight.test.sh 0.2s, verify-deployed.test.sh 0.4s,
+# branch-health-plan-only-detection.test.sh 0.1s -- all well under budget,
+# unlike wait-for-checks-deadline.test.sh and guard-self-test-wiring.sh
+# (EXCLUDED in cli/src/lib/verify-parity.test.ts, with why).
+[ -f scripts/core-revision-preflight.test.sh ] &&
+  run_check core-revision-preflight sh scripts/core-revision-preflight.test.sh
+[ -f scripts/verify-deployed.test.sh ] && run_check verify-deployed sh scripts/verify-deployed.test.sh
+[ -f scripts/branch-health-plan-only-detection.test.sh ] &&
+  run_check branch-health-plan-only sh scripts/branch-health-plan-only-detection.test.sh
 
 # The append-only corpus guard (#778). CI runs it in Release Guards, and it was
 # invisible to the parity test until #897 widened the harvester -- it is neither

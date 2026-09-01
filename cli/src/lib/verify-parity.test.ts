@@ -190,6 +190,36 @@ const EXCLUDED: Record<
     kind: 'container',
     why: "that step spins up a real debian:stable docker container (pulled over the network) to get a genuine dash, because the point of the test is verifying dash-specific behaviour that this repo's own host shell cannot reproduce; not runnable in the local push gate without that container",
   },
+  // 6 of biffo-template#1773's 23 pre-existing uncategorised commands, each
+  // audited individually rather than bulk-excluded. The other 17 turned out
+  // to be fast, offline, static self-checks and are wired into
+  // scripts/verify.sh's gate instead (see that file's "Biffo guards" and the
+  // two blocks after it) -- only these 6 have a real reason they cannot run
+  // in a push gate.
+  'sh scripts/nested-frontend-tests.sh': {
+    kind: 'network',
+    why: 'runs `pnpm install --frozen-lockfile --ignore-workspace` inside _skeletons/sibling-template/apps/frontend before testing it (see the script itself, around its `pnpm install` call) -- the same registry dependency as the root `pnpm install --frozen-lockfile` already excluded above, just against a second, nested lockfile',
+  },
+  'sh scripts/sync-domain-deps.sh': {
+    kind: 'network',
+    why: 'ends in `uv pip install "$@" --constraint "$constraints"` whenever a product domain declares dependencies (ADR-0022) -- a dependency install, not a check, same class as the `uv sync --all-groups --locked` already excluded above; this repo declares no domains so it currently exits before that line, but the command itself is not offline by construction',
+  },
+  'sh scripts/wait-for-checks-deadline.test.sh': {
+    kind: 'slow',
+    why: 'measured 10.8s in this repo on 2026-09-01 -- on its own more than half the ~20s whole-gate budget cited elsewhere in this file, and deliberately so: its own header says every case is `timeout`-bounded because without the fix under test they do not exit at all, so the real minimum is set by how long a deadline the fix itself needs to prove, not by anything this gate controls',
+  },
+  'sh scripts/guard-self-test-wiring.sh': {
+    kind: 'slow',
+    why: 'measured 6.6s in this repo on 2026-09-01, running 8 scripts/*.test.sh files it found with no other CI caller -- and that count only grows: every future guard self-test that gains no explicit workflow line adds its own runtime here, so unlike every other check in this file its duration is not fixed, it is a function of how much of the tree remains unwired',
+  },
+  'sh scripts/biffo.sh check migration-body-change': {
+    kind: 'pr-time',
+    why: 'takes an optional [base] branch defaulting to $GITHUB_BASE_REF (see cli/src/commands/check.ts) and CI calls it with no argument -- the same pr-time shape as `check ownership` and `check release-subject` already excluded above: $GITHUB_BASE_REF does not exist outside a pull_request event',
+  },
+  'node scripts/check-closing-keywords.mjs': {
+    kind: 'pr-time',
+    why: 'reads the PR body/title/commits, live via `gh pr view` when GH_TOKEN+PR_NUMBER+GH_REPO are all set (see fetchPrBodyViaGh/fetchPrTitleViaGh/fetchPrCommitsViaGh in the script) -- there is no PR open against a local push, so this has nothing to read',
+  },
   // `terraform fmt -check -recursive infra/environments/` and
   // `.../infra/global/` are ALSO newly visible after #1668 and are deliberately
   // NOT keyed here: `kindOf()` below maps every `terraform fmt` command to the
@@ -401,7 +431,7 @@ describe('verify.sh mirrors CI', () => {
    * be raised to make a NEW uncategorised command fit.
    */
   it('does not let an unrecognised command hide from the missing-check computation (#1771)', () => {
-    const KNOWN_UNCATEGORISED_DEBT_BASELINE = 23 // biffo-template#1773; lower by hand as each is resolved, never raise
+    const KNOWN_UNCATEGORISED_DEBT_BASELINE = 0 // biffo-template#1773; all 23 resolved -- 17 wired into scripts/verify.sh, 6 keyed into EXCLUDED above. Lower by hand as any future one is resolved, never raise without a new, equally-audited command behind it.
     const gateSet = new Set(gateRuns)
     const uncategorised = ciCheckCommands().filter(
       (cmd) => !(cmd in EXCLUDED) && kindOf(cmd) === '' && !gateSet.has(cmd),

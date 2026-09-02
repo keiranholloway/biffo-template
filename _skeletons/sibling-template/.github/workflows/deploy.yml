@@ -190,9 +190,52 @@ jobs:
           CORE_ROUTE_REVISION_URL: ${{ vars.CORE_PORTAL_URL }}/.well-known/route-revision.json
         run: sh scripts/core-revision-preflight.sh
 
+  # A DIFFERENT dependency from preflight-core-revision above: that job asks
+  # "has core shipped the specific ROUTE my code depends on right now" (a
+  # deploy-ORDERING race, #1604/#903). This asks "is the instance running at
+  # least the core TEMPLATE version my code was written against" — a much
+  # coarser, cheaper signal that does not require core to have published
+  # anything new. It reuses core's existing, already-public /api/v1/health
+  # endpoint (services/api/src/api/routers/health.py), which reports
+  # core_version() baked in at package time. #1605 split this off #903
+  # deliberately: it does NOT address #903's ordering race, only the
+  # separate case of a sibling deploying against a core template that is
+  # simply too old for what the sibling needs.
+  #
+  # Runs in parallel with deploy-infra and preflight-core-revision (all three
+  # depend only on resolve-environment) so it costs no extra wall-clock on a
+  # deploy that passes; deploy-app then needs all three.
+  preflight-core-version:
+    name: Preflight — core template version
+    needs: resolve-environment
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    environment: ${{ needs.resolve-environment.outputs.environment }}
+    if: vars.SIBLING_DEPLOY_ENABLED == 'true'
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - name: Core-version preflight
+        # scripts/core-version-preflight.sh does the actual check; see its
+        # own header for the full reasoning (why NOT biffo.sibling.json's
+        # template_version, why absence fails closed rather than being
+        # treated as satisfied — the #1363 fail-open class, same as
+        # preflight-core-revision above).
+        #
+        # CORE_MIN_TEMPLATE_VERSION is how THIS sibling declares which core
+        # template version its code depends on — set by hand as a
+        # per-environment repo variable, the same way CORE_MIN_ROUTE_REVISION
+        # is set: after merging a core PR your code needs, record the
+        # version /api/v1/health reports for that deploy here. Unset means
+        # "this sibling depends on no specific core template version" and
+        # the check is skipped — the correct default for a sibling that has
+        # never declared a dependency, not a fail-open.
+        env:
+          CORE_MIN_TEMPLATE_VERSION: ${{ vars.CORE_MIN_TEMPLATE_VERSION }}
+          CORE_HEALTH_URL: ${{ vars.CORE_API_URL }}/api/v1/health
+        run: sh scripts/core-version-preflight.sh
+
   deploy-app:
     name: Deploy app
-    needs: [resolve-environment, deploy-infra, preflight-core-revision]
+    needs: [resolve-environment, deploy-infra, preflight-core-revision, preflight-core-version]
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     environment: ${{ needs.resolve-environment.outputs.environment }}
     steps:
@@ -394,7 +437,14 @@ jobs:
   # and "never configured" are different facts and only one of them is a defect:
   deploy-status:
     name: Deploy status
-    needs: [resolve-environment, deploy-infra, preflight-core-revision, deploy-app]
+    needs:
+      [
+        resolve-environment,
+        deploy-infra,
+        preflight-core-revision,
+        preflight-core-version,
+        deploy-app,
+      ]
     if: always()
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     steps:
@@ -403,9 +453,10 @@ jobs:
           ENABLED: ${{ vars.SIBLING_DEPLOY_ENABLED }}
           INFRA: ${{ needs.deploy-infra.result }}
           PREFLIGHT: ${{ needs.preflight-core-revision.result }}
+          VERSION_PREFLIGHT: ${{ needs.preflight-core-version.result }}
           APP: ${{ needs.deploy-app.result }}
         run: |
-          echo "SIBLING_DEPLOY_ENABLED='${ENABLED}'  deploy-infra=${INFRA}  preflight-core-revision=${PREFLIGHT}  deploy-app=${APP}"
+          echo "SIBLING_DEPLOY_ENABLED='${ENABLED}'  deploy-infra=${INFRA}  preflight-core-revision=${PREFLIGHT}  preflight-core-version=${VERSION_PREFLIGHT}  deploy-app=${APP}"
 
           if [ "${ENABLED}" = "false" ]; then
             echo "::notice::Deploys are deliberately disabled for this repo (SIBLING_DEPLOY_ENABLED=false). Nothing was deployed, by choice."
@@ -418,14 +469,15 @@ jobs:
           fi
 
           # A real failure already makes the run red for the right reason, and
-          # `deploy-app` needs `deploy-infra` AND `preflight-core-revision` —
-          # so a failed infra job or a preflight that blocked a stale sibling
-          # SKIPS the app job. Reporting that skip as "deployed nothing" would
-          # bury the actual cause (visible on the failed job itself, e.g.
-          # core-revision-preflight.sh's own ::error:: naming the required
-          # and actual revisions, #1604) under a second, vaguer error. Defer
-          # to the real one.
-          case "${INFRA}:${PREFLIGHT}:${APP}" in
+          # `deploy-app` needs `deploy-infra`, `preflight-core-revision` AND
+          # `preflight-core-version` — so a failed infra job or either
+          # preflight that blocked a stale sibling SKIPS the app job.
+          # Reporting that skip as "deployed nothing" would bury the actual
+          # cause (visible on the failed job itself, e.g.
+          # core-revision-preflight.sh's or core-version-preflight.sh's own
+          # ::error:: naming the required and actual values, #1604/#1605)
+          # under a second, vaguer error. Defer to the real one.
+          case "${INFRA}:${PREFLIGHT}:${VERSION_PREFLIGHT}:${APP}" in
             *failure*|*cancelled*)
               echo "A deploy job failed or was cancelled; that failure is the run's result. Not adding a second error."
               exit 0
@@ -434,7 +486,7 @@ jobs:
 
           # Enabled — the jobs were meant to run. 'skipped' here means a gate
           # upstream of them suppressed the work while the run still went green.
-          for pair in "deploy-infra:${INFRA}" "preflight-core-revision:${PREFLIGHT}" "deploy-app:${APP}"; do
+          for pair in "deploy-infra:${INFRA}" "preflight-core-revision:${PREFLIGHT}" "preflight-core-version:${VERSION_PREFLIGHT}" "deploy-app:${APP}"; do
             job="${pair%%:*}"
             result="${pair#*:}"
             if [ "${result}" = "skipped" ]; then
@@ -443,4 +495,4 @@ jobs:
             fi
           done
 
-          echo "Deploy jobs ran (infra=${INFRA}, preflight=${PREFLIGHT}, app=${APP})."
+          echo "Deploy jobs ran (infra=${INFRA}, preflight=${PREFLIGHT}, version-preflight=${VERSION_PREFLIGHT}, app=${APP})."

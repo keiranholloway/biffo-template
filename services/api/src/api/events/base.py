@@ -2,7 +2,6 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-import boto3
 from aws_lambda_powertools import Logger
 from pydantic import BaseModel, Field
 
@@ -68,6 +67,8 @@ class BiffoEvent(BaseModel):
 
 class EventPublisher:
     def __init__(self) -> None:
+        import boto3
+
         self._client = boto3.client("events")
 
     def publish(self, event: BiffoEvent) -> PublishOutcome:

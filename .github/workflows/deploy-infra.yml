@@ -362,25 +362,36 @@ jobs:
 
       # Restore the plan-time `.build/` directory, if the plan produced one
       # (#1663) -- the upload is in plan-dev, right after the tfplan upload.
-      # `if-no-artifact-found: ignore` mirrors that upload's
-      # `if-no-files-found: ignore`: no artifact means the plan's Terraform
-      # has no archive_file, which is the common case, not an error.
+      # No artifact means the plan's Terraform has no archive_file, which is
+      # the common case, not an error -- but `download-artifact@v5`'s actual
+      # input schema (name, artifact-ids, path, pattern, merge-multiple,
+      # github-token, repository, run-id -- confirmed against the action's own
+      # action.yml) has no ignore-if-missing input at all. An earlier version
+      # of this step set `if-no-artifact-found: ignore`, which the action
+      # silently drops as unrecognised and then hard-fails on the missing
+      # artifact anyway (biffo-template#1858). `continue-on-error: true` is
+      # what actually tolerates a missing optional artifact on this action
+      # version: the step is allowed to fail without failing the job, and
+      # nothing downstream depends on this download having succeeded.
       - uses: actions/download-artifact@v5
+        continue-on-error: true
         with:
           name: tfbuild-dev
           path: infra/environments/dev/.build
-          if-no-artifact-found: ignore
 
       # Restore any OTHER plan-time build artifacts the general collector
       # found (#1663 general case, biffo-template#1772) -- see the matching
       # step in plan-dev. The upload there is conditional, so a missing
       # artifact here just means the plan had no archive_file outside
-      # .build/ at all, not a failure.
+      # .build/ at all, not a failure. See the `.build/` download above
+      # (biffo-template#1858) for why this is `continue-on-error: true`
+      # rather than an `if-no-artifact-found` input the action doesn't have;
+      # the following step's own `[ -f ... ]` check handles either outcome.
       - uses: actions/download-artifact@v5
+        continue-on-error: true
         with:
           name: tfbuild-extra-dev
           path: ${{ runner.temp }}
-          if-no-artifact-found: ignore
       - name: Restore other plan-time build artifacts
         run: |
           if [ -f "${{ runner.temp }}/tfbuild-extra-dev.tar.gz" ]; then
@@ -635,20 +646,21 @@ jobs:
           path: infra/environments/staging
 
       # Restore the plan-time `.build/` directory, if the plan produced one
-      # (#1663) -- see the matching comment in apply-dev. `if-no-artifact-found:
-      # ignore` mirrors the upload's `if-no-files-found: ignore`.
+      # (#1663) -- see the matching comment in apply-dev
+      # (biffo-template#1858) for why this is `continue-on-error: true`
+      # rather than an `if-no-artifact-found` input the action doesn't have.
       - uses: actions/download-artifact@v5
+        continue-on-error: true
         with:
           name: tfbuild-staging
           path: infra/environments/staging/.build
-          if-no-artifact-found: ignore
 
       # See the matching comment in apply-dev.
       - uses: actions/download-artifact@v5
+        continue-on-error: true
         with:
           name: tfbuild-extra-staging
           path: ${{ runner.temp }}
-          if-no-artifact-found: ignore
       - name: Restore other plan-time build artifacts
         run: |
           if [ -f "${{ runner.temp }}/tfbuild-extra-staging.tar.gz" ]; then
@@ -906,20 +918,21 @@ jobs:
           path: infra/environments/prod
 
       # Restore the plan-time `.build/` directory, if the plan produced one
-      # (#1663) -- see the matching comment in apply-dev. `if-no-artifact-found:
-      # ignore` mirrors the upload's `if-no-files-found: ignore`.
+      # (#1663) -- see the matching comment in apply-dev
+      # (biffo-template#1858) for why this is `continue-on-error: true`
+      # rather than an `if-no-artifact-found` input the action doesn't have.
       - uses: actions/download-artifact@v5
+        continue-on-error: true
         with:
           name: tfbuild-prod
           path: infra/environments/prod/.build
-          if-no-artifact-found: ignore
 
       # See the matching comment in apply-dev.
       - uses: actions/download-artifact@v5
+        continue-on-error: true
         with:
           name: tfbuild-extra-prod
           path: ${{ runner.temp }}
-          if-no-artifact-found: ignore
       - name: Restore other plan-time build artifacts
         run: |
           if [ -f "${{ runner.temp }}/tfbuild-extra-prod.tar.gz" ]; then

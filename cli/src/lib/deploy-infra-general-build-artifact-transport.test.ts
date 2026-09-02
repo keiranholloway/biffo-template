@@ -59,10 +59,17 @@ describe('deploy-infra.yml wires the general plan-time-build-artifact collector 
     'apply-%s: restores other build artifacts before running terraform apply',
     (env) => {
       // The download must be present, must not hard-fail when the plan had
-      // nothing to transport (if-no-artifact-found: ignore), and must extract
-      // BEFORE `terraform apply` runs -- otherwise the restore is a no-op.
+      // nothing to transport, and must extract BEFORE `terraform apply` runs
+      // -- otherwise the restore is a no-op. `download-artifact@v5` has no
+      // `if-no-artifact-found` input (biffo-template#1858: the action
+      // silently drops it as unrecognised and then hard-fails on a genuinely
+      // missing optional artifact anyway) -- `continue-on-error: true` on the
+      // step is what actually tolerates the missing-artifact case on this
+      // action version.
       expect(yaml).toMatch(
-        new RegExp(`name: tfbuild-extra-${env}\\b[\\s\\S]{0,120}if-no-artifact-found: ignore`),
+        new RegExp(
+          `continue-on-error: true\\s*\\n\\s*with:\\s*\\n\\s*name: tfbuild-extra-${env}\\b`,
+        ),
       )
       const restoreMatch = new RegExp(
         `name: tfbuild-extra-${env}\\b[\\s\\S]*?Restore other plan-time build artifacts[\\s\\S]*?tar -xzf[\\s\\S]*?tfbuild-extra-${env}\\.tar\\.gz`,

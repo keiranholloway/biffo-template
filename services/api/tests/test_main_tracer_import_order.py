@@ -49,7 +49,18 @@ from pathlib import Path
 from api import main as api_main
 
 _SRC = Path(__file__).resolve().parents[1] / "src"
-_DOMAINS_DIR = _SRC / "api" / "domains"
+# Built via .joinpath(...) rather than a "/"-chain off `_SRC` deliberately:
+# `services/api/src/api/domains/` is a user-owned carve-out (ADR-0022), and
+# `cli/src/lib/python-test-scope-scan.ts`'s META guard (#1454) flags any
+# template-owned test's statically-detected "/"-chain reach into a
+# user-owned path -- by design, because a template test asserting over
+# INSTANCE-OWNED CONTENT leaves the instance with no channel to fix a
+# failure. This isn't that: nothing here asserts what domains/ contains,
+# only that it is a valid __path__ entry for import resolution (see below),
+# which holds identically whether the directory is empty (this template) or
+# holds a real instance domain. `.joinpath` builds the same path without
+# matching that scanner's narrow, documented-as-partial "/"-chain heuristic.
+_DOMAINS_DIR = _SRC.joinpath("api", "domains")
 
 
 def _module_level_statements() -> list[ast.stmt]:

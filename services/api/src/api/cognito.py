@@ -23,9 +23,7 @@ import secrets
 import string
 from typing import Any
 
-import boto3
 from aws_lambda_powertools import Logger
-from botocore.exceptions import ClientError
 
 from .config import settings
 
@@ -189,9 +187,14 @@ class CognitoAdmin:
         region: str | None = None,
     ) -> None:
         self._pool_id = user_pool_id if user_pool_id is not None else settings.cognito_user_pool_id
-        self._client = client or boto3.client(
-            "cognito-idp", region_name=region or settings.cognito_region
-        )
+        if client is not None:
+            self._client = client
+        else:
+            import boto3
+
+            self._client = boto3.client(
+                "cognito-idp", region_name=region or settings.cognito_region
+            )
 
     def _call(
         self, op: str, *, redact: list[str | None] | None = None, **kwargs: Any
@@ -208,6 +211,8 @@ class CognitoAdmin:
         in the first place, only `op`/`code`, so no separate redaction is
         needed there.
         """
+        from botocore.exceptions import ClientError
+
         kwargs["UserPoolId"] = self._pool_id
         try:
             return getattr(self._client, op)(**kwargs)

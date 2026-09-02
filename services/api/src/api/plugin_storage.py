@@ -54,9 +54,6 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
-import boto3
-from botocore.exceptions import ClientError
-
 from .config import settings
 
 #: The one prefix this capability owns. The IAM grant in
@@ -113,6 +110,8 @@ def _s3() -> Any:
     """
     global _client
     if _client is None:
+        import boto3
+
         _client = boto3.client("s3")
     return _client
 
@@ -210,6 +209,8 @@ def head(key: str) -> StoredObject | None:
     here means the IAM grant is wrong, and swallowing it would turn a
     misconfiguration into an indistinguishable "not uploaded".
     """
+    from botocore.exceptions import ClientError
+
     try:
         meta = _s3().head_object(Bucket=_bucket(), Key=key)
     except ClientError as exc:

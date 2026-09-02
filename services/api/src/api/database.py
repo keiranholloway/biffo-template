@@ -1,7 +1,6 @@
 import json
 from collections.abc import AsyncGenerator
 
-import boto3
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
@@ -10,6 +9,8 @@ from .config import settings
 
 
 def _fetch_secret(secret_arn: str) -> dict:
+    import boto3
+
     client = boto3.client("secretsmanager")
     return json.loads(client.get_secret_value(SecretId=secret_arn)["SecretString"])
 

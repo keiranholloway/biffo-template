@@ -49,6 +49,7 @@ from pathlib import Path
 from api import main as api_main
 
 _SRC = Path(__file__).resolve().parents[1] / "src"
+_DOMAINS_DIR = _SRC / "api" / "domains"
 
 
 def _module_level_statements() -> list[ast.stmt]:
@@ -104,8 +105,17 @@ def test_tracer_is_constructed_after_every_include_router_call() -> None:
 
 
 # The probe run in a fresh subprocess, below. Pre-registers a synthetic
-# instance product domain in sys.modules (the base template ships no
-# services/api/src/api/domains/ tree to import for real) and wraps
+# instance product domain in sys.modules -- the base template's own
+# services/api/src/api/domains/ tree is real but empty (no subpackages), so
+# _discover_domain_names() is monkeypatched below to report one anyway.
+# `domains_pkg.__path__` is pointed at that real, on-disk directory rather
+# than `[]`: Python's import system checks `sys.modules` for the full dotted
+# name *before* ever walking `__path__` (`_find_and_load` returns a cached
+# module immediately), so the pre-registered `api.domains._probe` still
+# resolves from the cache regardless of what `__path__` contains -- while an
+# instance whose real `api.domains.<name>` package sits on disk (unlike this
+# template's empty one) can still be found via that same `__path__` if
+# anything other than the probe ever imports it. `domains_pkg` still wraps
 # build_domain_router so it records whether `aws_xray_sdk.core` is already
 # resident in sys.modules the moment it is called -- before importing
 # api.main runs any further module-level code, including wherever `tracer`
@@ -120,7 +130,7 @@ _PROBE = textwrap.dedent(
     import api.routing.domain_router as domain_router
 
     domains_pkg = types.ModuleType("api.domains")
-    domains_pkg.__path__ = []
+    domains_pkg.__path__ = [{domains_dir!r}]
     probe_mod = types.ModuleType("api.domains._probe")
     probe_mod.routers = []
     sys.modules["api.domains"] = domains_pkg
@@ -158,7 +168,7 @@ _PROBE = textwrap.dedent(
 
 
 def _run_probe(*, simulate_bug: bool) -> tuple[bool, bool]:
-    script = _PROBE.format(src=str(_SRC), simulate_bug=simulate_bug)
+    script = _PROBE.format(src=str(_SRC), domains_dir=str(_DOMAINS_DIR), simulate_bug=simulate_bug)
     result = subprocess.run(  # noqa: S603
         [sys.executable, "-c", script],
         capture_output=True,

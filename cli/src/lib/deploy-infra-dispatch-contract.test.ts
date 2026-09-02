@@ -199,11 +199,19 @@ describe('deploy-infra.yml dispatch contract (#1582, #1701)', () => {
       'the run-name plan-only marker (#1678) belongs to a state this workflow ' +
         'can no longer reach; if it is back, so is the ambiguity it marked',
     ).toBe(false)
-    // The #1582 mitigation that could not work: a job that notices and reports,
-    // marked `continue-on-error: true` so it cannot affect the run's conclusion.
+    // The #1582 mitigation that could not work: a JOB that notices and
+    // reports, marked `continue-on-error: true` so it cannot affect the
+    // run's conclusion. A job-level `continue-on-error` sits at the same
+    // 4-space indent as that job's own `runs-on:`/`steps:` keys, which is
+    // what distinguishes it from a `continue-on-error: true` on an
+    // individual STEP (biffo-template#1858: tolerating one optional
+    // `download-artifact@v5` step that has no working ignore-if-missing
+    // input of its own) -- a step failure there does not touch the job's
+    // conclusion the way a masked job's did, so it is not the #1582 shape
+    // and must not be flagged by this check.
     const masked = code(infra)
       .split('\n')
-      .filter((l) => /^\s*continue-on-error:\s*true\s*$/.test(l))
+      .filter((l) => /^ {4}continue-on-error:\s*true\s*$/.test(l))
     expect(
       masked,
       'a `continue-on-error: true` job cannot change the run conclusion, which ' +

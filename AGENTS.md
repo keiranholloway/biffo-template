@@ -245,6 +245,23 @@ only.
 - Mark a PR **ready** (not draft) when it is meant to merge.
 - Behavior changes ship **with tests**. Don't reduce coverage to make CI pass.
 
+### Never write a negated closing keyword
+
+GitHub's merge-linker has no concept of negation. A PR body or commit message
+reading "does not close #N" or "this does NOT close #N" still closes #N on
+merge — the linker matches the keyword and the reference, and stops reading
+right there. Writing the negation more emphatically does not help; it has
+recurred at least four times across this estate with the sentence spelled out
+in full, in good faith, immediately before the close still fired.
+
+If a PR must reference an issue without closing it — the common case for
+DB/infra/deploy-only work where correctness can only be confirmed once
+deployed and observed, not at merge time — write `Refs #N` (or "leaves #N
+open") and never place any closing keyword (`closes`, `fixes`, `resolves`,
+etc.) anywhere near the issue reference, negated or not. A guard in CI checks
+for exactly this shape on deploy-only paths, but do not rely on it to catch
+what a differently-phrased sentence could have avoided in the first place.
+
 ### Read your own diff for the fail-open shape
 
 `biffo-workflow`'s Step 4.5 ("read your own diff before you open the PR") asks

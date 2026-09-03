@@ -112,3 +112,102 @@ describe('scripts/biffo.sh version resolution (#667)', () => {
     expect(() => run()).toThrow(/carries no readable version/)
   })
 })
+
+/**
+ * `claim` never depends on `cli/`'s TypeScript toolchain (biffo-fleet#1231).
+ *
+ * `scripts/biffo.sh` used to `exec` straight into `cli/node_modules/.bin/tsx`
+ * with no existence check, for every subcommand including `claim` — even
+ * though `claim` (`cli/src/commands/claim.ts`) is a pure passthrough to the
+ * dependency-free `scripts/claim.sh`. In a worktree where `pnpm install`
+ * never completed in `cli/`, that `exec` hit a missing binary and exited 127
+ * with no reconciling action: the caller saw "not found" and the claim/label
+ * was left stale, silently blocking re-dispatch of the same issue. Five
+ * confirmed instances since 2026-08-31, one costing ~1.25M tokens for zero
+ * progress.
+ *
+ * The fix dispatches `claim` straight to `scripts/claim.sh`, unconditionally,
+ * before biffo.sh ever looks at `cli/` — so releasing (or claiming, or
+ * reaffirming) an issue can no longer depend on that toolchain at all.
+ */
+describe('scripts/biffo.sh: claim bypasses the tsx toolchain entirely (biffo-fleet#1231)', () => {
+  let repo: string
+
+  beforeEach(() => {
+    repo = makeTmpDir('biffo-sh-claim')
+    execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: repo })
+    execFileSync('mkdir', ['-p', join(repo, 'scripts')])
+  })
+  afterEach(() => {
+    rmSync(repo, { recursive: true, force: true })
+  })
+
+  function writeClaimStub(body: string): void {
+    writeFileSync(join(repo, 'scripts', 'claim.sh'), body, { mode: 0o755 })
+  }
+
+  function run(args: string[]): { code: number; out: string } {
+    try {
+      const out = execFileSync('sh', [SCRIPT, ...args], { cwd: repo, encoding: 'utf8' })
+      return { code: 0, out }
+    } catch (e) {
+      const err = e as { status: number; stdout: string; stderr: string }
+      return { code: err.status, out: (err.stdout ?? '') + (err.stderr ?? '') }
+    }
+  }
+
+  it("reaches claim.sh directly when cli/ does not exist at all -- today's exact failure shape, fixed", () => {
+    // No `cli/` directory whatsoever -- the worst case (#1231's actual
+    // shape: `pnpm install` never ran in `cli/`, so neither the directory
+    // nor tsx exist). Before this fix, biffo.sh's final line would `exec`
+    // a nonexistent tsx binary and exit 127 having never reached claim.sh.
+    writeClaimStub('#!/usr/bin/env sh\necho "claim.sh ran: $*"\nexit 0\n')
+
+    const { code, out } = run(['claim', '1234', '--release', 'sometoken'])
+
+    expect(code).toBe(0)
+    expect(out).toContain('claim.sh ran: 1234 --release sometoken')
+  })
+
+  it('reaches claim.sh directly even with a cli/ directory present but no tsx built', () => {
+    // The more common real shape: `cli/` exists (this IS the template
+    // checkout) but `pnpm install` never completed inside it, so
+    // `cli/node_modules/.bin/tsx` is missing. Before the fix this hit the
+    // final `exec "$root/cli/node_modules/.bin/tsx" ...` line and failed
+    // with exit 127 and no reconciling action.
+    execFileSync('mkdir', ['-p', join(repo, 'cli')])
+    writeClaimStub('#!/usr/bin/env sh\necho "claim.sh ran: $*"\nexit 0\n')
+
+    const { code, out } = run(['claim', '999', '--as', 'tok-0903-abcd'])
+
+    expect(code).toBe(0)
+    expect(out).toContain('claim.sh ran: 999 --as tok-0903-abcd')
+  })
+
+  it("passes claim.sh's exit code straight through (2 = cannot tell, never flattened)", () => {
+    writeClaimStub('#!/usr/bin/env sh\nexit 2\n')
+
+    const { code } = run(['claim', '1234', '--release', 'sometoken'])
+
+    expect(code).toBe(2)
+  })
+
+  it('does not intercept other subcommands -- only claim bypasses tsx', () => {
+    // No claim.sh stub here on purpose: this proves the guard is scoped to
+    // the literal `claim` subcommand, not every invocation of biffo.sh.
+    const binDir = makeTmpDir('biffo-sh-claim-npx')
+    const npx = join(binDir, 'npx')
+    writeFileSync(npx, '#!/usr/bin/env sh\necho "NPX $*"\n', { mode: 0o755 })
+    writeFileSync(join(repo, '.biffo-shared-version'), 'core-v1.2.3\n')
+
+    const out = execFileSync('sh', [SCRIPT, 'wait-for-checks', '42'], {
+      cwd: repo,
+      encoding: 'utf8',
+      env: { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ''}` },
+    })
+    rmSync(binDir, { recursive: true, force: true })
+
+    expect(out).toContain('NPX')
+    expect(out).toContain('wait-for-checks')
+  })
+})

@@ -642,6 +642,91 @@ claim_select_expr() {
     "$_n" "$_slug" "$_n" "$_n"
 }
 
+# --- continuity-language guard for --release (biffo-fleet#1232) -------------
+#
+# `--reaffirm` (above) gives a session the right TOOL for "this PR promises
+# the claim stays alive past this session" -- but nothing stopped the WRONG
+# one, ordinary `--release`, from running anyway. PR #1848 said, in its own
+# body and in a same-session comment on the issue it referenced, that it
+# would not touch that issue's claim -- then the same session's routine
+# end-of-session `--release` fired 21 seconds later and cleared it, exactly
+# the "written promise vs. actual mechanism disagree" shape AGENTS.md's own
+# `--guard` was built to close for the branch/PR half of collision
+# prevention. This is that fix's sibling for release.
+#
+# It is necessarily a DETECT-tier guard (level 4, not higher): whether a PR
+# or comment PROMISES continuity is a fact about free text, not a structural
+# fact `gh` can hand back the way `closingIssuesReferences` can. So it
+# pattern-matches a small set of phrases drawn from the one real corpus this
+# estate has for it -- PR #1848's own body, and the comment posted on #1083
+# quoted in biffo-fleet#1232 -- rather than inventing hypothetical wording.
+#
+# Deliberately errs toward FALSE positives, not false negatives: blocking an
+# ordinary release that turns out to be fine costs one manual override
+# (documented in the refusal message, same shape as the "genuinely stale
+# claim" carve-out already below); missing a real continuity promise
+# reproduces the exact bug this guard exists to close. A guard that only
+# recognised PR #1848's literal wording would be exactly the "fixed the
+# sentence, not the class" failure this estate has already paid for
+# (biffo-fleet#711) -- so this matches the SHAPE of a continuity claim
+# (claim/label + stays/remains/not-touched/reaffirm), not its exact words.
+#
+# GitHub markdown wraps PR/issue bodies at ~80 columns, and the one real
+# instance of this phrase ("...under the Foreman's existing claim throughout
+# the review window; nothing here touches that label or that claim.") spans
+# three wrapped lines. A per-line grep would never see "touches" and "claim"
+# on the same line, so the text is whitespace-collapsed before matching --
+# deliberately, unlike the closing-keyword parser's cross-newline match
+# AGENTS.md warns about, because collapsing here only widens what gets
+# BLOCKED (safe direction: the escape hatch is a manual override, not an
+# action taken on the estate), not what gets closed or released.
+CONTINUITY_RE='(stays?|remains?) claimed|reaffirm|under the [^.]*claim|nothing[^.]*touch[^.]*(claim|label)|not[^.]*(touch|release)[^.]*(claim|label)|nothing[^.]*claim[^.]*touch'
+
+# claim_continuity_promise <issue> -- tri-state: does an OPEN PR referencing
+# $1 (via `claim_select_expr`'s same three signals: closes, branch name, or
+# `Refs #N`), or $1's OWN issue comments, contain continuity language?
+#
+#   0  a continuity promise was found -- refuse the release
+#   1  none found -- reads succeeded, nothing matched
+#   2  cannot tell -- a read itself failed
+#
+# Requires BOTH reads to succeed before returning 1 ("none found"), same
+# fail-closed shape as `claim_held_by`: a read failure that happened to hide
+# a real promise must never be indistinguishable from "checked, and it's
+# clear".
+#
+# Note for the ONE call site this has today (the `--release` block below):
+# the comment read here is the identical `gh issue view --json comments`
+# call `claim_held_by` already made, in the same process, just above it --
+# so a genuinely unreadable comment list is caught there first, and this
+# function's own comment-failure branch is unreachable through that path.
+# It stays, fail-closed, for any future caller that does not check
+# `claim_held_by` first.
+claim_continuity_promise() {
+  _cp_issue="$1"
+  _cp_slug=$(repo_slug)
+  _cp_select=$(claim_select_expr "$_cp_issue" "$_cp_slug")
+
+  _cp_pr_bodies=$(gh_pr list --state open --limit 100 \
+    --json number,headRefName,closingIssuesReferences,body \
+    --jq "[.[] | select($_cp_select)] | .[].body // \"\"" 2>/dev/null)
+  _cp_pr_status=$?
+
+  _cp_issue_comments=$(gh_issue view "$_cp_issue" --json comments \
+    --jq '[.comments[]?.body // ""] | join("\n---\n")' 2>/dev/null)
+  _cp_comment_status=$?
+
+  if [ "$_cp_pr_status" -ne 0 ] || [ "$_cp_comment_status" -ne 0 ]; then
+    return 2
+  fi
+
+  _cp_text=$(printf '%s\n%s' "$_cp_pr_bodies" "$_cp_issue_comments" | tr '\n' ' ')
+  if printf '%s' "$_cp_text" | grep -Eiq "$CONTINUITY_RE"; then
+    return 0
+  fi
+  return 1
+}
+
 LABEL=in-progress
 
 # --- holder identity (#1279) -------------------------------------------------
@@ -756,6 +841,31 @@ if [ -n "$RELEASE" ]; then
   claim_held_by "$ISSUE" "$HOLDER"
   _held_status=$?
   if [ "$_held_status" -eq 0 ]; then
+    # Structural continuity check (biffo-fleet#1232) -- runs AFTER ownership
+    # is confirmed (a mismatched holder is refused below regardless) and
+    # BEFORE the label is actually removed, so an ordinary --release cannot
+    # silently contradict a promise an open PR or this issue's own comments
+    # have made about staying claimed. See claim_continuity_promise above.
+    claim_continuity_promise "$ISSUE"
+    _cp_status=$?
+    if [ "$_cp_status" -eq 0 ]; then
+      echo "${RED}claim: refusing to release #$ISSUE${OFF} — an open PR referencing it, or a" >&2
+      echo "${RED}  comment on it, says the claim stays alive past this session.${OFF}" >&2
+      echo "${DIM}  AGENTS.md §1: a PR that promises an issue stays claimed must REAFFIRM it,${OFF}" >&2
+      echo "${DIM}  not just say so. If that promise still holds, run:${OFF}" >&2
+      echo "${DIM}    sh scripts/biffo.sh claim $ISSUE --reaffirm $HOLDER${OFF}" >&2
+      echo "${DIM}  If it has genuinely resolved (review window over, work finished), clear${OFF}" >&2
+      echo "${DIM}  the label by hand and say so in a comment, rather than through --release:${OFF}" >&2
+      echo "${DIM}    gh issue edit $ISSUE --remove-label $LABEL${OFF}" >&2
+      exit 1
+    fi
+    if [ "$_cp_status" -eq 2 ]; then
+      echo "${RED}claim: cannot tell whether #$ISSUE carries a continuity promise${OFF} — the" >&2
+      echo "${RED}  referencing PR list or the issue's comments were unreadable.${OFF}" >&2
+      echo "${DIM}  Not releasing on an unreadable read: that could clear a claim meant to${OFF}" >&2
+      echo "${DIM}  stay held. Retry once gh/network is working.${OFF}" >&2
+      exit 2
+    fi
     gh_issue edit "$ISSUE" --remove-label "$LABEL" >/dev/null 2>&1 || {
       echo "${RED}claim: could not remove the '$LABEL' label.${OFF}" >&2
       exit 2

@@ -1,7 +1,9 @@
-import { mkdirSync, readdirSync, rmSync, statSync } from 'node:fs'
+import { mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { defineConfig } from 'vitest/config'
+import { RUN_DIR_ENV } from './src/test-utils/scratch-root-global-teardown.js'
+import { sweepScratchRoot } from './src/test-utils/scratch-root.js'
 
 /**
  * Every temp directory this run creates — including ones made by the shell
@@ -37,28 +39,46 @@ import { defineConfig } from 'vitest/config'
  * cooperation from the dying process, because the next run reclaims whatever
  * was left behind.
  *
- * The stale cutoff is deliberately hours, not minutes: several worktrees run
- * this suite concurrently, and a cutoff shorter than a run would let one run
- * delete another's fixtures mid-test. A run takes ~15s, so this is four orders
- * of magnitude of headroom.
+ * ## Why age alone stopped being enough (#1864)
+ *
+ * `STALE_MS` used to be the *only* signal a `run-*` directory was safe to
+ * remove, at a flat 2 hours: "several worktrees run this suite concurrently,
+ * and a cutoff shorter than a run would let one run delete another's
+ * fixtures mid-test." That reasoning is still correct for a run that never
+ * reaches its own teardown (killed, interrupted) — nothing else can ever
+ * tell the sweep such a run is done, so age stays its only signal and
+ * `STALE_MS` stays unchanged for it.
+ *
+ * It stops being enough once invocations arrive faster than the window: 15
+ * separate `vitest` runs landed inside one 2-hour span on 2026-09-02, so
+ * nothing was ever old enough to sweep and 247,128 files piled up across 15
+ * `run-*` dirs — 14 of which had already finished; only the newest still had
+ * a live process. Age cannot distinguish "finished 90 minutes ago" from
+ * "started 90 minutes ago and still running" without a window comfortably
+ * longer than any real run, and that same window is what let 14 *finished*
+ * runs sit unreclaimed.
+ *
+ * The fix is a second, *positive* signal a normal exit can leave behind that
+ * a killed process cannot: `markRunComplete` (wired below via `globalSetup`)
+ * writes a marker into this run's directory once every test file has
+ * finished, and `sweepScratchRoot` removes a marked directory immediately,
+ * regardless of age. A well-behaved run is now reclaimed on the very next
+ * invocation no matter how tightly packed invocations are; a killed run
+ * falls back to exactly the age-gated removal this file has always done. See
+ * `test-utils/scratch-root.ts`'s doc comment for the full reasoning and unit
+ * tests.
  */
 const TMP_ROOT = join(tmpdir(), 'biffo-tests')
 const STALE_MS = 2 * 60 * 60 * 1000
 
 mkdirSync(TMP_ROOT, { recursive: true })
-for (const entry of readdirSync(TMP_ROOT)) {
-  const dir = join(TMP_ROOT, entry)
-  try {
-    if (Date.now() - statSync(dir).mtimeMs > STALE_MS) rmSync(dir, { recursive: true, force: true })
-  } catch {
-    // A concurrent run swept it first, which is the intended outcome, not an
-    // error. Failing the whole suite because cleanup raced would trade a
-    // resource leak for a flaky gate.
-  }
-}
+sweepScratchRoot(TMP_ROOT, STALE_MS)
 
 const runDir = join(TMP_ROOT, `run-${process.pid}-${Date.now()}`)
 mkdirSync(runDir, { recursive: true })
+// Read back by scratch-root-global-teardown.ts's `teardown`, in the same
+// main-thread process, once this run's test files have all finished.
+process.env[RUN_DIR_ENV] = runDir
 
 export default defineConfig({
   test: {
@@ -66,6 +86,10 @@ export default defineConfig({
     environment: 'node',
     include: ['src/**/*.test.ts'],
     setupFiles: ['src/test-setup.ts'],
+    // Fires once, after every test file in this run has finished -- see this
+    // file's "Why age alone stopped being enough" comment above and
+    // scratch-root-global-teardown.ts for what it does (#1864).
+    globalSetup: ['src/test-utils/scratch-root-global-teardown.ts'],
     // Vitest's 5s default is sized for in-process unit tests. This suite is
     // dominated by tests that shell out -- `git init`, `git clone`, a real
     // `shared-sync` round, `verify.sh` against a fixture repo -- and since

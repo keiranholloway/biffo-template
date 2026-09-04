@@ -13,9 +13,17 @@ locals {
 }
 
 resource "random_password" "db_password" {
+  # Deliberately excludes '%' (and '/', '@', which were never in the set):
+  # this is the RDS master password, interpolated into the asyncpg URL below
+  # (db_url output) and into services/api/src/api/database.py's
+  # _url_from_secret. A literal '%' is ambiguous with percent-encoding when
+  # that URL is parsed back apart, corrupting the password SQLAlchemy's
+  # make_url hands to asyncpg — every unauthenticated route depends on this
+  # connection, so a corrupted password 500s all of them (#1888). Same
+  # defect, same fix as random_password.app_password below (#187 upstream).
   length           = 32
   special          = true
-  override_special = "!#$%&*()-_=+[]{}<>:?"
+  override_special = "!#$&*()-_=+[]{}<>:?"
 }
 
 # ---------------------------------------------------------------------------

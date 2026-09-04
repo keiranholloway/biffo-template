@@ -55,6 +55,20 @@
  * it is — it proves the CLI path on every PR — but it is no longer the only
  * caller this command has.
  *
+ * A second, later verdict on #1714 (2026-09-04) found that neither of those
+ * two callers blocks the PR that actually CREATES the divergence: the
+ * scheduled report only runs from the template's own schedule, up to a day
+ * after an instance PR merges, and every instance's own copy of this
+ * self-check step is — by the same "all three dirs default to the same
+ * root" construction above — ALSO permanently zero, once distributed into
+ * an instance's ci.yml via the ordinary `biffo core upgrade` three-way
+ * merge, because it still runs with no `--instance-dir`. `scripts/
+ * check-orphan-ratchet-instance.sh` is the third caller that closes that
+ * gap: it runs from an instance's own PR-time CI, resolves a real template
+ * tree by cloning `biffo-template` at that instance's own recorded
+ * `biffo.core.json` version, and passes it as BOTH `--theirs-dir` and
+ * `--base-dir` — see that script's own doc comment for the full reasoning.
+ *
  * ── The per-file guidance (#1714) ────────────────────────────────────────
  *
  * The refusal inside `biffo core upgrade` used to name only a bare count and

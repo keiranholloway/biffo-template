@@ -1413,6 +1413,16 @@ if [ -f scripts/biffo.sh ]; then
   run_check plugin-tool-supply sh scripts/biffo.sh check plugin-tool-supply
   run_check core-direct-paths sh scripts/biffo.sh check core-direct-paths
   run_check orphan-ratchet sh scripts/biffo.sh check orphan-ratchet
+  # #1714 second remediation: the INSTANCE-mode caller, distinct from the
+  # self-check above. It clones a real template tree pinned to
+  # biffo.core.json's own version and compares against it -- but this repo
+  # never carries biffo.core.json (it is the template, not an instance), so
+  # the script itself detects that and exits 0 as a genuine skip (see its own
+  # doc comment) rather than attempting a comparison it has no tree for. Kept
+  # unconditional, exactly like the line above, for the same reason: ci.yml's
+  # exact command text must appear in `verify.sh --list`'s output or the
+  # parity test (verify-parity.test.ts, #1773) reports it uncategorised.
+  run_check orphan-ratchet-instance sh scripts/check-orphan-ratchet-instance.sh
   run_check cognito-invite sh scripts/biffo.sh check cognito-invite-template
   run_check lambda-output sh scripts/biffo.sh check lambda-output
   run_check pipe-trap sh scripts/biffo.sh check pipe-trap
@@ -1452,6 +1462,18 @@ fi
 # neither network nor a live deployment. Measured here: ~2.4s.
 [ -f scripts/allocate-module-number.test.sh ] &&
   run_check allocate-module-number sh scripts/allocate-module-number.test.sh
+
+# check-orphan-ratchet-instance.sh's own self-test (#1714, second
+# remediation): real throwaway git fixtures standing in for "the template at
+# a pinned version" and "a live instance", exercising the wrapper end to end
+# via THIS repo's own already-built local CLI through tsx (no mocking of
+# planCoreUpgrade/classify()). Needs cli/node_modules/.bin/tsx -- present
+# once `pnpm install` has run in this checkout, same as every other
+# JS-backed check above; the test itself fails with a clear "run pnpm
+# install" message rather than a cryptic tsx-not-found if it hasn't.
+# Measured here: ~1.6s.
+[ -f scripts/check-orphan-ratchet-instance.test.sh ] &&
+  run_check orphan-ratchet-instance-selftest sh scripts/check-orphan-ratchet-instance.test.sh
 
 # The append-only corpus guard (#778). CI runs it in Release Guards, and it was
 # invisible to the parity test until #897 widened the harvester -- it is neither

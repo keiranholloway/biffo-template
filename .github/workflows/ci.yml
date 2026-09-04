@@ -218,12 +218,69 @@ jobs:
       # real orphan: kept, not removed, because it is still real per-PR
       # coverage of the CLI path itself, and removing it would buy nothing.
       # The part that CAN catch real drift — --instance-dir pointed at a real
-      # instance tree — now runs in .github/workflows/orphan-ratchet-report.yml
-      # (biffo-template#1714), a scheduled cross-repo report cloning every
-      # live instance fresh, mirroring instance-adoption-report.yml exactly.
+      # instance tree — runs two other places, neither of which is this
+      # step: .github/workflows/orphan-ratchet-report.yml (biffo-template
+      # #1714), a scheduled cross-repo report cloning every live instance
+      # fresh from the TEMPLATE's own schedule; and the step immediately
+      # below, which is what actually closes #1714's own acceptance
+      # criterion ("fails in the pull request that creates the divergence").
       - name: Orphan-ratchet guard (template self-check)
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: sh scripts/biffo.sh check orphan-ratchet
+      # #1714, second remediation: the self-check step above and the
+      # scheduled report can each only ever find a real orphan on the
+      # TEMPLATE's own timeline (a daily cross-repo clone, up to 24h after a
+      # divergence-creating PR merges) or never at all (a self-check
+      # comparing a tree to itself is mathematically zero orphans, forever —
+      # see check-orphan-ratchet.ts's own doc comment). Neither runs from
+      # INSIDE an instance's own PR, so nothing blocked the PR that actually
+      # created the drift — confirmed live against tabsii-platform by two
+      # independent prosecutor passes (2026-08-29, 2026-09-04): zero per-PR
+      # wiring in any instance's own CI.
+      #
+      # This step is that missing per-PR caller. `.github/` is template-owned
+      # (core-manifest.json, carved out only for `*.instance.yml`), so it
+      # reaches every instance via the ordinary `biffo core upgrade`
+      # three-way merge exactly like the self-check step above already does
+      # — confirmed live: tabsii-platform@dev (core 0.301.24) already carries
+      # that step verbatim. No separate cross-repo distribution mechanism is
+      # needed for THIS step either; running `biffo core upgrade` is what
+      # carries it, the same way it carries every other guard in this file.
+      #
+      # It is a no-op in the template's OWN CI: the script itself checks for
+      # biffo.core.json and skips (exit 0) when absent — this repo never
+      # carries one, so there is no pinned version to resolve a comparison
+      # template from (that is what the self-check step above is for). It
+      # only does real work once an instance has actually upgraded to a core
+      # version that carries this step, at which point biffo.core.json is
+      # ALREADY pinned to that same version (`biffo core upgrade --apply`
+      # rewrites it before committing) — so the step and the version it needs
+      # always land together, never one without the other.
+      #
+      # scripts/check-orphan-ratchet-instance.sh clones the REAL
+      # biffo-template (public, no token needed) at this instance's own
+      # `core-v<version>` tag and re-runs the identical `check orphan-ratchet`
+      # CLI path against it — a real diverged tree, not a self-check — so a
+      # file added under a template-owned path with no sanctioned carve-out
+      # fails THIS pull request, not a report up to a day later.
+      - name: Orphan-ratchet guard (instance mode, against the pinned template)
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: sh scripts/check-orphan-ratchet-instance.sh
+      # check-orphan-ratchet-instance.sh's own self-test: hermetic, real-git
+      # fixtures standing in for "the template at a pinned version" and "a
+      # live instance" (no mocking of planCoreUpgrade/classify()), exercising
+      # the wrapper end to end via THIS repo's own already-built local CLI,
+      # invoked directly through tsx (see the test file's own doc comment for
+      # why -- the real `npx @biffo/cli@<version>` dispatch path needs a
+      # published npm version this unreleased change cannot have yet). It
+      # needs cli/node_modules/.bin/tsx, which only this job installs
+      # (`pnpm install`, above) -- the Python job never does, so this step
+      # must be here rather than left for guard-self-test-wiring.sh's blind
+      # bare-`sh` fallback to pick up in the Python job, which is exactly
+      # what happened before this step existed (biffo-template#1714).
+      - name: Orphan-ratchet guard (instance mode) self-test
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: sh scripts/check-orphan-ratchet-instance.test.sh
       # A Cognito invite_message_template missing email_subject/email_message/
       # sms_message, or one of the {username}/{####} placeholders Cognito's
       # CreateUserPool requires — terraform validate is silent on this, so a

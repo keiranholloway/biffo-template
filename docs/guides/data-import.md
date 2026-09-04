@@ -96,7 +96,15 @@ This invokes the deployed Core API Lambda directly and asks it to run `db/import
 
 ### Adding more DDL later
 
-`biffo data import <name>` refuses to run again once `db/imports/<name>/` already exists — you'll get an "already present" error telling you to remove it first. To add new statements to an existing import, add a **new** numbered file (e.g. `013_more_tables.sql`) directly under `db/imports/<name>/` and commit it yourself. Push and `biffo data apply` again; only the new file shows up under "Applied", everything else stays "skipped".
+`biffo data import <name>` refuses to run again once `db/imports/<name>/` already exists — you'll get an "already present" error telling you to remove it first. To add new statements to an existing import, add a **new** numbered file directly under `db/imports/<name>/` and commit it yourself. Push and `biffo data apply` again; only the new file shows up under "Applied", everything else stays "skipped".
+
+**Don't pick the number by reading the directory listing.** `ls db/imports/<name>/ | tail` and "add one" is a race: two branches that read the same listing before either commits land on the identical "next" number, and the collision is only caught later, at merge time, by each instance's own convention guard (e.g. `test_no_new_duplicate_module_numbers_against_current_dev`) — a detector, not a preventer (biffo-template#1886). Allocate the number instead:
+
+```
+NUM=$(sh scripts/allocate-module-number.sh <name>)
+```
+
+This reserves the number atomically against the remote (a compare-and-swap on a git ref — see the script's own header comment for why a locked file or a plain push isn't equivalent), so two concurrent branches can never both win the same number; exit 0 with the number on stdout, exit 2 if it couldn't confirm an allocation (never treat that as "pick one yourself"). Create `db/imports/<name>/${NUM}_<description>.sql` with the allocated number and commit it as usual. The instance's own merge-time duplicate-number guard stays in place regardless — this removes the race, it does not remove the check that catches anything which still slips through it (a hand-authored file that skipped the allocator, for instance).
 
 ### If an already-applied file changes
 

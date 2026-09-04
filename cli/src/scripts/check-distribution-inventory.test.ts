@@ -19,6 +19,7 @@ import { join } from 'node:path'
 import { makeTmpDir } from '../test-utils/tmp.js'
 import { runDistributionInventoryCheck } from './check-distribution-inventory.js'
 import type { DistributionInventory } from '../lib/distribution-inventory.js'
+import { INSTANCE_CORE_FILE } from '../lib/core-version.js'
 
 let exitCode: number | undefined
 
@@ -114,5 +115,61 @@ describe('runDistributionInventoryCheck', () => {
     const reported = vi.mocked(console.error).mock.calls.flat().join('\n')
     expect(reported).toContain('example-entry')
     expect(reported).toContain('no-evidence')
+  })
+
+  // #1897: `distribution-inventory.json` is a template-only registry (not
+  // declared templateOwned/userOwned in core-manifest.json), but the CI step
+  // that calls this function is templateOwned and lands in every instance
+  // verbatim via biffo core upgrade. Before this fix, an instance -- which
+  // never carries the file -- hit `loadDistributionInventory`'s throw on
+  // every single PR, forever (confirmed live on tabsii-platform on core
+  // 0.302.1+). These two cases are the instance-context half of that fix;
+  // the three above remain the template-context half (checks run/enforce).
+  it('an instance (biffo.core.json present) skips cleanly with no violation, even with no inventory file', async () => {
+    const root = makeTmpDir('distribution-inventory-check-instance')
+    mkdirSync(root, { recursive: true })
+    writeFileSync(join(root, INSTANCE_CORE_FILE), JSON.stringify({ version: '1.2.3' }))
+    // Deliberately no distribution-inventory.json written -- a real instance
+    // never has one; this proves the instance check fires before any attempt
+    // to read the (absent) file.
+
+    await runDistributionInventoryCheck(root)
+
+    expect(process.exit).not.toHaveBeenCalled()
+    const logged = vi.mocked(console.log).mock.calls.flat().join('\n')
+    expect(logged).toContain('skipped')
+    expect(logged).toContain(INSTANCE_CORE_FILE)
+  })
+
+  it('a checkout with no biffo.core.json AND no distribution-inventory.json skips cleanly (not a template throw)', async () => {
+    const root = makeTmpDir('distribution-inventory-check-neither')
+    mkdirSync(root, { recursive: true })
+    // Neither biffo.core.json (not an instance) nor distribution-inventory.json
+    // (nothing to validate) -- e.g. a sibling/plugin repo, or any other
+    // checkout that is not the template itself.
+
+    await runDistributionInventoryCheck(root)
+
+    expect(process.exit).not.toHaveBeenCalled()
+    const logged = vi.mocked(console.log).mock.calls.flat().join('\n')
+    expect(logged).toContain('skipped')
+  })
+
+  it('an instance still skips even if it somehow also carries a distribution-inventory.json', async () => {
+    // Belt-and-braces: the instance check must come first and win outright --
+    // an instance is never meant to hold this registry, so its mere presence
+    // (e.g. a stray leftover file) must not flip this back into validating it.
+    const root = makeTmpDir('distribution-inventory-check-instance-with-file')
+    writeFileSync(join(root, INSTANCE_CORE_FILE), JSON.stringify({ version: '1.2.3' }))
+    writeInventory(root, {
+      version: 1,
+      note: 'test fixture',
+      channels: CLEAN_CHANNELS,
+      entries: [{ ...CLEAN_ENTRY, evidence: [] }], // would be a schema violation if validated
+    })
+
+    await runDistributionInventoryCheck(root)
+
+    expect(process.exit).not.toHaveBeenCalled()
   })
 })

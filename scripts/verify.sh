@@ -1413,6 +1413,16 @@ if [ -f scripts/biffo.sh ]; then
   run_check plugin-tool-supply sh scripts/biffo.sh check plugin-tool-supply
   run_check core-direct-paths sh scripts/biffo.sh check core-direct-paths
   run_check orphan-ratchet sh scripts/biffo.sh check orphan-ratchet
+  # #1714 second remediation: the INSTANCE-mode caller, distinct from the
+  # self-check above. It clones a real template tree pinned to
+  # biffo.core.json's own version and compares against it -- but this repo
+  # never carries biffo.core.json (it is the template, not an instance), so
+  # the script itself detects that and exits 0 as a genuine skip (see its own
+  # doc comment) rather than attempting a comparison it has no tree for. Kept
+  # unconditional, exactly like the line above, for the same reason: ci.yml's
+  # exact command text must appear in `verify.sh --list`'s output or the
+  # parity test (verify-parity.test.ts, #1773) reports it uncategorised.
+  run_check orphan-ratchet-instance sh scripts/check-orphan-ratchet-instance.sh
   run_check cognito-invite sh scripts/biffo.sh check cognito-invite-template
   run_check lambda-output sh scripts/biffo.sh check lambda-output
   run_check pipe-trap sh scripts/biffo.sh check pipe-trap

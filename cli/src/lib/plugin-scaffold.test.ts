@@ -45,6 +45,7 @@ function makeSkeleton(): string {
   write('skeleton/registry-schema.json', '{}\n')
   write('skeleton/node_modules/dep/index.js', 'module.exports = 1\n')
   write('skeleton/__pycache__/x.pyc', 'junk')
+  write('skeleton/uv.lock', 'version = 1\nrequires-python = ">=3.13"\n')
   return skeleton
 }
 
@@ -187,6 +188,31 @@ describe('scaffoldPlugin', () => {
     expect(existsSync(join(dest, '__pycache__'))).toBe(false)
   })
 
+  // Regression guard for biffo-template#1731 item 3: `uv.lock` must stay in
+  // NEVER_COPY. The skeleton's uv.lock resolves and pins `example-plugin`'s
+  // OWN dependency set under the skeleton's OWN package name — if it were
+  // ever copied into a scaffolded plugin, the plugin would inherit a
+  // lockfile naming a different package (still `biffo-plugin-example`, not
+  // its own `dist` name from ScaffoldNames) and pinning resolutions for
+  // dependencies the scaffolded plugin may not even declare once
+  // `applySubstitutions` has rewritten pyproject.toml. `uv sync --locked`
+  // (added by PR #1760/#1762 to every scaffolded skeleton's own CI, per
+  // this same issue) would then fail immediately in a freshly-created
+  // plugin repo it had never resolved anything for, or — worse — silently
+  // pin stale/wrong transitive versions if it happened to still resolve.
+  //
+  // This is asserted against scaffoldPlugin's actual output (the file is
+  // absent from both the returned file list AND the destination directory),
+  // not by reading the NEVER_COPY Set directly, so it fails if the set is
+  // edited OR if the copy logic stops consulting it correctly.
+  it('never copies the skeleton uv.lock (regression guard for #1731)', () => {
+    const dest = join(root, 'out-uv-lock')
+    const result = scaffoldPlugin(makeSkeleton(), dest, deriveNames('acme-crm'))
+
+    expect(existsSync(join(dest, 'uv.lock'))).toBe(false)
+    expect(result.files).not.toContain('uv.lock')
+  })
+
   it('throws when the skeleton does not exist', () => {
     expect(() =>
       scaffoldPlugin(join(root, 'nope'), join(root, 'out'), deriveNames('acme-crm')),
@@ -221,6 +247,17 @@ describe('the real _skeletons/plugin-template', () => {
 
     expect(result.files.some((f) => f.startsWith('terraform/'))).toBe(true)
     expect(JSON.parse(readFileSync(join(dest, 'biffo.plugin.json'), 'utf8')).name).toBe('acme-crm')
+
+    // #1731 item 3, against the REAL skeleton's real uv.lock (not a fixture
+    // stand-in) — the skeleton at this commit does carry one, so this is a
+    // live check of the NEVER_COPY behaviour, not just the makeSkeleton()
+    // fixture above.
+    expect(
+      existsSync(join(realSkeleton!, 'uv.lock')),
+      'fixture drift: skeleton has no uv.lock to guard against',
+    ).toBe(true)
+    expect(existsSync(join(dest, 'uv.lock'))).toBe(false)
+    expect(result.files).not.toContain('uv.lock')
 
     for (const rel of result.files) {
       expect(rel).not.toMatch(/example[-_]plugin/)

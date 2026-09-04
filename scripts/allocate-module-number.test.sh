@@ -228,14 +228,33 @@ if [ "$out" != "100" ]; then
 fi
 
 # A number already reserved (lock ref exists, no file yet) is skipped.
+#
+# The commit that stands in for that reservation needs an explicit identity,
+# the same way make_fixture's own seed commit does (`-c user.email=... -c
+# user.name=...`) and the same way allocate-module-number.sh's own LOCK_SHA
+# computation does (GIT_AUTHOR_NAME/EMAIL) -- a CI runner carries no global
+# git identity, unlike most developer workstations, so a bare `git
+# commit-tree` here fails with "empty ident name" precisely where a
+# workstation with user.name/user.email already configured would not. That
+# failure was previously silent: this whole setup runs as one `&&`-chained
+# subshell with no exit-status check, so `git commit-tree` failing left
+# `lock_sha` empty and skipped the `git push` after it via short-circuit --
+# the "pre-existing reservation" was never actually created on the remote,
+# and the allocator was correctly reporting '011' as free because, as far
+# as it could see, it genuinely was. Confirmed live: this exact failure
+# reproduced on a real CI run (PR #1887) and was unreproducible on a
+# workstation with a global git identity already set -- the allocator was
+# never wrong; the fixture's own precondition was never met.
 skip_bare="$WORK/skip-bare.git"
 skip_seed="$WORK/skip-seed"
 make_fixture "$skip_bare" "$skip_seed" demo 010_a.sql
-( cd "$skip_seed" &&
+if ! ( cd "$skip_seed" &&
   empty_tree=$(git hash-object -w -t tree /dev/null) &&
-  lock_sha=$(git commit-tree "$empty_tree" -m "pre-existing reservation") &&
+  lock_sha=$(git -c user.email=t@example.invalid -c user.name=t commit-tree "$empty_tree" -m "pre-existing reservation") &&
   git push --quiet --no-verify origin "$lock_sha:refs/biffo-module-locks/demo/011"
-)
+); then
+  report "could not set up the pre-existing lock-reservation fixture (011, no file) -- the reservation was never pushed, so the assertion below would be checking against a precondition that was never actually true. This must never fail silently: see the comment above for why it used to."
+fi
 out=$(sh "$ALLOCATOR" demo --git-remote "$skip_bare" --base trunk 2>/dev/null)
 if [ "$out" != "012" ]; then
   report "with '010' on disk and '011' already lock-reserved (no file), expected allocation '012', got '$out'"

@@ -34,6 +34,31 @@
 # repo-local anyway, matching allocate-module-number.test.sh's own
 # precedent).
 #
+# ## This script's own template-vs-instance gate (#1897)
+#
+# ci.yml wires this SELF-TEST as an unconditional step ("Orphan-ratchet guard
+# (instance mode) self-test"), gated only on `pnpm install` having succeeded
+# -- and ci.yml itself is template-owned, so `biffo core upgrade` carries that
+# step verbatim into every instance. This script needs a locally-built
+# `cli/node_modules/.bin/tsx` to exercise the real CLI (see the header above),
+# but `cli/` is declared `"released"` in core-manifest.json, not
+# `templateOwned` or `userOwned` -- it is published to npm and deliberately
+# NEVER distributed into an instance's tree (confirmed live: tabsii-platform
+# on core 0.302.1+ carries no `cli/` directory at all, not merely an unbuilt
+# one). Treating that as a FAIL made this step structurally unpassable in
+# every instance, forever, from the moment core 0.302.1 landed.
+#
+# `cli/` presence is therefore the right discriminator for THIS script
+# specifically (it is what the failure actually depends on), and it agrees
+# with this repo's other canonical instance marker: an instance always
+# carries `biffo.core.json` (`isInstanceRepo()`,
+# `cli/src/lib/core-version.ts`, and this same script's own production
+# counterpart `check-orphan-ratchet-instance.sh` already skips -- exit 0, a
+# genuine skip, not "cannot tell" -- when THAT file is absent, for the exact
+# same template-vs-instance reason). Absence of `cli/` is a genuine skip here
+# for the same reason: there is nothing wrong to report, only nothing this
+# checkout can self-test.
+#
 # Run: sh scripts/check-orphan-ratchet-instance.test.sh
 
 set -u
@@ -44,20 +69,74 @@ WRAPPER="$REPO_ROOT/scripts/check-orphan-ratchet-instance.sh"
 TSX="$REPO_ROOT/cli/node_modules/.bin/tsx"
 CLI_ENTRY="$REPO_ROOT/cli/src/index.ts"
 
+fail=0
+report() {
+  echo "FAIL: $1" >&2
+  fail=1
+}
+
+# =============================================================================
+# The real gate: an instance carries no cli/ (see the doc comment above) --
+# skip cleanly rather than failing on a directory that was never meant to be
+# here. This MUST run before the meta-test below: the meta-test invokes a
+# copy of this very file from a scratch root with no cli/, and that copy
+# needs to hit this gate and exit immediately, not fall through into its own
+# nested meta-test (which would recurse without ever terminating).
+# =============================================================================
+
+if [ ! -d "$REPO_ROOT/cli" ]; then
+  echo "SKIP: $REPO_ROOT/cli is absent -- this is an instance, not the template (cli/ is" >&2
+  echo "'released' in core-manifest.json: published to npm, never distributed via biffo core" >&2
+  echo "upgrade). There is no local CLI/tsx here to self-test against. Genuine skip (exit 0)," >&2
+  echo "not a failure -- see this script's own doc comment for why." >&2
+  exit 0
+fi
+
 if [ ! -x "$TSX" ]; then
   echo "FAIL: $TSX is not present/executable -- run 'pnpm install' in $REPO_ROOT first (this" >&2
   echo "test exercises the real CLI, not a reimplementation of it)." >&2
   exit 1
 fi
 
+# =============================================================================
+# 0. Meta-test: prove the skip gate above actually skips, by running a real
+#    copy of THIS script from a scratch root that has no cli/ -- not a
+#    reimplementation of the guard clause, the actual file. This is the only
+#    practical way to exercise the "instance context" path for a shell
+#    preamble: there is no live instance checkout to point this at from the
+#    template's own CI, so simulate the one structural fact that matters
+#    (cli/ is absent) and confirm the guard above reacts to it. Only reached
+#    once we know (from the gate just above) that THIS run has a real cli/ --
+#    so the nested copy hits its OWN gate first, with no cli/ under its
+#    scratch root, and exits there without ever reaching this block again.
+# =============================================================================
+
+skip_meta_work=$(mktemp -d "$REPO_ROOT/.check-orphan-ratchet-instance-test-skip-XXXXXX")
+mkdir -p "$skip_meta_work/scripts"
+cp "$REPO_ROOT/scripts/check-orphan-ratchet-instance.test.sh" "$skip_meta_work/scripts/"
+
+skip_out=$(sh "$skip_meta_work/scripts/check-orphan-ratchet-instance.test.sh" 2>&1)
+skip_rc=$?
+rm -rf "$skip_meta_work"
+
+if [ "$skip_rc" -ne 0 ]; then
+  report "running this test script from a root with no cli/ was expected to exit 0 (genuine" \
+    "skip) -- got $skip_rc: $skip_out"
+fi
+case "$skip_out" in
+  *"cli is absent"*) ;;
+  *) report "the no-cli/ skip did not log a clear, named reason -- got: $skip_out" ;;
+esac
+case "$skip_out" in
+  *"PASS: instance-mode orphan-ratchet check"*)
+    report "the no-cli/ run reached the normal success banner instead of skipping early -- the" \
+      "guard clause did not fire: $skip_out"
+    ;;
+  *) ;;
+esac
+
 WORK=$(mktemp -d "$REPO_ROOT/.check-orphan-ratchet-instance-test-XXXXXX")
 trap 'rm -rf "$WORK"' EXIT INT TERM
-
-fail=0
-report() {
-  echo "FAIL: $1" >&2
-  fail=1
-}
 
 git_c() {
   # A CI runner carries no global git identity; workstation .gitconfig

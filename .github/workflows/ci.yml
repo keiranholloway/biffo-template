@@ -784,11 +784,53 @@ jobs:
         with:
           name: bandit-report
           path: bandit-report.json
+
+  # Split out of the `python` job deliberately (#1882, mirroring #1880/#1881's
+  # identical JS-side fix): `pip-audit`'s advisory lookups are exactly as
+  # registry-dependent and chronically unreliable as `pnpm audit`'s were --
+  # AGENTS.md's own "a dependency audit is time-dependent" section already
+  # documented that a fresh advisory landing mid-session can redden an
+  # untouched PR, and #1880's rollout proved it live: the same morning the JS
+  # fix shipped, a newly-published pip advisory (PYSEC-2026-3721) independently
+  # blocked the required Python gate on five unrelated sibling repos within the
+  # same hour, none of which touch Python code. `#591` already made
+  # `py-dependency-audit.sh` itself fail closed (INCONCLUSIVE blocks) rather
+  # than silently pass on a broken registry response; #1882 is the same
+  # discovery #1880 made for JS, now confirmed for Python too: fail-closed was
+  # blocking real, unrelated PRs on a problem nobody merging them could fix.
+  #
+  # `python` (required) no longer runs this step at all, so a registry-side
+  # advisory event can never again block that job. This job runs the exact
+  # same script, on every push/PR, so a real high/critical advisory is still
+  # surfaced quickly -- it is informational rather than blocking:
+  # `continue-on-error: true` keeps a registry-side failure from turning red
+  # in a way that looks like this job's own fault, and this job's name is
+  # deliberately NOT added to `dev`'s required status checks. This is a
+  # DELIBERATE, OPEN loosening of a gate per AGENTS.md §7, not a silent one --
+  # #1882 is the tracking issue.
+  python-audit:
+    name: Python Dependency Audit (non-blocking, #1882)
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    timeout-minutes: 20
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - id: install
+        run: uv sync --all-groups --locked
+      - name: Product-domain dependencies
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: sh scripts/sync-domain-deps.sh
       - name: Dependency audit
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         # Fails on a real advisory, but treats a broken audit registry/network
-        # response as inconclusive rather than blocking the whole merge queue
-        # (#591 — same treatment already applied to the JS audit).
+        # response as inconclusive rather than blocking (#591) -- and this
+        # job's own non-required status is what stops that inconclusive
+        # result from blocking the merge queue in the first place.
         run: sh scripts/py-dependency-audit.sh
 
   security-secrets:

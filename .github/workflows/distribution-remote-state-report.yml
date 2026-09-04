@@ -1,0 +1,151 @@
+name: Distribution-inventory remote-state report
+
+# distribution-remote-state guard (#1570/#1807/#1816): does a
+# distribution-inventory.json entry's gapReason still describe the REAL,
+# current content of the remote repo it names, or has it drifted into
+# restating an older, now-false classification as fact?
+#
+# #1807 caught this class once already, for a claim about THIS repo's own
+# tree (deployInfraSetsTfVar, a live assertion inside the normal `pnpm run
+# test` suite). #1816 was the same class one entry over, but the claim was
+# about biffo-plugin-marketing's live .gitleaks.toml -- content this repo's
+# own unit-test job structurally cannot see, because the default GITHUB_TOKEN
+# a CI job gets cannot read another repo's contents API. Nothing was watching
+# that claim between the day it was written and the day a prosecutor happened
+# to re-check it by hand nine days after biffo-plugin-marketing#188 made it
+# false.
+#
+# This workflow is the missing caller, the same shape shared-sync-report.yml
+# and instance-adoption-report.yml already established for "the real defect
+# lives outside this repo's own checkout": run `sh scripts/biffo.sh check
+# distribution-remote-state` (cli/src/scripts/check-distribution-remote-state.ts)
+# on a schedule, with a real BIFFO_GITHUB_TOKEN, so a remote repo's content
+# drifting away from what a gapReason claims about it becomes a loud,
+# scheduled failure instead of something only a full prosecution finds.
+#
+# Deliberately much shorter than its two siblings: those clone every
+# candidate repo in the estate to discover instances/satellites that carry no
+# fixed list anywhere. This check's targets are not discovered -- they are
+# the exact (repo, path, ref) triples distribution-inventory.json's entries
+# already declare in their own remoteContentAssertions, so there is nothing
+# to clone; the CLI check itself fetches each file directly via `gh api`.
+#
+# ## Cadence
+#
+# 07:30 UTC -- after shared-sync-report.yml's 06:00 and instance-adoption-
+# report.yml's 07:00, so the three scheduled cross-repo reads do not collide
+# in the same window.
+
+on:
+  schedule:
+    - cron: '30 7 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: distribution-remote-state-report
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: '22'
+
+jobs:
+  report:
+    name: Check distribution-inventory.json's remote-content claims against real repos
+    # Same reasoning as instance-adoption-report.yml's own `if`: this file is
+    # template-owned (.github/) and rides `biffo core upgrade` into every
+    # instance, but only the template repo should ever actually run it --
+    # an instance running its own copy would report on THIS repo's
+    # gapReason claims, which have nothing to do with that instance.
+    if: github.repository == 'keiranholloway/biffo-template'
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      # This step's own tree names the assertions to check (via
+      # distribution-inventory.json) -- must be the real tip, not whatever SHA
+      # triggered the run. Same reasoning as shared-sync-report.yml/
+      # instance-adoption-report.yml's own "re-point the checkout" step.
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: dev
+          fetch-depth: 0
+
+      - name: Re-point the checkout at the current origin/dev tip
+        run: |
+          set -eu
+          git fetch origin dev --prune
+          git reset --hard origin/dev
+          behind=$(git rev-list --count HEAD..origin/dev)
+          if [ "$behind" -ne 0 ]; then
+            echo "::error title=distribution-remote-state: checkout still behind origin/dev::Reset to origin/dev but still $behind commit(s) behind." >&2
+            exit 1
+          fi
+          echo "checkout is at origin/dev tip: $(git rev-parse --short HEAD)"
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - name: Install this repo's dependencies (the CLI that runs the check)
+        id: install
+        run: pnpm install --frozen-lockfile
+
+      - name: Refuse to run with no cross-repo token
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ secrets.BIFFO_GITHUB_TOKEN }}
+        run: |
+          set -u
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error title=distribution-remote-state: no cross-repo token::BIFFO_GITHUB_TOKEN is not set. The default GITHUB_TOKEN cannot read another repo's contents API, so this job cannot see any remote claim's real state -- refusing to report a clean run against nothing it could reach." >&2
+            exit 1
+          fi
+
+      # Bare invocation, deliberately: no pipe, no redirection, nothing after
+      # the command on this line. `cli/src/lib/guard-denominator.ts`'s #1363
+      # sweep discovers `sh scripts/biffo.sh check <name>` invocations across
+      # this repo and only credits a check's own denominator print when it
+      # can run one VERBATIM, with no arguments -- the same reason
+      # `instance-adoption-report.yml`'s own invocation (real `--instance-dir`
+      # etc. arguments) is correctly skipped by that harness rather than
+      # miscounted as silent. This check needs no arguments at all, so bare
+      # is also simply the natural form: no pipe-trap risk (AGENTS.md §4) to
+      # guard against by construction, and the run's own stdout/stderr is
+      # already visible in the job log without a separate tee/log file.
+      - name: Run the distribution-remote-state check against every declared remoteContentAssertion
+        id: check
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ secrets.BIFFO_GITHUB_TOKEN }}
+        run: sh scripts/biffo.sh check distribution-remote-state
+
+      - name: Open or update a tracking issue on any failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -u
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          title="distribution-remote-state scheduled report: a gapReason no longer matches live remote content"
+          body=$(printf '%s\n' \
+            "Run: ${run_url}" \
+            "" \
+            "See the run's own job log above for which entry and which remote (repo, path, " \
+            "ref) triple no longer matches its declared remoteContentAssertions." \
+            "" \
+            "This is the #1816 class recurring in a THIRD entry, or a fetch failure (exit 2, " \
+            "cannot tell -- check BIFFO_GITHUB_TOKEN before assuming the content itself changed)." \
+            "" \
+            "This issue is not auto-closed on the next clean run, per AGENTS.md section 4 -- " \
+            "confirm the gapReason was actually corrected (or the assertion updated to the new " \
+            "real state) before closing it.")
+          existing=$(gh issue list --state open --limit 100 --json number,title \
+            --jq "map(select(.title == \"${title}\")) | .[0].number // empty")
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body"
+          fi

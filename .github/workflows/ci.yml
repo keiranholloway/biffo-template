@@ -302,6 +302,13 @@ jobs:
       - name: Plugin-allowlist convention guard
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: sh scripts/biffo.sh check plugin-allowlist-convention
+      # Schema-only half of distribution-inventory.json's guard (#1570/#1894):
+      # self-checkable and network-free, unlike its sibling
+      # distribution-remote-state (which needs a real cross-repo token and
+      # runs only from the scheduled distribution-remote-state-report.yml).
+      - name: Distribution-inventory schema guard
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: sh scripts/biffo.sh check distribution-inventory
 
   # Split out of the `js` job deliberately (#1880): `pnpm audit`'s registry
   # call (`registry.npmjs.org/-/npm/v1/security/advisories/bulk`) has been

@@ -101,6 +101,48 @@ export interface ChannelDefinition {
  */
 export type EntryStatus = 'detected' | 'unregistered' | 'unverified'
 
+/**
+ * A factual, mechanically-checkable claim a `gapReason` makes about a NAMED
+ * REMOTE repo's file content, at a given ref — e.g. "biffo-plugin-marketing's
+ * `.gitleaks.toml` is the plain default stub, not a customised copy".
+ *
+ * Built for #1816, the second instance of the class #1807 already found once
+ * in this same file: `gapReason` restates another issue's classification of a
+ * REMOTE repo's state as current fact, and nothing checks that restatement
+ * against the real repo — only a one-off regex on the exact stale WORDING
+ * (see `distribution-inventory.test.ts`'s original #1807 guard). A wording
+ * regex only ever catches the ONE sentence a prosecutor happened to quote; it
+ * says nothing about whether the underlying fact is still true. This is
+ * deliberately keyed to real CONTENT instead: `mustContain`/`mustNotContain`
+ * are substrings of the actual live file (captured via `gh api
+ * repos/<repo>/contents/<path>?ref=<ref>` — see #1816's issue body and
+ * `checkRemoteContentAssertions`'s own test for the real fetch commands that
+ * produced them), so a check against them fails the moment the REAL state
+ * changes, independent of how the next person happens to word the prose.
+ *
+ * Not self-checkable from this repo's own CI test job (no cross-repo token —
+ * see `distribution-inventory.test.ts` and `check-distribution-remote-state.ts`
+ * for why), so this is read by a real fetch only from
+ * `check-distribution-remote-state.ts`, wired into
+ * `.github/workflows/distribution-remote-state-report.yml` on a schedule —
+ * the same "needs an external tree, so wire the scheduled-report shape
+ * instead of the unit suite" pattern `sharedFilesSync` and
+ * `instanceAdoptionPair` already use for other artifacts in this same file.
+ */
+export interface RemoteContentAssertion {
+  /** `owner/repo`, e.g. `"keiranholloway/biffo-plugin-marketing"`. */
+  repo: string
+  /** Repo-relative path of the file to fetch, e.g. `".gitleaks.toml"`. */
+  path: string
+  /** Branch/ref to read, e.g. `"dev"`. */
+  ref: string
+  /** Substrings that MUST be present in the live file's content. */
+  mustContain?: string[]
+  /** Substrings that MUST NOT be present — the stale-claim shape: text that
+   * described a customisation/state which no longer exists. */
+  mustNotContain?: string[]
+}
+
 export interface DistributionEntry {
   id: string
   artifact: string
@@ -110,6 +152,9 @@ export interface DistributionEntry {
   evidence: string[]
   notes?: string
   gapReason?: string
+  /** Optional: real, mechanically-checkable claims this entry's gapReason
+   * makes about remote repo content — see `RemoteContentAssertion`. */
+  remoteContentAssertions?: RemoteContentAssertion[]
 }
 
 export interface DistributionInventory {
@@ -235,6 +280,28 @@ export function validateInventory(inventory: DistributionInventory): SchemaViola
         detail: 'targets must name at least one destination',
       })
     }
+
+    for (const assertion of entry.remoteContentAssertions ?? []) {
+      if (!assertion.repo || !assertion.path || !assertion.ref) {
+        violations.push({
+          entryId: entry.id,
+          rule: 'incomplete-remote-content-assertion',
+          detail: `remoteContentAssertions entry missing repo/path/ref: ${JSON.stringify(assertion)}`,
+        })
+      }
+      if (
+        (assertion.mustContain?.length ?? 0) === 0 &&
+        (assertion.mustNotContain?.length ?? 0) === 0
+      ) {
+        violations.push({
+          entryId: entry.id,
+          rule: 'empty-remote-content-assertion',
+          detail:
+            `remoteContentAssertions entry for ${assertion.repo}/${assertion.path} states ` +
+            'neither mustContain nor mustNotContain -- checks nothing',
+        })
+      }
+    }
   }
 
   return violations
@@ -284,6 +351,10 @@ export function workflowInvokesCommand(
  * "this repo's own workflow does/doesn't set env var X" -- the same
  * substring-on-raw-YAML discipline `workflowInvokesCommand` above already
  * uses, not a YAML parse.
+ *
+ * For the sibling claim shape -- a `gapReason` describing a REMOTE repo's
+ * file content, which this checkout cannot read directly -- see
+ * `checkRemoteContentAssertions` below (#1816).
  */
 export function deployInfraSetsTfVar(root: string, varName: string): boolean {
   const path = join(root, '.github/workflows/deploy-infra.yml')
@@ -300,4 +371,132 @@ export function wiredWorkflowPath(wiredIn: string | null): string | null {
   if (!wiredIn) return null
   const match = wiredIn.match(/\.github\/workflows\/[\w.-]+\.yml/)
   return match ? match[0] : null
+}
+
+/** A `RemoteContentAssertion` failing against the content actually fetched. */
+export interface RemoteContentViolation {
+  entryId: string
+  assertion: RemoteContentAssertion
+  rule: 'missing-required-substring' | 'contains-forbidden-substring' | 'fetch-failed'
+  detail: string
+}
+
+/**
+ * Given already-fetched content for a `(repo, path, ref)`, or `null` when the
+ * fetch itself failed (repo unreachable, file absent, no token), check it
+ * against every `RemoteContentAssertion` every entry in `inventory` declares.
+ *
+ * Deliberately generic across every entry, not hardcoded to
+ * `gitleaks-toml-plugin-repos` (#1816) or any other single id: any future
+ * entry that adds `remoteContentAssertions` is covered by this same sweep
+ * with no new test or detector code, closing the actual gap #1816's verdict
+ * named -- "nothing... checks an entry's prose against live satellite state
+ * except the one narrow #1807-specific regex" -- for the whole class, not
+ * just this one row.
+ *
+ * `fetchedContent` is keyed by `${repo}\n${path}\n${ref}` so a caller that
+ * fetches once and has several assertions against the same file (or several
+ * entries sharing one) does not have to fetch it twice. Pure and
+ * network-free: `check-distribution-remote-state.ts` does the real fetching
+ * and calls this with the results; `distribution-inventory.test.ts` calls it
+ * with real CONTENT captured live via `gh api` and committed as a fixture, so
+ * this function itself never touches the network and every test here runs
+ * offline.
+ */
+export function checkRemoteContentAssertions(
+  inventory: DistributionInventory,
+  fetchedContent: Map<string, string | null>,
+): RemoteContentViolation[] {
+  const violations: RemoteContentViolation[] = []
+
+  for (const entry of inventory.entries) {
+    for (const assertion of entry.remoteContentAssertions ?? []) {
+      const key = `${assertion.repo}\n${assertion.path}\n${assertion.ref}`
+      const content = fetchedContent.get(key)
+
+      if (content === undefined) {
+        violations.push({
+          entryId: entry.id,
+          assertion,
+          rule: 'fetch-failed',
+          detail: `no fetched content supplied for ${key.replace(/\n/g, ' @ ')}`,
+        })
+        continue
+      }
+      if (content === null) {
+        violations.push({
+          entryId: entry.id,
+          assertion,
+          rule: 'fetch-failed',
+          detail: `fetching ${assertion.repo}/${assertion.path}@${assertion.ref} failed`,
+        })
+        continue
+      }
+
+      for (const needle of assertion.mustContain ?? []) {
+        if (!content.includes(needle)) {
+          violations.push({
+            entryId: entry.id,
+            assertion,
+            rule: 'missing-required-substring',
+            detail:
+              `${assertion.repo}/${assertion.path}@${assertion.ref} no longer contains ` +
+              `"${needle}" -- the entry's gapReason claims this is (still) the current state`,
+          })
+        }
+      }
+      for (const needle of assertion.mustNotContain ?? []) {
+        if (content.includes(needle)) {
+          violations.push({
+            entryId: entry.id,
+            assertion,
+            rule: 'contains-forbidden-substring',
+            detail:
+              `${assertion.repo}/${assertion.path}@${assertion.ref} still contains ` +
+              `"${needle}" -- the entry's gapReason claims this was removed/changed`,
+          })
+        }
+      }
+    }
+  }
+
+  return violations
+}
+
+/**
+ * Real fetcher for `RemoteContentAssertion`s: `gh api
+ * repos/<repo>/contents/<path>?ref=<ref>`, base64-decoded. Only ever called
+ * from `check-distribution-remote-state.ts` (a scheduled-workflow entrypoint
+ * with a real `BIFFO_GITHUB_TOKEN` -- see that file's own doc comment for
+ * why this repo's unit-test job cannot call it) -- never from
+ * `distribution-inventory.test.ts`, which uses fixed, real, previously
+ * captured content instead so the test suite stays offline and deterministic.
+ *
+ * Returns `null` on any failure (network, auth, 404) rather than throwing --
+ * the caller folds that into a `fetch-failed` violation (cannot tell is never
+ * a silent pass) instead of crashing the whole sweep on one bad repo.
+ */
+export async function fetchRemoteContentViaGh(
+  repo: string,
+  path: string,
+  ref: string,
+  execCommand: (
+    file: string,
+    args: string[],
+  ) => Promise<{ stdout: string; exitCode: number | null }>,
+): Promise<string | null> {
+  const result = await execCommand('gh', [
+    'api',
+    `repos/${repo}/contents/${path}?ref=${ref}`,
+    '--jq',
+    '.content',
+  ])
+  if (result.exitCode !== 0) return null
+  const base64 = result.stdout.trim()
+  if (!base64) return null
+  try {
+    return Buffer.from(base64, 'base64').toString('utf8')
+  } catch {
+    return null
+  }
 }

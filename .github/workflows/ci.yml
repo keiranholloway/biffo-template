@@ -71,6 +71,13 @@ jobs:
   # all; the required check name it reports ("Release Guards") is unchanged,
   # and this file no longer defines a job with that name.
   js:
+    # The name stays "...audit" even though the audit step moved out (below),
+    # deliberately: it is a required status-check context matched by literal
+    # string against DEFAULT_STATUS_CHECKS and against branch protection
+    # already written onto this repo and every existing instance/sibling.
+    # Renaming it would leave all of them waiting forever on a context
+    # nothing reports — the same trap the sibling skeleton's own `js` job
+    # comment already warns about, followed here rather than re-learned.
     name: JS (lint, types, test, audit)
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     timeout-minutes: 20
@@ -127,12 +134,6 @@ jobs:
       - name: Test
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm run test
-      - name: Dependency audit
-        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        # Fails on a real high/critical advisory, but treats a broken audit
-        # registry (non-JSON response) as inconclusive rather than blocking the
-        # whole merge queue (#591).
-        run: sh scripts/js-dependency-audit.sh
       # A plugin manifest declaring event_subscriptions must ship terraform/,
       # or the subscription is inert in every deployment (#194). This walks the
       # whole tree from the git root so it also covers _skeletons/, which no
@@ -301,6 +302,53 @@ jobs:
       - name: Plugin-allowlist convention guard
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: sh scripts/biffo.sh check plugin-allowlist-convention
+
+  # Split out of the `js` job deliberately (#1880): `pnpm audit`'s registry
+  # call (`registry.npmjs.org/-/npm/v1/security/advisories/bulk`) has been
+  # chronically overloaded since npm/GitHub retired the legacy audit endpoints
+  # on 2026-07-15, consolidating every pnpm/npm/yarn audit client worldwide
+  # onto this one path with no published SLA. Independently reproduced and
+  # documented in #1880: intermittent multi-second hangs, unrelated to this
+  # repo's own code, CI config, or runner — an ongoing, unresolved, upstream
+  # infrastructure condition, not a transient blip #591's retry loop can be
+  # relied on to absorb. #1269/#591 already made `js-dependency-audit.sh`
+  # itself fail closed (INCONCLUSIVE blocks) rather than silently pass on a
+  # broken registry response; #1880 is the discovery that the registry itself
+  # is now unreliable often enough that "fail closed" was blocking real,
+  # unrelated PRs on a problem nobody merging them could fix.
+  #
+  # `js` (required) no longer runs this step at all, so a registry hang can
+  # never again block or cancel the lint/type/test/guard job. This job runs
+  # the exact same script, on every push/PR, so a real high/critical advisory
+  # is still surfaced quickly — it is informational rather than blocking:
+  # `continue-on-error: true` keeps a registry-side failure from turning red
+  # in a way that looks like this job's own fault, and this job's name is
+  # deliberately NOT added to `dev`'s required status checks. This is a
+  # DELIBERATE, OPEN loosening of a gate per AGENTS.md §7, not a silent one —
+  # #1880 is the tracking issue, and it names the follow-up (a scheduled,
+  # persistent scan) this PR does not itself build.
+  js-audit:
+    name: JS Dependency Audit (non-blocking, #1880)
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    timeout-minutes: 20
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - id: install
+        run: pnpm install --frozen-lockfile
+      - name: Dependency audit
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        # Fails on a real high/critical advisory, but treats a broken audit
+        # registry (non-JSON response, or the chronic #1880 timeout) as
+        # inconclusive rather than blocking (#591) — and this job's own
+        # non-required status is what stops that inconclusive result from
+        # blocking the merge queue in the first place.
+        run: sh scripts/js-dependency-audit.sh
 
   python:
     name: Python (lint, types, test, security)

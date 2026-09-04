@@ -75,17 +75,50 @@ import sys
 import textwrap
 from pathlib import Path
 
-# Built via .joinpath(...) rather than a "/"-chain deliberately: see
-# test_main_tracer_import_order.py's identical note. `_API_ROOT` is entirely
-# template-owned (services/api/ minus the domains/ carve-out, ADR-0022), and
-# nothing here asserts what any particular file under it *contains* beyond the
-# structural "no import-time boto3/botocore" property -- which holds
-# identically whether a given file is template-owned or an instance's own
-# domain code.
+# Built via .joinpath(...) rather than a "/"-chain: see
+# test_main_tracer_import_order.py's identical note for why a "/"-chain
+# would trip python-test-scope-scan.ts's detector. That precedent's own
+# comment is explicit that its `.joinpath()` use is safe *because* it only
+# needs `domains/` as a `__path__` entry and "nothing ... asserts what
+# domains/ contains" -- a condition this file did NOT preserve until #1893:
+# the walk below used to run over `_API_ROOT.rglob("*.py")` directly, which
+# DOES read and assert the content of every file under `domains/`, a path
+# `core-manifest.json` marks `userOwned` (ADR-0022). That is precisely the
+# defect class #1454's scope guard exists to catch, and the guard reported
+# green only because its regex-only "/"-chain heuristic never sees a
+# `.joinpath()` + `.rglob()` reach (confirmed live: a synthetic
+# `domains/_instance_probe/__init__.py` with a module-scope `import boto3`
+# made the real test fail, while `findPythonTestAssertedPaths` never listed
+# `domains/` among the reached paths). See `_target_python_files` below,
+# which now excludes `domains/` from the walk explicitly -- this file's
+# invariant applies only to template-owned code, never to an instance's own
+# product-domain code.
 _SRC = Path(__file__).resolve().parents[1] / "src"
 _API_ROOT = _SRC.joinpath("api")
 
 _FORBIDDEN_MODULES = frozenset({"boto3", "botocore"})
+
+
+def _target_python_files(api_root: Path) -> list[Path]:
+    """Every ``.py`` file under ``api_root`` this guard checks -- excluding
+    ``domains/``, which is user-owned (ADR-0022, ``core-manifest.json``).
+
+    This guard is template-owned and must never assert over instance-owned
+    content (#1893): an instance's own product-domain code under
+    ``services/api/src/api/domains/<name>/`` is not this template's to
+    police, and a downstream `biffo core upgrade` that fails an instance on
+    its own domain code, with no channel to fix it short of editing that
+    domain code to satisfy a rule this file imposes, is exactly the defect
+    class #1454's scope guard exists to catch. Unlike
+    ``test_main_tracer_import_order.py``'s identical ``.joinpath()`` use
+    (which only needs ``domains/`` as a ``__path__`` entry and never reads
+    its content), this test walks and asserts file content -- so avoiding
+    python-test-scope-scan.ts's "/"-chain detector was never sufficient here
+    on its own; the exclusion below is what actually keeps the invariant
+    template-owned-only, not the ``.joinpath()`` construction by itself.
+    """
+    domains_root = api_root.joinpath("domains")
+    return sorted(path for path in api_root.rglob("*.py") if domains_root not in path.parents)
 
 
 def _is_type_checking_guard(node: ast.If) -> bool:
@@ -146,19 +179,20 @@ def _forbidden_imports_in_source(source: str, filename: str = "<test>") -> list[
 
 
 def test_no_import_time_boto3_or_botocore_import_in_api_package() -> None:
-    """Static half: no ``.py`` file under ``services/api/src/api/`` may import
-    boto3/botocore at a point that executes when the module is imported --
-    only inside a function or method body, constructed lazily on first actual
-    use (the pattern already in place at ``cognito.py``, ``database.py``,
-    ``plugin_storage.py``, ``endpoint_control.py``, ``chat_engine.py``, and
-    ``events/base.py``'s ``EventPublisher.__init__``).
+    """Static half: no ``.py`` file under ``services/api/src/api/`` (excluding
+    the user-owned ``domains/`` carve-out -- see ``_target_python_files``)
+    may import boto3/botocore at a point that executes when the module is
+    imported -- only inside a function or method body, constructed lazily on
+    first actual use (the pattern already in place at ``cognito.py``,
+    ``database.py``, ``plugin_storage.py``, ``endpoint_control.py``,
+    ``chat_engine.py``, and ``events/base.py``'s ``EventPublisher.__init__``).
 
     Fails on the pre-#1856 layout, where ``events/base.py`` had
     ``import boto3`` at module top -- confirmed by temporarily reintroducing
     exactly that during development of this test.
     """
     offenders: list[str] = []
-    for path in sorted(_API_ROOT.rglob("*.py")):
+    for path in _target_python_files(_API_ROOT):
         source = path.read_text(encoding="utf-8")
         findings = _forbidden_imports_in_source(source, filename=str(path))
         for name, lineno in findings:
@@ -228,6 +262,38 @@ def test_ast_walker_flags_an_import_inside_a_module_level_try_block() -> None:
         """
     )
     assert _forbidden_imports_in_source(source) == [("boto3", 3)]
+
+
+def test_target_python_files_excludes_domains_directory(tmp_path: Path) -> None:
+    """Structural proof of the #1893 fix: ``domains/`` must never appear in
+    the walked file set, even though it contains a real ``.py`` file with a
+    module-scope ``boto3`` import that would otherwise fail
+    ``test_no_import_time_boto3_or_botocore_import_in_api_package``.
+
+    Mirrors #1893's own reproduction exactly (a synthetic
+    ``domains/_instance_probe/__init__.py`` with ``import boto3`` at module
+    scope), but against a throwaway ``tmp_path`` tree rather than writing
+    into this repo's real ``services/api/src/api/domains/`` -- doing the
+    latter would itself be a template-owned test asserting over (by
+    creating) content in a user-owned path, the exact defect class this fix
+    exists to close.
+    """
+    api_root = tmp_path / "api"
+    (api_root / "domains" / "_instance_probe").mkdir(parents=True)
+    (api_root / "domains" / "_instance_probe" / "__init__.py").write_text(
+        "import boto3\n\nclient = boto3.client('sns')\n", encoding="utf-8"
+    )
+    (api_root / "events").mkdir(parents=True)
+    (api_root / "events" / "base.py").write_text(
+        "class EventPublisher:\n    pass\n", encoding="utf-8"
+    )
+
+    files = _target_python_files(api_root)
+
+    assert all("domains" not in path.parts for path in files), (
+        f"domains/ leaked into the walked file set: {files}"
+    )
+    assert api_root / "events" / "base.py" in files
 
 
 _PROBE = textwrap.dedent(

@@ -1463,6 +1463,18 @@ fi
 [ -f scripts/allocate-module-number.test.sh ] &&
   run_check allocate-module-number sh scripts/allocate-module-number.test.sh
 
+# check-orphan-ratchet-instance.sh's own self-test (#1714, second
+# remediation): real throwaway git fixtures standing in for "the template at
+# a pinned version" and "a live instance", exercising the wrapper end to end
+# via THIS repo's own already-built local CLI through tsx (no mocking of
+# planCoreUpgrade/classify()). Needs cli/node_modules/.bin/tsx -- present
+# once `pnpm install` has run in this checkout, same as every other
+# JS-backed check above; the test itself fails with a clear "run pnpm
+# install" message rather than a cryptic tsx-not-found if it hasn't.
+# Measured here: ~1.6s.
+[ -f scripts/check-orphan-ratchet-instance.test.sh ] &&
+  run_check orphan-ratchet-instance-selftest sh scripts/check-orphan-ratchet-instance.test.sh
+
 # The append-only corpus guard (#778). CI runs it in Release Guards, and it was
 # invisible to the parity test until #897 widened the harvester -- it is neither
 # `pnpm`, `uv`, `terraform` nor `sh scripts/`, so the guard whose property is

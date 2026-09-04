@@ -266,6 +266,21 @@ jobs:
       - name: Orphan-ratchet guard (instance mode, against the pinned template)
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: sh scripts/check-orphan-ratchet-instance.sh
+      # check-orphan-ratchet-instance.sh's own self-test: hermetic, real-git
+      # fixtures standing in for "the template at a pinned version" and "a
+      # live instance" (no mocking of planCoreUpgrade/classify()), exercising
+      # the wrapper end to end via THIS repo's own already-built local CLI,
+      # invoked directly through tsx (see the test file's own doc comment for
+      # why -- the real `npx @biffo/cli@<version>` dispatch path needs a
+      # published npm version this unreleased change cannot have yet). It
+      # needs cli/node_modules/.bin/tsx, which only this job installs
+      # (`pnpm install`, above) -- the Python job never does, so this step
+      # must be here rather than left for guard-self-test-wiring.sh's blind
+      # bare-`sh` fallback to pick up in the Python job, which is exactly
+      # what happened before this step existed (biffo-template#1714).
+      - name: Orphan-ratchet guard (instance mode) self-test
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: sh scripts/check-orphan-ratchet-instance.test.sh
       # A Cognito invite_message_template missing email_subject/email_message/
       # sms_message, or one of the {username}/{####} placeholders Cognito's
       # CreateUserPool requires — terraform validate is silent on this, so a

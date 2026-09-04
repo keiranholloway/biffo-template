@@ -1445,6 +1445,13 @@ fi
 [ -f scripts/branch-health-plan-only-detection.test.sh ] &&
   run_check branch-health-plan-only sh scripts/branch-health-plan-only-detection.test.sh
 
+# The DDL module-number allocator's own race-freedom proof (#1886): races real
+# `git` processes against throwaway local bare repos (never a mock of git, and
+# never /tmp -- repo-local scratch dirs cleaned up by its own trap), so it needs
+# neither network nor a live deployment. Measured here: ~2.4s.
+[ -f scripts/allocate-module-number.test.sh ] &&
+  run_check allocate-module-number sh scripts/allocate-module-number.test.sh
+
 # The append-only corpus guard (#778). CI runs it in Release Guards, and it was
 # invisible to the parity test until #897 widened the harvester -- it is neither
 # `pnpm`, `uv`, `terraform` nor `sh scripts/`, so the guard whose property is

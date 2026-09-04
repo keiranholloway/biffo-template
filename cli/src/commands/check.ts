@@ -9,6 +9,7 @@ import { runCodeqlSuppressionCheck } from '../scripts/check-codeql-suppression.j
 import { runCognitoInviteTemplateCheck } from '../scripts/check-cognito-invite-template.js'
 import { runCoreDirectPathsCheck } from '../scripts/check-core-direct-paths.js'
 import { runOwnershipCheck } from '../scripts/check-core-ownership.js'
+import { runDistributionInventoryCheck } from '../scripts/check-distribution-inventory.js'
 import { runDistributionRemoteStateCheck } from '../scripts/check-distribution-remote-state.js'
 import { runEventBridgeLogPermissionCheck } from '../scripts/check-eventbridge-log-permissions.js'
 import { runInstanceAdoptionCheck } from '../scripts/check-instance-adoption.js'
@@ -51,8 +52,8 @@ export const checkCommand = new Command('check').description(
     'eventbridge-log-permissions, plugin-tool-supply, core-direct-paths, instance-adoption, ' +
     'orphan-ratchet, cognito-invite-template, lambda-output, pipe-trap, codeql-suppression, ' +
     'skeleton-drift, terraform-input, plugin-allowlist-convention, migration-body-change, ' +
-    'distribution-remote-state) run in CI and git hooks, plus out-of-band audits (branch ' +
-    'protection, plugin-staleness)',
+    'distribution-inventory, distribution-remote-state) run in CI and git hooks, plus ' +
+    'out-of-band audits (branch protection, plugin-staleness)',
 )
 
 checkCommand
@@ -198,6 +199,19 @@ checkCommand
   )
   .action(async (opts: { instance?: string; instanceDir?: string; theirsDir?: string }) => {
     await runInstanceAdoptionCheck(opts)
+  })
+
+checkCommand
+  .command('distribution-inventory')
+  .description(
+    'Refuse a distribution-inventory.json entry that is malformed, half-classified, or ' +
+      "inconsistent with the channel it names (#1570) -- validateInventory's own schema rules, " +
+      'self-checkable and network-free. Contrast distribution-remote-state below, its sibling, ' +
+      "which needs a real cross-repo token to check a NAMED REMOTE repo's actual content and " +
+      'runs only on a schedule.',
+  )
+  .action(async () => {
+    await runDistributionInventoryCheck()
   })
 
 checkCommand

@@ -33,6 +33,7 @@ describe('biffo check', () => {
     'codeql-suppression',
     'cognito-invite-template',
     'core-direct-paths',
+    'distribution-inventory',
     'eventbridge-log-permissions',
     'lambda-output',
     'migration-body-change',

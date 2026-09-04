@@ -278,13 +278,6 @@ jobs:
         with:
           name: bandit-report
           path: services/api/bandit-report.json
-      - name: Dependency audit
-        if: ${{ !cancelled() }}
-        # Same treatment as the JS job's Dependency audit above: fails on a real
-        # advisory, INCONCLUSIVE on an unreachable PyPI/OSV (#591, #743). cwd is
-        # services/api, which is the environment `uv sync` installed and so the
-        # one to audit.
-        run: sh ../../scripts/py-dependency-audit.sh
       - name: Routing smoke test — self-test
         if: ${{ !cancelled() }}
         # Not exercising this repo's own deployment (CI has none to reach) —
@@ -369,6 +362,47 @@ jobs:
             exit 1
           fi
           echo "PASS: every scripts/*.test.sh guard in this repo has a caller."
+
+  # Split out of the `python` job deliberately (biffo-template#1882):
+  # `pip-audit`'s advisory lookups are chronically registry-dependent — same
+  # root cause, same fix, as the `js-audit` split above
+  # (biffo-template#1880/#1881). Mirrors biffo-template's own root `ci.yml`
+  # split; see that repo's `python-audit` job and #1882 for the full
+  # evidence. `python` (required) no longer runs this step, so a registry
+  # hang can never again block this required check; this job runs the exact
+  # same script informationally on every push/PR (`continue-on-error: true`)
+  # and is deliberately NOT part of
+  # DEFAULT_STATUS_CHECKS/SIBLING_STATUS_CHECKS.
+  python-audit:
+    name: Python Dependency Audit (non-blocking, #1882)
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    timeout-minutes: 20
+    continue-on-error: true
+    defaults:
+      run:
+        working-directory: services/api
+    steps:
+      # `fetch-depth: 0` matches the `python` job's own checkout above, for
+      # the same reason: py-dependency-audit.sh's pre-existing-vs-introduced
+      # comparison (#1673) only activates when `origin/${GITHUB_BASE_REF}`
+      # resolves locally, which a shallow (depth-1, single-ref) checkout
+      # never provides.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --all-groups --locked
+      - name: Dependency audit
+        if: ${{ !cancelled() }}
+        # Same treatment as the JS job's Dependency audit above: fails on a
+        # real advisory, INCONCLUSIVE on an unreachable PyPI/OSV (#591,
+        # #743) — and this job's own non-required status is what stops that
+        # inconclusive result from blocking the merge queue in the first
+        # place. cwd is services/api, which is the environment `uv sync`
+        # installed and so the one to audit.
+        run: sh ../../scripts/py-dependency-audit.sh
 
   security-secrets:
     name: Secret Scan

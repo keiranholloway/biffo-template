@@ -9,6 +9,7 @@ import { runCodeqlSuppressionCheck } from '../scripts/check-codeql-suppression.j
 import { runCognitoInviteTemplateCheck } from '../scripts/check-cognito-invite-template.js'
 import { runCoreDirectPathsCheck } from '../scripts/check-core-direct-paths.js'
 import { runOwnershipCheck } from '../scripts/check-core-ownership.js'
+import { runDistributionRemoteStateCheck } from '../scripts/check-distribution-remote-state.js'
 import { runEventBridgeLogPermissionCheck } from '../scripts/check-eventbridge-log-permissions.js'
 import { runInstanceAdoptionCheck } from '../scripts/check-instance-adoption.js'
 import { runLambdaOutputCheck } from '../scripts/check-lambda-output.js'
@@ -49,8 +50,9 @@ export const checkCommand = new Command('check').description(
   'Repo guards (ownership, release subject, plugin terraform, plugin collisions, ' +
     'eventbridge-log-permissions, plugin-tool-supply, core-direct-paths, instance-adoption, ' +
     'orphan-ratchet, cognito-invite-template, lambda-output, pipe-trap, codeql-suppression, ' +
-    'skeleton-drift, terraform-input, plugin-allowlist-convention, migration-body-change) ' +
-    'run in CI and git hooks, plus out-of-band audits (branch protection, plugin-staleness)',
+    'skeleton-drift, terraform-input, plugin-allowlist-convention, migration-body-change, ' +
+    'distribution-remote-state) run in CI and git hooks, plus out-of-band audits (branch ' +
+    'protection, plugin-staleness)',
 )
 
 checkCommand
@@ -196,6 +198,20 @@ checkCommand
   )
   .action(async (opts: { instance?: string; instanceDir?: string; theirsDir?: string }) => {
     await runInstanceAdoptionCheck(opts)
+  })
+
+checkCommand
+  .command('distribution-remote-state')
+  .description(
+    "Refuse a distribution-inventory.json gapReason restating a REMOTE repo's content as " +
+      'current fact once that content has actually changed (#1816) -- fetches every declared ' +
+      'remoteContentAssertion via `gh api` and compares against real content, generalising ' +
+      'the one-off #1807 wording-regex guard to any entry that declares one. Needs a real ' +
+      'cross-repo token (BIFFO_GITHUB_TOKEN in CI); exits 2 (cannot tell) rather than passing ' +
+      'when a fetch fails.',
+  )
+  .action(async () => {
+    await runDistributionRemoteStateCheck()
   })
 
 checkCommand

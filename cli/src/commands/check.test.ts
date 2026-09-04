@@ -66,12 +66,18 @@ describe('biffo check', () => {
    * — biffo-template is the template, not an instance), and it needs a real
    * cloned instance tree passed via `--instance-dir`, so it runs from
    * `instance-adoption-report.yml` on a schedule, not from a per-PR diff.
-   * Listing all four here keeps that a stated choice — a new subcommand that
+   * `biffo check distribution-remote-state` (#1816) is here for the same
+   * shape as `instance-adoption`: the claims it checks are about ANOTHER
+   * repo's live content, which needs a real cross-repo `BIFFO_GITHUB_TOKEN`
+   * a per-PR job does not carry, so it runs from
+   * `distribution-remote-state-report.yml` on a schedule instead.
+   * Listing all five here keeps that a stated choice — a new subcommand that
    * is neither a CI guard nor listed here fails the exhaustiveness assertion
    * below.
    */
   const auditOnly = [
     'branch-protection',
+    'distribution-remote-state',
     'instance-adoption',
     'plugin-staleness',
     'shared-file-reduction',

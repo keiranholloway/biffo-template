@@ -293,6 +293,34 @@ export const GUARD_AUTHORITY_INVENTORY: GuardAuthorityRecord[] = [
       "honest `unclear` per this sweep's own standard, not a manufactured verdict either way.",
   },
   {
+    id: 'distribution-inventory-remote-content',
+    path: 'cli/src/lib/distribution-inventory.ts',
+    inClass: true,
+    document:
+      "distribution-inventory.json entries' remoteContentAssertions (mustContain/" +
+      "mustNotContain) -- the substrings a gapReason's factual claim about a remote repo's " +
+      'file implies must/must not be present',
+    actor:
+      "the named remote repo's real file content at the named ref, fetched fresh via `gh api " +
+      "repos/<repo>/contents/<path>?ref=<ref>` (check-distribution-remote-state.ts) -- #1816's " +
+      "own class: a gapReason restated #1623's closed classification of biffo-plugin-" +
+      "marketing's .gitleaks.toml as current fact nine days after biffo-plugin-marketing#188 " +
+      'made it false, and the only prior guard (a #1807-shaped wording regex scoped to that ' +
+      'one entry) checked the PROSE, never the real file.',
+    disagreementTest: 'cli/src/lib/distribution-inventory.test.ts',
+    independence: 'independent',
+    note:
+      '#1816: checkRemoteContentAssertions is pure and network-free -- it takes ALREADY-' +
+      'FETCHED content as a Map, never touches the network or the gapReason string itself, so ' +
+      "a corruption in how a human writes gapReason prose cannot make this guard's own read " +
+      'agree with it wrongly. The one real fetch path (fetchRemoteContentViaGh, `gh api`) is ' +
+      "used only by check-distribution-remote-state.ts's live/scheduled run, never by the " +
+      "guard's own logic or its test, which use real content CAPTURED once and committed as a " +
+      'fixture (see the two named commands in the test file) -- independent measurements ' +
+      '(a hand-written claim vs. a live fetch) by construction, the same shape plugin-' +
+      'staleness.ts already established for "recorded value vs. live query".',
+  },
+  {
     id: 'doctor',
     path: 'cli/src/lib/doctor.ts',
     inClass: true,

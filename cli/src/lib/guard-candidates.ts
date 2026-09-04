@@ -209,6 +209,21 @@ export const GUARD_CANDIDATE_CLASSIFICATION: Record<string, GuardCandidateVerdic
       'to guard-authority-inventory.ts because the old regex never found it, and is now ' +
       'discovered natively.',
   },
+  'distribution-inventory.ts': {
+    isGuard: true,
+    reason:
+      'exports checkRemoteContentAssertions (#1816): a real document/actor comparison — a ' +
+      "distribution-inventory.json entry's remoteContentAssertions (the document: what a " +
+      "gapReason claims a named remote repo's file contains) against that file's real live " +
+      'content (the actor, fetched by check-distribution-remote-state.ts). Generalises the ' +
+      "narrow #1807-specific wording regex that first surfaced this file's own gapReason " +
+      'entries could go stale; wired via `biffo check distribution-remote-state`, scheduled ' +
+      'in distribution-remote-state-report.yml (no per-PR cross-repo token available — same ' +
+      'shape plugin-staleness.ts/doctor.ts already use for a remote actor). validateInventory ' +
+      'in this same file is NOT itself classified separately: it is schema validation on the ' +
+      "inventory's own shape (well-formedness), not a document/actor comparison, and its name " +
+      'does not match the export-name discovery signal.',
+  },
   'doctor.ts': {
     isGuard: true,
     reason:

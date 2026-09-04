@@ -101,12 +101,29 @@ attempts=3
 inconclusive=0
 failed=0
 
-# Audit one directory. Returns 0 if clean or inconclusive, 1 on a real finding.
-# `$1` is the directory, `$2` a human label, `$3` extra pnpm flags.
+# Audit one directory. Returns 0 if clean or inconclusive, 1 on a real finding,
+# AND writes a one-word verdict (`ok` / `fail` / `inconclusive`) to `$4`.
+#
+# The verdict file exists because this function is invoked backgrounded (`&`,
+# see the audit loop below) so the four (or however many) trees run in
+# parallel rather than paying their registry round-trip one after another
+# (#1874: 4 trees serially cost 15m21s in a real CI run and blew the job's
+# 20-minute cap). A backgrounded call is a forked subshell — every variable it
+# touches, including `inconclusive`/`failed` below, is a copy in that child
+# process and vanishes when it exits. The return code has the same problem: a
+# background job's exit status is only visible via `wait "$pid"`, one pid at a
+# time, which is no simpler than a file and less robust (a killed/never-run
+# job leaves nothing to wait on). So each invocation reports for itself, in
+# writing, and the parent tallies the results after `wait` once every
+# invocation has finished.
+#
+# `$1` is the directory, `$2` a human label, `$3` extra pnpm flags, `$4` the
+# result file this invocation must write its verdict to.
 audit_dir() {
   dir="$1"
   label="$2"
   extra="$3"
+  resultfile="$4"
 
   for attempt in $(seq 1 "$attempts"); do
     # printf, never echo: the CI step runs `sh scripts/...` i.e. dash, whose
@@ -157,12 +174,14 @@ audit_dir() {
       if [ "$((high + crit))" -gt 0 ]; then
         echo "::error::${label}: ${crit} critical + ${high} high advisory(ies) across ${total} package(s); registry answered ${seen_at}."
         printf '%s' "$out" | jq '.advisories // .metadata.vulnerabilities' 2>/dev/null | head -c 4000
+        echo "fail" >"$resultfile"
         return 1
       fi
       # A bare "no advisories" is not falsifiable. State the population, the
       # severities that did NOT block, and when the registry was asked, so a
       # reader can tell a clean tree from a tree nobody looked at properly.
       echo "${label}: 0 critical, 0 high across ${total} package(s) (${mod} moderate, ${low} low — reported, not blocking); registry answered ${seen_at}."
+      echo "ok" >"$resultfile"
       return 0
     fi
 
@@ -172,7 +191,7 @@ audit_dir() {
   done
 
   echo "::error::${label}: audit could not run after ${attempts} attempts (the registry returned a non-JSON/error response). Advisory scanning was NOT performed for this tree, so this is INCONCLUSIVE and BLOCKS — a gate that cannot see its input must not report clean (#1269, #591)."
-  inconclusive=$((inconclusive + 1))
+  echo "inconclusive" >"$resultfile"
   return 0
 }
 
@@ -232,11 +251,31 @@ for lock in $ALL_LOCKS; do
   fi
 done
 
-# Audit each discovered tree. The workspace's own lockfile is audited WITHOUT
-# --ignore-workspace, so pnpm resolves it normally; every other discovered
-# lockfile is a separate, vendored project and needs the flag, or pnpm walks
-# up, finds the workspace, and silently audits THAT instead — reporting clean
-# for a tree it never looked at, which is this exact defect one level down.
+# Audit each discovered tree IN PARALLEL (#1874). Each `audit_dir` call is a
+# real network round-trip, with its own retry/backoff, to registry.npmjs.org
+# — run one after another they cost roughly N x the slowest single tree (a
+# real CI run measured 4 trees / 15m21s, blowing the job's 20-minute cap
+# mid-way through ~9 other required guard steps). Backgrounding them lets the
+# round-trips overlap instead.
+#
+# A one-word-per-tree result file (see `audit_dir` above) is how the parent
+# shell learns each backgrounded verdict back: `$TMP_DIR` is created via
+# `mktemp -d` (collision-safe by construction — no need to hand-roll a `$$`
+# suffix on top of it) and torn down by the EXIT/HUP/INT/TERM trap below
+# whichever way this script leaves.
+#
+# The workspace's own lockfile is audited WITHOUT --ignore-workspace, so pnpm
+# resolves it normally; every other discovered lockfile is a separate,
+# vendored project and needs the flag, or pnpm walks up, finds the workspace,
+# and silently audits THAT instead — reporting clean for a tree it never
+# looked at, which is this exact defect one level down.
+TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/js-dependency-audit.XXXXXX") || {
+  echo "::error::js-dependency-audit: could not create a temp directory for parallel results (mktemp failed)." >&2
+  exit 2
+}
+trap 'rm -rf "$TMP_DIR"' EXIT HUP INT TERM
+
+i=0
 for lock in $ALL_LOCKS; do
   dir=$(dirname "$lock")
   dir_abs=$(cd "$dir" 2>/dev/null && pwd -P)
@@ -245,11 +284,39 @@ for lock in $ALL_LOCKS; do
     "$REPO_ROOT"/*) rel=${dir_abs#"$REPO_ROOT"/} ;;
     *) rel="$dir_abs" ;;
   esac
+  i=$((i + 1))
+  resultfile="$TMP_DIR/result.$i"
   if [ "$dir_abs" = "$WORKSPACE_ABS" ]; then
-    audit_dir "$dir" "pnpm audit (workspace: ${rel})" "" || failed=1
+    audit_dir "$dir" "pnpm audit (workspace: ${rel})" "" "$resultfile" &
   else
-    audit_dir "$dir" "pnpm audit (${rel})" "--ignore-workspace" || failed=1
+    audit_dir "$dir" "pnpm audit (${rel})" "--ignore-workspace" "$resultfile" &
   fi
+done
+
+# Wait for every backgrounded audit_dir before reading any result file back —
+# reading early would race a tree that is still auditing.
+wait
+
+# Tally the verdicts the backgrounded invocations wrote for themselves. A
+# result file that is missing or unreadable (the subshell was killed before
+# it could write, or never started) fails CLOSED as inconclusive rather than
+# being silently skipped — the same posture as the empty-discovery check
+# above: a tree this run cannot account for is not a clean tree.
+i=0
+for lock in $ALL_LOCKS; do
+  i=$((i + 1))
+  resultfile="$TMP_DIR/result.$i"
+  verdict=$(cat "$resultfile" 2>/dev/null)
+  case "$verdict" in
+    ok) ;;
+    fail) failed=1 ;;
+    inconclusive) inconclusive=$((inconclusive + 1)) ;;
+    *)
+      lock_dir=$(dirname "$lock")
+      echo "::error::js-dependency-audit: no verdict recorded for ${lock_dir} (expected ok/fail/inconclusive in ${resultfile}). Treating as inconclusive."
+      inconclusive=$((inconclusive + 1))
+      ;;
+  esac
 done
 
 if [ "$failed" -ne 0 ]; then

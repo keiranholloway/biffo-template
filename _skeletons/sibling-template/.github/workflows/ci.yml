@@ -87,21 +87,6 @@ jobs:
       - name: Build
         if: ${{ !cancelled() }}
         run: pnpm run build
-      - name: Dependency audit
-        if: ${{ !cancelled() }}
-        # Fails on a real high/critical advisory, but treats a broken audit
-        # registry as INCONCLUSIVE rather than reddening a required check for an
-        # infrastructure hiccup (#591, #743). The raw `pnpm audit
-        # --audit-level=high` this replaces exits non-zero identically whether it
-        # found a vulnerability or simply could not parse the registry's
-        # response, so any npm blip failed this job on every open PR at once.
-        #
-        # The relative path is deliberate. This job's working-directory is
-        # apps/frontend, which is exactly the tree to audit, and the script
-        # audits its own cwd — it is byte-identical to biffo-template's copy and
-        # to every other satellite's, distributed by that repo's shared-sync.sh,
-        # so it cannot assume a layout. Do not edit it here; edit it upstream.
-        run: sh ../../scripts/js-dependency-audit.sh
       # The generic relocation of tabsii-platform#377 Phase 2's scale-guard --
       # the systemic half of that issue, built in biffo-template so every new
       # sibling (in any Biffo instance) is born with it. Ships as
@@ -169,6 +154,51 @@ jobs:
       # portal, which is how tabsii-geo's CI broke for four hours (#1208).
       - name: E2E tests
         run: pnpm run e2e
+
+  # Split out of the `js` job deliberately (biffo-template#1880): `pnpm
+  # audit`'s registry call has been chronically, intermittently unreachable
+  # since npm/GitHub retired the legacy audit endpoints on 2026-07-15, an
+  # ongoing upstream infrastructure condition unrelated to this repo's own
+  # code. Mirrors biffo-template's own root `ci.yml` split; see that repo's
+  # `js-audit` job and #1880 for the full evidence. `js` (required) no
+  # longer runs this step, so a registry hang can never again block this
+  # required check; this job runs the exact same script informationally on
+  # every push/PR (`continue-on-error: true`) and is deliberately NOT part
+  # of DEFAULT_STATUS_CHECKS/SIBLING_STATUS_CHECKS.
+  js-audit:
+    name: JS Dependency Audit (non-blocking, #1880)
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    timeout-minutes: 20
+    continue-on-error: true
+    defaults:
+      run:
+        working-directory: apps/frontend
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: apps/frontend/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - name: Dependency audit
+        if: ${{ !cancelled() }}
+        # Fails on a real high/critical advisory, but treats a broken audit
+        # registry (non-JSON response, or the chronic #1880 timeout) as
+        # INCONCLUSIVE rather than blocking (#591, #743) — and this job's own
+        # non-required status is what stops that inconclusive result from
+        # blocking the merge queue in the first place.
+        #
+        # The relative path is deliberate. This job's working-directory is
+        # apps/frontend, which is exactly the tree to audit, and the script
+        # audits its own cwd — it is byte-identical to biffo-template's copy
+        # and to every other satellite's, distributed by that repo's
+        # shared-sync.sh, so it cannot assume a layout. Do not edit it here;
+        # edit it upstream.
+        run: sh ../../scripts/js-dependency-audit.sh
 
   python:
     name: Python (lint, types, test, security)

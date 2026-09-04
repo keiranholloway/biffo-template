@@ -29,11 +29,17 @@ output "security_group_id" {
 output "db_url" {
   description = "Full asyncpg URL for the MASTER/owner user — inject as BIFFO_DATABASE_URL in dev so Lambda needs no Secrets Manager call (and therefore no NAT or VPC endpoint). Used by migrations, biffo:db-init and biffo:ddl-import, which create and alter objects. Sensitive: stored in Terraform state."
   sensitive   = true
-  value       = "postgresql+asyncpg://${local.db_user}:${random_password.db_password.result}@${local.db_address}:5432/${local.db_name}"
+  # Defense in depth (#1888): percent-encode user/password rather than relying
+  # solely on db_password's narrowed charset above. urlencode()'s output
+  # round-trips correctly through SQLAlchemy's make_url (the only parser any
+  # consumer of this URL uses — confirmed by direct test), so this stays safe
+  # even if a future credential's charset changes again.
+  value = "postgresql+asyncpg://${urlencode(local.db_user)}:${urlencode(random_password.db_password.result)}@${local.db_address}:5432/${local.db_name}"
 }
 
 output "app_db_url" {
   description = "Full asyncpg URL for the least-privilege application role (#253) — inject as BIFFO_APP_DATABASE_URL in dev, alongside (not instead of) db_url. The request path uses this one. Sensitive: stored in Terraform state."
   sensitive   = true
-  value       = "postgresql+asyncpg://${var.app_db_user}:${random_password.app_password.result}@${local.db_address}:5432/${local.db_name}"
+  # Defense in depth (#1888) — see db_url above.
+  value = "postgresql+asyncpg://${urlencode(var.app_db_user)}:${urlencode(random_password.app_password.result)}@${local.db_address}:5432/${local.db_name}"
 }

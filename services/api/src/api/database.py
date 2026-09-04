@@ -1,5 +1,6 @@
 import json
 from collections.abc import AsyncGenerator
+from urllib.parse import quote
 
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -19,10 +20,16 @@ def _url_from_secret(secret: dict) -> str:
     # db_host overrides the secret's host field — used to point at the RDS Proxy
     # endpoint instead of the direct RDS address when the proxy is enabled.
     host = settings.db_host or secret["host"]
-    return (
-        f"postgresql+asyncpg://{secret['username']}:{secret['password']}"
-        f"@{host}:{secret['port']}/{secret['dbname']}"
-    )
+    # Defense in depth (#1888): percent-encode rather than trust the stored
+    # credential's charset alone. quote(..., safe="") round-trips correctly
+    # through SQLAlchemy's make_url — the parser create_async_engine uses
+    # internally, and the only one any consumer of this URL relies on
+    # (confirmed by direct test) — so a future credential containing a
+    # URL-structural character (a literal '%' being the reproduced case here)
+    # can no longer corrupt the connection URL this builds.
+    user = quote(secret["username"], safe="")
+    password = quote(secret["password"], safe="")
+    return f"postgresql+asyncpg://{user}:{password}@{host}:{secret['port']}/{secret['dbname']}"
 
 
 def resolve_master_database_url() -> str:

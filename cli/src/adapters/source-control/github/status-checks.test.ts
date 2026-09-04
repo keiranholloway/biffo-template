@@ -72,8 +72,19 @@ const CORE_WORKFLOWS = [CORE_CI, CORE_RELEASE_GUARDS]
  *   both status-check lists so a registry hang can never again block a
  *   merge queue on a problem nobody merging can fix — it still runs on
  *   every push/PR, informationally, via `continue-on-error: true`.
+ *
+ * - `Python Dependency Audit (non-blocking, #1882)`: the identical split for
+ *   `pip-audit`, applied for the identical reason — its registry lookups are
+ *   exactly as chronically unreliable as `pnpm audit`'s were, confirmed live
+ *   the same day #1880 shipped when a freshly-published pip advisory
+ *   independently blocked five unrelated sibling repos' required Python gate
+ *   within the same hour (#1882).
  */
-const NOT_REQUIRED = new Set(['Release Guards', 'JS Dependency Audit (non-blocking, #1880)'])
+const NOT_REQUIRED = new Set([
+  'Release Guards',
+  'JS Dependency Audit (non-blocking, #1880)',
+  'Python Dependency Audit (non-blocking, #1882)',
+])
 
 /**
  * Extract the `name:` of every top-level job in a GitHub Actions workflow.

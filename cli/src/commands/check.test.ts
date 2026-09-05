@@ -29,6 +29,7 @@ describe('biffo check', () => {
    */
   const ciGuards = [
     'adr-numbering',
+    'api-gateway-integration',
     'claim-invocation',
     'codeql-suppression',
     'cognito-invite-template',

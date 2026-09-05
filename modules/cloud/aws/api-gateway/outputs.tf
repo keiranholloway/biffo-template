@@ -24,3 +24,29 @@ output "api_domain" {
 output "cognito_authorizer_id" {
   value = aws_apigatewayv2_authorizer.cognito.id
 }
+
+# CONTRACT for any OTHER aws_apigatewayv2_integration targeting the SAME Lambda
+# this module was given as var.lambda_function_arn (biffo-template#1900). This
+# module's aws_lambda_permission.api_gateway is scoped to
+# qualifier = local.lambda_alias_name (#1747) — a Lambda alias carries its own
+# resource-based policy, separate from the unqualified function's, so a
+# permission added without a qualifier does not extend to invocations made via
+# a qualified ARN and vice versa. An integration_uri pointed at the raw,
+# unqualified function ARN therefore has ZERO invoke permission the moment this
+# module's permission exists, and fails closed with a generic API Gateway 500
+# that neither this module's nor the caller's `terraform plan`/`apply` can see
+# (confirmed live: this took down tabsii-platform's entire unauthenticated
+# public API, 11 routes, until a human noticed).
+#
+# Env-owned Terraform (infra/environments/<env>/*.tf, which core-manifest.json
+# excludes from template sync — see plugin-host.core.tf's own integration for
+# the established pattern of wiring a route onto this API from outside this
+# module) MUST use this output as integration_uri when it targets the same
+# Lambda, never the compute module's raw function_arn output and never a
+# same-named "live" alias re-derived by convention: this is the ARN THIS
+# module's own permission actually requires, independent of how any other
+# module happens to name its own alias.
+output "lambda_integration_uri" {
+  description = "Alias-qualified ARN of the Lambda this API's own aws_lambda_permission grants invoke access to. Any other aws_apigatewayv2_integration targeting the SAME function (the one passed in as var.lambda_function_arn) MUST use this output as its integration_uri — see the comment above for why the raw function ARN silently loses invoke permission."
+  value       = local.lambda_alias_arn
+}

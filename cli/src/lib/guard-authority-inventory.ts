@@ -524,6 +524,18 @@ export const GUARD_AUTHORITY_INVENTORY: GuardAuthorityRecord[] = [
     note: 'cross-references two Terraform resources in the SAME tree, not two different documents about the deployed actor',
   },
   {
+    id: 'api-gateway-integration-guard',
+    path: 'cli/src/lib/api-gateway-integration-guard.ts',
+    inClass: false,
+    disagreementTest: null,
+    note:
+      'cross-references two Terraform resources in the SAME tree (a `module "..."` block ' +
+      'establishing which Lambda an api-gateway module instance fronts with an ' +
+      'alias-qualified permission, and an `aws_apigatewayv2_integration` block elsewhere in ' +
+      'that same tree) — same shape as eventbridge-log-permission-guard directly above, not ' +
+      'two independently-authoritative documents about a live deployed actor (#1900).',
+  },
+  {
     id: 'lambda-output-guard',
     path: 'cli/src/lib/lambda-output-guard.ts',
     inClass: false,

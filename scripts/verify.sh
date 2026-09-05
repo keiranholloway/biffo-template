@@ -1432,6 +1432,7 @@ if [ -f scripts/biffo.sh ]; then
   run_check terraform-input sh scripts/biffo.sh check terraform-input
   run_check plugin-allowlist sh scripts/biffo.sh check plugin-allowlist-convention
   run_check distribution-inventory sh scripts/biffo.sh check distribution-inventory
+  run_check api-gateway-integration sh scripts/biffo.sh check api-gateway-integration
 else
   skip biffo-guards "no scripts/biffo.sh in this repo"
 fi

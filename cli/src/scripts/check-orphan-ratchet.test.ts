@@ -167,6 +167,50 @@ describe('runOrphanRatchetCheck', () => {
     expect(reported).toContain('nearest sanctioned carve-out(s): services/api/tests/instance/')
   })
 
+  it('distinguishes should-be-upstream from should-be-in-a-carve-out when no userOwned entry is nearby (#1714)', async () => {
+    // No userOwned entry anywhere in this manifest shares a leading path
+    // segment with the orphan below ('scripts' vs 'docs') --
+    // leadingSegmentOverlap requires shared > 0, so nearestUserOwnedEntries
+    // is genuinely empty here, not merely unasserted. This is the second
+    // half of #1714's recommendation ("distinguish 'should be upstream' from
+    // 'should be in a carve-out' -- those need opposite actions"), and until
+    // now nothing in this file exercised the branch that actually draws it.
+    const root = makeTmpDir('orphan-ratchet-check-no-carveout')
+    const baseDir = join(root, 'base')
+    const theirsDir = join(root, 'theirs')
+    const instanceDir = join(root, 'instance')
+    for (const dir of [baseDir, theirsDir, instanceDir]) mkdirSync(dir, { recursive: true })
+    writeFileSync(
+      join(theirsDir, 'core-manifest.json'),
+      JSON.stringify({
+        version: 1,
+        templateOwned: ['scripts/'],
+        userOwned: ['docs/ADR/'],
+      }),
+    )
+    write(
+      instanceDir,
+      'scripts/post-deploy-smoke.sh',
+      '#!/bin/sh\n# general-purpose tooling written in the wrong repo\n',
+    )
+
+    await expect(
+      runOrphanRatchetCheck({ label: 'fixture-no-carveout', theirsDir, baseDir, instanceDir }),
+    ).resolves.toBeUndefined()
+
+    const reported = vi.mocked(console.error).mock.calls.flat().join('\n')
+    expect(reported).toContain('no userOwned entry shares any leading path segment with this file')
+    expect(reported).toContain('core-manifest.json has no carve-out anywhere near it today')
+    expect(reported).toContain(
+      'Either this is a core capability that belongs upstream in biffo-template, or it needs ' +
+        'a new carve-out declared in core-manifest.json',
+    )
+    // And the opposite branch's text must NOT appear -- proves this really
+    // took the "no entries" path, not the carve-out path with an empty list
+    // rendered oddly.
+    expect(reported).not.toContain('nearest sanctioned carve-out(s)')
+  })
+
   it('denominator counts every template-owned path examined, not just the flagged ones (#1844)', async () => {
     const root = makeTmpDir('orphan-ratchet-check-denominator')
     const { baseDir, theirsDir, instanceDir } = buildTrees(root)

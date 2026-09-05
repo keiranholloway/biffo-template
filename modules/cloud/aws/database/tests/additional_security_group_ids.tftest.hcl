@@ -16,6 +16,14 @@ mock_provider "aws" {
   mock_resource "aws_iam_role" {
     defaults = { arn = "arn:aws:iam::123456789012:role/mock" }
   }
+  # aws_db_proxy_target's target_group_name must start with a letter. Left
+  # auto-mocked, this resource's `name` is a random string that occasionally
+  # starts with a digit, failing that validation nondeterministically —
+  # reproduced live in CI (biffo-template#1902) even though the exact same
+  # test had just passed locally moments earlier.
+  mock_resource "aws_db_proxy_default_target_group" {
+    defaults = { name = "mock-target-group" }
+  }
 }
 mock_provider "random" {}
 

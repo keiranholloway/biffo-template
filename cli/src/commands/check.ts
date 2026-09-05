@@ -3,6 +3,7 @@ import { GitAdapter } from '../adapters/git/index.js'
 import { RegistryAdapter } from '../adapters/registry/index.js'
 import { checkPluginStaleness, formatStalenessReport } from '../lib/plugin-staleness.js'
 import { runAdrNumberingCheck } from '../scripts/check-adr-numbering.js'
+import { runApiGatewayIntegrationCheck } from '../scripts/check-api-gateway-integration.js'
 import { runBranchProtectionCheck } from '../scripts/check-branch-protection.js'
 import { runClaimInvocationCheck } from '../scripts/check-claim-invocation.js'
 import { runCodeqlSuppressionCheck } from '../scripts/check-codeql-suppression.js'
@@ -52,8 +53,8 @@ export const checkCommand = new Command('check').description(
     'eventbridge-log-permissions, plugin-tool-supply, core-direct-paths, instance-adoption, ' +
     'orphan-ratchet, cognito-invite-template, lambda-output, pipe-trap, codeql-suppression, ' +
     'skeleton-drift, terraform-input, plugin-allowlist-convention, migration-body-change, ' +
-    'distribution-inventory, distribution-remote-state) run in CI and git hooks, plus ' +
-    'out-of-band audits (branch protection, plugin-staleness)',
+    'distribution-inventory, distribution-remote-state, api-gateway-integration) run in CI and ' +
+    'git hooks, plus out-of-band audits (branch protection, plugin-staleness)',
 )
 
 checkCommand
@@ -336,6 +337,19 @@ checkCommand
   )
   .action(async () => {
     await runTerraformInputCheck()
+  })
+
+checkCommand
+  .command('api-gateway-integration')
+  .description(
+    "Refuse an env-owned aws_apigatewayv2_integration targeting a Lambda's raw, unqualified " +
+      'function_arn when modules/cloud/aws/api-gateway already fronts that same Lambda with an ' +
+      'alias-qualified aws_lambda_permission (#1747) — terraform validate/plan pass on both ' +
+      'sides in isolation, so this is the only signal before a real deploy 500s (biffo-' +
+      'template#1900; tabsii-platform took 11 public routes down this exact way).',
+  )
+  .action(async () => {
+    await runApiGatewayIntegrationCheck()
   })
 
 checkCommand

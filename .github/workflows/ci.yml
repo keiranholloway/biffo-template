@@ -346,6 +346,16 @@ jobs:
       - name: Terraform-input guard
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: sh scripts/biffo.sh check terraform-input
+      # An env-owned aws_apigatewayv2_integration targeting a Lambda's raw,
+      # unqualified function_arn when modules/cloud/aws/api-gateway already
+      # fronts that same Lambda with an alias-qualified aws_lambda_permission
+      # (#1747) — terraform validate/plan pass on both sides of this seam in
+      # isolation, so this is the only signal before a real deploy 500s.
+      # tabsii-platform took its entire unauthenticated public API (11
+      # routes) down this exact way (#1900).
+      - name: API Gateway integration-qualifier guard
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: sh scripts/biffo.sh check api-gateway-integration
       # The ADR-0009 service-principal allowlist glob no longer matching the
       # IAM role name modules/cloud/aws/compute + modules/plugins/_template
       # actually build — terraform validate is silent on this by design (the

@@ -153,6 +153,14 @@ export interface GuardCandidateVerdict {
 export const GUARD_CANDIDATE_CLASSIFICATION: Record<string, GuardCandidateVerdict> = {
   // ── Pre-#1519 naming-convention guards — carried forward unchanged ──────
   'adr-numbering-guard.ts': { isGuard: true, reason: 'matches the *-guard.ts convention' },
+  'api-gateway-integration-guard.ts': {
+    isGuard: true,
+    reason:
+      'matches the *-guard.ts convention; cross-references a module block and an ' +
+      'aws_apigatewayv2_integration block in the same Terraform tree (#1900) — classified ' +
+      'inClass: false in guard-authority-inventory.ts (same shape as ' +
+      'eventbridge-log-permission-guard, not a #1362 two-independent-documents case).',
+  },
   'branch-protection-audit.ts': { isGuard: true, reason: 'matches the *-audit.ts convention' },
   'codeql-suppression-guard.ts': { isGuard: true, reason: 'matches the *-guard.ts convention' },
   'cognito-invite-template-guard.ts': {

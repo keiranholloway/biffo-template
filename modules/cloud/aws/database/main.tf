@@ -176,7 +176,7 @@ resource "aws_db_instance" "main" {
   password = random_password.db_password.result
 
   db_subnet_group_name   = aws_db_subnet_group.main.name
-  vpc_security_group_ids = [aws_security_group.db.id]
+  vpc_security_group_ids = concat([aws_security_group.db.id], var.additional_security_group_ids)
   parameter_group_name   = aws_db_parameter_group.main.name
 
   multi_az            = var.multi_az
@@ -246,7 +246,7 @@ resource "aws_db_proxy" "main" {
   idle_client_timeout    = 1800
   require_tls            = true
   role_arn               = aws_iam_role.rds_proxy[0].arn
-  vpc_security_group_ids = [aws_security_group.db.id]
+  vpc_security_group_ids = concat([aws_security_group.db.id], var.additional_security_group_ids)
   vpc_subnet_ids         = var.private_subnet_ids
 
   # One auth block per credential the proxy will accept. The master is what

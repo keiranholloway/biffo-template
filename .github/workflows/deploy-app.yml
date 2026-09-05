@@ -3015,10 +3015,10 @@ jobs:
           # Match on the exact title among open issues rather than `--search`:
           # the search index lags by minutes, which would file a duplicate for
           # every consecutive failure. One open issue per branch, commented on.
-          existing=$(gh issue list --state open --limit 100 --json number,title \
+          existing=$(gh issue list --repo "${GITHUB_REPOSITORY}" --state open --limit 100 --json number,title \
             --jq "map(select(.title == \"${title}\")) | .[0].number // empty")
           if [ -n "$existing" ]; then
-            gh issue comment "$existing" --body "$body"
+            gh issue comment "$existing" --repo "${GITHUB_REPOSITORY}" --body "$body"
           else
-            gh issue create --title "$title" --body "$body"
+            gh issue create --repo "${GITHUB_REPOSITORY}" --title "$title" --body "$body"
           fi

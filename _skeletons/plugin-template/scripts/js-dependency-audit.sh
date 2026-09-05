@@ -76,6 +76,27 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 1
 fi
 
+# `timeout` bounds each `pnpm audit` call (#1878). Without it, a registry that
+# TCP-hangs rather than erroring makes a single attempt block for however long
+# pnpm's own internal retry/timeout budget takes — observed at ~4 minutes per
+# attempt against a healthy-run baseline of ~2 seconds for all discovered
+# trees combined. Multiplied by this script's own 3-attempt retry loop across
+# every discovered lockfile tree, that reaches ~36 minutes worst case, blowing
+# through the CI job's 20-minute cap and getting the job CANCELLED — a worse
+# outcome than this script's own designed INCONCLUSIVE-and-block (exit 2),
+# because a cancelled job prints no actionable error. Missing `timeout` is a
+# deterministic environment defect like missing jq above, not a transient
+# hiccup, so it fails loudly rather than silently reverting to unbounded waits.
+if ! command -v timeout >/dev/null 2>&1; then
+  echo "::error::timeout (coreutils) is not installed on this runner. The dependency audit cannot bound a hung registry call without it. Install coreutils."
+  exit 1
+fi
+
+# Generous relative to a healthy run (~2s for every tree combined) but short
+# enough that 3 attempts × every discovered tree stays well inside the job's
+# budget. Overridable for local debugging against a known-slow network.
+AUDIT_TIMEOUT_SECS="${AUDIT_TIMEOUT_SECS:-20}"
+
 attempts=3
 inconclusive=0
 failed=0
@@ -121,7 +142,8 @@ audit_dir() {
     #     forever while scanning nothing. (Caught by running this script before
     #     trusting it — the workspace audit had silently stopped working.)
     # shellcheck disable=SC2086
-    out="$(cd "$dir" 2>/dev/null && pnpm audit --json $extra 2>/dev/null)"
+    out="$(cd "$dir" 2>/dev/null && timeout "$AUDIT_TIMEOUT_SECS" pnpm audit --json $extra 2>/dev/null)"
+    audit_status=$?
     # Stamped the instant the registry answered, not when the run started.
     # `pnpm audit` asks the LIVE registry, so its verdict is a function of what
     # had been ingested at this moment — two runs of the same tree minutes apart
@@ -129,6 +151,19 @@ audit_dir() {
     # falsifiable, and a red appearing hours after a merge reads as "someone
     # broke dev" when nothing in the tree moved.
     seen_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+    # `timeout` exits 124 when it had to kill the process rather than the
+    # process exiting on its own. Handled before the jq parse below: a killed
+    # `pnpm audit` produces empty/partial output that would already fall
+    # through to "could not run", but naming the timeout explicitly here keeps
+    # that failure distinguishable from a genuine registry parse error rather
+    # than silently blank, and — same contract as any other "could not run" —
+    # it is never treated as a clean/success result.
+    if [ "$audit_status" -eq 124 ]; then
+      echo "${label}: attempt ${attempt}/${attempts} could not run: timed out after ${AUDIT_TIMEOUT_SECS}s waiting on the registry"
+      [ "$attempt" -lt "$attempts" ] && sleep "$((attempt * 3))"
+      continue
+    fi
 
     if printf '%s' "$out" | jq -e '.metadata.vulnerabilities' >/dev/null 2>&1; then
       high="$(printf '%s' "$out" | jq '.metadata.vulnerabilities.high // 0')"

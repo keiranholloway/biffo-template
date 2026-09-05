@@ -58,12 +58,12 @@ function repo(): string {
   return dir
 }
 
-function run(script: string, cwd: string, binDir: string) {
+function run(script: string, cwd: string, binDir: string, extraEnv: Record<string, string> = {}) {
   try {
     const stdout = execFileSync('sh', [script], {
       encoding: 'utf8',
       cwd,
-      env: { ...process.env, PATH: `${binDir}:${process.env.PATH}` },
+      env: { ...process.env, PATH: `${binDir}:${process.env.PATH}`, ...extraEnv },
     })
     return { code: 0, output: stdout }
   } catch (e) {
@@ -90,6 +90,12 @@ if [ "$1" = "audit" ]; then
   echo '{"metadata":{"vulnerabilities":{"info":0,"low":0,"moderate":0,"high":3,"critical":1},"totalDependencies":412}}'
   exit 1
 fi
+exit 1
+`
+// A registry that TCP-hangs instead of erroring (#1878) — never exits on its
+// own, so only the script's own `timeout` wrapper can end the attempt.
+const PNPM_HANG = `#!/bin/sh
+if [ "$1" = "audit" ]; then sleep 300; fi
 exit 1
 `
 const UV_OK = `#!/bin/sh
@@ -121,6 +127,17 @@ describe('dependency audits fail closed (#1269)', () => {
     writeFileSync(join(d, 'pnpm-lock.yaml'), '{}')
     const { code, output } = run(JS_SCRIPT, d, bin(PNPM_JUNK, UV_OK))
     expect(code, output).toBe(2)
+    expect(output).toMatch(/NOT performed/i)
+  })
+
+  it('js: a registry that TCP-hangs (#1878) is bounded by `timeout` and still exits 2, not left to run forever', () => {
+    const d = repo()
+    writeFileSync(join(d, 'pnpm-lock.yaml'), '{}')
+    // AUDIT_TIMEOUT_SECS is overridable for exactly this: 3 attempts at a real
+    // 20s default would blow past the test's own timeout budget.
+    const { code, output } = run(JS_SCRIPT, d, bin(PNPM_HANG, UV_OK), { AUDIT_TIMEOUT_SECS: '1' })
+    expect(code, output).toBe(2)
+    expect(output).toMatch(/timed out after 1s/)
     expect(output).toMatch(/NOT performed/i)
   })
 

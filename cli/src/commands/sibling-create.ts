@@ -14,6 +14,7 @@ import { reportBranchProtectionSummary } from '../lib/branch-protection-outcome.
 import { parseGitHubRepo } from '../lib/core-upgrade.js'
 import { getLatestCoreVersion } from '../lib/core-version.js'
 import { resolveGithubToken } from '../lib/credentials.js'
+import { execa } from '../lib/exec.js'
 import { log } from '../lib/logger.js'
 import { resolveRepoIds } from '../lib/oidc.js'
 import {
@@ -235,6 +236,33 @@ export interface SiblingCreateOptions {
    * has to paper over.
    */
   skipRegistration?: boolean
+  /**
+   * Regenerates `apps/frontend/pnpm-lock.yaml` in the scaffold's temp
+   * directory, after `writeSiblingTemplate` has added `coreConfig.design_tokens`
+   * (issue #1739 option B) as a new dependency in `package.json`. Without
+   * this, the sibling's own `pnpm install --frozen-lockfile` (ci.yml) would
+   * reject the mismatch and fail the new repo's FIRST required check.
+   *
+   * Only ever invoked when `coreConfig.design_tokens` is set — an instance
+   * that declares no design token source never calls this, matching "today's
+   * behaviour unchanged".
+   *
+   * Defaults to a real `pnpm install --lockfile-only` subprocess (below).
+   * Injectable so tests can assert the right directory was targeted without
+   * touching the network or a real package registry.
+   */
+  relockFrontendDeps?: (cwd: string) => Promise<void>
+}
+
+/**
+ * Real implementation of `SiblingCreateOptions.relockFrontendDeps`.
+ * `--lockfile-only` resolves the new dependency and rewrites
+ * `pnpm-lock.yaml` without installing `node_modules` or running any
+ * package's install scripts — correct here, since nothing in this temp
+ * directory ever runs the code it would install.
+ */
+async function defaultRelockFrontendDeps(cwd: string): Promise<void> {
+  await execa('pnpm', ['install', '--lockfile-only'], { cwd })
 }
 
 export async function runSiblingCreate(
@@ -343,6 +371,7 @@ export async function runSiblingCreate(
         config,
         options.coreConfig,
         options.githubToken,
+        options.relockFrontendDeps ?? defaultRelockFrontendDeps,
       )
     }
     markSiblingStepComplete(session, 'push_skeleton')
@@ -605,6 +634,7 @@ async function pushSkeleton(
   config: SiblingConfig,
   coreConfig: BiffoConfig,
   githubToken: string,
+  relockFrontendDeps: (cwd: string) => Promise<void>,
 ): Promise<void> {
   const workDir = mkdtempSync(join(tmpdir(), `biffo-sibling-${config.project.name}-`))
   try {
@@ -615,7 +645,18 @@ async function pushSkeleton(
       // only, mirroring how `biffo init` stamps `biffo.core.json`. See the
       // `template_version` field doc on `SiblingMarker` (lib/sibling-teardown.ts).
       templateVersion: getLatestCoreVersion(),
+      designTokens: coreConfig.design_tokens,
     })
+    // writeSiblingTemplate has just (possibly) added coreConfig.design_tokens
+    // as a new apps/frontend dependency — the committed pnpm-lock.yaml no
+    // longer describes package.json, and ci.yml's `pnpm install
+    // --frozen-lockfile` rejects exactly that mismatch rather than silently
+    // re-resolving. Skip entirely when no design tokens were declared: this
+    // is the "today's behaviour unchanged" half of issue #1739 option B, and
+    // it must not cost every other instance a network round-trip it never asked for.
+    if (coreConfig.design_tokens) {
+      await relockFrontendDeps(join(workDir, 'apps', 'frontend'))
+    }
     await git.init(workDir, 'dev')
     await git.addRemote(workDir, 'origin', cloneUrl)
     await git.add(workDir, ['.'])
@@ -665,6 +706,13 @@ export function writeSiblingTemplate(
      * `lib/sibling-teardown.ts`).
      */
     templateVersion: string
+    /**
+     * The core project's own design token source (issue #1739 option B),
+     * threaded straight from `BiffoConfig.design_tokens`. `undefined` is
+     * today's unchanged behaviour: the sibling depends only on the generic
+     * `@biffo/design-tokens` and none of the rewrites below run.
+     */
+    designTokens?: { package: string; version: string; path: string } | undefined
   },
 ): void {
   if (!existsSync(templateRoot)) {
@@ -721,6 +769,106 @@ export function writeSiblingTemplate(
       .replace(/^NEXT_PUBLIC_SIBLING_PATH_PREFIX=.*$/m, `NEXT_PUBLIC_SIBLING_PATH_PREFIX=${path}`)
       .replace(/^NEXT_PUBLIC_BASE_PATH=.*$/m, `NEXT_PUBLIC_BASE_PATH=${path}`)
     writeFileSync(envPath, content)
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
+  }
+
+  if (context.designTokens) {
+    rewriteDesignTokens(targetDir, context.designTokens)
+  }
+}
+
+/**
+ * Issue #1739 option B. Points the freshly-scaffolded sibling at the core
+ * project's own design token package instead of the generic (currently
+ * empty) `@biffo/design-tokens` scale — three mechanical rewrites, all
+ * tolerant of a template that lacks the target file (the same ENOENT
+ * tolerance `writeSiblingTemplate` already applies to `.env.example`, so a
+ * minimal/custom `--template` doesn't hard-fail on a file it never had).
+ *
+ * `@biffo/design-tokens` is deliberately left as a dependency, never removed
+ * — `biffo-scale-guard`'s own bin ships from that package, even when its
+ * tokens.css is no longer the source being checked.
+ */
+function rewriteDesignTokens(
+  targetDir: string,
+  tokens: { package: string; version: string; path: string },
+): void {
+  const importSpecifier = `${tokens.package}/${tokens.path}`
+
+  // apps/frontend/package.json — add the real token package as a dependency
+  // alongside @biffo/design-tokens.
+  const packageJsonPath = join(targetDir, 'apps', 'frontend', 'package.json')
+  try {
+    const pkg = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as {
+      dependencies?: Record<string, string>
+    }
+    pkg.dependencies = { ...pkg.dependencies, [tokens.package]: tokens.version }
+    writeFileSync(packageJsonPath, JSON.stringify(pkg, null, 2) + '\n')
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
+  }
+
+  // apps/frontend/src/app/globals.css — the import is the ONLY thing that
+  // changes; the file's own header comment (forbidding a locally redeclared
+  // token) applies exactly as much to an instance-supplied source as to the
+  // generic default.
+  const globalsCssPath = join(targetDir, 'apps', 'frontend', 'src', 'app', 'globals.css')
+  try {
+    const css = readFileSync(globalsCssPath, 'utf8').replace(
+      /^@import '@biffo\/design-tokens\/tokens\.css';$/m,
+      `@import '${importSpecifier}';`,
+    )
+    writeFileSync(globalsCssPath, css)
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
+  }
+
+  // .github/workflows/ci.yml:
+  //   1. Point --tokens (in the `js` job) at the real package, resolved the
+  //      way that job's own working-directory (apps/frontend) sees
+  //      node_modules after `pnpm install --frozen-lockfile`.
+  //   2. Add `packages: read` + NODE_AUTH_TOKEN to `js` AND `js-audit` — both
+  //      run `pnpm install --frozen-lockfile` from apps/frontend, and without
+  //      them neither can resolve a private scoped package at all (the
+  //      skeleton's `e2e` job already carries both, for the same reason).
+  //      `js` is a REQUIRED status check, so leaving it unauthenticated would
+  //      fail the new sibling's own first CI run at its very first step.
+  const ciYmlPath = join(targetDir, '.github', 'workflows', 'ci.yml')
+  try {
+    let yml = readFileSync(ciYmlPath, 'utf8')
+    yml = yml.replace(
+      /^(\s*run: pnpm exec biffo-scale-guard)$/m,
+      `$1 --tokens node_modules/${importSpecifier}`,
+    )
+    // Only the `js` job has exactly this sequence with nothing between
+    // `timeout-minutes` and `defaults` — `js-audit` has `continue-on-error`
+    // in between, and `e2e` already declares its own `permissions` block, so
+    // this targets `js` alone.
+    yml = yml.replace(
+      '    timeout-minutes: 20\n    defaults:\n      run:\n        working-directory: apps/frontend\n    steps:',
+      '    timeout-minutes: 20\n    permissions:\n      contents: read\n      packages: read\n' +
+        '    defaults:\n      run:\n        working-directory: apps/frontend\n    steps:',
+    )
+    // `js-audit` (non-blocking, #1880) runs the same `pnpm install
+    // --frozen-lockfile` from the same apps/frontend — without its own
+    // `permissions` block it would fail the same way `js` would have, just
+    // without blocking anything. Its own unique anchor: `continue-on-error`
+    // immediately before `defaults`/`apps/frontend` (`python-audit` has
+    // `continue-on-error` too, but working-directory: services/api).
+    yml = yml.replace(
+      '    continue-on-error: true\n    defaults:\n      run:\n        working-directory: apps/frontend\n    steps:',
+      '    continue-on-error: true\n    permissions:\n      contents: read\n      packages: read\n' +
+        '    defaults:\n      run:\n        working-directory: apps/frontend\n    steps:',
+    )
+    // Both `js` and `js-audit` run `pnpm install --frozen-lockfile` with no
+    // NODE_AUTH_TOKEN of their own — `e2e`'s copy already has one, so the
+    // negative lookahead skips it rather than double-adding.
+    yml = yml.replace(
+      /( {6}- run: pnpm install --frozen-lockfile)\n(?! {8}env:)/g,
+      '$1\n        env:\n          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n',
+    )
+    writeFileSync(ciYmlPath, yml)
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
   }

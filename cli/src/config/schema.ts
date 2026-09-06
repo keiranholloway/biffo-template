@@ -45,6 +45,41 @@ const DnsSchema = z.object({
   domain: z.string().min(1).optional(),
 })
 
+// Issue #1739 option B. `_skeletons/sibling-template` depends only on the
+// generic `@biffo/design-tokens`, which ships colour/radius/shadow tokens but
+// deliberately NO type scale (packages/design-tokens/bin/scale-guard.mjs
+// explains why: a generic Biffo scale is a design decision nobody has made,
+// and biffo-template must not smuggle one in). An instance that HAS adopted
+// its own scale (Tabsii's `@tabsii-com/ui`) declares it here so every sibling
+// `biffo sibling create` scaffolds against this core project inherits it
+// automatically, instead of a founder hand-migrating each one after the fact
+// the way the first four Tabsii siblings were. Omitting this block is
+// unchanged behaviour: a new sibling depends only on `@biffo/design-tokens`,
+// exactly as before this option existed.
+const DesignTokensSchema = z.object({
+  package: z
+    .string()
+    .min(1)
+    .describe(
+      'npm package providing this instance\'s real type scale, e.g. "@tabsii-com/ui". ' +
+        'Added as an apps/frontend dependency of every new sibling, alongside (not instead ' +
+        "of) @biffo/design-tokens -- biffo-scale-guard's own bin still ships from there.",
+    ),
+  version: z
+    .string()
+    .min(1)
+    .default('*')
+    .describe("Version range to pin `package` at in a new sibling's apps/frontend/package.json"),
+  path: z
+    .string()
+    .min(1)
+    .describe(
+      'Path to the CSS file declaring the --text-*/--space-* scale, relative to the package ' +
+        'root (e.g. "dist/tokens.css"). Used for both the new sibling\'s globals.css @import ' +
+        "and biffo-scale-guard's --tokens argument.",
+    ),
+})
+
 export const BiffoConfigSchema = z
   .object({
     $schema: z.string().optional(),
@@ -75,6 +110,7 @@ export const BiffoConfigSchema = z
       })
       .default({}),
     modules: ModulesSchema.default({}),
+    design_tokens: DesignTokensSchema.optional(),
   })
   .superRefine((config, ctx) => {
     const dns = resolveDnsConfig(config)

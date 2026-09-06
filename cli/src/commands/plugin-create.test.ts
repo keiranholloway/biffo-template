@@ -282,6 +282,44 @@ describe.runIf(SKELETON)('runPluginCreate', () => {
       expect(existsSync(join(projectRoot, 'biffo-plugin-acme-crm'))).toBe(true)
     })
 
+    it('carries a substituted uv.lock, naming the new plugin (issue #1769)', async () => {
+      // #1769: the standalone layout used to drop uv.lock unconditionally
+      // (NEVER_COPY), so every scaffolded plugin's first CI run had no
+      // lockfile for its `uv sync --locked` jobs to check against. It now
+      // ships the skeleton's own lock, substituted like any other text file.
+      await runPluginCreate('acme-crm', options({ standalone: true }), {
+        git: makeGitMock() as never,
+      })
+
+      const dir = join(projectRoot, 'biffo-plugin-acme-crm')
+      expect(existsSync(join(dir, 'uv.lock'))).toBe(true)
+      const lockContents = readFileSync(join(dir, 'uv.lock'), 'utf8')
+      expect(lockContents).toContain('biffo-plugin-acme-crm')
+      expect(lockContents).not.toContain('biffo-plugin-example')
+    })
+
+    it('refuses to commit a standalone scaffold with no uv.lock (belt-and-braces, issue #1769)', async () => {
+      // Simulates the exclusion set drifting back to dropping uv.lock for the
+      // standalone layout: a skeleton copy with uv.lock removed. If C's fix
+      // ever regresses, this is the guard that stops a red repo shipping
+      // silently rather than the CLI throwing loudly before the commit that
+      // triggers the first CI run.
+      const driftedSkeleton = join(projectRoot, 'drifted-skeleton')
+      cpSync(SKELETON!, driftedSkeleton, { recursive: true })
+      rmSync(join(driftedSkeleton, 'uv.lock'))
+
+      const git = makeGitMock()
+      await expect(
+        runPluginCreate('acme-crm', options({ standalone: true, skeletonRoot: driftedSkeleton }), {
+          git: git as never,
+        }),
+      ).rejects.toThrow(/has no uv\.lock/)
+
+      expect(git.init).not.toHaveBeenCalled()
+      expect(git.add).not.toHaveBeenCalled()
+      expect(git.commit).not.toHaveBeenCalled()
+    })
+
     it('refuses to combine with --first-party', async () => {
       await expect(
         runPluginCreate('acme-crm', options({ standalone: true, firstParty: true }), {

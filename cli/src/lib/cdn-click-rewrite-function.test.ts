@@ -3,15 +3,47 @@ import { join } from 'node:path'
 import { runInNewContext } from 'node:vm'
 import { describe, expect, it } from 'vitest'
 
-// The tracked-link CloudFront viewer-request function is authored as
-// standalone JS so it can be executed here, the same convention as
-// cdn-rewrite-function.test.ts. It is CloudFront Functions source (a
-// top-level `function handler`), not an ES module, so load it the way
-// CloudFront does: evaluate the body in a fresh context and pull `handler`
-// off that context's globals.
+// The tracked-link CloudFront viewer-request function is authored as a
+// template (click-rewrite.js.tftpl) so main.tf can render it via
+// templatefile() from the SAME CDN path contract this test reads — see
+// path-contract.json and biffo-template#1923. Rendering it here the same way
+// Terraform does (a single `${origin_path_prefix}` substitution) means this
+// test executes the actual generated handler, not a hand-copied guess at
+// what main.tf produces.
 const repoRoot = join(__dirname, '..', '..', '..')
-const path = join(repoRoot, 'modules', 'cloud', 'aws', 'cdn', 'click-rewrite.js')
-const source = readFileSync(path, 'utf8')
+const cdnDir = join(repoRoot, 'modules', 'cloud', 'aws', 'cdn')
+
+interface PathContractRow {
+  key: string
+  path_pattern: string
+  origin: string
+  origin_path_prefix: string
+  token_required: boolean
+  function: string
+}
+
+const contract: PathContractRow[] = JSON.parse(
+  readFileSync(join(cdnDir, 'path-contract.json'), 'utf8'),
+).rows
+const clickRow = contract.find((r) => r.key === 'click')
+if (!clickRow)
+  throw new Error(
+    'path-contract.json has no "click" row — cdn-click-rewrite-function.test.ts has nothing to test against',
+  )
+if (clickRow.function !== 'click-rewrite') {
+  throw new Error(
+    `path-contract.json's "click" row declares function=${clickRow.function}, not "click-rewrite" — either the contract or click-rewrite.js.tftpl has drifted`,
+  )
+}
+
+// The template has exactly one substitution point: `${origin_path_prefix}`.
+// This is deliberately the SAME single-variable substitution
+// templatefile() performs — not a general template engine — so a template
+// that ever needed more than this one value would need this test taught the
+// same interpolation, keeping the two in lockstep by construction rather
+// than by remembering to update both.
+const template = readFileSync(join(cdnDir, 'click-rewrite.js.tftpl'), 'utf8')
+const source = template.replaceAll('${origin_path_prefix}', clickRow.origin_path_prefix)
 
 interface CfHeaders {
   [name: string]: { value: string }
@@ -28,16 +60,21 @@ interface CfRequest {
 const sandbox: { handler?: (event: { request: CfRequest }) => CfRequest } = {}
 runInNewContext(source, sandbox)
 const handler = sandbox.handler
-if (!handler) throw new Error('click-rewrite.js did not define a top-level `handler`')
+if (!handler)
+  throw new Error('the rendered click-rewrite template did not define a top-level `handler`')
 
 function run(uri: string, querystring: CfQueryString = {}): CfRequest {
   return handler!({ request: { uri, headers: {}, querystring } })
 }
 
 describe('cdn tracked-link rewrite — biffo-plugin-marketing#52', () => {
-  it('rewrites /c/<token> to the Core API public click route', () => {
+  it('rewrites /c/<token> to the origin path the contract declares', () => {
     const r = run('/c/abc123XYZ')
-    expect(r.uri).toBe('/api/v1/public/c/abc123XYZ')
+    expect(r.uri).toBe(`${clickRow.origin_path_prefix}/c/abc123XYZ`)
+  })
+
+  it('requires a token, per the contract row (token_required)', () => {
+    expect(clickRow.token_required).toBe(true)
   })
 
   it('rewrites every token identically — no branching on shape or validity', () => {
@@ -55,7 +92,7 @@ describe('cdn tracked-link rewrite — biffo-plugin-marketing#52', () => {
       'a'.repeat(200), // implausibly long
     ]
     for (const token of tokens) {
-      expect(run(`/c/${token}`).uri).toBe(`/api/v1/public/c/${token}`)
+      expect(run(`/c/${token}`).uri).toBe(`${clickRow.origin_path_prefix}/c/${token}`)
     }
   })
 
@@ -75,7 +112,7 @@ describe('cdn tracked-link rewrite — biffo-plugin-marketing#52', () => {
     expect(r.headers).toEqual({})
   })
 
-  it('the source contains no logging or network call that could leak a token', () => {
+  it('the rendered source contains no logging or network call that could leak a token', () => {
     // Belt-and-braces: CloudFront Functions has no console/network access in
     // its production runtime regardless, but assert the source never even
     // attempts one, so a future edit cannot introduce a channel that silently
@@ -86,6 +123,14 @@ describe('cdn tracked-link rewrite — biffo-plugin-marketing#52', () => {
   it('only ever writes request.uri — never replaces the request object wholesale', () => {
     const r = run('/c/abc123')
     expect(typeof r.uri).toBe('string')
-    expect(r.uri.startsWith('/api/v1/public/c/')).toBe(true)
+    expect(r.uri.startsWith(clickRow.origin_path_prefix)).toBe(true)
+  })
+
+  it('the template has no leftover, un-substituted interpolation markers', () => {
+    // If templatefile() were ever given a variable name this test doesn't
+    // know about, `${origin_path_prefix}` above would substitute nothing for
+    // it and the leftover `${...}` would silently reach CloudFront as
+    // literal text. Guard the substitution itself, not just its result.
+    expect(source).not.toContain('${')
   })
 })

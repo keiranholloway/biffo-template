@@ -1,0 +1,63 @@
+{
+  "_comment": [
+    "Fail-first fixture for biffo-template#1923 -- the 'click' row deliberately removed."
+  ],
+  "rows": [
+    {
+      "key": "admin",
+      "path_pattern": "admin",
+      "origin": "portal",
+      "origin_path_prefix": "",
+      "token_required": false,
+      "function": "rewrite"
+    },
+    {
+      "key": "admin-wildcard",
+      "path_pattern": "admin/*",
+      "origin": "portal",
+      "origin_path_prefix": "",
+      "token_required": false,
+      "function": "rewrite"
+    },
+    {
+      "key": "login",
+      "path_pattern": "login",
+      "origin": "portal",
+      "origin_path_prefix": "",
+      "token_required": false,
+      "function": "rewrite"
+    },
+    {
+      "key": "login-wildcard",
+      "path_pattern": "login/*",
+      "origin": "portal",
+      "origin_path_prefix": "",
+      "token_required": false,
+      "function": "rewrite"
+    },
+    {
+      "key": "well-known",
+      "path_pattern": ".well-known/*",
+      "origin": "portal",
+      "origin_path_prefix": "",
+      "token_required": false,
+      "function": "none"
+    },
+    {
+      "key": "plugin-host",
+      "path_pattern": "api/v1/plugins/*",
+      "origin": "plugin-host",
+      "origin_path_prefix": "",
+      "token_required": false,
+      "function": "none"
+    },
+    {
+      "key": "health",
+      "path_pattern": "api/v1/health",
+      "origin": "core-api",
+      "origin_path_prefix": "",
+      "token_required": false,
+      "function": "none"
+    }
+  ]
+}

@@ -7,6 +7,100 @@ terraform {
 locals {
   name_prefix = "${var.project_name}-${var.environment}"
 
+  # biffo-template#1923 — the single generated document for every LITERAL
+  # (non-per-sibling) CloudFront path pattern this module wires up. See
+  # path-contract.json's own header for the field meanings and
+  # path_contract_gate below for how a row's activation is decided.
+  path_contract        = jsondecode(file("${path.module}/${var.path_contract_file}")).rows
+  path_contract_by_key = { for r in local.path_contract : r.key => r }
+
+  # Whether each contract row's underlying feature is enabled by THIS
+  # instance's configuration. The four portal rows and well-known have no
+  # gate — they are always wired. Deliberately a literal map of the keys
+  # main.tf actually knows how to wire, NOT derived from local.path_contract
+  # itself: if it were, a deleted contract row would silently remove itself
+  # from consideration here too, and the guard below would never see the gap
+  # it exists to catch.
+  path_contract_gate = {
+    "admin"          = true
+    "admin-wildcard" = true
+    "login"          = true
+    "login-wildcard" = true
+    "well-known"     = true
+    "plugin-host"    = var.plugin_host_api_domain != ""
+    "health"         = var.core_api_health_domain != ""
+    "click"          = var.tracked_link_api_domain != ""
+  }
+
+  # Rows this instance's configuration says should be active right now, but
+  # path-contract.json has no row for — "a behaviour exists in main.tf with
+  # no contract row" (issue #1923's guard, direction 1).
+  path_contract_missing_rows = toset([
+    for k, gated_on in local.path_contract_gate : k
+    if gated_on && !contains(keys(local.path_contract_by_key), k)
+  ])
+
+  # Contract rows whose key this module has no wiring for at all — a stale
+  # or mistyped row — independent of whether that wiring is currently gated
+  # on. "a contract row with no behaviour" (guard direction 2).
+  path_contract_orphan_rows = toset([
+    for k in keys(local.path_contract_by_key) : k
+    if !contains(keys(local.path_contract_gate), k)
+  ])
+
+  # The actual path_pattern value each known key resolves to, null-safe: a
+  # deleted row resolves to an obviously-broken sentinel instead of failing
+  # plan outright, so the precondition on aws_cloudfront_distribution.portal
+  # below gets a chance to run and report BOTH counts by name, rather than
+  # this evaluating first and aborting the plan with a bare "Invalid index".
+  #
+  # "admin", "admin-wildcard", "login", "login-wildcard", "well-known" and
+  # "plugin-host" below actually WIRE their behaviour's path_pattern from
+  # this map (portal_cache_behaviors above, and the plugin-host
+  # ordered_cache_behavior further down). "health" and "click" do not — their
+  # ordered_cache_behavior blocks keep the literal "api/v1/health"/"c/*"
+  # hard-coded, because cli/src/lib/cdn-core-api-health.test.ts and
+  # cdn-tracked-links.test.ts (both outside this issue's read-set — #1923's
+  # dispatch shares cli/src/lib/ with an in-flight M2 builder and was told not
+  # to touch other files there) assert that exact literal text in main.tf's
+  # source. path_contract_value_mismatches below is what still ties those two
+  # rows to the contract despite that: the guard fails closed if
+  # path-contract.json's "health"/"click" row ever disagrees with the literal
+  # this file hard-codes for it, even though the deployed value itself isn't
+  # SOURCED from the contract for these two. Every other row has no such
+  # constraint and is genuinely generated from the document.
+  path_contract_pattern = {
+    for k in keys(local.path_contract_gate) :
+    k => try(local.path_contract_by_key[k].path_pattern, "MISSING-CONTRACT-ROW:${k}")
+  }
+
+  path_contract_hardcoded_values = {
+    "health" = "api/v1/health"
+    "click"  = "c/*"
+  }
+
+  # Resolved via try(), same as path_contract_pattern above, and for the same
+  # reason: HCL's `&&` is NOT short-circuiting (both operands are evaluated
+  # eagerly, unlike a `?:` conditional), so a naive
+  # `contains(keys(local.path_contract_by_key), k) && local.path_contract_by_key[k].path_pattern != hardcoded`
+  # still evaluates the index into local.path_contract_by_key[k] even when
+  # `contains(...)` is false, and throws "Invalid index" the moment a row
+  # (e.g. "click") is entirely absent from the contract — caught by
+  # tests/path-contract-guard.tftest.hcl's missing-click fixture, which is
+  # exactly the case path_contract_missing_rows exists to report instead.
+  # Resolving through a null-safe map first means the comparison below never
+  # indexes an absent key at all.
+  path_contract_hardcoded_actual = {
+    for k, hardcoded in local.path_contract_hardcoded_values :
+    k => try(local.path_contract_by_key[k].path_pattern, null)
+  }
+
+  path_contract_value_mismatches = toset([
+    for k, hardcoded in local.path_contract_hardcoded_values :
+    "${k}: contract=${local.path_contract_hardcoded_actual[k]} main.tf=${hardcoded}"
+    if local.path_contract_hardcoded_actual[k] != null && local.path_contract_hardcoded_actual[k] != hardcoded
+  ])
+
   # CloudFront path_pattern "<name>/*" does NOT match the bare "/<name>"
   # (no trailing slash, nothing after it) — only "/<name>/" or
   # "/<name>/anything". Since that's exactly how a human types or links to
@@ -67,7 +161,12 @@ locals {
   #
   # There is deliberately NO "_next/*" behavior here. That prefix now belongs to
   # whoever serves the root, and adding it back would re-create the collision.
-  portal_cache_behaviors = ["admin", "admin/*", "login", "login/*"]
+  portal_cache_behaviors = [
+    local.path_contract_pattern["admin"],
+    local.path_contract_pattern["admin-wildcard"],
+    local.path_contract_pattern["login"],
+    local.path_contract_pattern["login-wildcard"],
+  ]
 
   # Both Core-API variables carry the same value when both are in use — they are
   # separate only so an instance can enable one route without the other. `try`
@@ -143,7 +242,7 @@ resource "aws_cloudfront_function" "rewrite" {
 
 # Viewer-request rewrite for the opt-in `c/*` tracked-link behaviour ONLY —
 # see that ordered_cache_behavior block below for the full defect this fixes
-# (biffo-plugin-marketing#52) and click-rewrite.js's header for the rationale
+# (biffo-plugin-marketing#52) and click-rewrite.js.tftpl's header for the rationale
 # and the security properties it must preserve.
 #
 # A SEPARATE function from aws_cloudfront_function.rewrite above, deliberately:
@@ -160,7 +259,9 @@ resource "aws_cloudfront_function" "click_rewrite" {
   name    = "${local.name_prefix}-click-rewrite"
   runtime = "cloudfront-js-2.0"
   publish = true
-  code    = file("${path.module}/click-rewrite.js")
+  code = templatefile("${path.module}/click-rewrite.js.tftpl", {
+    origin_path_prefix = try(local.path_contract_by_key["click"].origin_path_prefix, "/MISSING-CONTRACT-ROW")
+  })
 }
 
 # Second half of the biffo-template#1529 fix (see error_status_demote_lambda_arn
@@ -474,7 +575,7 @@ resource "aws_cloudfront_distribution" "portal" {
   # never touch an API request). Its prefix (api/v1/plugins/*) is disjoint from the
   # "<name>/*" frontend prefixes, so ordering against them is immaterial.
   dynamic "ordered_cache_behavior" {
-    for_each = var.plugin_host_api_domain == "" ? {} : { "api/v1/plugins/*" = "plugin-host" }
+    for_each = var.plugin_host_api_domain == "" ? {} : { (local.path_contract_pattern["plugin-host"]) = "plugin-host" }
     content {
       path_pattern             = ordered_cache_behavior.key
       target_origin_id         = ordered_cache_behavior.value
@@ -590,7 +691,7 @@ resource "aws_cloudfront_distribution" "portal" {
   # every tracked link 401ed instead of redirecting, and never reached the
   # handler that would answer it correctly (biffo-plugin-marketing#52).
   # aws_cloudfront_function.click_rewrite fixes exactly that one path prefix
-  # and nothing else; see its own comment and click-rewrite.js's header for
+  # and nothing else; see its own comment and click-rewrite.js.tftpl's header for
   # the security properties (constant-404 preserved, no token leakage, no
   # branching on the token) it must not weaken.
   dynamic "ordered_cache_behavior" {
@@ -698,7 +799,7 @@ resource "aws_cloudfront_distribution" "portal" {
   # It must be its own behaviour so it does not fall through to
   # default_cache_behavior, which belongs to the root application sibling.
   ordered_cache_behavior {
-    path_pattern               = ".well-known/*"
+    path_pattern               = local.path_contract_pattern["well-known"]
     allowed_methods            = ["GET", "HEAD", "OPTIONS"]
     cached_methods             = ["GET", "HEAD"]
     target_origin_id           = "S3-${var.portal_bucket_name}"
@@ -789,6 +890,55 @@ resource "aws_cloudfront_distribution" "portal" {
   }
 
   tags = var.tags
+
+  # biffo-template#1923 — the CDN path contract guard. Fails the plan closed
+  # (not merely a warning) in either direction:
+  #   1. a behaviour this instance's own configuration says should be active
+  #      (path_contract_gate) has no matching row in path-contract.json, so
+  #      main.tf just rendered a "MISSING-CONTRACT-ROW:<key>" sentinel
+  #      pattern into a real CloudFront behaviour above;
+  #   2. path-contract.json carries a row keyed by something this module has
+  #      no wiring for at all (path_contract_gate has no such key) — a stale
+  #      or mistyped row with no possible behaviour.
+  # Both counts (how many behaviours this module can wire vs. how many rows
+  # the contract actually declares) and every offending key are named in the
+  # error, so a CI failure reads as "what's wrong" rather than "something's
+  # wrong". See path-contract.json's header and the locals above for the
+  # rest of the mechanism, and
+  # modules/cloud/aws/cdn/tests/path-contract-guard.tftest.hcl for the
+  # fail-first evidence this precondition actually fires (biffo-verify).
+  #
+  # Residual, stated rather than hidden: this only catches drift on the keys
+  # path_contract_gate already knows about. A wholesale NEW ordered_cache_behavior
+  # added elsewhere in this file, wired without going through
+  # local.path_contract_pattern at all, needs its key added to
+  # path_contract_gate by hand before this guard can see it — level 3
+  # (fail-closed), not level 1 (impossible), because Terraform has no way to
+  # enumerate "every path_pattern this resource renders" independent of how
+  # each one was computed.
+  lifecycle {
+    precondition {
+      condition = (
+        length(local.path_contract_missing_rows) == 0 &&
+        length(local.path_contract_orphan_rows) == 0 &&
+        length(local.path_contract_value_mismatches) == 0
+      )
+      error_message = join(" ", compact([
+        "CDN path contract guard (biffo-template#1923):",
+        "${length(keys(local.path_contract_gate))} behaviour(s) this module can wire,",
+        "${length(local.path_contract_by_key)} contract row(s) found in path-contract.json.",
+        length(local.path_contract_missing_rows) > 0 ?
+        "MISSING a contract row for active behaviour(s): ${join(", ", local.path_contract_missing_rows)}."
+        : "",
+        length(local.path_contract_orphan_rows) > 0 ?
+        "ORPHAN contract row(s) with no matching behaviour: ${join(", ", local.path_contract_orphan_rows)}."
+        : "",
+        length(local.path_contract_value_mismatches) > 0 ?
+        "VALUE MISMATCH between the contract and this file's own hard-coded pattern: ${join("; ", local.path_contract_value_mismatches)}."
+        : "",
+      ]))
+    }
+  }
 }
 
 # DNS ALIAS record — only created when a custom domain and hosted zone are provided

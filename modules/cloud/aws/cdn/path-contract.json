@@ -1,0 +1,109 @@
+{
+  "_comment": [
+    "biffo-template#1923 — the single source of truth for every LITERAL (not",
+    "per-sibling) CloudFront path pattern this distribution routes. main.tf",
+    "and the CloudFront Function templates in this directory read this file",
+    "rather than repeating these values, so the behaviour, the function code",
+    "and the guard that checks them agree by construction instead of by",
+    "convention (#1362/#1364's remedy for #1503's three-repo seam).",
+    "",
+    "Per-sibling patterns (var.sibling_origins) are deliberately NOT rows",
+    "here — they are genuinely per-instance data, not a fixed contract, and",
+    "'admin'/'login'/'c' are already reserved against them (variables.tf).",
+    "",
+    "Fields:",
+    "  key                 stable identifier main.tf looks this row up by.",
+    "                      Never rendered to AWS; changing it has no effect",
+    "                      on the deployed distribution as long as main.tf's",
+    "                      own lookups (see path_contract_gate in main.tf)",
+    "                      use the same key.",
+    "  path_pattern        the PUBLIC CloudFront path pattern a viewer",
+    "                      request must match.",
+    "  origin              which backend the pattern routes to: 'portal'",
+    "                      (the S3 portal bucket), 'plugin-host' (the",
+    "                      shared plugin API Gateway, ADR-0021) or",
+    "                      'core-api' (the Core API Gateway).",
+    "  origin_path_prefix  literal prefix spliced onto the viewer path",
+    "                      before it reaches the origin, or '' when the",
+    "                      viewer path is forwarded unchanged. Only 'click'",
+    "                      below has one today; it drives click-rewrite.js's",
+    "                      generated prefix directly (main.tf templatefile).",
+    "  token_required      true when the path pattern carries an opaque,",
+    "                      unvalidated token segment that any associated",
+    "                      CloudFront Function must pass through untouched",
+    "                      (biffo-plugin-marketing#52's constant-404 property).",
+    "  function            which CloudFront Function (if any) is associated",
+    "                      as this behaviour's viewer-request handler:",
+    "                      'rewrite' (rewrite.js — Next.js static-export",
+    "                      routing, applies uniformly to any URI so it takes",
+    "                      no contract-derived data), 'click-rewrite'",
+    "                      (click-rewrite.js.tftpl — templated from this",
+    "                      row's origin_path_prefix) or 'none'."
+  ],
+  "rows": [
+    {
+      "key": "admin",
+      "path_pattern": "admin",
+      "origin": "portal",
+      "origin_path_prefix": "",
+      "token_required": false,
+      "function": "rewrite"
+    },
+    {
+      "key": "admin-wildcard",
+      "path_pattern": "admin/*",
+      "origin": "portal",
+      "origin_path_prefix": "",
+      "token_required": false,
+      "function": "rewrite"
+    },
+    {
+      "key": "login",
+      "path_pattern": "login",
+      "origin": "portal",
+      "origin_path_prefix": "",
+      "token_required": false,
+      "function": "rewrite"
+    },
+    {
+      "key": "login-wildcard",
+      "path_pattern": "login/*",
+      "origin": "portal",
+      "origin_path_prefix": "",
+      "token_required": false,
+      "function": "rewrite"
+    },
+    {
+      "key": "well-known",
+      "path_pattern": ".well-known/*",
+      "origin": "portal",
+      "origin_path_prefix": "",
+      "token_required": false,
+      "function": "none"
+    },
+    {
+      "key": "plugin-host",
+      "path_pattern": "api/v1/plugins/*",
+      "origin": "plugin-host",
+      "origin_path_prefix": "",
+      "token_required": false,
+      "function": "none"
+    },
+    {
+      "key": "health",
+      "path_pattern": "api/v1/health",
+      "origin": "core-api",
+      "origin_path_prefix": "",
+      "token_required": false,
+      "function": "none"
+    },
+    {
+      "key": "click",
+      "path_pattern": "c/*",
+      "origin": "core-api",
+      "origin_path_prefix": "/api/v1/public",
+      "token_required": true,
+      "function": "click-rewrite"
+    }
+  ]
+}

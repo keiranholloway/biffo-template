@@ -26,6 +26,56 @@ describe('BiffoConfigSchema', () => {
     })
   })
 
+  it("omits design_tokens by default — today's unchanged behaviour (issue #1739 option B)", () => {
+    const result = BiffoConfigSchema.safeParse(BASE)
+    expect(result.success).toBe(true)
+    if (!result.success) return
+    expect(result.data.design_tokens).toBeUndefined()
+  })
+
+  it('accepts an instance-supplied design_tokens source', () => {
+    const result = BiffoConfigSchema.safeParse({
+      ...BASE,
+      design_tokens: {
+        package: '@tabsii-com/ui',
+        version: '^1.1.1',
+        path: 'dist/tokens.css',
+      },
+    })
+    expect(result.success).toBe(true)
+    if (!result.success) return
+    expect(result.data.design_tokens).toEqual({
+      package: '@tabsii-com/ui',
+      version: '^1.1.1',
+      path: 'dist/tokens.css',
+    })
+  })
+
+  it('defaults design_tokens.version to "*" when omitted', () => {
+    const result = BiffoConfigSchema.safeParse({
+      ...BASE,
+      design_tokens: { package: '@tabsii-com/ui', path: 'dist/tokens.css' },
+    })
+    expect(result.success).toBe(true)
+    if (!result.success) return
+    expect(result.data.design_tokens?.version).toBe('*')
+  })
+
+  it('rejects design_tokens missing a package or path', () => {
+    expect(
+      BiffoConfigSchema.safeParse({
+        ...BASE,
+        design_tokens: { path: 'dist/tokens.css' },
+      }).success,
+    ).toBe(false)
+    expect(
+      BiffoConfigSchema.safeParse({
+        ...BASE,
+        design_tokens: { package: '@tabsii-com/ui' },
+      }).success,
+    ).toBe(false)
+  })
+
   it('rejects project name with uppercase letters', () => {
     const result = BiffoConfigSchema.safeParse({
       ...BASE,

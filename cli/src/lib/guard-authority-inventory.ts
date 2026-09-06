@@ -390,40 +390,54 @@ export const GUARD_AUTHORITY_INVENTORY: GuardAuthorityRecord[] = [
       'out of reach for a CLI check, and the PR body it emits says so).',
   },
 
-  // ── In-class, STILL NO disagreement test — the honest remainder ─────────
+  // ── In-class, WITH a disagreement test (fixed 2026-09-06, #1912) ─────────
   {
     id: 'core-ownership-guard',
     path: 'cli/src/lib/core-ownership-guard.ts',
     inClass: true,
-    document: "core-manifest.json's templateOwned prefix list",
+    document:
+      "core-manifest.json's templateOwned prefix list, optionally narrowed by " +
+      "template-shipped-paths.ts's live fetch of biffo-template's dev tree (CI mode only)",
     actor:
       "core-upgrade.ts's classify(), which returns keep-ours/orphaned for any path with no base and no theirs",
     disagreementTest: 'cli/src/lib/core-ownership-orphan-disagreement.test.ts',
     independence: 'independent',
-    // DESCRIPTIVE, not prescriptive — read this before trusting the field above.
+    // PRESCRIPTIVE as of #1912 — read this before trusting the field above.
     // The test drives BOTH sides over one state (planCoreUpgrade over real
-    // dirs, checkCoreOwnership over the same manifest) and pins the
-    // disagreement rather than asserting the behaviour we want, because the
-    // behaviour we want is not reachable from where the guard stands: at commit
-    // time in an instance it has `changedFiles` and the manifest, and no view
-    // of the template tree, so it CANNOT know whether a path under a
-    // template-owned prefix was ever shipped upstream. That is why five fixes
-    // to the prefix list never closed instance #8.
-    // The test therefore fails the day someone makes the two agree, and says so
-    // in its own assertion message. Treat that failure as the fix landing, not
-    // as a regression, and change this field's note when it does.
+    // dirs, checkCoreOwnership over the same manifest) and now asserts
+    // AGREEMENT: when checkCoreOwnership is given `templateShippedPaths` (the
+    // template's real dev-tree, fetched live), a manifest-prefix match with no
+    // upstream counterpart is a `knownOrphan` — never blocked, never needing a
+    // `Core-Divergence:` trailer, matching classify()'s own keep-ours/orphaned
+    // verdict exactly. A second test proves the specific #1912 shape fail-first
+    // in the same file: a Core-Divergence trailer is still accepted (wrongly
+    // recording "diverges from the template") when NO template view is
+    // supplied, and is no longer needed at all once one is.
+    //
+    // The residual gap, stated rather than hidden: the agreement only holds
+    // when `templateShippedPaths` is available, which is CI-mode-only by
+    // design (the local commit-msg hook stays offline-safe and fast, per
+    // template-shipped-paths.ts's own doc) and is itself a best-effort network
+    // fetch that returns null (falls back to prefix-only, pre-#1912 behaviour)
+    // on any failure — offline, timeout, DNS. That fallback is deliberately
+    // the SAME direction the guard has always erred in (block and require a
+    // trailer), not a new fail-open path: a network hiccup degrades the guard
+    // to what it was before this fix, never below it.
     note:
-      'instance #8, reported 2026-08-08/09, STILL OPEN per the issue thread ("second occurrence — ' +
-      'same day, different file"). A prefix match claims services/api/ template-owned; classify() ' +
-      'cannot carry a path the template has never shipped. Needs a disagreement test that builds a ' +
-      'manifest prefix with no matching template file and asserts the guard and classify() agree ' +
-      "it is instance-owned (or asserts the guard fails loudly, naming the guard's own gap — either " +
-      'is a fix; today neither exists, so the guard commit-blocks with an impossible instruction). ' +
-      "Swept for instance-11 exposure 2026-08-11: checkCoreOwnership() reads the manifest's static " +
-      'prefix list via isTemplateOwned(); classify() derives its answer from base/theirs tree ' +
-      'presence in a wholly separate module (core-upgrade.ts). No shared helper, parser or decode ' +
-      'step exists between them — the DISAGREEMENT itself (the honest remainder above) is the open ' +
-      'problem here, not a shared-lens exposure masking one.',
+      'instance #8, reported 2026-08-08/09 ("second occurrence — same day, different file"), and ' +
+      "the #1912 sharpening of it (the guard's Core-Divergence escape hatch accepted ANY reason for " +
+      'ANY path under a template-owned prefix, so an orphan got a false "divergence from the ' +
+      'template" recorded in history rather than being recognised as never template-owned at all). ' +
+      "Fixed by giving checkCoreOwnership() an optional, real view of what the template's dev " +
+      'branch actually ships (template-shipped-paths.ts, a plain unauthenticated `git fetch` — ' +
+      'biffo-template is public, so no cross-repo token is needed the way ' +
+      "check-distribution-remote-state.ts's BIFFO_GITHUB_TOKEN is). Swept for instance-11 exposure " +
+      "2026-08-11 (pre-#1912) and reconfirmed after: checkCoreOwnership() reads the manifest's " +
+      'static prefix list via isTemplateOwned() and, separately, the injected templateShippedPaths ' +
+      'set by plain Set#has(); classify() derives its answer from base/theirs tree presence in a ' +
+      'wholly separate module (core-upgrade.ts) via a wholly separate fetch mechanism ' +
+      '(materializeTemplateAtTag, a local tag checkout). No shared helper, parser or decode step ' +
+      'exists between the guard, its new template view, and the actor.',
   },
   {
     id: 'claim-structural-resolver',

@@ -29,6 +29,7 @@ import {
   resolveBranch,
 } from '../lib/core-ownership-guard.js'
 import { readCoreManifest } from '../lib/core-manifest.js'
+import { fetchTemplateShippedPaths } from '../lib/template-shipped-paths.js'
 
 const BOLD = '[1m'
 const DIM = '[2m'
@@ -98,6 +99,24 @@ export async function runOwnershipCheck(argv: string[]): Promise<void> {
   })
   const branch = resolveBranch(process.env, gitBranch)
 
+  // Only in CI/PR-diff mode: this is the check this file's own docstring says
+  // cannot be bypassed with `--no-verify`, and GitHub Actions runners always
+  // have network egress. The local commit-msg hook stays fast and offline-safe
+  // — a per-commit network fetch there would slow every developer commit and
+  // break disconnected work, so it keeps the manifest-prefix-only behaviour
+  // this guard has always had (see `fetchTemplateShippedPaths`'s doc on why
+  // `null` — "could not tell" — is always the safe fallback, never treated as
+  // "the template ships nothing").
+  const templateShippedPaths = staged ? null : await fetchTemplateShippedPaths(root)
+  if (!staged && templateShippedPaths === null) {
+    console.error(
+      `${YELLOW}⚠ core ownership guard: could not fetch biffo-template's dev tree (offline, ` +
+        `network failure, or timeout) — falling back to the manifest prefix list alone, which ` +
+        `cannot tell an instance-only file from a real template file under the same prefix ` +
+        `(#1912).${OFF}`,
+    )
+  }
+
   const result = checkCoreOwnership({
     changedFiles,
     manifest: readCoreManifest(root),
@@ -105,7 +124,19 @@ export async function runOwnershipCheck(argv: string[]): Promise<void> {
     branch,
     commitMessage,
     warnOnly: readDivergenceConfig(root).warnOnly,
+    templateShippedPaths,
   })
+
+  if (result.knownOrphans.length > 0) {
+    console.log(
+      `${DIM}ℹ ${result.knownOrphans.length} path(s) matched a template-owned prefix, but ` +
+        `biffo-template's dev branch does not ship them — treated as instance-owned, no ` +
+        `Core-Divergence trailer needed (#1912):${OFF}`,
+    )
+    for (const path of result.knownOrphans) {
+      console.log(`    ${DIM}${path}${OFF}`)
+    }
+  }
 
   for (const { path, entry } of result.warned) {
     console.error(

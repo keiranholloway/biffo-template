@@ -1630,6 +1630,118 @@ if ci_has "gitleaks"; then
   fi
 fi
 
+# Resolve the exact `pnpm` invocation every JS check below runs through
+# (biffo-template#1920).
+#
+# ## The defect
+#
+# Modern `pnpm` self-manages its own version: it reads the nearest ancestor
+# `package.json`'s `packageManager` field and, if the field pins a version
+# other than the binary currently running, re-execs that pinned version
+# instead (no `corepack enable` required -- this is `pnpm`'s own built-in
+# behaviour, confirmed by direct experiment against the actual binary this
+# machine has installed, not by reading its source). That resolution walks
+# UP from the invoking process's cwd, so it silently stops applying the
+# moment a check's working directory has no ancestor `package.json`
+# declaring the field at all -- which is exactly what
+# `cli/src/lib/verify-toolchain-missing.test.ts`'s own fixtures are: bare,
+# isolated tmp git repos with a minimal `package.json` (deliberately, to
+# simulate a fresh worktree before `pnpm install`) that carries no
+# `packageManager` field. On a machine whose globally-installed `pnpm`
+# binary is any OTHER version -- observed: v12.3.4, against this repo's own
+# pin of v9.15.9 -- the fixture's checks silently run under that OTHER
+# version instead.
+#
+# `run_check_js`'s own INCONCLUSIVE/FAILED split below is a grep against
+# wording pnpm 9.15.9 specifically prints for a missing toolchain
+# (`node_modules missing, did you mean to install?`), which a different
+# major does not necessarily print at all: confirmed live, pnpm 12.3.4 skips
+# that WARN entirely for the identical missing-toolchain scenario, so the
+# fixture's real "binary not found" failure reads as an ordinary FAILED
+# instead of INCONCLUSIVE -- not because detection is wrong, but because two
+# different pnpm versions produced two different diagnoses of the same
+# state, and only one of them was ever read.
+#
+# ## The fix
+#
+# Make the version actually executed impossible to disagree with the
+# version the detection regex was written against, rather than occasionally
+# undetected: every `pnpm run`/`pnpm --dir` call in this file is eligible to
+# be pinned to the EXACT version PINNED IN THE REPO THIS COPY OF verify.sh
+# LIVES IN, via `corepack`, which forces a specific `pnpm@<version>`
+# regardless of the PATH order on the invoking machine or of the checked
+# directory's own `package.json`. Node ships `corepack` alongside itself
+# from Node 16.9 onward -- this repo's own `engines.node` requires >=22 --
+# so it is resolved relative to `node` rather than assumed to already be on
+# PATH (`corepack enable` symlinks it onto PATH but is not required for
+# `corepack pnpm@<version> ...` to work directly). "Eligible": the pin is
+# only actually forced when bare `pnpm` would not already resolve to it
+# unassisted -- see the ambient-version check below for why forcing it
+# unconditionally is itself a regression, not just unnecessary.
+#
+# Deliberately NOT `package.json` in `$PWD`: every real invocation happens
+# with cwd already at the repo root (`.githooks/pre-push` itself `cd`s there
+# first), so cwd and "the repo this script belongs to" are the same
+# directory on every real path -- but the toolchain-missing fixtures above
+# invoke this exact file with cwd pointed at an isolated, unrelated tmp repo
+# on purpose, to simulate a fresh worktree of SOME OTHER project before
+# `pnpm install`. That target has no reason to carry (and must not need to
+# carry) this repo's own pnpm pin merely to be checked correctly, so the pin
+# is read from where `$0` says this script actually lives, not from
+# whatever happens to be checked.
+PNPM_RUN="pnpm"
+if [ -z "$LIST" ]; then
+  _verify_script_dir=$(cd "$(dirname "$0")" 2>/dev/null && pwd) || _verify_script_dir=""
+  _verify_repo_root=""
+  [ -n "$_verify_script_dir" ] && _verify_repo_root="$_verify_script_dir/.."
+  if [ -z "$_verify_repo_root" ] || [ ! -f "$_verify_repo_root/package.json" ]; then
+    # Could not resolve $0 to a real path (e.g. sourced from stdin) -- cwd is
+    # the only fallback left, and matches every real invocation anyway.
+    _verify_repo_root="."
+  fi
+  if [ -f "$_verify_repo_root/package.json" ]; then
+    _pnpm_pin=$(grep -oE '"packageManager"[[:space:]]*:[[:space:]]*"pnpm@[0-9][^"]*"' "$_verify_repo_root/package.json" |
+      sed -E 's/.*"pnpm@([^"]*)".*/\1/')
+    # Ask bare `pnpm` what it would already resolve to from $PWD before ever
+    # reaching for corepack. On every REAL check this already equals
+    # `$_pnpm_pin` -- self-management (above) finds this repo's own pin by
+    # walking up from cwd, which is always the repo root -- and in that case
+    # `PNPM_RUN` is deliberately left as plain `pnpm`. This matters beyond
+    # tidiness: `pnpm run test` fans out through turbo, which shells back out
+    # to a bare `pnpm` of its own for each workspace package, and pnpm
+    # refuses to self-manage a SECOND time once corepack has already forced
+    # a version once in the process tree (`ERR_PNPM_BAD_PM_VERSION`,
+    # confirmed live -- ordinary `pnpm run test` segfaulted under a
+    # corepack-wrapped outer call). Reaching for corepack is therefore
+    # reserved for the one case it actually fixes: bare `pnpm` disagreeing
+    # with our pin because nothing above cwd declares one at all (the
+    # toolchain-missing fixtures' isolated tmp repos) -- never the ordinary
+    # path where self-management was already correct on its own.
+    if [ -n "$_pnpm_pin" ] && [ "$(pnpm --version 2>/dev/null)" != "$_pnpm_pin" ]; then
+      _corepack=$(command -v corepack 2>/dev/null)
+      if [ -z "$_corepack" ]; then
+        _node_path=$(command -v node 2>/dev/null)
+        if [ -n "$_node_path" ]; then
+          # `node` on PATH is routinely a symlink into a version manager's
+          # real install directory (nvm, a `~/.local/bin` shim, etc.) --
+          # `corepack` ships as node's OWN sibling in THAT real directory, not
+          # next to wherever the symlink happens to sit, so the link must be
+          # resolved before taking dirname. `readlink -f` is GNU/Linux (every
+          # machine this runs on -- workstation and `ubuntu-24.04` CI alike);
+          # falling back to the unresolved path costs nothing worse than the
+          # `command -v corepack` miss this branch already handles above.
+          _node_real=$(readlink -f "$_node_path" 2>/dev/null) || _node_real="$_node_path"
+          _node_bin_dir=$(dirname "$_node_real")
+          [ -x "$_node_bin_dir/corepack" ] && _corepack="$_node_bin_dir/corepack"
+        fi
+      fi
+      if [ -n "$_corepack" ] && "$_corepack" "pnpm@$_pnpm_pin" --version >/dev/null 2>&1; then
+        PNPM_RUN="$_corepack pnpm@$_pnpm_pin"
+      fi
+    fi
+  fi
+fi
+
 # JS, cheapest first; `test` last because it is slowest and the most likely to
 # be interrupted by an impatient reader.
 JS_DIRS=$(js_dirs)
@@ -1646,9 +1758,13 @@ if [ -n "$JS_DIRS" ]; then
       label="$(printf '%s' "$s" | tr -d ':')$suffix"
       if have_script "$s" "$d"; then
         if [ "$d" = "." ]; then
-          run_check_js "$label" pnpm run "$s"
+          # shellcheck disable=SC2086 # $PNPM_RUN is a deliberately unquoted,
+          # internally-computed word list (corepack + pnpm@<version>, or the
+          # single word "pnpm") -- never external input.
+          run_check_js "$label" $PNPM_RUN run "$s"
         else
-          run_check_js "$label" pnpm --dir "$d" run "$s"
+          # shellcheck disable=SC2086 # see above
+          run_check_js "$label" $PNPM_RUN --dir "$d" run "$s"
         fi
       else
         skip "$label" "no \"$s\" script"

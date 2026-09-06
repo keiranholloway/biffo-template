@@ -10,6 +10,7 @@ import {
 } from '../lib/branch-protection-outcome.js'
 import { log } from '../lib/logger.js'
 import type { SiblingSession } from '../lib/sibling-session.js'
+import { assertRunsCommand, workflowRunCommands } from '../lib/workflow-run-commands.js'
 import {
   assertCoreSupportsSiblingRouting,
   assertGitIdentity,
@@ -312,8 +313,8 @@ describe('writeSiblingTemplate — design tokens (issue #1739 option B)', () => 
       readFileSync(join(target, 'apps', 'frontend', 'src', 'app', 'globals.css'), 'utf8'),
     ).toContain("@import '@biffo/design-tokens/tokens.css';")
     const ciYml = readFileSync(join(target, '.github', 'workflows', 'ci.yml'), 'utf8')
-    expect(ciYml).toContain('run: pnpm exec biffo-scale-guard\n')
-    expect(ciYml).not.toContain('--tokens')
+    assertRunsCommand(ciYml, 'pnpm exec biffo-scale-guard')
+    expect(workflowRunCommands(ciYml).some((c) => c.includes('--tokens'))).toBe(false)
   })
 
   it("threads the core project's design_tokens into package.json, globals.css and ci.yml", () => {
@@ -347,8 +348,9 @@ describe('writeSiblingTemplate — design tokens (issue #1739 option B)', () => 
 
     const ciYml = readFileSync(join(target, '.github', 'workflows', 'ci.yml'), 'utf8')
     // js job: --tokens flag added, permissions + NODE_AUTH_TOKEN added.
-    expect(ciYml).toContain(
-      'run: pnpm exec biffo-scale-guard --tokens node_modules/@tabsii-com/ui/dist/tokens.css',
+    assertRunsCommand(
+      ciYml,
+      'pnpm exec biffo-scale-guard --tokens node_modules/@tabsii-com/ui/dist/tokens.css',
     )
     const jsJob = ciYml.split('  e2e:')[0]!
     expect(jsJob).toContain('permissions:\n      contents: read\n      packages: read')

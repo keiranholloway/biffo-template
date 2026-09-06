@@ -39,7 +39,17 @@ import {
  * a role name and glob from. A satellite repo (sibling app, plugin repo)
  * never carries `modules/cloud/aws/*` or `modules/plugins/_template` at all
  * — that Terraform is template/instance-only — so their absence here is a
- * legitimate "not applicable", not a broken read (biffo-template#1906). */
+ * legitimate "not applicable", not a broken read (biffo-template#1906).
+ *
+ * The discriminator is ALL FOUR missing, not ANY of the four (biffo-template
+ * #1908): a true satellite carries none of them, but a template/instance
+ * tree that has SOME of the four and is missing one — a rename or an
+ * accidental delete of just `variables.tf`, say — is exactly the drift this
+ * guard exists to catch, and treating that as "not applicable" would skip
+ * silently over it instead of failing closed. Only the true zero case is
+ * skipped here; a partial set falls through and lets `checkAllowlistConvention`
+ * throw its own "cannot read <path>" error below, exactly as it did before
+ * this guard learned to distinguish satellites at all. */
 const REQUIRED_SOURCES = [
   COMPUTE_MAIN_TF,
   PLUGIN_TEMPLATE_MAIN_TF,
@@ -51,7 +61,7 @@ export async function runPluginAllowlistConventionCheck(): Promise<void> {
   const root = (await execa('git', ['rev-parse', '--show-toplevel'])).stdout.trim()
 
   const missing = REQUIRED_SOURCES.filter((relative) => !existsSync(join(root, relative)))
-  if (missing.length > 0) {
+  if (missing.length === REQUIRED_SOURCES.length) {
     console.log(
       '· Plugin-allowlist convention guard: not applicable — ' +
         `${missing.join(', ')} not found under ${root}. This is not a template/instance tree ` +

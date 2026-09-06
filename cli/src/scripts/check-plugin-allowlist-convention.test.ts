@@ -22,8 +22,17 @@
  * exercised here too (reusing the same "copy the real modules, patch one"
  * fixture the lib-level test uses), so the fix cannot be read as silencing
  * the real signal along with the false one.
+ *
+ * #1906's first fix treated ANY of the four sources being missing as
+ * "satellite, skip" — which also silently waved through a real
+ * template/instance tree missing just ONE of the four (a rename or an
+ * accidental delete), the exact drift this guard exists to catch
+ * (biffo-template#1908). The "only SOME missing" case below reproduces that
+ * regression directly against a full copy of the real modules with one file
+ * removed, and asserts it still fails loudly (exit 1) rather than reporting
+ * "not applicable".
  */
-import { cpSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { execa } from 'execa'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -114,5 +123,24 @@ describe('runPluginAllowlistConventionCheck', () => {
     expect(exitCode).toBe(1)
     const reported = vi.mocked(console.error).mock.calls.flat().join('\n')
     expect(reported).toContain('drift found')
+  })
+
+  it('fails loudly (exit 1), NOT "not applicable", when only SOME of the four sources are missing (#1908)', async () => {
+    const root = makeTmpDir('plugin-allowlist-partial-tree')
+    copyRealModules(root)
+    // A real template/instance tree missing just one of the four sources —
+    // e.g. `variables.tf` renamed or accidentally deleted — is drift, not a
+    // satellite. It must fail closed exactly like the pre-#1907 behaviour,
+    // not be silently classified as "not applicable" (#1907's regression).
+    rmSync(join(root, ALLOWLIST_VARIABLES_TF))
+    setRoot(root)
+
+    await expect(runPluginAllowlistConventionCheck()).rejects.toThrow('process.exit(1)')
+
+    expect(exitCode).toBe(1)
+    const reported = vi.mocked(console.error).mock.calls.flat().join('\n')
+    expect(reported.toLowerCase()).not.toContain('not applicable')
+    expect(reported).toContain('could not run')
+    expect(reported).toContain(ALLOWLIST_VARIABLES_TF)
   })
 })

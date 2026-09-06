@@ -381,6 +381,22 @@ async function runStandaloneCreate(
   )
 
   if (options.commit) {
+    // Belt-and-braces guard (issue #1769): the standalone layout is supposed
+    // to carry a substituted uv.lock (plugin-scaffold.ts's
+    // STANDALONE_ONLY_ENTRIES, not NEVER_COPY) precisely so the first commit
+    // — and therefore the first CI run it triggers, which every install-ing
+    // job runs with `uv sync --locked` — has a lockfile to check against. If
+    // this ever trips, the exclusion set has drifted and dropped uv.lock
+    // again; refuse rather than publish a repo that is red on commit #1.
+    if (!existsSync(join(destDir, 'uv.lock'))) {
+      throw new Error(
+        `Scaffolded plugin at ${destDir} has no uv.lock. The standalone layout must carry a ` +
+          `substituted uv.lock (see plugin-scaffold.ts STANDALONE_ONLY_ENTRIES) so the first ` +
+          `commit's CI run can satisfy 'uv sync --locked'. Refusing to commit a repo that would ` +
+          `ship red on its very first push (issue #1769) — run 'uv lock' in ${destDir} first.`,
+      )
+    }
+
     // A NEW repo in destDir — never a commit into whatever checkout the user
     // happened to run this from, which is what the in-tree path does.
     await deps.git.init(destDir)

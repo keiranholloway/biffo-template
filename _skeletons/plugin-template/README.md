@@ -137,7 +137,7 @@ repository with its own independent `uv sync` / `uv.lock`, not inside
 biffo-template's workspace. Once copied out, `uv sync && uv run pytest`
 works standalone with no dependency on the rest of biffo-template.
 
-## The `biffo-plugin-sdk` dependency: PyPI pin, pending the first release
+## The `biffo-plugin-sdk` dependency: PyPI pin
 
 `pyproject.toml` declares:
 
@@ -148,41 +148,30 @@ dependencies = [
 ]
 ```
 
-This is a **PyPI-style version pin**, and it is the correct end state: the
-SDK is versioned `1.0.0` and biffo-template's
+This is a **PyPI-style version pin**: the SDK is published via
+biffo-template's
 [`.github/workflows/publish-sdk.yml`](https://github.com/keiranholloway/biffo-template/blob/main/.github/workflows/publish-sdk.yml)
-builds and publishes it to PyPI (via Trusted Publishing) on a pushed
-`sdk-v*` tag. `>=1.0,<2.0` matches the `"biffo-plugin-sdk": "^1.0"` that
+(Trusted Publishing) on a pushed `sdk-v*` tag, and the first release has
+already happened — this skeleton's own `uv.lock` resolves `biffo-plugin-sdk`
+1.4.0 from `https://pypi.org/simple` (see its `biffo-plugin-sdk` entry).
+`>=1.0,<2.0` matches the `"biffo-plugin-sdk": "^1.0"` that
 `biffo.plugin.json` declares, and the SDK carries its own independent
 semver — it is **not** tied to the template's core version, so a major
 bump here means the plugin API broke and nothing else.
 
-**Ordering caveat.** The release _pipeline_ exists; the _release_ does not
-yet. `biffo-plugin-sdk` has never been uploaded — the PyPI project is
-unregistered until the owner configures the Trusted Publisher and pushes
-`sdk-v1.0.0`. Until that happens, `uv sync` in a freshly-copied plugin repo
-still cannot resolve this dependency, and you need one of the two local
-overrides below. Once 1.0.0 is live, **delete the override** — the
-`dependencies` entry above already points at the real thing.
+`uv sync` in a freshly-copied plugin repo resolves this pin normally; no
+`[tool.uv.sources]` override is needed. If you are developing this plugin
+*inside* a `biffo-template` checkout (e.g. one you plan to upstream into
+`services/`) and want to iterate against an unreleased SDK change before it
+ships, a local override still works:
 
-Two ways to make local development work before that happens:
+```toml
+[tool.uv.sources]
+biffo-plugin-sdk = { path = "../../packages/python-sdk", editable = true }
+```
 
-1. **Path dependency** (if developing inside a biffo-template checkout,
-   e.g. for a plugin you plan to upstream into `services/`): add
-   ```toml
-   [tool.uv.sources]
-   biffo-plugin-sdk = { path = "../../packages/python-sdk", editable = true }
-   ```
-2. **Git dependency** (developing this plugin as a genuinely separate repo
-   against an unpublished SDK):
-   ```toml
-   [tool.uv.sources]
-   biffo-plugin-sdk = { git = "https://github.com/keiranholloway/biffo-template", subdirectory = "packages/python-sdk" }
-   ```
-
-Either override goes in `[tool.uv.sources]` only — the PyPI-style
-`dependencies` entry above stays as-is, so removing the override is the
-only change needed once the SDK actually ships to PyPI.
+Keep it local (uncommitted, or removed before committing) — the PyPI-style
+`dependencies` entry above is what every scaffolded plugin repo ships with.
 
 ## Manifest validation: why CI doesn't hard-gate on `registry-schema.json`
 

@@ -24,10 +24,24 @@ export async function runEventBridgeLogPermissionCheck(): Promise<void> {
   try {
     report = auditEventBridgeLogPermissions(root)
   } catch (err) {
-    // No .tf files at all under root — a hard failure, not "0 violations"
+    const message = err instanceof Error ? err.message : String(err)
+    // Some satellites (non-instance repos) legitimately carry no .tf files
+    // at all -- that is a genuine "nothing to audit here", not the same
+    // "discovery broke on a real instance" case the underlying guard's hard
+    // failure exists to catch (biffo-template#1906). Distinguish by the
+    // guard's own message rather than re-deriving the .tf scan here, so this
+    // stays in sync with whatever walkTerraformFiles considers "no files".
+    if (message.includes('no .tf files found under')) {
+      console.log(
+        `· EventBridge log permission guard: not applicable — ${message} This repo carries no ` +
+          'Terraform at all, which is expected for a non-instance satellite. Skipping.',
+      )
+      return
+    }
+    // Any other failure -- a hard failure, not "0 violations"
     // (see the module doc comment's blindness section).
     console.error('✗ EventBridge log permission guard: could not run\n')
-    console.error(err instanceof Error ? err.message : String(err))
+    console.error(message)
     process.exit(1)
   }
 

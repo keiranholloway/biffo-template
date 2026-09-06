@@ -502,6 +502,20 @@ jobs:
       - name: Type check
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: uv run pyright
+      # `_skeletons/plugin-template/uv.lock` is a REAL lockfile now that
+      # `biffo plugin create --standalone` ships it (issue #1769) — the
+      # scaffold's substitution rewrites the one package-name token, and
+      # every scaffolded plugin's first CI run checks it with `uv sync
+      # --locked`. It is not part of this repo's own uv workspace, so the
+      # `uv sync --locked` above never looks at it, and nothing else in this
+      # job would notice it silently drifting behind the skeleton's own
+      # pyproject.toml. `uv lock --check` re-resolves and diffs without
+      # writing, so a drifted skeleton lock fails HERE, in the template that
+      # owns it, rather than on the first commit of every plugin scaffolded
+      # from it afterwards.
+      - name: Skeleton uv.lock freshness (plugin-template)
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: cd _skeletons/plugin-template && uv lock --check
       - name: Test
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         # Exit code 5 = no tests collected — valid for the template repo before tests are added

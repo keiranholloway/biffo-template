@@ -41,6 +41,8 @@ export const STANDALONE_ONLY_ENTRIES: Record<string, string> = {
     'standalone-repo CI/release workflows — the host monorepo already runs lint/type/test/security over services/',
   'registry-schema.json':
     'the plugin-registry publishing schema, used when submitting a *published* plugin to the registry repo, not by an in-tree plugin',
+  'uv.lock':
+    "a standalone repo's own lockfile, substituted like any other text file (issue #1769) — a nested lock inside a monorepo's services/ would be wrong there, since the host resolves its own dependency tree",
 }
 
 /** Build/tool detritus that must never be copied out of a working skeleton. */
@@ -53,7 +55,6 @@ const NEVER_COPY = new Set([
   '.pytest_cache',
   '.mypy_cache',
   'dist',
-  'uv.lock',
   '.DS_Store',
 ])
 

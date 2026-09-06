@@ -45,7 +45,14 @@ function makeSkeleton(): string {
   write('skeleton/registry-schema.json', '{}\n')
   write('skeleton/node_modules/dep/index.js', 'module.exports = 1\n')
   write('skeleton/__pycache__/x.pyc', 'junk')
-  write('skeleton/uv.lock', 'version = 1\nrequires-python = ">=3.13"\n')
+  // Mirrors the real skeleton's uv.lock shape (one [[package]] block naming
+  // the example plugin itself — see the real uv.lock's `name =
+  // "biffo-plugin-example"` entry) so a test can assert the substitution
+  // table actually rewrites it, not just that the file is present.
+  write(
+    'skeleton/uv.lock',
+    'version = 1\nrequires-python = ">=3.13"\n\n[[package]]\nname = "biffo-plugin-example"\nversion = "0.1.0"\nsource = { editable = "." }\n',
+  )
   return skeleton
 }
 
@@ -180,6 +187,40 @@ describe('scaffoldPlugin', () => {
     expect(existsSync(join(dest, '__pycache__'))).toBe(false)
   })
 
+  // Issue #1769: PR #1760 added `--locked` to every install-ing job in the
+  // skeleton's own CI, which a `standalone` scaffold copies verbatim
+  // (STANDALONE_ONLY_ENTRIES keeps `.github`). Before this fix `uv.lock` sat
+  // in NEVER_COPY unconditionally, so a freshly scaffolded standalone plugin
+  // had those workflows AND no lockfile for them to check — 5 of 6 CI jobs
+  // red on commit #1, before a line of plugin logic existed. `uv.lock` is
+  // not build/tool detritus for a standalone repo; it is the repo's own
+  // load-bearing artefact, so it now lives in STANDALONE_ONLY_ENTRIES
+  // (dropped for in-tree, kept — and substituted, like any other text file —
+  // for standalone) rather than in NEVER_COPY (dropped unconditionally).
+  it('keeps and substitutes uv.lock for the standalone layout (issue #1769)', () => {
+    const dest = join(root, 'out')
+    const result = scaffoldPlugin(makeSkeleton(), dest, deriveNames('acme-crm'), {
+      layout: 'standalone',
+    })
+
+    expect(result.files).toContain('uv.lock')
+    expect(existsSync(join(dest, 'uv.lock'))).toBe(true)
+    const lockContents = readFileSync(join(dest, 'uv.lock'), 'utf8')
+    expect(lockContents).toContain('biffo-plugin-acme-crm')
+    expect(lockContents).not.toContain('biffo-plugin-example')
+  })
+
+  it('still drops uv.lock for the in-tree layout, with a reason (issue #1769)', () => {
+    const dest = join(root, 'out')
+    const result = scaffoldPlugin(makeSkeleton(), dest, deriveNames('acme-crm'))
+
+    expect(existsSync(join(dest, 'uv.lock'))).toBe(false)
+    expect(result.files).not.toContain('uv.lock')
+    const skippedUvLock = result.skipped.find((s) => s.entry === 'uv.lock')
+    expect(skippedUvLock).toBeDefined()
+    expect(skippedUvLock?.reason).not.toHaveLength(0)
+  })
+
   it('never copies build or VCS detritus', () => {
     const dest = join(root, 'out')
     scaffoldPlugin(makeSkeleton(), dest, deriveNames('acme-crm'))
@@ -188,24 +229,23 @@ describe('scaffoldPlugin', () => {
     expect(existsSync(join(dest, '__pycache__'))).toBe(false)
   })
 
-  // Regression guard for biffo-template#1731 item 3: `uv.lock` must stay in
-  // NEVER_COPY. The skeleton's uv.lock resolves and pins `example-plugin`'s
-  // OWN dependency set under the skeleton's OWN package name — if it were
-  // ever copied into a scaffolded plugin, the plugin would inherit a
-  // lockfile naming a different package (still `biffo-plugin-example`, not
-  // its own `dist` name from ScaffoldNames) and pinning resolutions for
-  // dependencies the scaffolded plugin may not even declare once
-  // `applySubstitutions` has rewritten pyproject.toml. `uv sync --locked`
-  // (added by PR #1760/#1762 to every scaffolded skeleton's own CI, per
-  // this same issue) would then fail immediately in a freshly-created
-  // plugin repo it had never resolved anything for, or — worse — silently
-  // pin stale/wrong transitive versions if it happened to still resolve.
+  // Regression guard for biffo-template#1731 item 3, UPDATED by #1769.
+  // #1731 originally asked this to prove `uv.lock` is never copied at all —
+  // true when it lived in NEVER_COPY unconditionally, but that turned out to
+  // be the #1769 regression: the `standalone` layout needs its own
+  // substituted copy (see the STANDALONE_ONLY_ENTRIES tests above), because
+  // `applySubstitutions` already rewrites the one package-name token the
+  // skeleton's lock carries. What must still hold, and what #1731 actually
+  // cared about, is narrower: the DEFAULT (`in-tree`) layout — a plugin
+  // merged into a monorepo's services/ — must never receive a nested
+  // `uv.lock`, since the host resolves its own dependency tree and a copy
+  // in there would be inert at best and confusing at worst.
   //
   // This is asserted against scaffoldPlugin's actual output (the file is
   // absent from both the returned file list AND the destination directory),
-  // not by reading the NEVER_COPY Set directly, so it fails if the set is
-  // edited OR if the copy logic stops consulting it correctly.
-  it('never copies the skeleton uv.lock (regression guard for #1731)', () => {
+  // not by reading STANDALONE_ONLY_ENTRIES directly, so it fails if the set
+  // is edited OR if the copy logic stops consulting it correctly.
+  it('never copies uv.lock into the default in-tree layout (regression guard for #1731/#1769)', () => {
     const dest = join(root, 'out-uv-lock')
     const result = scaffoldPlugin(makeSkeleton(), dest, deriveNames('acme-crm'))
 
@@ -248,10 +288,10 @@ describe('the real _skeletons/plugin-template', () => {
     expect(result.files.some((f) => f.startsWith('terraform/'))).toBe(true)
     expect(JSON.parse(readFileSync(join(dest, 'biffo.plugin.json'), 'utf8')).name).toBe('acme-crm')
 
-    // #1731 item 3, against the REAL skeleton's real uv.lock (not a fixture
-    // stand-in) — the skeleton at this commit does carry one, so this is a
-    // live check of the NEVER_COPY behaviour, not just the makeSkeleton()
-    // fixture above.
+    // #1731 item 3 / #1769, against the REAL skeleton's real uv.lock (not a
+    // fixture stand-in) — the skeleton at this commit does carry one, so
+    // this is a live check that the default (in-tree) layout still drops
+    // it, not just the makeSkeleton() fixture above.
     expect(
       existsSync(join(realSkeleton!, 'uv.lock')),
       'fixture drift: skeleton has no uv.lock to guard against',
@@ -307,5 +347,41 @@ describe('the real _skeletons/plugin-template', () => {
       }
     },
     180_000,
+  )
+
+  // Issue #1769: PR #1760 added `--locked` to every install-ing job in
+  // _skeletons/plugin-template/.github/workflows/{ci,release}.yml, which the
+  // `standalone` layout carries verbatim. `biffo plugin create --standalone`
+  // never ran `uv lock`, and `uv.lock` sat in NEVER_COPY unconditionally, so
+  // a freshly scaffolded standalone plugin's very first commit — the one
+  // that triggers its very first CI run — had no lockfile at all: 5 of 6 CI
+  // jobs would fail `uv sync --all-groups --locked` with "Unable to find
+  // lockfile", before a single line of plugin logic was written.
+  //
+  // This runs the EXACT command every one of those jobs runs
+  // (`uv sync --all-groups --locked`), against the EXACT directory
+  // `scaffoldPlugin(..., { layout: 'standalone' })` produces from the REAL
+  // skeleton — not a hand-written fixture — so it fails the same way CI
+  // would if the uv.lock exclusion regresses back into NEVER_COPY, and
+  // passes once the substituted skeleton lock is shipped instead.
+  //
+  // Network + toolchain dependent (a real `uv sync` resolve), so — like the
+  // web-admin test above — it is skipped outright unless the real skeleton
+  // is present, with a long timeout for a cold uv cache.
+  it.runIf(realSkeleton)(
+    "a standalone-scaffolded plugin satisfies 'uv sync --all-groups --locked' (issue #1769)",
+    () => {
+      const dest = join(root, 'standalone-locked')
+      const result = scaffoldPlugin(realSkeleton!, dest, deriveNames('acme-crm'), {
+        layout: 'standalone',
+      })
+
+      expect(result.files, 'uv.lock missing from scaffold output').toContain('uv.lock')
+      expect(existsSync(join(dest, 'uv.lock')), 'uv.lock missing on disk').toBe(true)
+      expect(readFileSync(join(dest, 'uv.lock'), 'utf8')).not.toMatch(/biffo-plugin-example/)
+
+      execSync('uv sync --all-groups --locked', { cwd: dest, stdio: 'pipe' })
+    },
+    120_000,
   )
 })

@@ -101,9 +101,9 @@
  *     not exist, so nothing was examined at all — cannot-tell, never a pass.
  */
 import { existsSync } from 'node:fs'
-import { basename } from 'node:path'
+import { basename, join } from 'node:path'
 import { execa } from '../lib/exec.js'
-import { explainOwnership, readCoreManifest } from '../lib/core-manifest.js'
+import { CORE_MANIFEST_FILE, explainOwnership, readCoreManifest } from '../lib/core-manifest.js'
 import {
   checkOrphanRatchet,
   planCoreUpgrade,
@@ -182,6 +182,22 @@ export async function runOrphanRatchetCheck(opts: OrphanRatchetCheckOptions = {}
         'Pass a real instance tree with --instance-dir for a check that can actually find ' +
         'something. biffo-template#1714.',
     )
+  }
+
+  // A satellite (sibling app, plugin repo) carries neither core-manifest.json
+  // nor biffo.core.json — it is not, and never will be, an instance this
+  // guard can classify against. That is the same "not an instance" case
+  // check-orphan-ratchet-instance.sh already treats as a genuine skip (see
+  // its own header) rather than a broken run; readCoreManifest's throw would
+  // otherwise crash this self-check in exactly that repo shape
+  // (biffo-template#1906).
+  if (!existsSync(join(theirsDir, CORE_MANIFEST_FILE))) {
+    console.log(
+      `orphan-ratchet guard (${label}): no ${CORE_MANIFEST_FILE} in ${theirsDir} — this is not ` +
+        'a Biffo template/instance tree (a satellite repo never carries one), so there is no ' +
+        'ownership manifest to classify paths against. Not applicable; skipping.',
+    )
+    return
   }
 
   const manifest = readCoreManifest(theirsDir)

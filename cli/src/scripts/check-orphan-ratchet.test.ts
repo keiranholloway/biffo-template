@@ -243,6 +243,32 @@ describe('runOrphanRatchetCheck', () => {
     expect(logged).toContain('1 unsanctioned file(s) found')
   })
 
+  it('is not applicable (exit 0, no crash) against a satellite tree with no core-manifest.json anywhere (#1906)', async () => {
+    // Shaped like a real satellite repo (tabsii-ui, tabsii-crm): a plain
+    // directory tree with no core-manifest.json at all -- readCoreManifest
+    // would throw "core-manifest.json not found in ...", which is exactly
+    // the crash the shared-sync rehearsal hit in every one of the 15
+    // satellites for 12+ days.
+    const root = makeTmpDir('orphan-ratchet-check-satellite')
+    const satelliteDir = join(root, 'satellite')
+    mkdirSync(satelliteDir, { recursive: true })
+    write(satelliteDir, 'apps/frontend/package.json', '{"name": "satellite-app"}')
+
+    await expect(
+      runOrphanRatchetCheck({
+        label: 'satellite',
+        theirsDir: satelliteDir,
+        baseDir: satelliteDir,
+        instanceDir: satelliteDir,
+      }),
+    ).resolves.toBeUndefined()
+
+    expect(process.exit).not.toHaveBeenCalled()
+    const logged = vi.mocked(console.log).mock.calls.flat().join('\n')
+    expect(logged).toContain('no core-manifest.json')
+    expect(logged.toLowerCase()).toContain('not applicable')
+  })
+
   it('defaults the label to the basename of --instance-dir when --label is omitted', async () => {
     const root = makeTmpDir('orphan-ratchet-check-label')
     const { baseDir, theirsDir, instanceDir } = buildTrees(root)

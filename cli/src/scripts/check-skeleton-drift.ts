@@ -72,8 +72,22 @@ export async function runSkeletonDriftCheck(): Promise<void> {
   )
 
   if (skeletons.length === 0) {
-    // This repo always ships _skeletons/plugin-template and
-    // _skeletons/sibling-template. Zero here means discovery broke.
+    // A satellite repo (sibling app, plugin repo) never carries a
+    // _skeletons/ directory at all — that scaffolding is template-only, so
+    // its absence here is a legitimate zero, not broken discovery
+    // (biffo-template#1906). Only fail closed when _skeletons/ EXISTS but
+    // nothing under it qualified as a real skeleton — that is still the
+    // "discovery broke" signal this guard was built to catch, e.g. in this
+    // repo, which always ships _skeletons/plugin-template and
+    // _skeletons/sibling-template.
+    if (!existsSync(join(root, '_skeletons'))) {
+      console.log(
+        '· Skeleton-drift guard: no _skeletons/ directory under ' +
+          `${root} — this is not a repo that ships scaffolding (a satellite repo never carries ` +
+          'one). Not applicable; skipping.',
+      )
+      return
+    }
     console.error(
       '✗ Skeleton-drift guard: found 0 repo skeletons under _skeletons/ — this looks like a ' +
         'broken scan, not a repo with no scaffolding. Refusing to report success over zero input.',

@@ -281,6 +281,23 @@ describe('the real _skeletons/plugin-template', () => {
   // would otherwise silently produce a plugin still called "example-plugin".
   const realSkeleton = findSkeletonRoot(new URL('.', import.meta.url).pathname, 'plugin-template')
 
+  // Unlike pnpm (guaranteed present — it is what invoked this very test run),
+  // `uv` has no such guarantee: this suite runs under `pnpm test`, which
+  // never implies a Python toolchain is on PATH. The one test below that
+  // shells out to `uv sync` gates on this in addition to `realSkeleton`, so a
+  // machine/job with the skeleton but no `uv` (or vice versa) skips with a
+  // clear reason instead of crashing on "uv: not found". CI's "JS (lint,
+  // types, test, audit)" job installs `uv` for exactly this reason (see
+  // .github/workflows/ci.yml) — the gate is a safety net for local dev and
+  // any future job shape, not a way to let the check go quietly unrun.
+  let hasUv = false
+  try {
+    execSync('uv --version', { stdio: 'ignore' })
+    hasUv = true
+  } catch {
+    hasUv = false
+  }
+
   it.runIf(realSkeleton)('scaffolds cleanly with no example-plugin tokens left behind', () => {
     const dest = join(root, 'real')
     const result = scaffoldPlugin(realSkeleton!, dest, deriveNames('acme-crm'))
@@ -367,8 +384,11 @@ describe('the real _skeletons/plugin-template', () => {
   //
   // Network + toolchain dependent (a real `uv sync` resolve), so — like the
   // web-admin test above — it is skipped outright unless the real skeleton
-  // is present, with a long timeout for a cold uv cache.
-  it.runIf(realSkeleton)(
+  // is present, with a long timeout for a cold uv cache. Additionally gated
+  // on `hasUv`: this file runs under `pnpm test`, which carries no guarantee
+  // that a Python toolchain is on PATH (unlike pnpm itself, which invoked
+  // this run). CI's JS job installs `uv` so this still executes on every PR.
+  it.runIf(realSkeleton && hasUv)(
     "a standalone-scaffolded plugin satisfies 'uv sync --all-groups --locked' (issue #1769)",
     () => {
       const dest = join(root, 'standalone-locked')

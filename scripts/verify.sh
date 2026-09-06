@@ -75,6 +75,38 @@
 
 set -u
 
+# Orphaned-scratch backstop (#1930). Every check below that creates a temp
+# dir/file already cleans it up inline on its own pass/fail paths (an
+# explicit `rm -rf`/`rm -f`, sometimes a per-function trap) -- that cleanup is
+# left exactly as it is, as defensive belt-and-braces. What none of them cover
+# is verify.sh itself dying abnormally (SIGTERM from a CI timeout, an
+# interrupted local Ctrl-C, `kill`) partway through one of those functions,
+# before its own inline cleanup line is reached. `gitleaks_tracked_only`'s
+# `_gl_dir` has the largest such window: mirror-copy every tracked file, then
+# a full `gitleaks detect` run, all between the `mktemp -d` and the `rm -rf`
+# that only fires if the function returns normally.
+#
+# That gap is exactly what accumulated hundreds of stale `bt-verify`,
+# `biffo-template-verify`, `dev-check-*` and `tmp.*` scratch dirs in /tmp with
+# no eviction, driving it to 100% inode usage and breaking every `fleet.sh`
+# command that writes a temp file.
+#
+# Idiom matches the other trap-using scripts in this directory
+# (`js-dependency-audit.sh`, `shared-sync.sh`): accumulate every path this run
+# creates in one variable, and let a single EXIT/HUP/INT/TERM trap sweep all
+# of them however the script leaves. Declared here, at the very top, so the
+# trap has a function to call no matter how early an abnormal exit happens.
+_VERIFY_TMP_PATHS=""
+_verify_track_tmp() {
+  _VERIFY_TMP_PATHS="$_VERIFY_TMP_PATHS $1"
+}
+_verify_cleanup_tmp() {
+  # shellcheck disable=SC2086  -- word-splitting is the point: one or more
+  # space-separated paths accumulated over the run.
+  [ -n "$_VERIFY_TMP_PATHS" ] && rm -rf $_VERIFY_TMP_PATHS
+}
+trap _verify_cleanup_tmp EXIT HUP INT TERM
+
 LIST=""
 [ "${1:-}" = "--list" ] && LIST=1
 
@@ -537,6 +569,7 @@ run_check() {
     return 0
   fi
   start=$(date +%s)
+  _verify_track_tmp "/tmp/biffo-verify.$$"
   if "$@" >"/tmp/biffo-verify.$$" 2>&1; then
     PASSED="$PASSED $name"
     LAST_CHECK_SECONDS=$(($(date +%s) - start))
@@ -651,6 +684,7 @@ run_check_js() {
     return 0
   fi
   start=$(date +%s)
+  _verify_track_tmp "/tmp/biffo-verify.$$"
   if "$@" >"/tmp/biffo-verify.$$" 2>&1; then
     PASSED="$PASSED $name"
     LAST_CHECK_SECONDS=$(($(date +%s) - start))
@@ -1027,6 +1061,7 @@ pg_xdist_ready() {
 
 pg_test_run() {
   _out="/tmp/biffo-verify-pg.$$"
+  _verify_track_tmp "$_out"
   _pg_started=$(date +%s)
 
   if pg_xdist_ready "$1"; then
@@ -1287,6 +1322,7 @@ else
       echo pg_test_run "$_pg_dir" "$_pg_rel"
     else
       _pg_check_start=$(date +%s)
+      _verify_track_tmp "/tmp/biffo-verify-pg-check.$$"
       # shellcheck disable=SC2086
       pg_test_run "$_pg_dir" "$_pg_rel" >"/tmp/biffo-verify-pg-check.$$" 2>&1
       _pg_check_rc=$?
@@ -1567,6 +1603,7 @@ fi
 # existing path-based `.gitleaks.toml` allowlist entries keep working unchanged.
 gitleaks_tracked_only() {
   _gl_dir=$(mktemp -d "${TMPDIR:-/tmp}/biffo-gitleaks.XXXXXX") || return 1
+  _verify_track_tmp "$_gl_dir"
   _gl_root=$(git rev-parse --show-toplevel) || {
     rm -rf "$_gl_dir"
     return 1

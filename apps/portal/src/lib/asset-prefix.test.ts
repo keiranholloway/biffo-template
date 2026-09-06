@@ -58,12 +58,31 @@ describe('portal asset prefix', () => {
 
 describe('the routing that assetPrefix depends on', () => {
   it('the CDN routes both the bare prefix and the wildcard for admin and login', () => {
-    const cdn = read('modules/cloud/aws/cdn/main.tf')
-    const declared = /portal_cache_behaviors\s*=\s*\[([^\]]*)\]/.exec(cdn)?.[1] ?? ''
-    const patterns = [...declared.matchAll(/"([^"]+)"/g)].map((m) => m[1])
+    // biffo-template#1923: portal_cache_behaviors no longer inlines literal
+    // path_pattern strings — it looks them up from path-contract.json by key
+    // (`local.path_contract_pattern["admin"]`, etc.), the single generated
+    // document main.tf and the CloudFront Function templates both read. So
+    // this drift guard now has two parts: the contract's own resolved
+    // values (unchanged expectation), AND that main.tf still wires
+    // portal_cache_behaviors from exactly these four contract keys, in this
+    // order, rather than from re-typed literals that could drift from the
+    // contract silently.
+    const contract = JSON.parse(read('modules/cloud/aws/cdn/path-contract.json')) as {
+      rows: Array<{ key: string; path_pattern: string }>
+    }
+    const byKey = Object.fromEntries(contract.rows.map((r) => [r.key, r.path_pattern]))
+    const patterns = ['admin', 'admin-wildcard', 'login', 'login-wildcard'].map((k) => byKey[k])
     // The bare pattern is not redundant: CloudFront's "admin/*" does NOT match
     // "/admin" (nothing after the slash), which is exactly how a human types it.
     expect(patterns).toEqual(['admin', 'admin/*', 'login', 'login/*'])
+
+    const cdn = read('modules/cloud/aws/cdn/main.tf')
+    // Lazy, multi-line match up to the closing `]` of the OUTER list
+    // (a bare `[^\]]*` stops at the FIRST `]`, which is now the one that
+    // closes `path_contract_pattern["admin"]` itself, truncating the match).
+    const declared = /portal_cache_behaviors\s*=\s*\[([\s\S]*?)\n\s*\]/.exec(cdn)?.[1] ?? ''
+    const keys = [...declared.matchAll(/path_contract_pattern\["([^"]+)"\]/g)].map((m) => m[1])
+    expect(keys).toEqual(['admin', 'admin-wildcard', 'login', 'login-wildcard'])
   })
 
   it('the CDN keeps no _next behaviour — that prefix is the root sibling’s', () => {

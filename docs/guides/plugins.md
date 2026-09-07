@@ -240,6 +240,42 @@ The ADR-0009 service-auth wiring comes along with it: the generated block passes
 
 To disable an installed plugin without uninstalling it, override `enabled_plugins` with `-var`/`-var-file`/`TF_VAR_enabled_plugins` — all of which outrank an auto-tfvars file.
 
+## User-facing frontend (`user_frontend`, ADR-0021 §2)
+
+A founder-facing plugin UI declares:
+
+```json
+"user_frontend": {
+  "dir": "web/dist",
+  "required_group": "founder"
+}
+```
+
+and ships `web/` — a built static bundle at the repo-relative path `dir` names
+(`index.html` plus hashed `assets/*`, the ordinary Vite build-output shape) —
+and nothing else. That is the whole contract: no `terraform/` frontend
+resources, no `deploy-frontend.yml` workflow, nothing for `install`/`upgrade`
+to provision beyond committing the built bundle. The shared plugin host serves
+it directly, at `GET /api/v1/plugins/<name>/ui` and
+`GET /api/v1/plugins/<name>/ui/{proxy+}` — the same shared-host mechanism the
+admin shell (`admin_ingress`) already uses in production, extended to
+`user_frontend` rather than provisioning a per-plugin CloudFront origin. See
+[ADR-0021](../ADR/0021-shared-plugin-hosting.md) section 2 for the full design.
+
+**This supersedes ADR-0018 section 2's per-plugin frontend hosting** — a
+dedicated `aws_s3_bucket` behind the shared CloudFront distribution, wired
+through a `cdn_distribution_arn` module variable and a `frontend_bucket_*`
+output. That shape is retired, and `biffo plugin install`/`upgrade` refuse it
+outright: a plugin whose `terraform/` declares an `aws_s3_bucket` named on the
+`-plugin-…-web` pattern, a `frontend_bucket_*` output, or a
+`cdn_distribution_arn` variable is refused with an error naming ADR-0021
+section 2 and this contract, fail-closed, before anything is written to your
+checkout. If you maintain an older plugin still on that shape, delete
+`terraform/`'s frontend resources (and `deploy-frontend.yml`, if present) and
+adopt `user_frontend` above — there is nothing left to provision once you do.
+`_skeletons/plugin-template/README.md` documents the same contract for anyone
+starting a new plugin.
+
 ## Things the CLI does _not_ do (do these yourself)
 
 These are deliberate — the CLI never acts on your live deployment, and never edits a file you hand-authored:

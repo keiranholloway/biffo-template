@@ -330,6 +330,36 @@
       "type": "object",
       "additionalProperties": { "type": "string" },
       "description": "Python package dependencies (including biffo-plugin-sdk)."
+    },
+    "config": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "kind", "description"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "description": "Config key, snake_case. Referenced by other manifest fields (e.g. chat_agents[].required_group) and used as the per-plugin, per-name lookup key the host resolves at runtime."
+          },
+          "kind": {
+            "enum": ["secret", "setting"],
+            "description": "'secret' — the instance supplies an SSM parameter PATH, never the credential itself. 'setting' — the instance supplies a literal value (a Cognito group name, a feature flag, a numeric limit). Never a value itself; this manifest declares only the NEED (biffo-template#1517)."
+          },
+          "required": {
+            "type": "boolean",
+            "default": true,
+            "description": "If true, `biffo plugin install` fails loudly when the instance supplies no value for this name, rather than installing an unconfigured plugin."
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "description": "What this need is for, shown to whoever installs the plugin so they know what to supply."
+          }
+        },
+        "additionalProperties": false
+      },
+      "description": "Named needs (a credential, a group name, a feature flag) this manifest declares that the INSTANCE must supply at install time — never values, only name/kind/required/description (biffo-template#1517). See ConfigDeclaration in biffo_plugin_sdk.plugin for the full mechanism."
     }
   },
   "additionalProperties": false

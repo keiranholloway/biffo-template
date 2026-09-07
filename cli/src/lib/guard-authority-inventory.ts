@@ -182,6 +182,26 @@ export const GUARD_AUTHORITY_INVENTORY: GuardAuthorityRecord[] = [
       "resolveBody's own comment) and hand it to documentsFor() as plain text — no second read " +
       'of the same field through a matching decode step exists to agree with the first one wrongly.',
   },
+  {
+    id: 'ownership-header-claim-guard',
+    path: 'cli/src/lib/ownership-header-claim-guard.ts',
+    inClass: true,
+    document:
+      "a file's own header comment claim (INSTANCE-OWNED, template-owned, user-owned, or " +
+      '"NOT a template file")',
+    actor:
+      "core-manifest.json's real answer via isTemplateOwned() (core-manifest.ts, longest-prefix " +
+      'match) — the actual authority `biffo core upgrade` acts on',
+    disagreementTest: 'cli/src/lib/ownership-header-claim-guard.test.ts',
+    independence: 'independent',
+    note:
+      'instance #1911, split from this class (#1362): scripts/verify-deployed.checks carried an ' +
+      'INSTANCE-OWNED header while core-manifest.json disagreed until a human noticed by hand ' +
+      '(#1706/#1707) — nothing ever compared the two documents. Independent by construction: ' +
+      'findHeaderClaim reads file content via readFileSync and a hand-written regex, while ' +
+      'isTemplateOwned reads core-manifest.json via JSON.parse and a longest-prefix-match over ' +
+      'path strings — no shared parser or decode step exists for a corruption to travel through.',
+  },
 
   // ── In-class, no TS disagreement test (out-of-language: Python) ─────────
   {
@@ -293,6 +313,34 @@ export const GUARD_AUTHORITY_INVENTORY: GuardAuthorityRecord[] = [
       "honest `unclear` per this sweep's own standard, not a manufactured verdict either way.",
   },
   {
+    id: 'distribution-inventory-remote-content',
+    path: 'cli/src/lib/distribution-inventory.ts',
+    inClass: true,
+    document:
+      "distribution-inventory.json entries' remoteContentAssertions (mustContain/" +
+      "mustNotContain) -- the substrings a gapReason's factual claim about a remote repo's " +
+      'file implies must/must not be present',
+    actor:
+      "the named remote repo's real file content at the named ref, fetched fresh via `gh api " +
+      "repos/<repo>/contents/<path>?ref=<ref>` (check-distribution-remote-state.ts) -- #1816's " +
+      "own class: a gapReason restated #1623's closed classification of biffo-plugin-" +
+      "marketing's .gitleaks.toml as current fact nine days after biffo-plugin-marketing#188 " +
+      'made it false, and the only prior guard (a #1807-shaped wording regex scoped to that ' +
+      'one entry) checked the PROSE, never the real file.',
+    disagreementTest: 'cli/src/lib/distribution-inventory.test.ts',
+    independence: 'independent',
+    note:
+      '#1816: checkRemoteContentAssertions is pure and network-free -- it takes ALREADY-' +
+      'FETCHED content as a Map, never touches the network or the gapReason string itself, so ' +
+      "a corruption in how a human writes gapReason prose cannot make this guard's own read " +
+      'agree with it wrongly. The one real fetch path (fetchRemoteContentViaGh, `gh api`) is ' +
+      "used only by check-distribution-remote-state.ts's live/scheduled run, never by the " +
+      "guard's own logic or its test, which use real content CAPTURED once and committed as a " +
+      'fixture (see the two named commands in the test file) -- independent measurements ' +
+      '(a hand-written claim vs. a live fetch) by construction, the same shape plugin-' +
+      'staleness.ts already established for "recorded value vs. live query".',
+  },
+  {
     id: 'doctor',
     path: 'cli/src/lib/doctor.ts',
     inClass: true,
@@ -362,40 +410,54 @@ export const GUARD_AUTHORITY_INVENTORY: GuardAuthorityRecord[] = [
       'out of reach for a CLI check, and the PR body it emits says so).',
   },
 
-  // ── In-class, STILL NO disagreement test — the honest remainder ─────────
+  // ── In-class, WITH a disagreement test (fixed 2026-09-06, #1912) ─────────
   {
     id: 'core-ownership-guard',
     path: 'cli/src/lib/core-ownership-guard.ts',
     inClass: true,
-    document: "core-manifest.json's templateOwned prefix list",
+    document:
+      "core-manifest.json's templateOwned prefix list, optionally narrowed by " +
+      "template-shipped-paths.ts's live fetch of biffo-template's dev tree (CI mode only)",
     actor:
       "core-upgrade.ts's classify(), which returns keep-ours/orphaned for any path with no base and no theirs",
     disagreementTest: 'cli/src/lib/core-ownership-orphan-disagreement.test.ts',
     independence: 'independent',
-    // DESCRIPTIVE, not prescriptive — read this before trusting the field above.
+    // PRESCRIPTIVE as of #1912 — read this before trusting the field above.
     // The test drives BOTH sides over one state (planCoreUpgrade over real
-    // dirs, checkCoreOwnership over the same manifest) and pins the
-    // disagreement rather than asserting the behaviour we want, because the
-    // behaviour we want is not reachable from where the guard stands: at commit
-    // time in an instance it has `changedFiles` and the manifest, and no view
-    // of the template tree, so it CANNOT know whether a path under a
-    // template-owned prefix was ever shipped upstream. That is why five fixes
-    // to the prefix list never closed instance #8.
-    // The test therefore fails the day someone makes the two agree, and says so
-    // in its own assertion message. Treat that failure as the fix landing, not
-    // as a regression, and change this field's note when it does.
+    // dirs, checkCoreOwnership over the same manifest) and now asserts
+    // AGREEMENT: when checkCoreOwnership is given `templateShippedPaths` (the
+    // template's real dev-tree, fetched live), a manifest-prefix match with no
+    // upstream counterpart is a `knownOrphan` — never blocked, never needing a
+    // `Core-Divergence:` trailer, matching classify()'s own keep-ours/orphaned
+    // verdict exactly. A second test proves the specific #1912 shape fail-first
+    // in the same file: a Core-Divergence trailer is still accepted (wrongly
+    // recording "diverges from the template") when NO template view is
+    // supplied, and is no longer needed at all once one is.
+    //
+    // The residual gap, stated rather than hidden: the agreement only holds
+    // when `templateShippedPaths` is available, which is CI-mode-only by
+    // design (the local commit-msg hook stays offline-safe and fast, per
+    // template-shipped-paths.ts's own doc) and is itself a best-effort network
+    // fetch that returns null (falls back to prefix-only, pre-#1912 behaviour)
+    // on any failure — offline, timeout, DNS. That fallback is deliberately
+    // the SAME direction the guard has always erred in (block and require a
+    // trailer), not a new fail-open path: a network hiccup degrades the guard
+    // to what it was before this fix, never below it.
     note:
-      'instance #8, reported 2026-08-08/09, STILL OPEN per the issue thread ("second occurrence — ' +
-      'same day, different file"). A prefix match claims services/api/ template-owned; classify() ' +
-      'cannot carry a path the template has never shipped. Needs a disagreement test that builds a ' +
-      'manifest prefix with no matching template file and asserts the guard and classify() agree ' +
-      "it is instance-owned (or asserts the guard fails loudly, naming the guard's own gap — either " +
-      'is a fix; today neither exists, so the guard commit-blocks with an impossible instruction). ' +
-      "Swept for instance-11 exposure 2026-08-11: checkCoreOwnership() reads the manifest's static " +
-      'prefix list via isTemplateOwned(); classify() derives its answer from base/theirs tree ' +
-      'presence in a wholly separate module (core-upgrade.ts). No shared helper, parser or decode ' +
-      'step exists between them — the DISAGREEMENT itself (the honest remainder above) is the open ' +
-      'problem here, not a shared-lens exposure masking one.',
+      'instance #8, reported 2026-08-08/09 ("second occurrence — same day, different file"), and ' +
+      "the #1912 sharpening of it (the guard's Core-Divergence escape hatch accepted ANY reason for " +
+      'ANY path under a template-owned prefix, so an orphan got a false "divergence from the ' +
+      'template" recorded in history rather than being recognised as never template-owned at all). ' +
+      "Fixed by giving checkCoreOwnership() an optional, real view of what the template's dev " +
+      'branch actually ships (template-shipped-paths.ts, a plain unauthenticated `git fetch` — ' +
+      'biffo-template is public, so no cross-repo token is needed the way ' +
+      "check-distribution-remote-state.ts's BIFFO_GITHUB_TOKEN is). Swept for instance-11 exposure " +
+      "2026-08-11 (pre-#1912) and reconfirmed after: checkCoreOwnership() reads the manifest's " +
+      'static prefix list via isTemplateOwned() and, separately, the injected templateShippedPaths ' +
+      'set by plain Set#has(); classify() derives its answer from base/theirs tree presence in a ' +
+      'wholly separate module (core-upgrade.ts) via a wholly separate fetch mechanism ' +
+      '(materializeTemplateAtTag, a local tag checkout). No shared helper, parser or decode step ' +
+      'exists between the guard, its new template view, and the actor.',
   },
   {
     id: 'claim-structural-resolver',
@@ -494,6 +556,18 @@ export const GUARD_AUTHORITY_INVENTORY: GuardAuthorityRecord[] = [
     inClass: false,
     disagreementTest: null,
     note: 'cross-references two Terraform resources in the SAME tree, not two different documents about the deployed actor',
+  },
+  {
+    id: 'api-gateway-integration-guard',
+    path: 'cli/src/lib/api-gateway-integration-guard.ts',
+    inClass: false,
+    disagreementTest: null,
+    note:
+      'cross-references two Terraform resources in the SAME tree (a `module "..."` block ' +
+      'establishing which Lambda an api-gateway module instance fronts with an ' +
+      'alias-qualified permission, and an `aws_apigatewayv2_integration` block elsewhere in ' +
+      'that same tree) — same shape as eventbridge-log-permission-guard directly above, not ' +
+      'two independently-authoritative documents about a live deployed actor (#1900).',
   },
   {
     id: 'lambda-output-guard',

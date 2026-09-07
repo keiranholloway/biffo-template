@@ -36,6 +36,9 @@ function gitMock(overrides: Record<string, unknown> = {}) {
     // #1833: defaults model the safe case — no live fleet worktree-claim
     // lock held on the candidate.
     hasFleetWorktreeClaim: vi.fn().mockResolvedValue(false),
+    // #1948: only ever read when hasFleetWorktreeClaim resolves true.
+    fleetWorktreeClaimAgeMs: vi.fn().mockResolvedValue(0),
+    clearStaleFleetWorktreeClaim: vi.fn().mockResolvedValue(undefined),
     fetchPrune: vi.fn().mockResolvedValue(undefined),
     aheadBehind: vi.fn().mockResolvedValue({ ahead: 0, behind: 0, hasUpstream: true }),
     listBranchRefs: vi.fn().mockResolvedValue([]),
@@ -50,6 +53,11 @@ function gitMock(overrides: Record<string, unknown> = {}) {
     // Milestone 2 (#1682): same safe-case default, for the bare-branch path.
     branchSha: vi.fn().mockResolvedValue('merged-tip-sha'),
     deleteBranch: vi.fn().mockResolvedValue(true),
+    // #1954: empty by default — every branch this file's fixtures use is
+    // meant to read as "its own remote copy is gone", matching their
+    // `track: '[gone]'` fixtures; override per test for a "still on remote"
+    // case.
+    listRemoteBranchNames: vi.fn().mockResolvedValue(new Set()),
     ...overrides,
   }
 }
@@ -249,6 +257,7 @@ describe('runDoctorFix', () => {
         candidate: { branch: 'chore/merged', worktreePath: '/wt/merged' },
         verdict: { action: 'reap' },
         worktreeRemoved: true,
+        staleClaimCleared: false,
       },
     ])
     expect(git.removeWorktree).toHaveBeenCalledWith(cwd, '/wt/merged')
@@ -285,6 +294,7 @@ describe('runDoctorFix', () => {
         },
         verdict: { action: 'keep', reason: 'commits-not-in-merge' },
         worktreeRemoved: null,
+        staleClaimCleared: false,
       },
     ])
     expect(git.removeWorktree).not.toHaveBeenCalled()
@@ -313,6 +323,7 @@ describe('runDoctorFix', () => {
         candidate: { branch: 'security/undici-advisories', worktreePath: '/wt/undici' },
         verdict: { action: 'keep', reason: 'pr-closed' },
         worktreeRemoved: null,
+        staleClaimCleared: false,
       },
     ])
     expect(git.removeWorktree).not.toHaveBeenCalled()
@@ -496,11 +507,13 @@ describe('printReapOutcomes', () => {
         candidate: { branch: 'feature-dirty', worktreePath: '/wt/feature-dirty' },
         verdict: { action: 'reap' },
         worktreeRemoved: false,
+        staleClaimCleared: false,
       },
       {
         candidate: { branch: 'feature-open', worktreePath: '/wt/feature-open' },
         verdict: { action: 'reap' },
         worktreeRemoved: true,
+        staleClaimCleared: false,
       },
     ]
 
@@ -521,11 +534,13 @@ describe('printReapOutcomes', () => {
         candidate: { branch: 'chore/merged', worktreePath: '/wt/merged' },
         verdict: { action: 'reap' },
         worktreeRemoved: true,
+        staleClaimCleared: false,
       },
       {
         candidate: { branch: 'pr-open', worktreePath: '/wt/pr-open' },
         verdict: { action: 'keep', reason: 'pr-open' },
         worktreeRemoved: null,
+        staleClaimCleared: false,
       },
     ]
 
@@ -542,11 +557,13 @@ describe('printReapOutcomes', () => {
         candidate: { branch: 'fix/1602-orphan-ratchet-divergence', worktreePath: '/wt/realname' },
         verdict: { action: 'keep', reason: 'commits-not-in-merge' },
         worktreeRemoved: null,
+        staleClaimCleared: false,
       },
       {
         candidate: { branch: 'chore/merged', worktreePath: '/wt/merged' },
         verdict: { action: 'keep', reason: 'unknown-merge-head' },
         worktreeRemoved: null,
+        staleClaimCleared: false,
       },
     ]
 

@@ -85,10 +85,13 @@ export interface DoctorFixDeps {
     GitAdapter,
     | 'hasUncommittedChanges'
     | 'hasFleetWorktreeClaim'
+    | 'fleetWorktreeClaimAgeMs'
+    | 'clearStaleFleetWorktreeClaim'
     | 'currentBranch'
     | 'removeWorktree'
     | 'headSha'
     | 'isAncestor'
+    | 'listRemoteBranchNames'
   >
   github: Pick<GithubCliAdapter, 'prVerdictForBranch' | 'mergedHeadSha'>
 }
@@ -180,7 +183,11 @@ export async function runDoctorFix(
   facts: Pick<RepoFacts, 'branches' | 'worktrees' | 'currentBranch'>,
   deps: DoctorFixDeps = { git: new GitAdapter(), github: new GithubCliAdapter() },
 ): Promise<ReapOutcome[]> {
-  return reapAll(cwd, facts.branches, facts.worktrees, facts.currentBranch, deps)
+  // #1954: the candidate-worthy signal is the branch's OWN remote copy, not
+  // its (possibly misconfigured) upstream — see `hasProvenGoneRemote`'s doc
+  // comment in `lib/doctor-reaper.ts`.
+  const remoteBranchNames = await deps.git.listRemoteBranchNames(cwd)
+  return reapAll(cwd, facts.branches, facts.worktrees, facts.currentBranch, deps, remoteBranchNames)
 }
 
 /** What `runDoctorFixBranches` needs — the same shape as `DoctorFixDeps` minus the
@@ -188,7 +195,7 @@ export async function runDoctorFix(
  * type of `DoctorFixDeps`) so a caller wiring only the branch half is not forced to also
  * satisfy `removeWorktree`/`headSha`/`isAncestor`'s worktree-flavoured signatures. */
 export interface DoctorFixBranchDeps {
-  git: Pick<GitAdapter, 'branchSha' | 'isAncestor' | 'deleteBranch'>
+  git: Pick<GitAdapter, 'branchSha' | 'isAncestor' | 'deleteBranch' | 'listRemoteBranchNames'>
   github: Pick<GithubCliAdapter, 'prVerdictForBranch' | 'mergedHeadSha'>
 }
 
@@ -204,7 +211,16 @@ export async function runDoctorFixBranches(
   facts: Pick<RepoFacts, 'branches' | 'worktrees' | 'currentBranch'>,
   deps: DoctorFixBranchDeps = { git: new GitAdapter(), github: new GithubCliAdapter() },
 ): Promise<BareBranchReapOutcome[]> {
-  return reapAllBareBranches(cwd, facts.branches, facts.worktrees, facts.currentBranch, deps)
+  // #1954: see the matching call in runDoctorFix above.
+  const remoteBranchNames = await deps.git.listRemoteBranchNames(cwd)
+  return reapAllBareBranches(
+    cwd,
+    facts.branches,
+    facts.worktrees,
+    facts.currentBranch,
+    deps,
+    remoteBranchNames,
+  )
 }
 
 /**
@@ -344,29 +360,50 @@ export function printReapOutcomes(outcomes: ReapOutcome[]): void {
   const removed = attempted.filter((o) => o.worktreeRemoved === true)
   const failed = attempted.filter((o) => o.worktreeRemoved !== true)
 
+  // #1948: reported once, apart from the per-row lines below, so it stays
+  // visible even if none of those rows happen to be a `reap` this run — the
+  // count of stale locks broken is worth knowing about on its own, since it
+  // is otherwise-permanent state nothing else in the estate ever clears.
+  const staleClaims = outcomes.filter((o) => o.staleClaimCleared)
+
   console.log('')
   for (const o of attempted) {
+    const staleNote = o.staleClaimCleared
+      ? ' (after clearing a stale fleet-worktree-claim lock)'
+      : ''
     if (o.worktreeRemoved === true) {
-      console.log(chalk.green(`  removed  ${o.candidate.worktreePath} (${o.candidate.branch})`))
+      console.log(
+        chalk.green(`  removed  ${o.candidate.worktreePath} (${o.candidate.branch})${staleNote}`),
+      )
     } else {
       console.log(
         chalk.red(
           `  FAILED   ${o.candidate.worktreePath} (${o.candidate.branch}) — judged safe to ` +
-            `remove but 'git worktree remove' did not succeed; left as-is`,
+            `remove but 'git worktree remove' did not succeed; left as-is${staleNote}`,
         ),
       )
     }
   }
   for (const o of kept) {
     const reason = o.verdict.reason === undefined ? 'unknown' : KEEP_REASON_TEXT[o.verdict.reason]
+    const staleNote = o.staleClaimCleared
+      ? ' (its stale fleet-worktree-claim lock was cleared first)'
+      : ''
     console.log(
-      chalk.dim(`  kept     ${o.candidate.worktreePath} (${o.candidate.branch}) — ${reason}`),
+      chalk.dim(
+        `  kept     ${o.candidate.worktreePath} (${o.candidate.branch}) — ${reason}${staleNote}`,
+      ),
     )
   }
+  const staleClaimNote =
+    staleClaims.length > 0
+      ? ` (${String(staleClaims.length)} had a stale fleet-worktree-claim lock cleared)`
+      : ''
   console.log(
     chalk.dim(
       `\n  --fix: ${String(removed.length)} removed, ${String(failed.length)} failed, ` +
-        `${String(kept.length)} kept, of ${String(outcomes.length)} worktree(s) considered.\n`,
+        `${String(kept.length)} kept, of ${String(outcomes.length)} worktree(s) considered` +
+        `${staleClaimNote}.\n`,
     ),
   )
 }

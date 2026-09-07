@@ -10,6 +10,7 @@ import {
 } from '../lib/branch-protection-outcome.js'
 import { log } from '../lib/logger.js'
 import type { SiblingSession } from '../lib/sibling-session.js'
+import { assertRunsCommand, workflowRunCommands } from '../lib/workflow-run-commands.js'
 import {
   assertCoreSupportsSiblingRouting,
   assertGitIdentity,
@@ -217,6 +218,172 @@ describe('writeSiblingTemplate', () => {
     expect(JSON.parse(readFileSync(join(target, 'biffo.sibling.json'), 'utf8')).routes).toEqual([
       { path: 'weekly', label: 'Weekly report' },
     ])
+  })
+})
+
+describe('writeSiblingTemplate — design tokens (issue #1739 option B)', () => {
+  const dirs: string[] = []
+
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
+  })
+
+  // Minimal fixtures carrying exactly the substrings rewriteDesignTokens
+  // anchors on — a subset of the real _skeletons/sibling-template files,
+  // not a full copy.
+  function seedFrontendFixture(template: string): void {
+    writeFileSync(join(template, 'biffo.sibling.json'), '{}')
+    const frontendDir = join(template, 'apps', 'frontend')
+    mkdirSync(join(frontendDir, 'src', 'app'), { recursive: true })
+    writeFileSync(
+      join(frontendDir, 'package.json'),
+      JSON.stringify(
+        {
+          name: 'sibling-frontend',
+          dependencies: { '@biffo/design-tokens': '^0.248.2', next: '^15.5.22' },
+        },
+        null,
+        2,
+      ) + '\n',
+    )
+    writeFileSync(
+      join(frontendDir, 'src', 'app', 'globals.css'),
+      "@import '@biffo/design-tokens/tokens.css';\n\nbody {\n  margin: 0;\n}\n",
+    )
+    const workflowsDir = join(template, '.github', 'workflows')
+    mkdirSync(workflowsDir, { recursive: true })
+    writeFileSync(
+      join(workflowsDir, 'ci.yml'),
+      [
+        'jobs:',
+        '  js:',
+        '    runs-on: ubuntu-latest',
+        '    timeout-minutes: 20',
+        '    defaults:',
+        '      run:',
+        '        working-directory: apps/frontend',
+        '    steps:',
+        '      - run: pnpm install --frozen-lockfile',
+        '      - name: Scale drift guard',
+        '        run: pnpm exec biffo-scale-guard',
+        '  e2e:',
+        '    runs-on: ubuntu-latest',
+        '    timeout-minutes: 20',
+        '    permissions:',
+        '      contents: read',
+        '      packages: read',
+        '    defaults:',
+        '      run:',
+        '        working-directory: apps/frontend',
+        '    steps:',
+        '      - run: pnpm install --frozen-lockfile',
+        '        env:',
+        '          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}',
+        '  js-audit:',
+        '    runs-on: ubuntu-latest',
+        '    timeout-minutes: 20',
+        '    continue-on-error: true',
+        '    defaults:',
+        '      run:',
+        '        working-directory: apps/frontend',
+        '    steps:',
+        '      - run: pnpm install --frozen-lockfile',
+        '',
+      ].join('\n'),
+    )
+  }
+
+  it('leaves package.json, globals.css and ci.yml untouched when the core project declares no design_tokens', () => {
+    const template = makeTmpDir('sibling-template-notokens')
+    const target = makeTmpDir('sibling-target-notokens')
+    dirs.push(template, target)
+    seedFrontendFixture(template)
+
+    writeSiblingTemplate(template, target, SIBLING_CONFIG, {
+      coreProjectName: 'core-app',
+      pathPrefix: 'reports',
+      templateVersion: '1.2.3',
+    })
+
+    expect(
+      JSON.parse(readFileSync(join(target, 'apps', 'frontend', 'package.json'), 'utf8'))
+        .dependencies,
+    ).toEqual({ '@biffo/design-tokens': '^0.248.2', next: '^15.5.22' })
+    expect(
+      readFileSync(join(target, 'apps', 'frontend', 'src', 'app', 'globals.css'), 'utf8'),
+    ).toContain("@import '@biffo/design-tokens/tokens.css';")
+    const ciYml = readFileSync(join(target, '.github', 'workflows', 'ci.yml'), 'utf8')
+    assertRunsCommand(ciYml, 'pnpm exec biffo-scale-guard')
+    expect(workflowRunCommands(ciYml).some((c) => c.includes('--tokens'))).toBe(false)
+  })
+
+  it("threads the core project's design_tokens into package.json, globals.css and ci.yml", () => {
+    const template = makeTmpDir('sibling-template-tokens')
+    const target = makeTmpDir('sibling-target-tokens')
+    dirs.push(template, target)
+    seedFrontendFixture(template)
+
+    writeSiblingTemplate(template, target, SIBLING_CONFIG, {
+      coreProjectName: 'core-app',
+      pathPrefix: 'reports',
+      templateVersion: '1.2.3',
+      designTokens: { package: '@tabsii-com/ui', version: '^1.1.1', path: 'dist/tokens.css' },
+    })
+
+    // package.json: the real package sits ALONGSIDE @biffo/design-tokens,
+    // never replacing it — biffo-scale-guard's own bin ships from there.
+    expect(
+      JSON.parse(readFileSync(join(target, 'apps', 'frontend', 'package.json'), 'utf8'))
+        .dependencies,
+    ).toEqual({
+      '@biffo/design-tokens': '^0.248.2',
+      next: '^15.5.22',
+      '@tabsii-com/ui': '^1.1.1',
+    })
+
+    // globals.css: the @import is repointed at the real scale.
+    expect(
+      readFileSync(join(target, 'apps', 'frontend', 'src', 'app', 'globals.css'), 'utf8'),
+    ).toContain("@import '@tabsii-com/ui/dist/tokens.css';")
+
+    const ciYml = readFileSync(join(target, '.github', 'workflows', 'ci.yml'), 'utf8')
+    // js job: --tokens flag added, permissions + NODE_AUTH_TOKEN added.
+    assertRunsCommand(
+      ciYml,
+      'pnpm exec biffo-scale-guard --tokens node_modules/@tabsii-com/ui/dist/tokens.css',
+    )
+    const jsJob = ciYml.split('  e2e:')[0]!
+    expect(jsJob).toContain('permissions:\n      contents: read\n      packages: read')
+    expect(jsJob).toContain(
+      '- run: pnpm install --frozen-lockfile\n        env:\n          NODE_AUTH_TOKEN:',
+    )
+    // js-audit job: same permissions/env addition, no --tokens flag (it never
+    // runs biffo-scale-guard).
+    const jsAuditJob = ciYml.split('  js-audit:')[1]!
+    expect(jsAuditJob).toContain('permissions:\n      contents: read\n      packages: read')
+    expect(jsAuditJob).toContain(
+      '- run: pnpm install --frozen-lockfile\n        env:\n          NODE_AUTH_TOKEN:',
+    )
+    // e2e already had permissions + NODE_AUTH_TOKEN — must not be doubled.
+    expect(ciYml.match(/NODE_AUTH_TOKEN: \$\{\{ secrets\.GITHUB_TOKEN \}\}/g)).toHaveLength(3)
+    expect(ciYml.match(/packages: read/g)).toHaveLength(3)
+  })
+
+  it('tolerates a template missing the frontend files when design_tokens is set', () => {
+    const template = makeTmpDir('sibling-template-bare')
+    const target = makeTmpDir('sibling-target-bare')
+    dirs.push(template, target)
+    writeFileSync(join(template, 'biffo.sibling.json'), '{}')
+    mkdirSync(join(template, 'apps', 'frontend'), { recursive: true })
+
+    expect(() =>
+      writeSiblingTemplate(template, target, SIBLING_CONFIG, {
+        coreProjectName: 'core-app',
+        pathPrefix: 'reports',
+        templateVersion: '1.2.3',
+        designTokens: { package: '@tabsii-com/ui', version: '^1.1.1', path: 'dist/tokens.css' },
+      }),
+    ).not.toThrow()
   })
 })
 
@@ -875,6 +1042,93 @@ describe('runSiblingCreate', () => {
         ),
       ).rejects.toThrow(/cloneUrl/)
     })
+  })
+})
+
+describe('pushSkeleton — relocking frontend deps (issue #1739 option B)', () => {
+  let skeletonRoot: string
+
+  beforeEach(() => {
+    skeletonRoot = makeTmpDir('sibling-skeleton-tokens')
+    writeFileSync(join(skeletonRoot, 'biffo.sibling.json'), '{}')
+    resetBranchProtectionOutcomes()
+  })
+
+  afterEach(() => {
+    rmSync(skeletonRoot, { recursive: true, force: true })
+  })
+
+  const CORE_CONFIG_WITH_TOKENS = BiffoConfigSchema.parse({
+    ...CORE_CONFIG,
+    design_tokens: { package: '@tabsii-com/ui', version: '^1.1.1', path: 'dist/tokens.css' },
+  })
+
+  it('never calls relockFrontendDeps when the core project declares no design_tokens', async () => {
+    const github = makeGithubMock()
+    const aws = makeAwsMock()
+    const coreAws = makeAwsMock()
+    coreAws.readTerraformOutputs.mockResolvedValue(CORE_OUTPUTS)
+    const git = makeGitMock()
+    const session = makeSession()
+    const relockFrontendDeps = vi.fn().mockResolvedValue(undefined)
+
+    await runSiblingCreate(
+      github as never,
+      aws as never,
+      coreAws as never,
+      git,
+      SIBLING_CONFIG,
+      session,
+      {
+        coreConfig: CORE_CONFIG,
+        skeletonRoot,
+        githubToken: 'gh-token',
+        relockFrontendDeps,
+      },
+    )
+
+    expect(relockFrontendDeps).not.toHaveBeenCalled()
+  })
+
+  it('relocks apps/frontend BEFORE committing, when the core project declares design_tokens', async () => {
+    const github = makeGithubMock()
+    const aws = makeAwsMock()
+    const coreAws = makeAwsMock()
+    coreAws.readTerraformOutputs.mockResolvedValue(CORE_OUTPUTS)
+    const git = makeGitMock()
+    const session = makeSession()
+    const calls: string[] = []
+    const relockFrontendDeps = vi.fn().mockImplementation(async () => {
+      calls.push('relock')
+    })
+    // `git.commit` is also called later, in step 8's registration PR against
+    // the (cloned) core repo — scope this assertion to the scaffold commit
+    // specifically, identified by its own commit message (see pushSkeleton).
+    git.commit.mockImplementation(async (_cwd: string, message: string) => {
+      if (message.startsWith('feat: scaffold')) calls.push('scaffold-commit')
+    })
+
+    await runSiblingCreate(
+      github as never,
+      aws as never,
+      coreAws as never,
+      git,
+      SIBLING_CONFIG,
+      session,
+      {
+        coreConfig: CORE_CONFIG_WITH_TOKENS,
+        skeletonRoot,
+        githubToken: 'gh-token',
+        relockFrontendDeps,
+      },
+    )
+
+    expect(relockFrontendDeps).toHaveBeenCalledTimes(1)
+    expect(relockFrontendDeps.mock.calls[0]![0]).toMatch(/apps[/\\]frontend$/)
+    // A stale pnpm-lock.yaml would fail the sibling's own first CI run
+    // (ci.yml's `pnpm install --frozen-lockfile`) — the relock has to happen
+    // before the scaffold commit is made, not merely somewhere in the run.
+    expect(calls).toEqual(['relock', 'scaffold-commit'])
   })
 })
 

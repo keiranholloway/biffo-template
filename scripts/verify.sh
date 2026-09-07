@@ -75,6 +75,38 @@
 
 set -u
 
+# Orphaned-scratch backstop (#1930). Every check below that creates a temp
+# dir/file already cleans it up inline on its own pass/fail paths (an
+# explicit `rm -rf`/`rm -f`, sometimes a per-function trap) -- that cleanup is
+# left exactly as it is, as defensive belt-and-braces. What none of them cover
+# is verify.sh itself dying abnormally (SIGTERM from a CI timeout, an
+# interrupted local Ctrl-C, `kill`) partway through one of those functions,
+# before its own inline cleanup line is reached. `gitleaks_tracked_only`'s
+# `_gl_dir` has the largest such window: mirror-copy every tracked file, then
+# a full `gitleaks detect` run, all between the `mktemp -d` and the `rm -rf`
+# that only fires if the function returns normally.
+#
+# That gap is exactly what accumulated hundreds of stale `bt-verify`,
+# `biffo-template-verify`, `dev-check-*` and `tmp.*` scratch dirs in /tmp with
+# no eviction, driving it to 100% inode usage and breaking every `fleet.sh`
+# command that writes a temp file.
+#
+# Idiom matches the other trap-using scripts in this directory
+# (`js-dependency-audit.sh`, `shared-sync.sh`): accumulate every path this run
+# creates in one variable, and let a single EXIT/HUP/INT/TERM trap sweep all
+# of them however the script leaves. Declared here, at the very top, so the
+# trap has a function to call no matter how early an abnormal exit happens.
+_VERIFY_TMP_PATHS=""
+_verify_track_tmp() {
+  _VERIFY_TMP_PATHS="$_VERIFY_TMP_PATHS $1"
+}
+_verify_cleanup_tmp() {
+  # shellcheck disable=SC2086  -- word-splitting is the point: one or more
+  # space-separated paths accumulated over the run.
+  [ -n "$_VERIFY_TMP_PATHS" ] && rm -rf $_VERIFY_TMP_PATHS
+}
+trap _verify_cleanup_tmp EXIT HUP INT TERM
+
 LIST=""
 [ "${1:-}" = "--list" ] && LIST=1
 
@@ -537,6 +569,7 @@ run_check() {
     return 0
   fi
   start=$(date +%s)
+  _verify_track_tmp "/tmp/biffo-verify.$$"
   if "$@" >"/tmp/biffo-verify.$$" 2>&1; then
     PASSED="$PASSED $name"
     LAST_CHECK_SECONDS=$(($(date +%s) - start))
@@ -651,6 +684,7 @@ run_check_js() {
     return 0
   fi
   start=$(date +%s)
+  _verify_track_tmp "/tmp/biffo-verify.$$"
   if "$@" >"/tmp/biffo-verify.$$" 2>&1; then
     PASSED="$PASSED $name"
     LAST_CHECK_SECONDS=$(($(date +%s) - start))
@@ -1027,6 +1061,7 @@ pg_xdist_ready() {
 
 pg_test_run() {
   _out="/tmp/biffo-verify-pg.$$"
+  _verify_track_tmp "$_out"
   _pg_started=$(date +%s)
 
   if pg_xdist_ready "$1"; then
@@ -1287,6 +1322,7 @@ else
       echo pg_test_run "$_pg_dir" "$_pg_rel"
     else
       _pg_check_start=$(date +%s)
+      _verify_track_tmp "/tmp/biffo-verify-pg-check.$$"
       # shellcheck disable=SC2086
       pg_test_run "$_pg_dir" "$_pg_rel" >"/tmp/biffo-verify-pg-check.$$" 2>&1
       _pg_check_rc=$?
@@ -1413,6 +1449,36 @@ if [ -f scripts/biffo.sh ]; then
   run_check plugin-tool-supply sh scripts/biffo.sh check plugin-tool-supply
   run_check core-direct-paths sh scripts/biffo.sh check core-direct-paths
   run_check orphan-ratchet sh scripts/biffo.sh check orphan-ratchet
+  run_check ownership-header-claim sh scripts/biffo.sh check ownership-header-claim
+  # #1714 second remediation: the INSTANCE-mode caller, distinct from the
+  # self-check above. It clones a real template tree pinned to
+  # biffo.core.json's own version and compares against it -- but this repo
+  # never carries biffo.core.json (it is the template, not an instance), so
+  # the script itself detects that and exits 0 as a genuine skip (see its own
+  # doc comment) rather than attempting a comparison it has no tree for.
+  #
+  # Guarded with `[ -f ... ] &&`, unlike the line above, because this script
+  # is a raw file path rather than a `scripts/biffo.sh check <name>` call
+  # through the versioned CLI bridge -- every other check in this block goes
+  # through that bridge, which resolves against the pinned, PACKAGED CLI and
+  # so works from any repo. This one does not, and `scripts/
+  # check-orphan-ratchet-instance.sh` is template-owned but never packaged
+  # for a satellite: not in shared-files.json's `files` (never copied to a
+  # sibling/plugin repo) and not in `PACKAGED_ROOT_ASSETS` (never bundled
+  # into the npm tarball) -- it only ever reaches a real INSTANCE, via
+  # `biffo core upgrade`'s ordinary three-way merge. A satellite running the
+  # packaged `verify.sh` through `scripts/biffo.sh verify` therefore had no
+  # such file on disk at all, and a bare `sh scripts/
+  # check-orphan-ratchet-instance.sh` failed at the shell -- "cannot open
+  # ... No such file" -- before the script's own biffo.core.json skip ever
+  # got a chance to run (biffo-template#1943). The guard is true in every
+  # checkout that actually carries the file (this repo, and any instance
+  # that has upgraded far enough to have received it), so `verify.sh --list`'s
+  # output here is unchanged and parity with ci.yml's own unconditional step
+  # holds exactly as before; it is false only in a satellite, where this now
+  # skips instead of crashing the rest of the gate.
+  [ -f scripts/check-orphan-ratchet-instance.sh ] &&
+    run_check orphan-ratchet-instance sh scripts/check-orphan-ratchet-instance.sh
   run_check cognito-invite sh scripts/biffo.sh check cognito-invite-template
   run_check lambda-output sh scripts/biffo.sh check lambda-output
   run_check pipe-trap sh scripts/biffo.sh check pipe-trap
@@ -1421,6 +1487,8 @@ if [ -f scripts/biffo.sh ]; then
   run_check claim-invocation sh scripts/biffo.sh check claim-invocation
   run_check terraform-input sh scripts/biffo.sh check terraform-input
   run_check plugin-allowlist sh scripts/biffo.sh check plugin-allowlist-convention
+  run_check distribution-inventory sh scripts/biffo.sh check distribution-inventory
+  run_check api-gateway-integration sh scripts/biffo.sh check api-gateway-integration
 else
   skip biffo-guards "no scripts/biffo.sh in this repo"
 fi
@@ -1451,6 +1519,18 @@ fi
 # neither network nor a live deployment. Measured here: ~2.4s.
 [ -f scripts/allocate-module-number.test.sh ] &&
   run_check allocate-module-number sh scripts/allocate-module-number.test.sh
+
+# check-orphan-ratchet-instance.sh's own self-test (#1714, second
+# remediation): real throwaway git fixtures standing in for "the template at
+# a pinned version" and "a live instance", exercising the wrapper end to end
+# via THIS repo's own already-built local CLI through tsx (no mocking of
+# planCoreUpgrade/classify()). Needs cli/node_modules/.bin/tsx -- present
+# once `pnpm install` has run in this checkout, same as every other
+# JS-backed check above; the test itself fails with a clear "run pnpm
+# install" message rather than a cryptic tsx-not-found if it hasn't.
+# Measured here: ~1.6s.
+[ -f scripts/check-orphan-ratchet-instance.test.sh ] &&
+  run_check orphan-ratchet-instance-selftest sh scripts/check-orphan-ratchet-instance.test.sh
 
 # The append-only corpus guard (#778). CI runs it in Release Guards, and it was
 # invisible to the parity test until #897 widened the harvester -- it is neither
@@ -1543,6 +1623,7 @@ fi
 # existing path-based `.gitleaks.toml` allowlist entries keep working unchanged.
 gitleaks_tracked_only() {
   _gl_dir=$(mktemp -d "${TMPDIR:-/tmp}/biffo-gitleaks.XXXXXX") || return 1
+  _verify_track_tmp "$_gl_dir"
   _gl_root=$(git rev-parse --show-toplevel) || {
     rm -rf "$_gl_dir"
     return 1
@@ -1606,6 +1687,118 @@ if ci_has "gitleaks"; then
   fi
 fi
 
+# Resolve the exact `pnpm` invocation every JS check below runs through
+# (biffo-template#1920).
+#
+# ## The defect
+#
+# Modern `pnpm` self-manages its own version: it reads the nearest ancestor
+# `package.json`'s `packageManager` field and, if the field pins a version
+# other than the binary currently running, re-execs that pinned version
+# instead (no `corepack enable` required -- this is `pnpm`'s own built-in
+# behaviour, confirmed by direct experiment against the actual binary this
+# machine has installed, not by reading its source). That resolution walks
+# UP from the invoking process's cwd, so it silently stops applying the
+# moment a check's working directory has no ancestor `package.json`
+# declaring the field at all -- which is exactly what
+# `cli/src/lib/verify-toolchain-missing.test.ts`'s own fixtures are: bare,
+# isolated tmp git repos with a minimal `package.json` (deliberately, to
+# simulate a fresh worktree before `pnpm install`) that carries no
+# `packageManager` field. On a machine whose globally-installed `pnpm`
+# binary is any OTHER version -- observed: v12.3.4, against this repo's own
+# pin of v9.15.9 -- the fixture's checks silently run under that OTHER
+# version instead.
+#
+# `run_check_js`'s own INCONCLUSIVE/FAILED split below is a grep against
+# wording pnpm 9.15.9 specifically prints for a missing toolchain
+# (`node_modules missing, did you mean to install?`), which a different
+# major does not necessarily print at all: confirmed live, pnpm 12.3.4 skips
+# that WARN entirely for the identical missing-toolchain scenario, so the
+# fixture's real "binary not found" failure reads as an ordinary FAILED
+# instead of INCONCLUSIVE -- not because detection is wrong, but because two
+# different pnpm versions produced two different diagnoses of the same
+# state, and only one of them was ever read.
+#
+# ## The fix
+#
+# Make the version actually executed impossible to disagree with the
+# version the detection regex was written against, rather than occasionally
+# undetected: every `pnpm run`/`pnpm --dir` call in this file is eligible to
+# be pinned to the EXACT version PINNED IN THE REPO THIS COPY OF verify.sh
+# LIVES IN, via `corepack`, which forces a specific `pnpm@<version>`
+# regardless of the PATH order on the invoking machine or of the checked
+# directory's own `package.json`. Node ships `corepack` alongside itself
+# from Node 16.9 onward -- this repo's own `engines.node` requires >=22 --
+# so it is resolved relative to `node` rather than assumed to already be on
+# PATH (`corepack enable` symlinks it onto PATH but is not required for
+# `corepack pnpm@<version> ...` to work directly). "Eligible": the pin is
+# only actually forced when bare `pnpm` would not already resolve to it
+# unassisted -- see the ambient-version check below for why forcing it
+# unconditionally is itself a regression, not just unnecessary.
+#
+# Deliberately NOT `package.json` in `$PWD`: every real invocation happens
+# with cwd already at the repo root (`.githooks/pre-push` itself `cd`s there
+# first), so cwd and "the repo this script belongs to" are the same
+# directory on every real path -- but the toolchain-missing fixtures above
+# invoke this exact file with cwd pointed at an isolated, unrelated tmp repo
+# on purpose, to simulate a fresh worktree of SOME OTHER project before
+# `pnpm install`. That target has no reason to carry (and must not need to
+# carry) this repo's own pnpm pin merely to be checked correctly, so the pin
+# is read from where `$0` says this script actually lives, not from
+# whatever happens to be checked.
+PNPM_RUN="pnpm"
+if [ -z "$LIST" ]; then
+  _verify_script_dir=$(cd "$(dirname "$0")" 2>/dev/null && pwd) || _verify_script_dir=""
+  _verify_repo_root=""
+  [ -n "$_verify_script_dir" ] && _verify_repo_root="$_verify_script_dir/.."
+  if [ -z "$_verify_repo_root" ] || [ ! -f "$_verify_repo_root/package.json" ]; then
+    # Could not resolve $0 to a real path (e.g. sourced from stdin) -- cwd is
+    # the only fallback left, and matches every real invocation anyway.
+    _verify_repo_root="."
+  fi
+  if [ -f "$_verify_repo_root/package.json" ]; then
+    _pnpm_pin=$(grep -oE '"packageManager"[[:space:]]*:[[:space:]]*"pnpm@[0-9][^"]*"' "$_verify_repo_root/package.json" |
+      sed -E 's/.*"pnpm@([^"]*)".*/\1/')
+    # Ask bare `pnpm` what it would already resolve to from $PWD before ever
+    # reaching for corepack. On every REAL check this already equals
+    # `$_pnpm_pin` -- self-management (above) finds this repo's own pin by
+    # walking up from cwd, which is always the repo root -- and in that case
+    # `PNPM_RUN` is deliberately left as plain `pnpm`. This matters beyond
+    # tidiness: `pnpm run test` fans out through turbo, which shells back out
+    # to a bare `pnpm` of its own for each workspace package, and pnpm
+    # refuses to self-manage a SECOND time once corepack has already forced
+    # a version once in the process tree (`ERR_PNPM_BAD_PM_VERSION`,
+    # confirmed live -- ordinary `pnpm run test` segfaulted under a
+    # corepack-wrapped outer call). Reaching for corepack is therefore
+    # reserved for the one case it actually fixes: bare `pnpm` disagreeing
+    # with our pin because nothing above cwd declares one at all (the
+    # toolchain-missing fixtures' isolated tmp repos) -- never the ordinary
+    # path where self-management was already correct on its own.
+    if [ -n "$_pnpm_pin" ] && [ "$(pnpm --version 2>/dev/null)" != "$_pnpm_pin" ]; then
+      _corepack=$(command -v corepack 2>/dev/null)
+      if [ -z "$_corepack" ]; then
+        _node_path=$(command -v node 2>/dev/null)
+        if [ -n "$_node_path" ]; then
+          # `node` on PATH is routinely a symlink into a version manager's
+          # real install directory (nvm, a `~/.local/bin` shim, etc.) --
+          # `corepack` ships as node's OWN sibling in THAT real directory, not
+          # next to wherever the symlink happens to sit, so the link must be
+          # resolved before taking dirname. `readlink -f` is GNU/Linux (every
+          # machine this runs on -- workstation and `ubuntu-24.04` CI alike);
+          # falling back to the unresolved path costs nothing worse than the
+          # `command -v corepack` miss this branch already handles above.
+          _node_real=$(readlink -f "$_node_path" 2>/dev/null) || _node_real="$_node_path"
+          _node_bin_dir=$(dirname "$_node_real")
+          [ -x "$_node_bin_dir/corepack" ] && _corepack="$_node_bin_dir/corepack"
+        fi
+      fi
+      if [ -n "$_corepack" ] && "$_corepack" "pnpm@$_pnpm_pin" --version >/dev/null 2>&1; then
+        PNPM_RUN="$_corepack pnpm@$_pnpm_pin"
+      fi
+    fi
+  fi
+fi
+
 # JS, cheapest first; `test` last because it is slowest and the most likely to
 # be interrupted by an impatient reader.
 JS_DIRS=$(js_dirs)
@@ -1622,9 +1815,13 @@ if [ -n "$JS_DIRS" ]; then
       label="$(printf '%s' "$s" | tr -d ':')$suffix"
       if have_script "$s" "$d"; then
         if [ "$d" = "." ]; then
-          run_check_js "$label" pnpm run "$s"
+          # shellcheck disable=SC2086 # $PNPM_RUN is a deliberately unquoted,
+          # internally-computed word list (corepack + pnpm@<version>, or the
+          # single word "pnpm") -- never external input.
+          run_check_js "$label" $PNPM_RUN run "$s"
         else
-          run_check_js "$label" pnpm --dir "$d" run "$s"
+          # shellcheck disable=SC2086 # see above
+          run_check_js "$label" $PNPM_RUN --dir "$d" run "$s"
         fi
       else
         skip "$label" "no \"$s\" script"

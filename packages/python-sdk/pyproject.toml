@@ -41,7 +41,25 @@ name = "biffo-plugin-sdk"
 # `discover.py`) plus `event_subscriptions`, `ui_components`, `dependencies`,
 # `core_capabilities` and `chat_agents_dynamic`, all of which real manifests
 # already declare and none of which validated against a typo before now.
-version = "1.4.0"
+#
+# 1.5.0 (biffo-template#1517, the mechanism this issue's own comment thread
+# calls "Deliberately not started" as of 1.4.0) adds `PluginManifest.config` —
+# `ConfigDeclaration`'s name/kind/required/description — the channel a plugin
+# manifest uses to declare a need (a credential, a group name) the instance
+# must supply at install time, never a value itself. Also tightens
+# `ChatAgentDeclaration.required_group`'s MEANING (not its type or field name:
+# it stays a non-empty `str`) from a literal, platform-specific Cognito group
+# name to a reference naming a `config` declaration of `kind: "setting"` on
+# the same manifest, enforced by a new cross-field validator on
+# `PluginManifest`. This is a MINOR bump, same reasoning as 1.4.0's: none of
+# the three live plugins (see `test_the_three_live_plugins_shapes_validate`)
+# declares `chat_agents` with a literal `required_group` today, so nothing
+# that validates now stops validating — the new validator only starts
+# constraining a shape nothing yet uses. `extra="forbid"` on `PluginManifest`
+# means a consumer pinned below `>=1.5` simply never sees `config` at all
+# (same version-gate posture as 1.4.0's own fields), so this is additive for
+# every manifest that predates it.
+version = "1.5.0"
 description = "Biffo Plugin SDK — manifest validation, Core API client, and event system for Biffo plugins"
 readme = "README.md"
 license = "MIT"

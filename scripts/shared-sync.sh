@@ -2046,9 +2046,12 @@ stage_repo() {
   [ -f "$wt/package.json" ] && (cd "$wt" && pnpm install --frozen-lockfile >/dev/null 2>&1 || true)
   [ -f "$wt/pyproject.toml" ] && (cd "$wt" && uv sync --all-groups >/dev/null 2>&1 || true)
   for p in $( (cd "$wt" && sh scripts/biffo.sh verify --list 2>/dev/null) | grep -oE '\-\-dir(ectory)? \./[A-Za-z0-9_./-]+' | awk '{print $2}' | sort -u); do
-    (cd "$wt/$p" 2>/dev/null && { pnpm install --frozen-lockfile >/dev/null 2>&1 ||
-      pnpm install --frozen-lockfile --ignore-workspace >/dev/null 2>&1 ||
-      uv sync --all-groups >/dev/null 2>&1; }) || true
+    if [ -f "$wt/$p/package.json" ]; then
+      (cd "$wt/$p" && { pnpm install --frozen-lockfile >/dev/null 2>&1 ||
+        pnpm install --frozen-lockfile --ignore-workspace >/dev/null 2>&1; }) || true
+    elif [ -f "$wt/$p/pyproject.toml" ]; then
+      (cd "$wt/$p" && uv sync --all-groups >/dev/null 2>&1) || true
+    fi
   done
 
   # THEN every other nested package, discovered from the tree rather than from
@@ -2694,6 +2697,77 @@ if [ -n "$CHECK" ]; then
     rm -f "$kverdicts"
   fi
 
+  # `scripts/*.test.sh` self-test wiring (#1909) -- measure-only, like the
+  # three checks above it. Unlike them it has no corresponding entry in
+  # `shared-files.json`: it is not a declared list of paths this repo owns,
+  # it is a rule derived purely from each repo's own tree (glob its guards,
+  # glob its workflows, ask whether the first calls the second).
+  #
+  # `guard-self-test-wiring.sh` (#1705) answers "does every guard this repo
+  # holds actually get executed by this repo's own CI?" for the repo it runs
+  # in. It is not itself in `files`/`filesFromSkeleton`, so it only ever
+  # answered that question about biffo-template. #1710 closed the equivalent
+  # gap for repos scaffolded from the sibling skeleton FROM NOW ON, by
+  # inlining an equivalent check into
+  # `_skeletons/sibling-template/.github/workflows/ci.yml` -- but, same shape
+  # as every skeleton improvement this file exists to correct for, that only
+  # ever helps a repo created afterwards. It never reaches the six already-
+  # live siblings, which only ever receive files retroactively through a
+  # shared-sync PR -- the case that gated tabsii-com/tabsii-geo#84.
+  #
+  # This is the generic form, run at the distribution point rather than
+  # per-repo, so it closes the CLASS rather than one instance: it does not
+  # need biffo-template to know in advance which future guard script will
+  # ship unwired. It globs `scripts/*.test.sh` in EVERY applicable repo's own
+  # `origin/<base>` tree and checks EVERY workflow file in that SAME repo --
+  # same two rules `guard-self-test-wiring.sh` uses (a real, non-comment
+  # reference anywhere in `.github/workflows/*.yml` counts as wired; nothing
+  # is re-run here, only checked for a caller), just evaluated from outside
+  # the repo instead of from inside it.
+  #
+  # A repo holding zero `scripts/*.test.sh` files is not a finding -- most
+  # plugin repos hold none yet, and "holds no guards" is not what this
+  # measures. A repo holding at least one, with at least one of those having
+  # no caller anywhere in its own `.github/workflows/*.yml`, is.
+  self_test_unwired=0
+  printf '\nself-test wiring -- every scripts/*.test.sh a repo holds must have a caller in its own .github/workflows/*.yml (#1909)\n\n'
+  repos=$(applicable_repo_list)
+  stfindings=$(mktemp)
+  printf '%s\n' "$repos" | while IFS="$TAB" read -r label d base; do
+    [ -n "$d" ] || continue
+    guards=$(git -C "$d" ls-tree -r --name-only "origin/$base" 2>/dev/null |
+      grep -E '^scripts/[^/]+\.test\.sh$' || true)
+    [ -n "$guards" ] || continue
+
+    wfiles=$(git -C "$d" ls-tree -r --name-only "origin/$base" 2>/dev/null |
+      grep -E '^\.github/workflows/[^/]+\.ya?ml$' || true)
+    wired=$(mktemp)
+    for wf in $wfiles; do
+      git -C "$d" show "origin/$base:$wf" 2>/dev/null |
+        grep -v '^[[:space:]]*#' |
+        grep -o 'scripts/[A-Za-z0-9_-]*\.test\.sh'
+    done | sort -u > "$wired"
+
+    unwired=""
+    guard_n=0
+    for g in $guards; do
+      guard_n=$((guard_n + 1))
+      name=$(basename "$g")
+      grep -qx "scripts/${name}" "$wired" || unwired="${unwired} ${name}"
+    done
+    rm -f "$wired"
+
+    if [ -n "$unwired" ]; then
+      printf '  \033[31m%-12s\033[0m %-24s no caller anywhere in .github/workflows for:%s\n' \
+        'UNWIRED' "$label" "$unwired"
+      printf 'unwired\n' >> "$stfindings"
+    else
+      printf '  %-12s %-24s %s guard(s), all wired\n' 'ok' "$label" "$guard_n"
+    fi
+  done
+  grep -qx 'unwired' "$stfindings" 2>/dev/null && self_test_unwired=1
+  rm -f "$stfindings"
+
   # A repo whose clone could not be fetched was neither current nor drifted --
   # it was unreadable, and exiting 0 over it is the fail-open this check exists
   # to remove one level down. `--check` feeds the daily dashboard, where a 0
@@ -2705,7 +2779,7 @@ if [ -n "$CHECK" ]; then
   fi
 
   if [ "$drifted" -gt 0 ] || [ "$uniform_worsened" -gt 0 ] || [ "${overrides_missing:-0}" -gt 0 ] ||
-    [ "$key_worsened" -gt 0 ]; then
+    [ "$key_worsened" -gt 0 ] || [ "${self_test_unwired:-0}" -gt 0 ]; then
     if [ "$drifted" -gt 0 ]; then
       printf '\n\033[31mShared files have drifted.\033[0m Run without --check to open sync PRs.\n'
     fi
@@ -2729,6 +2803,13 @@ if [ -n "$CHECK" ]; then
       printf 'divergence in a subtree that must match, not the pre-existing residue the\n'
       printf 'baseline tolerates -- reconcile the copies by hand rather than raising the\n'
       printf 'baseline to match.\n'
+    fi
+    if [ "${self_test_unwired:-0}" -gt 0 ]; then
+      printf '\n\033[31mA repo holds a scripts/*.test.sh guard with no caller anywhere in its own\033[0m\n'
+      printf '\033[31m.github/workflows/*.yml.\033[0m (#1909) That guard contributes nothing to CI and\n'
+      printf 'looks exactly like coverage from the workflow file alone -- add a `run:` line\n'
+      printf 'invoking it (see scripts/guard-self-test-wiring.sh for the two accepted shapes:\n'
+      printf 'a direct call, or a wrapped one for a runner missing a toolchain the guard needs).\n'
     fi
     printf '\n'
     exit 1

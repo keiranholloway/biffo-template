@@ -1,3 +1,56 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/*
+ * Portal brand tokens (issue #1945).
+ *
+ * `apps/portal/` had no branding mechanism at all: this file used to be these
+ * three `@tailwind` lines and nothing else, so every instance rendered the
+ * shared login page with Tailwind's own starter-default gray/blue palette,
+ * hardcoded directly into `(auth)/login/page.tsx`'s classNames.
+ * `apps/portal/` is template-owned (`core-manifest.json`), so an instance
+ * cannot fix this in its own copy without the change being silently reverted
+ * by the next `biffo core upgrade` — the mechanism has to live upstream, here.
+ *
+ * These are plain CSS custom properties, consumed by `tailwind.config.ts` as
+ * `var(--x)` rather than literal colors, so a value can be overridden per
+ * instance at build time without a template code fork or a new Tailwind
+ * build — see `NEXT_PUBLIC_PORTAL_PRIMARY_COLOR` in `src/app/layout.tsx` and
+ * the "Build portal" step in `.github/workflows/deploy-app.yml`, the same
+ * mechanism `NEXT_PUBLIC_PORTAL_TITLE` already uses (`src/lib/branding.ts`).
+ *
+ * The values below are the fallback: an instance that overrides nothing gets
+ * exactly today's look (Tailwind's blue-600 / gray-900 / gray-50 / red-700),
+ * so this change is a visual no-op for biffo-platform's own unbranded portal.
+ * `--primary-hover` derives from `--primary` with `color-mix()` (the same
+ * idiom already used for tint variants in the estate's Material-3 sibling
+ * frontends) rather than being a second value to override, so setting one
+ * token still yields a coherent hover state.
+ *
+ * Naming matches the Material-3-style convention already in use across the
+ * estate's sibling frontends (`--primary`, `--surface`, `--on-surface`, …),
+ * confirmed in tabsii-crm/tabsii-marketplace/tabsii-intake/tabsii-geo.
+ * Deliberately declared locally rather than importing the shared
+ * `@biffo/design-tokens` package (`packages/design-tokens/tokens.css`, "the
+ * portal, sibling apps and plugin frontends alike") — that package is the
+ * better long-term home for this scale, but wiring `apps/portal` to a new
+ * workspace dependency is out of this change's declared scope (it was not in
+ * the read-set this fix was scoped to); a natural follow-up once this lands.
+ */
+:root {
+  --primary: #2563eb; /* Tailwind blue-600 — matches today's default */
+  --primary-hover: color-mix(in srgb, var(--primary) 85%, black);
+  --on-primary: #ffffff;
+  --primary-container: #eff6ff; /* blue-50 */
+  --on-primary-container: #1d4ed8; /* blue-700 */
+
+  --surface: #ffffff;
+  --surface-variant: #f9fafb; /* gray-50 — the (auth) route-group's full-viewport background */
+  --on-surface: #111827; /* gray-900 */
+  --on-surface-variant: #4b5563; /* gray-600 */
+  --outline: #d1d5db; /* gray-300 */
+
+  --error-container: #fef2f2; /* red-50 */
+  --on-error-container: #b91c1c; /* red-700 */
+}

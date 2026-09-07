@@ -2,19 +2,34 @@
 
 ## Status
 
-Accepted (partially implemented). Amended 2026-07-26 — see the trust-based isolation decision at the end of this document (#579). The **backend** design here is built and live:
-one shared plugin-host Lambda (`services/_plugin-host/`) behind the Core API
-Gateway at `/api/v1/plugins/*`, same-origin via CloudFront, with per-plugin
-identity asserted by a signed `X-Biffo-Plugin` header (§1a). Verified serving the
-Ideation Engine end-to-end on biffo-platform dev. The **shared frontend app-shell**
-(§2) is **not yet built** — user-facing plugin *frontends* are still hosted the
-ADR-0018 way (a per-plugin static bucket + `<name>/*` CloudFront behaviour) until
-it lands; that work, and the full retirement of ADR-0018, is tracked in
-[#558](https://github.com/keiranholloway/biffo-template/issues/558).
+Accepted (partially implemented). Amended 2026-07-26 — see the trust-based
+isolation decision at the end of this document (#579). Amended 2026-09-07 (§2
+rewritten; [#558](https://github.com/keiranholloway/biffo-template/issues/558)
+Milestone 1, issue #1914) — §2 below now specifies **option B**, decided
+2026-08-16 and reconfirmed 2026-09-06: extend the shared plugin host's
+already-live static-shell serving (built for `admin_ingress`) to
+`user_frontend` too, rather than building the separate shared founder
+app-shell SPA this section originally described (**option A**, kept below
+under "Open decisions" as the deferred, not abandoned, alternative).
 
-**Supersedes ADR-0018** (user-facing plugin hosting as an authenticated sibling)
-for the backend today, completing the supersession once §2 lands. Narrows ADR-0007
-(siblings) to genuinely standalone applications.
+The **backend** design (§1/§1a) is built and live: one shared plugin-host
+Lambda (`services/_plugin-host/`) behind the Core API Gateway at
+`/api/v1/plugins/*`, same-origin via CloudFront, with per-plugin identity
+asserted by a signed `X-Biffo-Plugin` header. Verified serving the Ideation
+Engine end-to-end on biffo-platform dev.
+
+The **frontend mount** (§2) is specified below but has no code behind it yet —
+building it (manifest plumbing, the `mount.py` static mount, the two API
+Gateway routes, and the deploy-packaging change) is Milestone 2 of #558.
+Until M2 and the cross-repo migration land, user-facing plugin frontends are
+still served the ADR-0018 way (a per-plugin static bucket + `<name>/*`
+CloudFront behaviour) — see §2's migration order for the full sequence.
+
+**Fully supersedes ADR-0018.** ADR-0018's backend model (§1, a per-plugin
+authenticated Lambda) was already superseded by §1/§1a above; this amendment
+settles ADR-0018's frontend half (§2) the same way, so ADR-0018 carries no
+unsuperseded content — see its own Status line. Narrows ADR-0007 (siblings) to
+genuinely standalone applications.
 
 ## Context
 
@@ -162,34 +177,232 @@ runs only plugins the operator trusts to the same degree. The escape hatch for a
 user-facing plugin an operator will *not* fully trust is `isolated: true` — its
 own Lambda with its own IAM role, where the role itself is the identity and no
 `X-Biffo-Plugin` assertion is involved, so the strong-isolation path is
-unaffected by any of the above. That path is **not yet built** — there is no
+unaffected by any of the above. That path **remains unbuilt** — there is no
 third-party user-facing plugin to need it (everything in the shared host today
 is first-party and mutually trusted) — and is tracked in
 [#595](https://github.com/keiranholloway/biffo-template/issues/595), to be built
 when first needed. See the amendment at the end of this document.
 
-### 2. Frontend — ONE shared app shell, plugins mount UI routes
+### 2. Frontend — the shared host serves a plugin's `user_frontend` bundle; no per-plugin origin
 
-There is **one** founder-facing application shell (one origin, one S3 bucket, one
-CloudFront behaviour, one Cognito App Client). A plugin declares `ui_mount` and
-ships **UI routes/components** that the shell mounts at `<base>/<plugin>/*`. There
-is no per-plugin bucket, no per-plugin CloudFront behaviour, and no
-`sibling_origins`/`plugin_api_origins` registration for a plugin.
+**Decided 2026-08-16, reconfirmed 2026-09-06 (#558 Milestone 1, issue #1914):
+option B.** Extend the mechanism the host already runs in production for
+`admin_ingress` — serve a built static bundle from inside the host's own
+mount, exempt exactly those paths from the token check, and add matching
+unauthenticated API Gateway routes — to `user_frontend` too, rather than
+building a separate shared founder app-shell SPA (**option A**, this
+subsection's original design, kept below under "Open decisions" as deferred,
+not abandoned: the manifest field is `user_frontend` either way, so if
+founder-facing plugin count or asset traffic ever outgrows what this document
+prices, A is a straightforward next step and none of the manifest contract or
+the migration below is wasted).
 
-With a single SPA on a single origin, client-side routing owns every plugin path.
-This removes the conflict that broke ADR-0018's plugin APIs — but **only if the
-SPA deep-link fallback stops using distribution-wide CloudFront custom-error
-responses.** Today the distribution maps `403/404 → /index.html (200)`; that is
-distribution-wide, so it rewrites a plugin API's JSON `403/404` into HTML (this is
-the live `Unexpected token '<'` bug). **Part of this seam is therefore replacing
-those custom-error responses with per-behaviour SPA routing** — a CloudFront
-Function (or S3 error document) scoped to the app-shell behaviour only, so the API
-behaviour's error responses are never rewritten. It does not disappear for free;
-it must be built.
+**The URL.** `GET /api/v1/plugins/<name>/ui` and
+`GET /api/v1/plugins/<name>/ui/{proxy+}` — two new unauthenticated API Gateway
+routes on the **existing** shared `api/v1/plugins/*` behaviour (§1), mirroring
+the pair that already exists for the admin shell
+(`plugin_admin_shell_root`, `plugin_admin_shell_assets`,
+`infra/environments/dev/plugin-host.core.tf:116,128`). No new CloudFront
+behaviour, no new S3 origin, no `sibling_origins` entry — the whole point of
+reusing §1's route family. (The `/ui` proxy route is deliberately broader than
+the admin pair, whose second route is scoped to `/admin/assets/{proxy+}`
+only: `/ui/{proxy+}` must catch **every** path under `/ui/`, not just
+`/assets/*`, because an unknown path there is a client-side SPA route that
+needs the `index.html` fallback below, not a 404 — see SPA deep links.)
+
+This **retires** the old per-plugin URL, `<name>/*` (a dedicated S3 origin +
+`ordered_cache_behavior` per ADR-0018 §2), **with no redirect kept**. A
+redirect needs somewhere to live, and the somewhere — a per-plugin CloudFront
+behaviour — is exactly the infrastructure this migration deletes (M4);
+keeping one alive defeats the consolidation it exists to complete. A
+founder's stale bookmark to the old URL 404s once, which is the accepted,
+one-time cost against never provisioning per-plugin CDN infrastructure again.
+
+**Who serves it.** The host, not the plugin. `services/_plugin-host` mounts
+`StaticFiles(directory=BIFFO_PLUGINS_ROOT/<name>/<user_frontend.dir>,
+html=True)` at `/<name>/ui` for every installed plugin whose manifest
+declares `user_frontend`, driven by `discover.py`'s `DiscoveredPlugin`
+(plumbing, not new validation — `PluginManifest` already parses the field).
+This is a deliberate divergence from `admin_ingress`, which makes **each
+plugin** mount its own `StaticFiles` inside its own app module
+(`biffo-plugin-ideation/src/ideation/admin_app.py:217-242`:
+`_resolve_static_dir` + `app.mount("/", StaticFiles(...), name="admin-ui")`).
+That shape is per-plugin code doing a platform job: every admin-surfaced
+plugin re-derives the same `BIFFO_PLUGINS_ROOT`-relative path, the same
+Vite build-output convention (`index.html` + hashed `assets/*`), and the same
+bare-path/trailing-slash trap `_normalize_bare_admin_paths`'s docstring exists
+to document — logic that has already needed one fix
+(`_is_public_admin_asset`, `mount.py:110-111`) and would otherwise be
+copy-pasted into a second and third plugin's own source rather than fixed
+once. `user_frontend` does this in the host instead, for the same reason the
+platform generates CRUD instead of asking each plugin to write it.
+
+**Converging `admin_ingress` onto this host-served shape is a deferred
+follow-up, not forgotten.** It would touch `biffo-plugin-ideation` and
+`biffo-plugin-idea-scout` as well as the template, which is out of scope for
+a template-only epic (#558); recorded here so the next reader of
+`admin_app.py`'s static-mount code knows a shared replacement exists rather
+than assuming the duplication is permanent.
+
+Two comments already in the tree pre-date this decision and describe **option
+A's** premise instead: `mount.py:104-106`'s docstring and the comment above
+the admin routes in `plugin-host.core.tf` both say a founder-facing
+`user_frontend` "gets its own unauthenticated CloudFront distribution"
+(ADR-0018's model). That assumption is exactly what this document supersedes;
+both comments are stale as of this decision and will need correcting when M2
+builds the code they describe.
+
+**What `required_group` does and does not gate.** ADR-0018 §2 said it "gates
+the UI client-side (a non-founder is bounced)." **Nothing has ever
+implemented that gate, and option B cannot implement it either.** Both new
+`/ui` routes are `authorization_type = "NONE"`, by construction — a plain
+browser navigation (an address-bar URL, an `<a href>` click, a bookmark) has
+no hook to attach a bearer token to, which is exactly why the admin shell's
+own two Gateway routes are `NONE` today. This was independently confirmed in
+production at `docs/guides/development-practices.md:239`: measured directly
+against the API Gateway origin (never through CloudFront alone — a
+distribution-wide rule rewrites API `403`/`404` into portal HTML, #647),
+`/ideation/`'s admin shell is a **428-byte** empty `<div id="root">` served to
+any caller with no `Authorization` header at all, while every real API route
+behind it still `401`s with no token. So the field has described a
+client-side gate that was never built, on a mechanism structurally incapable
+of building it. `user_frontend.required_group` is **retained** in the
+manifest schema (`cli/src/lib/plugin-manifest.ts:251`,
+`packages/python-sdk/.../plugin.py:497`) for a possible future gated shell —
+gating the shell itself needs a redirect-to-Cognito at the edge, a separate
+decision, not this one — but it gates nothing today, and this document, not
+ADR-0018, is the corrected record of that.
+
+**SPA deep links.** An unknown path under `/ui/` — a client-side route the
+SPA itself resolves, e.g. `/api/v1/plugins/ideation/ui/session/42` — falls
+back to the mounted `index.html` (`StaticFiles(html=True)`'s built-in
+behaviour, once `_normalize_bare_admin_paths` is extended to also cover the
+bare `/<name>/ui` path — its existing docstring, written against the admin
+mount, is the specification for this one too: a `Mount` compiles to a
+trailing-slash-requiring regex, and a bare request without that extension
+silently falls through to the **founder** JWT-gated mount and fails there
+instead). The plugin's real JSON API stays at `/<name>/*` on the existing
+`ANY /api/v1/plugins/{proxy+}` route and is **never shadowed**: the two `/ui`
+routes have more literal path segments
+(`/api/v1/plugins/{name}/ui/{proxy+}`) than the blanket catch-all
+(`/api/v1/plugins/{proxy+}`), so API Gateway v2's precedence rule (more
+specific route wins) resolves them first for exactly the `/ui/**` prefix and
+leaves every other path — `/<name>/sessions`, `/<name>/admin`, everything
+else — on the JWT route untouched. A 404 from the JSON API is never rewritten
+into the SPA's `index.html`, and an unknown SPA route never falls through to
+the JWT gate: verify this against the API Gateway origin directly, not only
+through the CDN (the #647 trap applies here exactly as it does to
+`admin_ingress`).
+
+**Three measured limits.**
+
+1. **API Gateway's 6 MB Lambda-proxy response limit.** Built
+   `biffo-plugin-ideation/web` (`pnpm run build`, Vite 6, measured 2026-09-07):
+   the largest single asset is its JS bundle at **299,616 bytes** (~293 KiB,
+   `assets/index-DHP4dBJi.js`); total `dist/` is **305,287 bytes** (~298 KiB,
+   3 files — `index.html` 428 B, that JS bundle, and a 5,243 B CSS file).
+   `biffo-plugin-idea-scout/web` (same toolchain) measures within 1% of this:
+   largest asset 299,427 bytes, `dist/` total 307,858 bytes. Both are **~2% of
+   the 6 MB ceiling** — option B works unchanged at today's asset weight, with
+   roughly 19x headroom before a single asset would even approach the limit.
+   (Both plugins' bundles are near-identical in size because both were
+   scaffolded from the same skeleton and neither yet ships meaningfully
+   different UI code — a data point about the skeleton's baseline weight, not
+   evidence the limit has been genuinely exercised.)
+
+2. **Host zip budget.** Measured by replicating `deploy-app.yml`'s "Package
+   and deploy the shared plugin host" step exactly (same `uv export` /
+   `uv pip install --target` layout, the same boto3/botocore/s3transfer +
+   `__pycache__` + `tests` trim, the same `zip -rq`) against the host
+   runtime, the SDK, and both currently-installed plugins' backend code and
+   built `web-admin/` bundles — i.e. today's actual production shape, minus
+   `user_frontend`, which is not in the zip yet because nothing builds it.
+   That package zips to **10,429,231 bytes (~9.94 MB)**, unpacked
+   **32,514,439 bytes (~31.0 MB)**. Adding both plugins' `web/dist` (the
+   `user_frontend` bundles measured in limit 1) brings the zip to
+   **10,621,391 bytes (~10.13 MB)** — a delta of **+192,160 bytes (~188 KiB)
+   zipped**, **+613,145 bytes (~599 KiB) unpacked** (assets compress well
+   inside the zip, so the zipped delta is smaller than the raw `dist/`
+   weight). Both figures sit far under every ceiling in play: the ~54 MB
+   comfort zone the Core API step guards against overrunning the ~70 MB
+   inline `update-function-code` request cap, and the 250 MB unzipped
+   S3-upload ceiling. (Unlike the Core API step, the plugin-host step prints
+   no size and runs no guard at all today — worth flagging for M2 alongside
+   the packaging change; not itself a blocker to this decision.)
+
+3. **Per-request cost, API Gateway + Lambda vs. CloudFront.** Stated
+   assumption: **1,000 founder sessions/month**, each an uncached full
+   SPA-shell load (`index.html` + JS + CSS — the worst case; a warm browser
+   cache serves most repeat visits for free under either mechanism) = 3,000
+   asset requests, ~94.9 MB/month of gzip-compressed bytes (measured Vite
+   gzip sizes for ideation: 0.29 kB + 1.65 kB + 92.99 kB ≈ 94.93 kB per shell
+   load). Pricing: API Gateway HTTP API $1.00/million requests, Lambda
+   $0.20/million requests + $0.0000166667/GB-s (AWS list pricing, US East,
+   confirmed against aws.amazon.com 2026-09-07); CloudFront $0.085/GB +
+   $0.0075/10,000 HTTPS requests (US/Europe tier, standard published list
+   price — not independently re-confirmed live this session, treat as
+   illustrative). Assuming 512 MB Lambda memory and ~20 ms per static-asset
+   invocation (`StaticFiles` reads local disk and streams — no Core
+   round-trip):
+
+   | | API Gateway + Lambda (option B, live) | CloudFront (hypothetical dedicated origin) |
+   |---|---|---|
+   | Requests | 3,000 × $0.000001 + 3,000 × $0.0000002 ≈ **$0.0036** | 3,000 × $0.00000075 ≈ **$0.0023** |
+   | Compute / transfer | 3,000 × 0.01 GB-s × $0.0000166667 ≈ **$0.0005** | 0.095 GB × $0.085 ≈ **$0.0081** |
+   | **Total/month** | **≈ $0.0041** | **≈ $0.0104** |
+
+   The difference is about six-tenths of a cent a month at this volume —
+   noise, not a deciding factor. **The one real, permanent cost property of
+   option B**: the shared `api/v1/plugins/*` CloudFront behaviour carries
+   `Managed-CachingDisabled` deliberately
+   (`modules/cloud/aws/cdn/main.tf:367`, "an API response must never be
+   cached"), so unlike a dedicated static origin, **every** asset request —
+   including a repeat visit whose browser cache missed, e.g. after a redeploy
+   changes the hashed filename — invokes the Lambda; no CDN-layer cache
+   absorbs repeat load. This is not a new trade-off introduced here —
+   `admin_ingress` already carries it today — and at founder-session volume
+   it is invisible in the numbers above; it would matter only at a traffic
+   scale this document has no evidence Biffo is anywhere near.
+
+**The migration order**, across the four repos this epic touches (see
+Cross-repo boundary in the implementation plan,
+`docs/implementation/0006-shared-plugin-frontend-mount/README.md`):
+
+1. **biffo-template, M1 (this document).** The decision, written down — the
+   contract M2, M3, and every step below build against.
+2. **biffo-template, M2 and M3 (parallel).** M2 makes the host actually serve
+   `user_frontend`; M3 makes the old per-plugin shape un-installable for any
+   *new* plugin. Both merge before step 3 starts.
+3. **`biffo-plugin-ideation`, then `biffo-plugin-idea-scout`.** Each repoints
+   its `web/vite.config.ts`'s path-prefixed `base` at the new mount path,
+   deletes `deploy-frontend.yml`, and deletes `terraform/`'s frontend bucket
+   + `cdn_distribution_arn` variable. Ideation before idea-scout only because
+   ideation is the more actively developed of the two; nothing else orders
+   them relative to each other, and **both** must finish before step 4.
+4. **`biffo-platform`.** Once *both* plugins have migrated, remove their
+   `siblings.auto.tfvars.json` entries and `plugins.generated.tf` modules,
+   and destroy the two now-empty S3 buckets.
+5. **biffo-template, M4.** Delete the ADR-0018 deploy path from
+   `deploy-app.yml` and the `cdn_distribution_arn` wiring from
+   `plugin-terraform-wiring.ts`. Only safe after step 4: M4 deletes the
+   deploy path currently keeping `dev.biffo.io/ideation/` and
+   `dev.biffo.io/idea-scout/` alive on the old model, so landing it earlier
+   takes production down.
+
+Steps 1–3 are purely additive; the old path keeps serving throughout, so
+nothing user-visible breaks before step 4.
 
 The shared-session SSO mechanic from ADR-0007 §3 (same Cognito App Client →
-shared session on same origin, zero extra code) carries over unchanged, and is
-simpler here: one client, one origin, no per-sibling path client to reason about.
+shared session on same origin, zero extra code) carries over unchanged: one
+client, one origin, no per-plugin path client to reason about, and no
+distribution-wide custom-error-response conflict to solve either — that
+conflict (option A's `Unexpected token '<'` bug, described in the superseded
+version of this section) was a property of routing a plugin's JSON API and a
+*shared SPA shell's* deep-link fallback through the *same* CloudFront
+behaviour. Option B never puts them in the same behaviour in the first place:
+`/ui/**`'s fallback is API-Gateway-route precedence (see SPA deep links
+above), not a CloudFront custom-error response, so there is no distribution-wide
+rule to scope down and nothing here to build to avoid it.
 
 ### 3. The plugin contract becomes thin
 
@@ -228,7 +441,7 @@ AWS resources — an afternoon, flat at plugin #30.
 | 0009 (SigV4 inbound) | The plugin host is a SigV4 caller of Core `/internal/*`, allow-listed by its role; per-plugin table access adds a host-asserted plugin identity (§1a). |
 | 0011 (authz is core) | Group-gating moves out of plugin code into platform enforcement from the manifest. |
 | 0013 (declare/review/enforce; no plugin code in Core) | Router/UI/group are declared and reviewed; enforcement is core; plugin code runs in the *plugin host*, never in Core. |
-| 0018 (superseded) | Replaces per-plugin authenticated-sibling hosting with shared hosting. |
+| 0018 (superseded) | Replaces per-plugin authenticated-sibling hosting with shared hosting, backend (§1) and frontend (§2) alike. |
 
 **What survives from the Ideation build:** all of the product — prompts, agent
 definitions, chat orchestration, service layer, adapter, data model, SDK, and the
@@ -237,22 +450,36 @@ removed. Migrating Ideation onto this ADR (mount its existing router + UI, tear
 down its Lambda/gateway/bucket) is the proof, and incidentally fixes its current
 production bugs.
 
-## Open decisions (resolve before the frontend seam)
+## Open decisions — resolved 2026-08-16/2026-09-06 by option B (§2)
+
+These were the two questions this section originally posed as blocking the
+frontend seam, kept verbatim below as the record of what option A (not
+chosen) would have needed answered. §2 above settles both by *not* building a
+single shared shell at all:
 
 1. **Where the app shell lives.** It cannot be the admin portal — the portal is
    strictly the `/admin` console (core-manifest / #306), and the instance's
-   product UI belongs elsewhere. Recommendation: a **new template-owned founder
-   app shell** — a single SPA served on the shared distribution at the founder
-   paths, gated to the founder group, distinct from both `/admin` (portal) and
-   `/` (the user's product sibling). This keeps the portal-is-admin boundary
-   intact. Needs a nod before building the frontend.
-2. **How plugin UI is delivered into the shell.** Build-time inclusion (the
+   product UI belongs elsewhere. ~~Recommendation: a **new template-owned
+   founder app shell** — a single SPA served on the shared distribution at
+   the founder paths, gated to the founder group, distinct from both
+   `/admin` (portal) and `/` (the user's product sibling).~~ **Not built.**
+   Option B has no single shell to place: each plugin's `user_frontend`
+   bundle is served independently, at its own `/api/v1/plugins/<name>/ui/*`
+   path, by the plugin host — there is no shared SPA for a "where" question
+   to be about. The portal-is-admin boundary stays intact regardless, because
+   nothing here touches `/admin`.
+2. **How plugin UI is delivered into the shell.** ~~Build-time inclusion (the
    shell's build vendors installed plugins' UI, one deploy) is simplest and
    matches how the backend vendors routers; runtime module-federation is the
-   heavier alternative. Recommend build-time first.
+   heavier alternative.~~ **Moot under option B**, for the same reason: there
+   is no shell to vendor UI *into*. Each plugin ships its own already-built
+   `dist/`, and the host serves it as static files, unmodified, from wherever
+   the deploy step copied it — closer to the backend's own "vendor the
+   package, don't compile it in" shape than either alternative above
+   considered.
 
-The **backend seam (§1/§1a) has no such open questions** and is where the
-migration starts.
+The **backend seam (§1/§1a) had no such open questions** and is where the
+migration started; §2 above now has none either.
 
 ## Packaging — how the host Lambda gets plugin code
 
@@ -290,14 +517,26 @@ the tail.
 
 ## Migration
 
+This is the ADR-level plan as originally written, before #558 broke the
+frontend half into milestones. Step 2 described option A (not chosen); see
+§2's own "migration order" for the actual, current sequence across the four
+repos this now touches.
+
 1. Build the shared plugin host + the `/api/v1/plugins/*` route and manifest
-   `api_ingress` enforcement.
-2. Build the shared app shell + `ui_mount` mounting.
-3. Thin the plugin contract and `biffo plugin install` (drop terraform, two-apply,
-   wire).
-4. Migrate Ideation as the first consumer; delete its per-plugin infra.
-5. Remove the superseded machinery (ADR-0018 hosting, OAC, `plugin_api_origins`,
-   `plugin wire`).
+   `api_ingress` enforcement. **Done**, live on biffo-platform dev.
+2. ~~Build the shared app shell + `ui_mount` mounting.~~ Superseded by §2:
+   the host serves each plugin's `user_frontend` bundle directly: no shared
+   app shell, no `ui_mount` field (the manifest field is `user_frontend`).
+3. Thin the plugin contract and `biffo plugin install` (drop terraform,
+   two-apply, wire). **Done** for the backend; §2's Milestone 3 does the
+   equivalent for the frontend (refuse the ADR-0018 per-plugin shape at
+   install time).
+4. Migrate Ideation (then Idea Scout) as the first consumers; delete their
+   per-plugin infra. **Not yet done** — §2's migration order, step 3.
+5. Remove the superseded machinery (ADR-0018 hosting, OAC,
+   `plugin_api_origins`, `plugin wire`). **Done** for the backend; §2's
+   Milestone 4 does the frontend equivalent (the `deploy-app.yml` frontend
+   step, `cdn_distribution_arn` wiring).
 
 ---
 
@@ -339,7 +578,7 @@ first-party plugins, or third-party plugins that passed install review
   you would not trust with every other co-mounted plugin's data.** For a
   user-facing plugin an operator will not fully trust, use `isolated: true`.
 - `isolated: true` is the *only* real isolation mechanism for that case, and it
-  is **not yet built** — it lives in ADR text and a couple of SDK docstrings, not
+  **remains unbuilt** — it lives in ADR text and a couple of SDK docstrings, not
   in the manifest schema, discovery, or Terraform. That is acceptable today
   because there are zero third-party user-facing plugins; building it is tracked
   in #595, to be done when the first one needs it.

@@ -153,6 +153,14 @@ export interface GuardCandidateVerdict {
 export const GUARD_CANDIDATE_CLASSIFICATION: Record<string, GuardCandidateVerdict> = {
   // ── Pre-#1519 naming-convention guards — carried forward unchanged ──────
   'adr-numbering-guard.ts': { isGuard: true, reason: 'matches the *-guard.ts convention' },
+  'api-gateway-integration-guard.ts': {
+    isGuard: true,
+    reason:
+      'matches the *-guard.ts convention; cross-references a module block and an ' +
+      'aws_apigatewayv2_integration block in the same Terraform tree (#1900) — classified ' +
+      'inClass: false in guard-authority-inventory.ts (same shape as ' +
+      'eventbridge-log-permission-guard, not a #1362 two-independent-documents case).',
+  },
   'branch-protection-audit.ts': { isGuard: true, reason: 'matches the *-audit.ts convention' },
   'codeql-suppression-guard.ts': { isGuard: true, reason: 'matches the *-guard.ts convention' },
   'cognito-invite-template-guard.ts': {
@@ -208,6 +216,21 @@ export const GUARD_CANDIDATE_CLASSIFICATION: Record<string, GuardCandidateVerdic
       'exports assertTargetFidelity (#1399) — the motivating file for #1519: it was hand-added ' +
       'to guard-authority-inventory.ts because the old regex never found it, and is now ' +
       'discovered natively.',
+  },
+  'distribution-inventory.ts': {
+    isGuard: true,
+    reason:
+      'exports checkRemoteContentAssertions (#1816): a real document/actor comparison — a ' +
+      "distribution-inventory.json entry's remoteContentAssertions (the document: what a " +
+      "gapReason claims a named remote repo's file contains) against that file's real live " +
+      'content (the actor, fetched by check-distribution-remote-state.ts). Generalises the ' +
+      "narrow #1807-specific wording regex that first surfaced this file's own gapReason " +
+      'entries could go stale; wired via `biffo check distribution-remote-state`, scheduled ' +
+      'in distribution-remote-state-report.yml (no per-PR cross-repo token available — same ' +
+      'shape plugin-staleness.ts/doctor.ts already use for a remote actor). validateInventory ' +
+      'in this same file is NOT itself classified separately: it is schema validation on the ' +
+      "inventory's own shape (well-formedness), not a document/actor comparison, and its name " +
+      'does not match the export-name discovery signal.',
   },
   'doctor.ts': {
     isGuard: true,
@@ -283,6 +306,16 @@ export const GUARD_CANDIDATE_CLASSIFICATION: Record<string, GuardCandidateVerdic
       'doctor.ts were classified true on. Wired into the core-upgrade command as a warning rather ' +
       "than a throw (see the module's own docstring for why a hard fail would be worse here), " +
       'which does not change that it is a standalone check module, not internal machinery.',
+  },
+  'ownership-header-claim-guard.ts': {
+    isGuard: true,
+    reason:
+      'matches the *-guard.ts convention; exports checkOwnershipHeaderClaims (#1911, split from ' +
+      "#1362's own class): a real document/actor comparison — a file's own header comment claim " +
+      '(INSTANCE-OWNED/template-owned/user-owned/"NOT a template file") versus core-manifest.json\'s ' +
+      'real longest-prefix-match answer (isTemplateOwned). scripts/verify-deployed.checks lived ' +
+      'this exact disagreement (#1706/#1707) with nothing ever comparing the two documents. See ' +
+      'guard-authority-inventory.ts for the full classification.',
   },
 }
 

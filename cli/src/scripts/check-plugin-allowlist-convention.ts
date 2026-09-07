@@ -23,12 +23,51 @@
  * (#1545) wired it here — the template's own three source modules are the
  * real input, checked on every push, exactly where a rename would otherwise
  * go unnoticed until a plugin's calls started silently 403ing.
+ *
+ * ── Scoping this to the template and its instances (#1906, #1908, #1943) ───
+ *
+ * A satellite repo (sibling app, plugin repo) never carries
+ * `modules/plugins/_template` or `modules/cloud/aws/plugin-allowlist` at all
+ * — that Terraform is template/instance-only — so their absence is a
+ * legitimate "not applicable", not a broken read (#1906). The first fix
+ * checked that literally: ALL FOUR of the sources this guard reads missing
+ * meant "satellite, skip". #1908 found that heuristic also silently waved
+ * through a real template/instance tree missing just ONE of the four (a
+ * rename, an accidental delete) — treating that as "not applicable" would
+ * have skipped exactly the drift this guard exists to catch, so only the
+ * true zero-of-four case was ever treated as a skip.
+ *
+ * #1943 is the gap neither of those left closed: a real sibling (`biffo
+ * sibling create`'s own scaffold, `_skeletons/sibling-template/modules/`)
+ * DOES carry its own `modules/cloud/aws/compute/main.tf` — a real Lambda
+ * compute module for its own BFF, unrelated to the plugin-hosting one this
+ * guard reads — so a sibling is missing only THREE of the four, never all
+ * four, and the #1906/#1908 heuristic ran it anyway and threw "cannot read
+ * modules/plugins/_template/main.tf" on a perfectly healthy sibling. Counting
+ * missing files was always a proxy for "is this even a template/instance
+ * tree" — `classifyRepoOwnership` (`core-ownership-guard.ts`) answers that
+ * directly, the same discriminator `check-core-ownership.ts` already uses,
+ * so this stops guessing from a coincidence of path names a sibling can
+ * share by scaffolding and starts asking what the repo actually is.
  */
+import { classifyRepoOwnership } from '../lib/core-ownership-guard.js'
 import { execa } from '../lib/exec.js'
 import { checkAllowlistConvention } from '../lib/plugin-allowlist-convention.js'
 
 export async function runPluginAllowlistConventionCheck(): Promise<void> {
   const root = (await execa('git', ['rev-parse', '--show-toplevel'])).stdout.trim()
+
+  const ownership = classifyRepoOwnership(root)
+  if (ownership === 'satellite') {
+    console.log(
+      '· Plugin-allowlist convention guard: not applicable — this is not a template/instance ' +
+        `tree (${root}), so there is no modules/plugins/_template or ` +
+        'modules/cloud/aws/plugin-allowlist Terraform to audit. A sibling app may carry its ' +
+        "own unrelated modules/cloud/aws/compute for its own BFF; that is not this guard's " +
+        'concern. Skipping.',
+    )
+    return
+  }
 
   let violations: ReturnType<typeof checkAllowlistConvention>
   try {

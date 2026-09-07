@@ -22,6 +22,20 @@ variable "portal_bucket_arn" {
   type = string
 }
 
+# biffo-template#1923 — path to the CDN path contract JSON (public path
+# pattern -> rewritten origin path -> origin -> whether a token is
+# required) for the literal, non-per-sibling CloudFront behaviours this
+# module wires up. Relative to this module's own directory.
+#
+# Overridable ONLY so `terraform test` can exercise the fail-closed guard
+# (aws_cloudfront_distribution.portal's precondition) against a deliberately
+# broken fixture without mutating the real, committed contract. Every real
+# caller — every environment root — must leave this at its default.
+variable "path_contract_file" {
+  type    = string
+  default = "path-contract.json"
+}
+
 variable "custom_domain" {
   type    = string
   default = ""

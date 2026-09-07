@@ -93,6 +93,12 @@ variable "enable_iam_database_authentication" {
   default     = false
 }
 
+variable "additional_security_group_ids" {
+  description = "Extra security group IDs attached to the RDS instance (and its RDS Proxy, if enabled) alongside the module's own aws_security_group.db. For a caller that needs a narrowly-scoped ingress rule from an SG this module doesn't own, without touching this module's SG at all: this module declares aws_security_group.db's rules via an inline ingress {} block, and Terraform treats that block as the SG's complete rule set on every refresh — any rule attached to the same SG from outside (aws_security_group_rule or aws_vpc_security_group_ingress_rule, it makes no difference) gets silently marked for deletion on the next apply that touches this module (biffo-template#1901). Attaching the caller's own SG here instead sidesteps that: the caller manages its own SG and rule (via aws_vpc_security_group_ingress_rule, no inline block) entirely outside this module, and it never touches aws_security_group.db's inline-managed rule set."
+  type        = list(string)
+  default     = []
+}
+
 variable "tags" {
   type    = map(string)
   default = {}

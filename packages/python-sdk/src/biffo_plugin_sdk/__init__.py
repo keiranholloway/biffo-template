@@ -1,11 +1,22 @@
 """Biffo Plugin SDK."""
 
 from .client import BiffoAPIClient, BiffoAPIError
+from .config import (
+    ConfigState,
+    PluginConfigError,
+    PluginConfigTransientError,
+    SecretResolution,
+    get_plugin_config,
+    plugin_config_env_names,
+    resolve_secret,
+    resolve_setting,
+)
 from .events import BiffoEvent, EventSubscriber, create_event_handler
 from .plugin import (
     AdminIngress,
     BiffoPluginBase,
     ColumnDefinition,
+    ConfigDeclaration,
     EventSubscription,
     IndexDefinition,
     PermissionRule,
@@ -48,15 +59,20 @@ __all__ = [
     "BiffoPluginBase",
     "CognitoConfig",
     "ColumnDefinition",
+    "ConfigDeclaration",
+    "ConfigState",
     "EventSubscriber",
     "EventSubscription",
     "ForbiddenError",
     "ForwardedUser",
     "IndexDefinition",
     "PermissionRule",
+    "PluginConfigError",
+    "PluginConfigTransientError",
     "PluginManifest",
     "PrincipalCoreClient",
     "RouteDef",
+    "SecretResolution",
     "SeedDeclaration",
     "SignedCoreClient",
     "TableDefinition",
@@ -70,7 +86,11 @@ __all__ = [
     "authorize",
     "create_core_client",
     "create_event_handler",
+    "get_plugin_config",
     "load_manifest",
+    "plugin_config_env_names",
     "register_plugin",
     "require_group",
+    "resolve_secret",
+    "resolve_setting",
 ]

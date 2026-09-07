@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { auditClaimInvocationParity, distributedAgentsDocs } from './claim-invocation-parity.js'
 import {
+  checkRemoteContentAssertions,
   deployInfraSetsTfVar,
   type DistributionInventory,
   loadDistributionInventory,
@@ -234,32 +235,183 @@ describe('distribution inventory (#1570): every artifact-that-must-travel is reg
       const entry = inv.entries.find((e) => e.id === 'gitleaks-toml-plugin-repos')
       expect(entry, 'entry "gitleaks-toml-plugin-repos" not found').toBeTruthy()
 
-      // #1816: biffo-plugin-marketing#188 (merged 2026-08-21, commit
-      // 54aa52a9) dropped the deliberately-customised 38-line copy this
-      // gapReason used to describe as current -- its dev .gitleaks.toml is
-      // now the plain 4-line `useDefault = true` stub. Unlike
-      // deployInfraSetsTfVar (#1807) above, that fact lives in a REMOTE
-      // repo, not this checkout's own tree: this repo's CI test job carries
-      // no cross-repo token (ci.yml's test step sets none; the estate's only
-      // precedent for cross-repo reads, BIFFO_GITHUB_TOKEN, is wired into
-      // shared-sync-report.yml, a separate scheduled workflow, not into
-      // `pnpm run test`). So this cannot be a live self-checkable detector
-      // call the way deployInfraSetsTfVar is -- it can only guard against
-      // the exact stale claim reappearing verbatim, the same class #1570
-      // exists to surface, one level less than fully closed.
-      expect(
-        entry!.gapReason,
-        `"${entry!.id}"'s gapReason claims biffo-plugin-marketing still carries a live ` +
-          'deliberately-customised copy, but biffo-plugin-marketing#188 dropped it on ' +
-          '2026-08-21 -- this is the exact stale-prose class #1570 was filed to surface, ' +
-          'shipping again inside the artifact built to fix it',
-      ).not.toMatch(/marketing (?:additionally )?carries a deliberately-customised/i)
-
-      // The corrected text must actually say what changed, not just avoid
-      // the old wording -- otherwise this guard could pass on a DIFFERENT
-      // stale claim that happens not to match the one regex above.
+      // The corrected text must actually say what changed -- cheap to check
+      // and still useful as documentation -- but the REAL guard against this
+      // recurring is the content-based sweep below, not this wording check:
+      // a regex on prose only ever catches the one sentence a prosecutor
+      // happened to quote (see the #1816 class discussion in the describe()
+      // block below).
       expect(entry!.gapReason).toMatch(/biffo-plugin-marketing#188/)
       expect(entry!.gapReason).toMatch(/useDefault = true/)
+    })
+  })
+
+  describe("gapReason claims about a REMOTE repo's content are checked against real, captured content, generically (#1816)", () => {
+    // Real content captured live via the exact commands #1816's own report
+    // used (re-run 2026-08-31 for this test):
+    //
+    //   gh api "repos/keiranholloway/biffo-plugin-marketing/contents/.gitleaks.toml?ref=54aa52a9~1" --jq '.content' | base64 -d
+    //   gh api "repos/keiranholloway/biffo-plugin-marketing/contents/.gitleaks.toml?ref=dev" --jq '.content' | base64 -d
+    //
+    // The first is the pre-#188 commit (the "deliberately-customised 38-line
+    // copy" the stale gapReason described); the second is the real current
+    // dev tip. Both are the actual file bytes, not a hand-written stand-in --
+    // the same discipline #1628's case-matrix work established for "a case
+    // labelled captured live must actually have been captured live".
+    const OLD_CONTENT_PRE_1816 = `title = "Biffo Plugin Gitleaks Configuration"
+
+# Mirrors biffo-template's .gitleaks.toml \`biffo-aws-account-id\` rule
+# verbatim (see /home/keiran/code/biffo-template/.gitleaks.toml). Without it,
+# a bare 12-digit fixture value passes this repo's own Secret Scan and only
+# fails one repo and one CI cycle downstream, once vendored into an instance
+# whose gitleaks config does have this rule (#19). A plugin repo's gates
+# should be a superset of what its vendored copy will face downstream.
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "biffo-aws-account-id"
+description = "AWS Account ID — should only appear in .tfvars.example or biffo.config.json placeholders"
+regex = '''\\b\\d{12}\\b'''
+entropy = 0
+[rules.allowlist]
+regexes = [
+  "\\\\{\\\\{AWS_ACCOUNT_ID\\\\}\\\\}",  # placeholder in template files
+  "123456789012",                  # canonical example account ID used in tests
+  "999999999999",                  # canonical wrong-account ID used in error-path tests
+]
+commits = [
+  "bfb5dc5e075cc740dfaed146aa53aa1fca4dab45",
+  "86f57b34c7ada4b7f84276148722602b29e8e57b",
+  "d2ddeef824268a5ec6464f5019b71735fd6d249c",
+]
+`
+
+    const NEW_CONTENT_LIVE_DEV = `title = "Biffo Plugin Gitleaks Configuration"
+
+[extend]
+useDefault = true
+`
+
+    it('would have flagged the PRE-#188 content as a violation (fail-first: proves this catches the #1816 shape)', () => {
+      const inv = inventory()
+      const entry = inv.entries.find((e) => e.id === 'gitleaks-toml-plugin-repos')
+      expect(
+        entry!.remoteContentAssertions?.length,
+        'no remoteContentAssertions declared',
+      ).toBeGreaterThan(0)
+      const assertion = entry!.remoteContentAssertions![0]
+
+      const fetched = new Map<string, string | null>([
+        [`${assertion.repo}\n${assertion.path}\n${assertion.ref}`, OLD_CONTENT_PRE_1816],
+      ])
+      const violations = checkRemoteContentAssertions(inv, fetched)
+      expect(
+        violations,
+        'checking the PRE-#188 content should have failed -- it is exactly the customised copy ' +
+          'the stale gapReason described as current, and this is the fixture proving the ' +
+          'checker would actually have caught #1816 before a prosecutor had to find it by hand',
+      ).not.toEqual([])
+      expect(violations.some((v) => v.rule === 'contains-forbidden-substring')).toBe(true)
+    })
+
+    it('passes clean against the REAL current dev content', () => {
+      const inv = inventory()
+      const entry = inv.entries.find((e) => e.id === 'gitleaks-toml-plugin-repos')
+      const assertion = entry!.remoteContentAssertions![0]
+
+      const fetched = new Map<string, string | null>([
+        [`${assertion.repo}\n${assertion.path}\n${assertion.ref}`, NEW_CONTENT_LIVE_DEV],
+      ])
+      const violations = checkRemoteContentAssertions(inv, fetched)
+      expect(
+        violations,
+        `entry's remoteContentAssertions do not match the real current biffo-plugin-marketing ` +
+          `dev .gitleaks.toml: ${JSON.stringify(violations)}`,
+      ).toEqual([])
+    })
+
+    it('is generic across every entry that declares remoteContentAssertions, not hardcoded to one id', () => {
+      // Synthetic inventory, independent of the real distribution-inventory.json,
+      // proving the sweep function itself has no special-cased id anywhere --
+      // it walks whatever entries + assertions it is given. This is the
+      // structural answer to #1816's own CAUSE finding: "checked against
+      // reality nowhere except that one narrow per-entry regex" -- the new
+      // mechanism is entry-agnostic by construction, so a THIRD entry that
+      // adds remoteContentAssertions is covered with zero new test code.
+      const synthetic: DistributionInventory = {
+        version: 1,
+        note: 'synthetic, test-only',
+        channels: { none: inventory().channels.none },
+        entries: [
+          {
+            id: 'synthetic-entry-a',
+            artifact: 'a',
+            channel: 'none',
+            targets: ['some-other-repo'],
+            status: 'unverified',
+            gapReason: 'synthetic',
+            evidence: ['n/a'],
+            remoteContentAssertions: [
+              { repo: 'org/repo-a', path: 'FILE_A', ref: 'dev', mustContain: ['present'] },
+            ],
+          },
+          {
+            id: 'synthetic-entry-b',
+            artifact: 'b',
+            channel: 'none',
+            targets: ['yet-another-repo'],
+            status: 'unverified',
+            gapReason: 'synthetic',
+            evidence: ['n/a'],
+            remoteContentAssertions: [
+              { repo: 'org/repo-b', path: 'FILE_B', ref: 'dev', mustNotContain: ['forbidden'] },
+            ],
+          },
+        ],
+      }
+
+      const cleanFetch = new Map<string, string | null>([
+        ['org/repo-a\nFILE_A\ndev', 'this file has present in it'],
+        ['org/repo-b\nFILE_B\ndev', 'this file has neither word'],
+      ])
+      expect(checkRemoteContentAssertions(synthetic, cleanFetch)).toEqual([])
+
+      const dirtyFetch = new Map<string, string | null>([
+        ['org/repo-a\nFILE_A\ndev', 'missing the required word entirely'],
+        ['org/repo-b\nFILE_B\ndev', 'this file has forbidden in it'],
+      ])
+      const violations = checkRemoteContentAssertions(synthetic, dirtyFetch)
+      expect(violations.map((v) => v.entryId).sort()).toEqual([
+        'synthetic-entry-a',
+        'synthetic-entry-b',
+      ])
+      expect(violations.find((v) => v.entryId === 'synthetic-entry-a')?.rule).toBe(
+        'missing-required-substring',
+      )
+      expect(violations.find((v) => v.entryId === 'synthetic-entry-b')?.rule).toBe(
+        'contains-forbidden-substring',
+      )
+    })
+
+    it('reports fetch-failed rather than silently passing when content could not be fetched', () => {
+      const inv = inventory()
+      const entry = inv.entries.find((e) => e.id === 'gitleaks-toml-plugin-repos')
+      const assertion = entry!.remoteContentAssertions![0]
+
+      // A missing map entry (never fetched) and an explicit null (fetch
+      // attempted and failed) must BOTH be treated as cannot-tell, never as
+      // a clean pass -- the same "2 is never folded into a pass" convention
+      // every other check in this repo uses.
+      const violationsMissing = checkRemoteContentAssertions(inv, new Map())
+      expect(violationsMissing.some((v) => v.rule === 'fetch-failed')).toBe(true)
+
+      const violationsNull = checkRemoteContentAssertions(
+        inv,
+        new Map([[`${assertion.repo}\n${assertion.path}\n${assertion.ref}`, null]]),
+      )
+      expect(violationsNull.some((v) => v.rule === 'fetch-failed')).toBe(true)
     })
   })
 })

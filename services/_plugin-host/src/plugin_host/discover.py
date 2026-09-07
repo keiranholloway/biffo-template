@@ -53,19 +53,56 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from biffo_plugin_sdk.config import plugin_config_env_names
 from biffo_plugin_sdk.plugin import PluginManifest
 from pydantic import ValidationError
 
 _LOGGER = logging.getLogger(__name__)
 
-# The only two top-level fields a validation error is safe to drop and retry
+#: The reserved `config` name an instance uses to override a plugin's
+#: `user_ingress.required_group` at discovery time (biffo-template#1517
+#: Option B). Deliberately NOT one plugin authors must declare in their own
+#: manifest's `config:` list — the manifest literal (e.g. marketing's
+#: `"founder"`) stays the default and the field's type/validation are
+#: unchanged, so every already-shipped manifest keeps working with zero
+#: changes. An instance overrides it the same way it already supplies any
+#: other per-plugin value: add `BIFFO_PLUGIN_<PLUGIN>_USER_INGRESS_REQUIRED_
+#: GROUP` to `plugin_host_environment` in `plugin_host.auto.tfvars.json` (the
+#: shipped env-passing channel, biffo-template#1534/#1535/#1550/#1560/#1561).
+#: A plugin MAY additionally choose to declare this same name in its own
+#: `config:` list (`kind: "setting"`) purely to get `biffo plugin install`'s
+#: fail-closed prompt/printout for it — `resolvePluginConfigSupply` is
+#: already generic over any declared name, so that needs no change here or
+#: in the CLI; it is optional, not required, which is the whole point of
+#: "overridable" rather than "migrated to a reference" (contrast
+#: `ChatAgentDeclaration.required_group`, which SDK's
+#: `_validate_config_declarations` requires to literally name a declared
+#: `kind: "setting"` config entry — a stricter shape only safe because no
+#: chat agent shipped with a hardcoded group to preserve compatibility for).
+#:
+#: **Sequenced against biffo-template#1736/#1838 (merged 2026-08-31).** That
+#: change made `user_ingress.required_group` the forwarding gate's fallback
+#: authorisation for a declared route whose table rule authorises nobody
+#: (`forward.py`'s `forwarding_gate`) — both `mount.py`'s primary group_gate
+#: and that fallback read the SAME `DiscoveredPlugin.required_group` this
+#: module resolves below, so overriding it here changes both consumers
+#: identically and in lockstep. There is no separate place either consumer
+#: could read a stale, unoverridden value from: resolution happens once, at
+#: discovery, before either the main gate or the forwarder is built.
+REQUIRED_GROUP_OVERRIDE_CONFIG_NAME = "user_ingress_required_group"
+
+# The only top-level fields a validation error is safe to drop and retry
 # without: an incomplete/malformed declaration on one of these must not discard
 # an otherwise-valid, unrelated surface on the same manifest. Anything else
-# failing validation means the manifest itself is broken.
-_SALVAGEABLE_FIELDS = frozenset({"user_ingress", "admin_ingress"})
+# failing validation means the manifest itself is broken. ``user_frontend`` joins
+# this set for the same reason as its siblings (ADR-0021 §2, #558 M2): a
+# malformed static-frontend declaration must drop only the UI mount, never the
+# plugin's API.
+_SALVAGEABLE_FIELDS = frozenset({"user_ingress", "admin_ingress", "user_frontend"})
 
 
 @dataclass(frozen=True)
@@ -130,6 +167,15 @@ class DiscoveredPlugin:
     admin_required_group: str | None = None  # Cognito group or None if admin_ingress not declared
     #: Manifest-declared api_routes, forwarded to Core rather than served here.
     api_routes: tuple[DeclaredRoute, ...] = ()
+    #: ``user_frontend.dir`` (repo-relative, e.g. "web/dist"), or None if not
+    #: declared. The host resolves this against ``BIFFO_PLUGINS_ROOT/<name>``
+    #: (see ``app.py``'s ``build_plugin_host``) — plumbing only, PluginManifest
+    #: already validates the shape (ADR-0021 §2, #558 M2).
+    user_frontend_dir: str | None = None
+    #: ``user_frontend.required_group``. Carried for the manifest contract's
+    #: sake, not enforced anywhere yet — the shell is public by design (ADR-0021
+    #: §2's "What required_group does and does not gate").
+    user_frontend_required_group: str | None = None
 
 
 def _load_manifest_tolerant(manifest_path: Path) -> PluginManifest | None:
@@ -181,6 +227,26 @@ def _load_manifest_tolerant(manifest_path: Path) -> PluginManifest | None:
                 exc2,
             )
             return None
+
+
+def _resolve_required_group(plugin_name: str, manifest_group: str | None) -> str | None:
+    """The Cognito group `user_ingress` actually gates on: an instance-supplied
+    override if the host's environment carries one, else the manifest's own
+    literal (biffo-template#1517 Option B — see
+    `REQUIRED_GROUP_OVERRIDE_CONFIG_NAME`'s module-level docstring for why this
+    is an override rather than a required reference).
+
+    Uses the exact same `BIFFO_PLUGIN_<PLUGIN>_<NAME>` naming
+    (`plugin_config_env_names`) the install-time `config:` mechanism already
+    computes, so the two channels can never disagree about what an env var for
+    a given plugin+name pair is called even though this override does not go
+    through the manifest's `config:` list at all.
+    """
+    if manifest_group is None:
+        return None
+    literal_env, _ = plugin_config_env_names(plugin_name, REQUIRED_GROUP_OVERRIDE_CONFIG_NAME)
+    override = os.environ.get(literal_env, "").strip()
+    return override or manifest_group
 
 
 def _declared_routes(
@@ -254,7 +320,10 @@ def discover_plugins(services_root: str | Path) -> list[DiscoveredPlugin]:
         if manifest.user_ingress is None and manifest.admin_ingress is None:
             continue  # data/event-only plugin — nothing for the host to mount
 
-        required_group = manifest.user_ingress.required_group if manifest.user_ingress else None
+        required_group = _resolve_required_group(
+            manifest.name,
+            manifest.user_ingress.required_group if manifest.user_ingress else None,
+        )
         declared = _declared_routes(manifest, required_group)
 
         found.append(
@@ -267,6 +336,10 @@ def discover_plugins(services_root: str | Path) -> list[DiscoveredPlugin]:
                     manifest.admin_ingress.required_group if manifest.admin_ingress else None
                 ),
                 api_routes=declared,
+                user_frontend_dir=(manifest.user_frontend.dir if manifest.user_frontend else None),
+                user_frontend_required_group=(
+                    manifest.user_frontend.required_group if manifest.user_frontend else None
+                ),
             )
         )
     return found

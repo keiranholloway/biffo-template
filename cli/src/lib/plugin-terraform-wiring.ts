@@ -512,6 +512,108 @@ export function declaredOutputs(moduleDir: string): Set<string> {
   return names
 }
 
+/**
+ * A `bucket = "..."` attribute (an `aws_s3_bucket` resource's name) whose
+ * interpolated value ends in the retired per-plugin frontend shape,
+ * `-plugin-<something>-web`. This is the exact literal shape every
+ * ADR-0018-era frontend module ships — reproduced verbatim in
+ * `biffo-plugin-ideation/terraform/main.tf` and
+ * `biffo-plugin-idea-scout/terraform/main.tf`:
+ * `bucket = "${local.name_prefix}-plugin-${var.plugin_name}-web"`.
+ *
+ * A regex over the attribute value, not an HCL parse — same tradeoff
+ * `declaredVariables`/`declaredOutputs` already make in this file. `bucket =`
+ * with a string literal only ever appears on the `aws_s3_bucket` resource's
+ * own name attribute; every other reference to that bucket elsewhere in the
+ * module (`aws_s3_bucket_policy.bucket = aws_s3_bucket.frontend.id`, etc.) is
+ * an expression, not a string literal, so this cannot cross-match a sibling
+ * resource that merely references the frontend bucket. The trailing
+ * `-web"` requires the interpolation to end in `-web` immediately before the
+ * closing quote, so a bucket like `"...-plugin-registry-web-assets"` (ends in
+ * `-web-assets`, not `-web`) does not match.
+ */
+const RETIRED_FRONTEND_BUCKET_PATTERN = /bucket\s*=\s*"[^"]*-plugin-[^"]*-web"/
+
+/**
+ * Does this module's `*.tf` files declare an `aws_s3_bucket` named on the
+ * retired `-plugin-<name>-web` shape? See {@link RETIRED_FRONTEND_BUCKET_PATTERN}.
+ */
+function declaresRetiredFrontendBucket(moduleDir: string): boolean {
+  let entries
+  try {
+    entries = readdirSync(moduleDir, { withFileTypes: true })
+  } catch {
+    return false
+  }
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith('.tf')) continue
+    let contents: string
+    try {
+      contents = readFileSync(join(moduleDir, entry.name), 'utf8')
+    } catch {
+      continue
+    }
+    if (RETIRED_FRONTEND_BUCKET_PATTERN.test(contents)) return true
+  }
+  return false
+}
+
+/**
+ * Does `terraformDir` declare the retired ADR-0018 §2 per-plugin frontend
+ * hosting shape — a dedicated S3 origin behind the shared CloudFront
+ * distribution, superseded by ADR-0021 §2's `user_frontend` (the shared
+ * plugin host serves the bundle itself; no per-plugin origin at all)?
+ *
+ * Three independent signals, any one of which is sufficient (biffo-template#1916):
+ *
+ * 1. An `aws_s3_bucket` whose name interpolates `-plugin-...-web` — the
+ *    frontend origin bucket itself.
+ * 2. An output named `frontend_bucket_*` — what a root config's `sibling_origins`
+ *    wiring reads to find that bucket (`renderModuleBlock` above re-exports
+ *    whatever a module declares, so this is real wiring surface, not incidental).
+ * 3. A `cdn_distribution_arn` variable — the retired module's only reason to
+ *    need the shared distribution's ARN at all (its bucket policy scopes
+ *    `s3:GetObject` to reads from that exact distribution).
+ *
+ * Returns the empty array for a clean module (no `terraform/` at all, or a
+ * Lambda-backed one declaring none of the three) — never a bare boolean, so a
+ * refusal can quote precisely what it found, the same way
+ * `findPluginModuleReferences` does for a different refusal above.
+ */
+export function findRetiredFrontendShape(terraformDir: string): string[] {
+  const reasons: string[] = []
+  if (!existsSync(terraformDir)) return reasons
+
+  if (declaresRetiredFrontendBucket(terraformDir)) {
+    reasons.push('an aws_s3_bucket whose name interpolates "-plugin-...-web"')
+  }
+  for (const name of [...declaredOutputs(terraformDir)].sort()) {
+    if (name.startsWith('frontend_bucket')) {
+      reasons.push(`an output named "${name}"`)
+    }
+  }
+  if (declaredVariables(terraformDir).has('cdn_distribution_arn')) {
+    reasons.push('a "cdn_distribution_arn" variable')
+  }
+  return reasons
+}
+
+/**
+ * The refusal message for {@link findRetiredFrontendShape} finding something —
+ * shared by `plugin install` and `plugin upgrade` (biffo-template#1916) so the
+ * two commands cannot drift into naming the ADR differently.
+ */
+export function retiredFrontendShapeError(pluginName: string, reasons: string[]): string {
+  return (
+    `Plugin '${pluginName}' ships a terraform/ frontend on the retired ADR-0018 §2 per-plugin ` +
+    `hosting shape: it declares ${reasons.join(', ')}. ADR-0021 §2 replaced this — a user-facing ` +
+    "plugin's frontend is served by the shared plugin host directly from the manifest's " +
+    '`user_frontend` field (`{ dir, required_group }`); it ships `web/` and nothing else, with ' +
+    'no terraform/ frontend and no deploy-frontend.yml. Update the plugin to the `user_frontend` ' +
+    'contract (see _skeletons/plugin-template/README.md) before installing it here.'
+  )
+}
+
 /** Renders `key = value` lines with `=` aligned, as `terraform fmt` requires. */
 function renderArguments(args: Array<[string, string]>, indent: string): string {
   const width = Math.max(...args.map(([key]) => key.length))

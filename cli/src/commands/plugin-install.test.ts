@@ -31,12 +31,16 @@ function makeProjectRoot(): string {
   return dir
 }
 
-function makeClonedPluginDir(manifest: unknown = VALID_MANIFEST, withTerraform = false): string {
+function makeClonedPluginDir(
+  manifest: unknown = VALID_MANIFEST,
+  withTerraform = false,
+  tfMainContent = '# plugin terraform module\n',
+): string {
   const dir = makeTmpDir('biffo-plugin-src')
   writeFileSync(join(dir, 'biffo.plugin.json'), JSON.stringify(manifest))
   if (withTerraform) {
     mkdirSync(join(dir, 'terraform'), { recursive: true })
-    writeFileSync(join(dir, 'terraform', 'main.tf'), '# plugin terraform module\n')
+    writeFileSync(join(dir, 'terraform', 'main.tf'), tfMainContent)
   }
   return dir
 }
@@ -181,6 +185,89 @@ describe('runPluginInstall', () => {
     // No environment root config in this fixture, so there is nothing to wire
     // into — and the CLI must not invent an infra/ tree.
     expect(existsSync(join(projectRoot, 'infra'))).toBe(false)
+  })
+
+  describe('retired frontend shape guard (biffo-template#1916, ADR-0021 §2)', () => {
+    // Verbatim from biffo-plugin-ideation/terraform/main.tf — the real,
+    // currently-live ADR-0018 §2 per-plugin frontend module.
+    const RETIRED_SHAPE_MAIN_TF =
+      'resource "aws_s3_bucket" "frontend" {\n' +
+      '  bucket        = "${local.name_prefix}-plugin-${var.plugin_name}-web"\n' +
+      '  force_destroy = true\n' +
+      '  tags          = var.tags\n' +
+      '}\n'
+
+    it('exits non-zero, naming ADR-0021 §2, for a plugin whose terraform/main.tf declares the retired shape', async () => {
+      const registry = makeRegistryMock()
+      const git = makeGitMock(makeClonedPluginDir(VALID_MANIFEST, true, RETIRED_SHAPE_MAIN_TF))
+      const migrations = makeMigrationsMock()
+
+      await expect(
+        runPluginInstall(
+          'widgets@1.0',
+          { dryRun: false, cwd: projectRoot },
+          { registry: registry as never, git: git as never, migrations: migrations as never },
+        ),
+      ).rejects.toThrow('ADR-0021 §2')
+
+      // Fail-closed: nothing was written into the checkout at all.
+      expect(existsSync(join(projectRoot, 'services', 'widgets'))).toBe(false)
+      expect(existsSync(join(projectRoot, 'modules', 'plugins', 'widgets'))).toBe(false)
+      expect(git.add).not.toHaveBeenCalled()
+      expect(git.commit).not.toHaveBeenCalled()
+    })
+
+    it('also names the user_frontend contract in the refusal', async () => {
+      const registry = makeRegistryMock()
+      const git = makeGitMock(makeClonedPluginDir(VALID_MANIFEST, true, RETIRED_SHAPE_MAIN_TF))
+      const migrations = makeMigrationsMock()
+
+      await expect(
+        runPluginInstall(
+          'widgets@1.0',
+          { dryRun: false, cwd: projectRoot },
+          { registry: registry as never, git: git as never, migrations: migrations as never },
+        ),
+      ).rejects.toThrow('user_frontend')
+    })
+
+    it('installs a clean user_frontend plugin (no terraform/ frontend) without refusing', async () => {
+      // A guard with only a passing case has not been shown to fire — this is
+      // the sibling to the two tests above, on a manifest that actually
+      // declares user_frontend and ships no terraform/ at all (the current,
+      // template-shipped shape for a user-facing plugin).
+      const userFrontendManifest = {
+        ...VALID_MANIFEST,
+        user_frontend: { dir: 'web/dist', required_group: 'founder' },
+      }
+      const registry = makeRegistryMock()
+      const git = makeGitMock(makeClonedPluginDir(userFrontendManifest, false))
+      const migrations = makeMigrationsMock()
+
+      await runPluginInstall(
+        'widgets@1.0',
+        { dryRun: false, cwd: projectRoot },
+        { registry: registry as never, git: git as never, migrations: migrations as never },
+      )
+
+      expect(existsSync(join(projectRoot, 'services', 'widgets'))).toBe(true)
+      expect(git.commit).toHaveBeenCalledWith(projectRoot, 'feat(plugins): install widgets@1.0.0')
+    })
+
+    it('installs cleanly when terraform/ exists but declares none of the three retired signals', async () => {
+      const registry = makeRegistryMock()
+      const git = makeGitMock(makeClonedPluginDir(VALID_MANIFEST, true)) // default: '# plugin terraform module\n'
+      const migrations = makeMigrationsMock()
+
+      await runPluginInstall(
+        'widgets@1.0',
+        { dryRun: false, cwd: projectRoot },
+        { registry: registry as never, git: git as never, migrations: migrations as never },
+      )
+
+      expect(existsSync(join(projectRoot, 'modules', 'plugins', 'widgets'))).toBe(true)
+      expect(git.commit).toHaveBeenCalledWith(projectRoot, 'feat(plugins): install widgets@1.0.0')
+    })
   })
 
   describe('seed vendoring (biffo-template#1554)', () => {
@@ -517,6 +604,107 @@ describe('runPluginInstall', () => {
         { registry: registry as never, git: git as never, migrations: migrations as never },
       ),
     ).rejects.toThrow('does not contain a biffo.plugin.json manifest')
+  })
+
+  describe('config: declarations, install-time enforcement (biffo-template#1517 Option B, #1946)', () => {
+    // A manifest declaring one required 'secret' config need — the shape
+    // resolvePluginConfigSupply/missingRequiredConfigMessage exist to gate.
+    const CONFIG_MANIFEST = {
+      ...VALID_MANIFEST,
+      config: [
+        {
+          name: 'api_key',
+          kind: 'secret',
+          required: true,
+          description: 'Widgets API credential.',
+        },
+      ],
+    }
+
+    it('refuses install when a required config value is not supplied, leaving the checkout untouched', async () => {
+      const registry = makeRegistryMock()
+      const git = makeGitMock(makeClonedPluginDir(CONFIG_MANIFEST))
+      const migrations = makeMigrationsMock()
+
+      await expect(
+        runPluginInstall(
+          'widgets@1.0',
+          { dryRun: false, cwd: projectRoot }, // no `config` supplied at all
+          { registry: registry as never, git: git as never, migrations: migrations as never },
+        ),
+      ).rejects.toThrow(/declares 1 required config value/)
+
+      // Fail-closed: nothing was written into the checkout, and nothing was
+      // staged or committed — same posture as the retired-frontend-shape and
+      // invalid-manifest guards above.
+      expect(existsSync(join(projectRoot, 'services', 'widgets'))).toBe(false)
+      expect(existsSync(join(projectRoot, 'services', 'widgets', 'biffo.plugin-config.json'))).toBe(
+        false,
+      )
+      expect(git.add).not.toHaveBeenCalled()
+      expect(git.commit).not.toHaveBeenCalled()
+    })
+
+    it('installs and writes biffo.plugin-config.json when the required config value is supplied', async () => {
+      const registry = makeRegistryMock()
+      const git = makeGitMock(makeClonedPluginDir(CONFIG_MANIFEST))
+      const migrations = makeMigrationsMock()
+
+      await runPluginInstall(
+        'widgets@1.0',
+        {
+          dryRun: false,
+          cwd: projectRoot,
+          config: { api_key: '/widgets/dev/api_key' },
+        },
+        { registry: registry as never, git: git as never, migrations: migrations as never },
+      )
+
+      expect(existsSync(join(projectRoot, 'services', 'widgets'))).toBe(true)
+      const configFile = join(projectRoot, 'services', 'widgets', 'biffo.plugin-config.json')
+      expect(existsSync(configFile)).toBe(true)
+      const written = JSON.parse(readFileSync(configFile, 'utf8'))
+      expect(written).toMatchObject({
+        plugin: 'widgets',
+        resolved: [
+          {
+            name: 'api_key',
+            kind: 'secret',
+            env: 'BIFFO_PLUGIN_WIDGETS_API_KEY_PARAMETER',
+            value: '/widgets/dev/api_key',
+          },
+        ],
+      })
+      expect(git.add).toHaveBeenCalledWith(
+        projectRoot,
+        expect.arrayContaining(['services/widgets/biffo.plugin-config.json']),
+      )
+      expect(git.commit).toHaveBeenCalledWith(projectRoot, 'feat(plugins): install widgets@1.0.0')
+    })
+
+    it('refuses a secret value that is not an SSM parameter path, leaving the checkout untouched', async () => {
+      const registry = makeRegistryMock()
+      const git = makeGitMock(makeClonedPluginDir(CONFIG_MANIFEST))
+      const migrations = makeMigrationsMock()
+
+      await expect(
+        runPluginInstall(
+          'widgets@1.0',
+          {
+            dryRun: false,
+            cwd: projectRoot,
+            // An operator pasting the credential itself by mistake, instead
+            // of the SSM parameter path holding it.
+            config: { api_key: 'sk-live-not-a-path' },
+          },
+          { registry: registry as never, git: git as never, migrations: migrations as never },
+        ),
+      ).rejects.toThrow(/must be an SSM parameter PATH/)
+
+      expect(existsSync(join(projectRoot, 'services', 'widgets'))).toBe(false)
+      expect(git.add).not.toHaveBeenCalled()
+      expect(git.commit).not.toHaveBeenCalled()
+    })
   })
 
   describe('--dry-run', () => {

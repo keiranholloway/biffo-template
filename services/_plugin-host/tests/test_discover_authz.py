@@ -40,6 +40,84 @@ def test_discover_returns_only_user_facing_plugins(tmp_path):
     ]
 
 
+def test_discover_uses_manifest_literal_required_group_when_no_override_set(
+    tmp_path, monkeypatch
+) -> None:
+    """No `BIFFO_PLUGIN_IDEATION_USER_INGRESS_REQUIRED_GROUP` in the host's
+    environment — the manifest's own literal is used unchanged, so every
+    already-shipped plugin manifest keeps working with zero changes
+    (biffo-template#1517 Option B)."""
+    monkeypatch.delenv("BIFFO_PLUGIN_IDEATION_USER_INGRESS_REQUIRED_GROUP", raising=False)
+    _write_plugin(
+        tmp_path, "ideation", ingress={"app": "ideation.app:app", "required_group": "founder"}
+    )
+
+    found = discover_plugins(tmp_path)
+
+    assert found[0].required_group == "founder"
+
+
+def test_discover_honours_an_instance_supplied_required_group_override(
+    tmp_path, monkeypatch
+) -> None:
+    """An instance-supplied `BIFFO_PLUGIN_<PLUGIN>_USER_INGRESS_REQUIRED_GROUP`
+    overrides the manifest's literal `user_ingress.required_group`
+    (biffo-template#1517 Option B — unblocks marketing#46: a group name like
+    `"founder"` baked into a third-party manifest is platform-specific and
+    unreachable on an instance that names its equivalent group differently).
+    """
+    monkeypatch.setenv("BIFFO_PLUGIN_MARKETING_USER_INGRESS_REQUIRED_GROUP", "hq-marketing-admin")
+    _write_plugin(
+        tmp_path, "marketing", ingress={"app": "marketing.app:app", "required_group": "founder"}
+    )
+
+    found = discover_plugins(tmp_path)
+
+    assert found[0].required_group == "hq-marketing-admin"
+
+
+def test_discover_required_group_override_is_scoped_by_plugin_name(tmp_path, monkeypatch) -> None:
+    """Two plugins never collide on this override — only the exact
+    `BIFFO_PLUGIN_<PLUGIN>_USER_INGRESS_REQUIRED_GROUP` for THIS plugin's name
+    is read, the same per-plugin scoping the rest of the `config:` mechanism
+    already guarantees (`pluginConfigEnvNames`/`plugin_config_env_names`)."""
+    monkeypatch.setenv("BIFFO_PLUGIN_CRM_USER_INGRESS_REQUIRED_GROUP", "crm-override")
+    _write_plugin(
+        tmp_path, "ideation", ingress={"app": "ideation.app:app", "required_group": "founder"}
+    )
+    _write_plugin(tmp_path, "crm", ingress={"app": "crm.app:app", "required_group": "editor"})
+
+    found = discover_plugins(tmp_path)
+
+    by_name = {p.name: p.required_group for p in found}
+    assert by_name == {"crm": "crm-override", "ideation": "founder"}
+
+
+def test_discover_required_group_override_is_ignored_for_an_admin_only_plugin(
+    tmp_path, monkeypatch
+) -> None:
+    """A plugin with no `user_ingress` at all has no `required_group` to
+    override — setting the env var anyway must not invent one out of an
+    admin-only plugin's admin_ingress."""
+    monkeypatch.setenv("BIFFO_PLUGIN_MARKETING_USER_INGRESS_REQUIRED_GROUP", "should-not-apply")
+    root = tmp_path / "marketing"
+    root.mkdir()
+    (root / "biffo.plugin.json").write_text(
+        json.dumps(
+            {
+                "name": "marketing",
+                "version": "1.0.0",
+                "admin_ingress": {"app": "marketing.admin_app:app", "required_group": "admin"},
+            }
+        )
+    )
+
+    found = discover_plugins(tmp_path)
+
+    assert found[0].required_group is None
+    assert found[0].admin_required_group == "admin"  # untouched — override is user_ingress-only
+
+
 def test_discover_populates_admin_ingress_when_present(tmp_path):
     d = tmp_path / "ideation"
     d.mkdir()
@@ -69,6 +147,64 @@ def test_discover_leaves_admin_fields_none_when_absent(tmp_path):
     plugin = found[0]
     assert plugin.admin_app_ref is None
     assert plugin.admin_required_group is None
+
+
+def test_discover_populates_user_frontend_when_present(tmp_path) -> None:
+    """``user_frontend`` (dir, required_group) is carried onto DiscoveredPlugin
+    — plumbing, not new validation (ADR-0021 §2, #558 M2)."""
+    d = tmp_path / "ideation"
+    d.mkdir()
+    manifest = {
+        "name": "ideation",
+        "version": "1.0.0",
+        "user_ingress": {"app": "ideation.app:app", "required_group": "founder"},
+        "user_frontend": {"dir": "web/dist", "required_group": "founder"},
+    }
+    (d / "biffo.plugin.json").write_text(json.dumps(manifest))
+
+    found = discover_plugins(tmp_path)
+    assert len(found) == 1
+    assert found[0].user_frontend_dir == "web/dist"
+    assert found[0].user_frontend_required_group == "founder"
+
+
+def test_discover_leaves_user_frontend_fields_none_when_absent(tmp_path) -> None:
+    _write_plugin(
+        tmp_path, "ideation", ingress={"app": "ideation.app:app", "required_group": "founder"}
+    )
+
+    found = discover_plugins(tmp_path)
+    assert len(found) == 1
+    assert found[0].user_frontend_dir is None
+    assert found[0].user_frontend_required_group is None
+
+
+def test_a_malformed_user_frontend_drops_only_the_frontend_not_the_plugin(tmp_path, caplog) -> None:
+    """``user_frontend`` joined ``_SALVAGEABLE_FIELDS`` alongside user_ingress/
+    admin_ingress: an incomplete declaration (missing required_group here) must
+    drop just the frontend surface, not discard the whole plugin — the same
+    salvage rule #1517 established for the other two ingress fields."""
+    root = tmp_path / "services" / "ideation"
+    root.mkdir(parents=True)
+    (root / "biffo.plugin.json").write_text(
+        json.dumps(
+            {
+                "name": "ideation",
+                "version": "1.0.0",
+                "user_ingress": {"app": "ideation.app:app", "required_group": "founder"},
+                "user_frontend": {"dir": "web/dist"},  # missing required_group
+            }
+        )
+    )
+
+    with caplog.at_level("ERROR"):
+        found = discover_plugins(tmp_path / "services")
+
+    assert [p.name for p in found] == ["ideation"]
+    assert found[0].app_ref == "ideation.app:app"  # the valid surface survives
+    assert found[0].user_frontend_dir is None  # the malformed one was dropped
+    assert found[0].user_frontend_required_group is None
+    assert any("ideation" in record.message for record in caplog.records)
 
 
 def test_discover_empty_when_root_missing(tmp_path):
@@ -118,6 +254,54 @@ def test_build_plugin_host_composes_discovery_and_mounting(tmp_path):
     client = TestClient(host)
     assert client.get("/demo/ping", headers={"X-Biffo-Founder-Token": "ok"}).status_code == 200
     assert client.get("/demo/ping").status_code == 401  # gate still enforced
+
+
+def test_build_plugin_host_resolves_and_serves_user_frontend(tmp_path) -> None:
+    """``build_plugin_host`` joins discover.py's manifest-relative
+    ``user_frontend_dir`` against ``BIFFO_PLUGINS_ROOT/<name>`` itself and the
+    resulting mount actually serves the bundle end to end — the seam between
+    discovery (relative path) and mounting (a real filesystem directory),
+    which neither module's own unit tests exercise alone (ADR-0021 §2, #558
+    M2)."""
+    services_root = tmp_path / "services"
+    plugin_dir = services_root / "demo"
+    plugin_dir.mkdir(parents=True)
+    (plugin_dir / "biffo.plugin.json").write_text(
+        json.dumps(
+            {
+                "name": "demo",
+                "version": "1.0.0",
+                "user_ingress": {"app": "demo:app", "required_group": "founder"},
+                "user_frontend": {"dir": "web/dist", "required_group": "founder"},
+            }
+        )
+    )
+    dist = plugin_dir / "web" / "dist"
+    dist.mkdir(parents=True)
+    (dist / "index.html").write_text("<div id='root'></div>")
+
+    async def ping(request):
+        return JSONResponse({"ok": True})
+
+    fake_app = Starlette(routes=[Route("/ping", ping)])
+
+    def fake_authorize(token, required_group):
+        if token != "ok":
+            raise GateError(401, "nope")
+        return {"sub": "u"}
+
+    host = build_plugin_host(
+        services_root,
+        authorize=fake_authorize,
+        load=lambda ref: fake_app if ref == "demo:app" else None,
+    )
+    client = TestClient(host)
+    # The API stays gated...
+    assert client.get("/demo/ping").status_code == 401
+    # ...while the resolved BIFFO_PLUGINS_ROOT/demo/web/dist shell is public.
+    r = client.get("/demo/ui/")
+    assert r.status_code == 200
+    assert "root" in r.text
 
 
 def test_an_admin_only_plugin_is_discovered(tmp_path) -> None:

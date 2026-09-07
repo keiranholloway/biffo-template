@@ -1,7 +1,15 @@
-// CloudFront viewer-request function (runtime cloudfront-js-2.0), loaded into
-// aws_cloudfront_function.click_rewrite via file() in main.tf and associated
-// ONLY with the opt-in `c/*` tracked-link behaviour. See that resource's
-// comment for the full rationale; fixes biffo-plugin-marketing#52.
+// CloudFront viewer-request function (runtime cloudfront-js-2.0), rendered by
+// main.tf via templatefile() from THIS template and the "click" row of
+// path-contract.json, and associated ONLY with the opt-in `c/*` tracked-link
+// behaviour. See that resource's comment for the full rationale; fixes
+// biffo-plugin-marketing#52.
+//
+// biffo-template#1923: `${origin_path_prefix}` below is the "click" row's
+// origin_path_prefix field, not a value re-typed here — main.tf and this
+// function read the same contract document rather than agreeing by
+// convention. cli/src/lib/cdn-click-rewrite-function.test.ts renders this
+// same template against the same contract row before executing it, so the
+// test, the contract and the deployed function cannot drift apart silently.
 //
 // CloudFront forwards the `c/*` behaviour's viewer path to the Core API
 // origin UNCHANGED, so a request for `/c/<token>` reaches API Gateway asking
@@ -39,6 +47,6 @@
 // eslint-disable-next-line @typescript-eslint/no-unused-vars -- CloudFront invokes handler() by name
 function handler(event) {
   var request = event.request
-  request.uri = '/api/v1/public' + request.uri
+  request.uri = '${origin_path_prefix}' + request.uri
   return request
 }

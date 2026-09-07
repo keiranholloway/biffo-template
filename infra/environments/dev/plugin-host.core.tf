@@ -101,18 +101,21 @@ resource "aws_lambda_permission" "plugin_host_api_gateway" {
 # admin_ingress's built UI shell (index.html + hashed assets/*) is served from
 # INSIDE the same /<name>/admin path space as its gated JSON API — a deliberate
 # M2 tradeoff to avoid provisioning per-plugin CloudFront/S3 for a handful of
-# trusted admins (unlike a founder-facing user_frontend, which gets its own
-# unauthenticated CloudFront distribution). But the blanket JWT authorizer
-# above covers ALL of /api/v1/plugins/{proxy+}, and a plain browser navigation
-# can never attach a custom Authorization header — so without these two more
-# specific, unauthenticated routes, the shell's own index.html/JS/CSS could
-# never load in the first place, for anyone (biffo-template#627). API Gateway
-# v2 prefers a route with more literal path segments over a less specific
-# catch-all matching the same prefix, so these win for exactly the shell paths
-# they name and leave everything else on the blanket JWT route above. The
-# plugin-host Lambda's own group_gate independently exempts these same paths
-# from its token check (mount.py's _is_public_admin_asset) — its JSON API
-# routes stay fully gated either way.
+# trusted admins. A founder-facing user_frontend is served the SAME way, from
+# INSIDE /<name>/ui (below) — ADR-0021 §2 (decided 2026-08-16, #558 M2)
+# supersedes ADR-0018 §2's per-plugin CloudFront distribution; no plugin
+# provisions its own frontend infrastructure any more. But the blanket JWT
+# authorizer above covers ALL of /api/v1/plugins/{proxy+}, and a plain browser
+# navigation can never attach a custom Authorization header — so without these
+# more specific, unauthenticated routes, neither shell's own index.html/JS/CSS
+# could ever load, for anyone (biffo-template#627). API Gateway v2 prefers a
+# route with more literal path segments over a less specific catch-all
+# matching the same prefix, so these win for exactly the shell paths they name
+# and leave everything else on the blanket JWT route above. The plugin-host
+# Lambda's own logic independently exempts these same paths from its token
+# check — mount.py's group_gate is bypassed entirely for /ui (it needs no gate
+# at all) and its _is_public_admin_asset exemption covers /admin — so both
+# JSON APIs stay fully gated either way.
 resource "aws_apigatewayv2_route" "plugin_admin_shell_root" {
   api_id = module.api_gateway.api_id
   # No trailing slash: API Gateway v2 rejects a route_key with an empty final
@@ -128,6 +131,32 @@ resource "aws_apigatewayv2_route" "plugin_admin_shell_root" {
 resource "aws_apigatewayv2_route" "plugin_admin_shell_assets" {
   api_id             = module.api_gateway.api_id
   route_key          = "GET /api/v1/plugins/{name}/admin/assets/{proxy+}"
+  target             = "integrations/${aws_apigatewayv2_integration.plugin_host.id}"
+  authorization_type = "NONE"
+}
+
+# user_frontend's built UI shell (index.html + hashed assets/*), same shape as
+# the admin pair above but for a founder-facing plugin (ADR-0021 §2, #558 M2).
+# Mounted by the host itself at /<name>/ui (mount.py), with NO group_gate at
+# all — unlike admin_ingress there is no in-Lambda exemption to mirror, since
+# the whole mount is public by construction. The {proxy+} route here is
+# deliberately broader than the admin pair's (which is scoped to
+# admin/assets/{proxy+} only): /ui/{proxy+} must catch EVERY path under /ui/,
+# not just /assets/*, because an unknown path there is a client-side SPA route
+# that needs the index.html fallback (mount.py's _SpaStaticFiles), not a 404.
+resource "aws_apigatewayv2_route" "plugin_ui_shell_root" {
+  api_id = module.api_gateway.api_id
+  # No trailing slash, for the same reason as plugin_admin_shell_root above:
+  # API Gateway v2 rejects a route_key with an empty final path segment
+  # (biffo-template#631) — this bare form is the only one expressible.
+  route_key          = "GET /api/v1/plugins/{name}/ui"
+  target             = "integrations/${aws_apigatewayv2_integration.plugin_host.id}"
+  authorization_type = "NONE"
+}
+
+resource "aws_apigatewayv2_route" "plugin_ui_shell_assets" {
+  api_id             = module.api_gateway.api_id
+  route_key          = "GET /api/v1/plugins/{name}/ui/{proxy+}"
   target             = "integrations/${aws_apigatewayv2_integration.plugin_host.id}"
   authorization_type = "NONE"
 }

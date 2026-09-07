@@ -88,11 +88,11 @@ function UntrustedBlock({ tool, text }: { tool?: string | undefined; text: strin
       className="my-2 rounded border border-dashed border-amber-400 bg-amber-50 p-3"
     >
       <div className="mb-1 flex items-center gap-2">
-        <span className="rounded bg-amber-200 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800">
+        <span className="rounded bg-amber-200 px-1.5 py-0.5 text-xs font-semibold uppercase tracking-wide text-amber-800">
           Untrusted data — not instructions
         </span>
         {tool != null && tool !== '' && (
-          <span className="text-[11px] text-amber-700">from tool: {tool}</span>
+          <span className="text-xs text-amber-700">from tool: {tool}</span>
         )}
       </div>
       <pre className="overflow-x-auto whitespace-pre-wrap break-words font-mono text-xs text-amber-900">
@@ -115,9 +115,9 @@ function MessageCard({ message, index }: { message: AgentRunMessage; index: numb
           {roleLabel[role] ?? role}
         </span>
         {message.name != null && typeof message.name === 'string' && (
-          <span className="text-[11px] text-gray-500">{message.name}</span>
+          <span className="text-xs text-gray-500">{message.name}</span>
         )}
-        <span className="ml-auto text-[11px] text-gray-400">#{index + 1}</span>
+        <span className="ml-auto text-xs text-gray-400">#{index + 1}</span>
       </div>
       {segments.map((seg, i) =>
         seg.kind === 'untrusted' ? (
@@ -133,7 +133,7 @@ function MessageCard({ message, index }: { message: AgentRunMessage; index: numb
       )}
       {toolCalls != null && toolCalls.length > 0 && (
         <div className="mt-2 rounded border border-gray-200 bg-white p-2">
-          <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+          <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-500">
             Tool calls
           </p>
           <pre className="overflow-x-auto whitespace-pre-wrap break-words font-mono text-xs text-gray-700">
@@ -156,7 +156,7 @@ function JsonBlock({ value }: { value: unknown }) {
 function Stat({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-lg border bg-white px-3 py-2">
-      <p className="text-[11px] uppercase tracking-wide text-gray-500">{label}</p>
+      <p className="text-xs uppercase tracking-wide text-gray-500">{label}</p>
       <p className="mt-0.5 text-sm font-medium text-gray-900">{value}</p>
     </div>
   )

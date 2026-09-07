@@ -17,6 +17,8 @@
  * its own `.test.ts` has exercised it against this repo's real `modules/`
  * tree on every `pnpm run test`.
  */
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 import { execa } from '../lib/exec.js'
 import {
   checkCognitoInviteTemplates,
@@ -34,9 +36,22 @@ export async function runCognitoInviteTemplateCheck(): Promise<void> {
   console.log(`audited ${files.length} .tf file(s) under modules/ under ${root}`)
 
   if (files.length === 0) {
-    // The template-owned modules/ tree always ships .tf files (networking,
-    // compute, auth, ...). Zero here means discovery broke, not that there is
-    // nothing to check — fail closed rather than reporting a silent pass.
+    // A satellite repo (sibling app, plugin repo) never carries a modules/
+    // tree at all -- that Terraform is template/instance-only, so a zero
+    // caused by modules/ being wholly absent is a legitimate "not
+    // applicable", not broken discovery (biffo-template#1906). Only fail
+    // closed when modules/ EXISTS but audits to zero .tf files -- that is
+    // still the "discovery broke" signal this guard was built to catch: the
+    // template-owned modules/ tree always ships .tf files (networking,
+    // compute, auth, ...).
+    if (!existsSync(join(root, 'modules'))) {
+      console.log(
+        `· Cognito invite template guard: not applicable — no modules/ directory under ${root} ` +
+          '— this is not a template/instance tree (a satellite repo never carries the ' +
+          'template-owned Terraform modules). Skipping.',
+      )
+      return
+    }
     console.error(
       '✗ Cognito invite template guard: found 0 .tf files under modules/ — this looks like a ' +
         'broken scan, not a clean repo. Refusing to report success over zero input.',

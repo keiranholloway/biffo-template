@@ -177,7 +177,7 @@ blast-isolated; the same capabilities serve first-party and third-party alike.
 
 **Cons:** an extra network hop per turn; revives the need to build ADR-0013's
 authenticated `http_ingress` + a user-facing frontend host (deferred work, but
-work Ideation needs regardless).
+work Ideation needs regardless — specified, since #1914, in ADR-0021 §2).
 
 ### Founder identity across the plugin→Core seam
 
@@ -362,8 +362,9 @@ The load-bearing calls, ratified on acceptance:
    offers it alongside built-ins.
 5. **Service-auth owner-scoped table access** — serve declared, CRUD-closed tables
    to the owning module's Lambda under a mandatory owner scope.
-6. **Plugin `http_ingress` + frontend host** (ADR-0013) — the founder-gated Lambda
-   ingress and the path-routed static frontend (ADR-0007 CDN). The Ideation
+6. **Plugin `http_ingress` + frontend host** (ADR-0013 for `http_ingress`;
+   the frontend host is now ADR-0021 §2's shared-host static mount, not the
+   path-routed-per-plugin-CDN shape originally assumed here). The Ideation
    `CoreGateway` adapter binds to seams 3–5; `/ideation` ships.
 
 ## Related Decisions
@@ -371,6 +372,10 @@ The load-bearing calls, ratified on acceptance:
 - **ADR-0016** — the buffered chat spine this generalises.
 - **ADR-0013** — the plugin extension contract; this builds the `http_ingress`
   slice it left as design-only, for a founder-gated user surface.
+- **ADR-0021** — where the plugin's `http_ingress` Lambda and its
+  `user_frontend` static bundle actually end up hosted: the shared plugin
+  host (§1/§1a) and the shared-host static mount (§2), superseding the
+  per-plugin Lambda + per-plugin CDN origin this ADR assumed when written.
 - **ADR-0014 / ADR-0015** — the agentic worker framework and prompt library the
   prompt assistant (the first registered agent) serves.
 - **ADR-0009** — internal service authentication (SigV4) used on the plugin→Core

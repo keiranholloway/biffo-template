@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from .authz import cognito_authorizer
@@ -79,6 +80,14 @@ def build_plugin_host(
             admin_app=load(p.admin_app_ref) if p.admin_app_ref else None,
             admin_required_group=p.admin_required_group,
             api_routes=p.api_routes,
+            # Resolved here, not in discover.py: discover.py only knows the
+            # manifest-relative dir (ADR-0021 §2's "who serves" — the host
+            # derives BIFFO_PLUGINS_ROOT/<name>/<user_frontend.dir> itself).
+            user_frontend_dir=(
+                str(Path(services_root) / p.name / p.user_frontend_dir)
+                if p.user_frontend_dir is not None
+                else None
+            ),
         )
         for p in discover_plugins(services_root)
     ]

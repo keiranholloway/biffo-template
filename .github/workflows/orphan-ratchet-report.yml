@@ -64,6 +64,17 @@ name: Orphan-ratchet estate report
 # per-instance baseDir (the template at that instance's pinned core version)
 # is a real improvement and is left as follow-up, not invented here.
 #
+# That follow-up landed as a SEPARATE, per-PR caller rather than a change to
+# this file: scripts/check-orphan-ratchet-instance.sh (biffo-template#1714,
+# second remediation), wired into ci.yml and run from each INSTANCE's own
+# CI, resolves that tighter per-instance baseDir by cloning biffo-template at
+# the instance's own recorded biffo.core.json version. This workflow's job
+# stays what it always was -- a cross-repo floor that catches drift even
+# when an instance's own CI never ran the newer per-PR step (a
+# not-yet-upgraded instance, or a step an operator disabled) -- so both
+# callers stay, deliberately overlapping rather than one replacing the
+# other.
+#
 # ## The per-file guidance (#1714) rides along for free
 #
 # check-orphan-ratchet.ts's own report already names, via `explainOwnership`

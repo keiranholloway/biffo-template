@@ -320,6 +320,66 @@ class TestSecretShape:
         assert "proxy.example.com" in url
         assert "db.example.com" not in url
 
+    def test_a_percent_in_the_password_no_longer_corrupts_the_url(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Reproduces #1888: a literal '%' followed by two hex digits is
+        indistinguishable from percent-encoding once the URL is parsed back
+        apart by SQLAlchemy's `make_url` -- the exact parser
+        `create_async_engine` uses internally. Before `_url_from_secret`
+        percent-encoded its inputs, this password silently became a
+        *different* password on the far side of that parse, so the master
+        role could no longer authenticate and every unauthenticated route
+        (which all depend on this connection) 500'd. This is defense in
+        depth: `db_password`'s Terraform charset (main.tf) no longer
+        generates '%' at all, but this guards the class regardless of what
+        characters a future credential contains.
+        """
+        from sqlalchemy.engine import make_url
+        from src.api import database
+
+        monkeypatch.setattr(database.settings, "db_host", "")
+        password = "abc%def12345"  # "%de" is valid hex -> decodes to one byte
+        url = database._url_from_secret(
+            {
+                "username": "biffo_dev",
+                "password": password,
+                "host": "db.example.com",
+                "port": 5432,
+                "dbname": "biffo",
+            }
+        )
+        parsed = make_url(url)
+        assert parsed.password == password
+        assert parsed.username == "biffo_dev"
+
+    def test_url_structural_characters_in_username_and_password_round_trip(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The sibling shapes '#', '?', ':', '[', ']' didn't corrupt the URL
+        even before this fix (SQLAlchemy's make_url tolerates them unescaped),
+        but they must keep round-tripping now that _url_from_secret encodes
+        unconditionally -- encoding must not itself break what already worked.
+        """
+        from sqlalchemy.engine import make_url
+        from src.api import database
+
+        monkeypatch.setattr(database.settings, "db_host", "")
+        password = "a#b?c:d[e]f"
+        url = database._url_from_secret(
+            {
+                "username": "biffo_dev",
+                "password": password,
+                "host": "db.example.com",
+                "port": 5432,
+                "dbname": "biffo",
+            }
+        )
+        parsed = make_url(url)
+        assert parsed.password == password
+        assert parsed.host == "db.example.com"
+        assert parsed.port == 5432
+
 
 class TestTerraformWiring:
     """Drift guards over the Terraform that mints the second credential. A
@@ -330,6 +390,12 @@ class TestTerraformWiring:
 
         root = Path(__file__).resolve().parents[3]
         return (root / "modules/cloud/aws/database/main.tf").read_text()
+
+    def _outputs_module(self) -> str:
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[3]
+        return (root / "modules/cloud/aws/database/outputs.tf").read_text()
 
     def _block(self, header: str) -> str:
         """The text of one top-level Terraform block.
@@ -356,6 +422,28 @@ class TestTerraformWiring:
         assert "%" not in override.group(1)
         assert "/" not in override.group(1)
         assert "@" not in override.group(1)
+
+    def test_the_db_password_excludes_percent(self) -> None:
+        """Same defect as app_password above, for the master credential every
+        unauthenticated route depends on -- fixed once for app_password
+        (tabsii-platform#187) and left in db_password until #1888."""
+        db_block = self._block('resource "random_password" "db_password"')
+        override = re.search(r'override_special\s*=\s*"([^"]*)"', db_block)
+        assert override is not None, "db_password has no override_special"
+        assert "%" not in override.group(1)
+        assert "/" not in override.group(1)
+        assert "@" not in override.group(1)
+
+    def test_the_url_outputs_percent_encode_user_and_password(self) -> None:
+        """Defense in depth (#1888): db_url/app_db_url encode their
+        credentials via Terraform's `urlencode()` rather than relying solely
+        on the generator charset, so a future credential shape can't
+        reintroduce this class of corrupted-URL bug."""
+        outputs = self._outputs_module()
+        assert "urlencode(local.db_user)" in outputs
+        assert "urlencode(random_password.db_password.result)" in outputs
+        assert "urlencode(var.app_db_user)" in outputs
+        assert "urlencode(random_password.app_password.result)" in outputs
 
     def test_the_rds_proxy_accepts_both_credentials(self) -> None:
         """The proxy authenticates each client credential against a secret. One

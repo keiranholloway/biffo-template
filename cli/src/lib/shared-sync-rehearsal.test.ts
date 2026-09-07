@@ -187,6 +187,16 @@ function makeTemplate(
      * plain repo-relative path, read directly, independent of `filesFromSkeleton`.
      */
     overridesCanonical?: string
+    /**
+     * Overrides the candidate `scripts/verify.sh` this template distributes
+     * — `scripts/verify.sh` is itself one of the two `files` every satellite
+     * syncs, so a satellite's OWN copy is overwritten with this one during
+     * staging, before the nested-package installer loop ever runs. A test
+     * that needs `verify --list` to emit something (the shared
+     * `candidateVerify`'s own `--list` branch is deliberately silent) has to
+     * override it HERE, not on the satellite.
+     */
+    candidateVerifyScript?: string
   } = {},
 ): void {
   mkdirSync(join(dir, 'scripts'), { recursive: true })
@@ -228,7 +238,7 @@ function makeTemplate(
   writeFileSync(join(dir, 'shared-files.json'), JSON.stringify(manifest, null, 2))
   writeFileSync(join(dir, 'scripts/shared-sync.sh'), readFileSync(join(root, scriptUnderTest)))
   chmodSync(join(dir, 'scripts/shared-sync.sh'), 0o755)
-  writeFileSync(join(dir, 'scripts/verify.sh'), candidateVerify)
+  writeFileSync(join(dir, 'scripts/verify.sh'), opts.candidateVerifyScript ?? candidateVerify)
   chmodSync(join(dir, 'scripts/verify.sh'), 0o755)
   writeFileSync(join(dir, 'scripts/gate-coverage.sh'), candidateCoverage)
   chmodSync(join(dir, 'scripts/gate-coverage.sh'), 0o755)
@@ -263,6 +273,57 @@ exit 0
   chmodSync(gh, 0o755)
 }
 
+/**
+ * A `pnpm` stub reproducing the exact real-world side effect measured live,
+ * 2026-09-07, against `tabsii-app`/`biffo-platform-app`'s actual staged
+ * `services/api/` (no `package.json` there — both are Python-only): `pnpm
+ * install --frozen-lockfile` in a directory with no `package.json` does not
+ * fail cleanly, it writes an npm-init-style stub `package.json` (and this
+ * lockfile) as a side effect before erroring.
+ *
+ * NOT the real `pnpm` binary, deliberately — its exact error path for a
+ * missing manifest turned out to depend on ambient state this suite cannot
+ * control for (confirmed by hand: identical invocations under `/tmp` gave
+ * `ERR_PNPM_NO_LOCKFILE` — the stub-writing path — on a first run and
+ * `ERR_PNPM_NO_PKG_MANIFEST` — no stub — on every rerun after). The REAL
+ * `services/api/package.json` this bug produced is proof the stub-writing
+ * path is real; this stub encodes that specific, measured behaviour
+ * directly, the same way `makeFakeGh` above stands in for a real external
+ * tool rather than depending on its live, unpredictable state.
+ */
+function makeFakePnpm(binDir: string): void {
+  mkdirSync(binDir, { recursive: true })
+  const pnpm = join(binDir, 'pnpm')
+  writeFileSync(
+    pnpm,
+    `#!/usr/bin/env bash
+if [ ! -f package.json ]; then
+  cat > package.json <<'JSON'
+{
+  "name": "api",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \\"Error: no test specified\\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}
+JSON
+  cat > pnpm-lock.yaml <<'YAML'
+lockfileVersion: '9.0'
+YAML
+  echo "ERR_PNPM_NO_LOCKFILE" >&2
+  exit 1
+fi
+exit 0
+`,
+  )
+  chmodSync(pnpm, 0o755)
+}
+
 interface Run {
   status: number | null
   out: string
@@ -285,6 +346,9 @@ function runSync(
     mustBeUniform?: Record<string, number>
     keyMustBeUniform?: Record<string, Record<string, number>>
     overridesCanonical?: string
+    candidateVerifyScript?: string
+    /** Puts `makeFakePnpm`'s stub ahead of the real `pnpm` on `PATH`. */
+    fakePnpm?: boolean
     satellites?: Array<[string, SatelliteOpts]>
     /**
      * Runs after every satellite is cloned and seeded, but before the script
@@ -315,6 +379,7 @@ function runSync(
     mustBeUniform: opts.mustBeUniform,
     keyMustBeUniform: opts.keyMustBeUniform,
     overridesCanonical: opts.overridesCanonical,
+    candidateVerifyScript: opts.candidateVerifyScript,
   })
 
   const satellites = (
@@ -330,6 +395,7 @@ function runSync(
   writeFileSync(logFile, '')
   const binDir = join(base, 'bin')
   makeFakeGh(binDir, logFile)
+  if (opts.fakePnpm) makeFakePnpm(binDir)
 
   let scriptDir = template
   if (opts.fromWorktree) {
@@ -695,6 +761,67 @@ describe('shared-sync rehearsal', () => {
  * `reclaim_sync_branch`'s own return value in isolation (already covered by
  * shared-sync-foreign-worktree-reclaim.test.ts).
  */
+/**
+ * `verify --list`'s per-package installer must not run `pnpm` in a directory
+ * that has no `package.json` (#shared-sync-pnpm-stub).
+ *
+ * `pnpm install --frozen-lockfile` against an empty directory does not fail
+ * cleanly — it treats the directory as an implicit new package and WRITES a
+ * stub `package.json` (an npm-init placeholder) plus a lockfile as a side
+ * effect before erroring, and the installer's own `||` fallback chain then
+ * reaches `uv sync`, which succeeds — so the loop reports no error and the
+ * stub sails through `git add -A` into the sync commit unnoticed. Measured
+ * live, 2026-09-07: `tabsii-app` and `biffo-platform-app`, both Python-only
+ * in `services/api`, each picked up a bogus `services/api/package.json` +
+ * `pnpm-lock.yaml` this way, and their own gate then correctly failed on the
+ * stub's own placeholder "test" script in an otherwise Python-only service.
+ *
+ * Drives the real script exactly as the rehearsal tests above do — the
+ * assertion that matters is what actually reaches the satellite's pushed
+ * branch, not a theory about the installer's control flow.
+ */
+describe('the nested-package installer never runs pnpm where there is no package.json (#shared-sync-pnpm-stub)', () => {
+  const verifyListsServicesApi = `#!/usr/bin/env bash
+set -u
+[ "\${1:-}" = "--list" ] && { printf -- '--directory ./services/api\\n'; exit 0; }
+if [ -f GATE-FAILS-HERE ]; then
+  printf 'verify failed: typecheck\\n'
+  exit 1
+fi
+printf 'verify passed - lint typecheck test\\n'
+exit 0
+`
+
+  it('leaves no stray package.json/lockfile in a Python-only nested package', () => {
+    const { satellites } = runSync([], {
+      candidateVerifyScript: verifyListsServicesApi,
+      fakePnpm: true,
+      satellites: [
+        [
+          'sat-python-nested',
+          {
+            seedFiles: {
+              'services/api/pyproject.toml': '[project]\nname = "fixture-api"\nversion = "0.1.0"\n',
+            },
+          },
+        ],
+      ],
+    })
+    const [satellite] = satellites
+    if (!satellite) throw new Error('expected exactly one satellite')
+
+    // The seed itself reached the pushed branch — proves the fixture actually
+    // exercised the installer loop rather than skipping it for an unrelated
+    // reason (a `--list` parse miss, a staging failure, ...).
+    expect(pushedFile(satellite, 'services/api/pyproject.toml')).toContain('fixture-api')
+
+    // The bug's own signature: pnpm's accidental stub, and the lockfile it
+    // writes alongside it.
+    expect(pushedFile(satellite, 'services/api/package.json')).toBeNull()
+    expect(pushedFile(satellite, 'services/api/pnpm-lock.yaml')).toBeNull()
+  })
+})
+
 describe('BLOCKED staging is isolated to its own repo (biffo-template#1836)', () => {
   /**
    * Plants a foreign worktree on `chore/sync-shared` holding a clean working

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   declaredVariables,
   findPluginModuleReferences,
+  findRetiredFrontendShape,
   GENERATED_TF_FILE,
   GENERATED_TFVARS_FILE,
   listEnvironments,
@@ -11,6 +12,7 @@ import {
   listUnwirableEnvironments,
   listWireablePlugins,
   pluginModuleSource,
+  retiredFrontendShapeError,
   staleFirstPartyCopies,
   syncPluginTerraform,
 } from './plugin-terraform-wiring.js'
@@ -516,5 +518,160 @@ describe('findPluginModuleReferences (biffo-template#1563)', () => {
     const refs = findPluginModuleReferences(cwd, 'ideation')
     expect(refs).toHaveLength(1)
     expect(refs[0]!.file).toBe('infra/environments/staging/plugins.generated.tf')
+  })
+})
+
+describe('findRetiredFrontendShape', () => {
+  beforeEach(() => {
+    cwd = makeTmpDir('biffo-retired-frontend')
+  })
+  afterEach(() => rmSync(cwd, { recursive: true, force: true }))
+
+  // Case matrix derived from the real corpus, not invented examples:
+  //  - must-catch shapes are verbatim from biffo-plugin-ideation/terraform/
+  //    and biffo-plugin-idea-scout/terraform/ (both real, currently-installed
+  //    ADR-0018 §2 frontend modules, `git show` on origin/dev of each repo).
+  //  - must-NOT-catch shapes are verbatim from
+  //    _skeletons/plugin-template/terraform/ and biffo-plugin-marketing/terraform/
+  //    (a real, live, Lambda-backed plugin declaring `user_frontend: null`).
+
+  it('returns nothing when terraform/ does not exist at all', () => {
+    const dir = join(cwd, 'terraform')
+    expect(findRetiredFrontendShape(dir)).toEqual([])
+  })
+
+  it('must-NOT-catch: a clean Lambda-backed module (the plugin-template / _template shape)', () => {
+    const dir = join(cwd, 'terraform')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'main.tf'), '# Lambda + EventBridge module body\n')
+    writeFileSync(
+      join(dir, 'variables.tf'),
+      [
+        'variable "project_name" {\n  type = string\n}',
+        'variable "environment" {\n  type = string\n}',
+        'variable "plugin_name" {\n  type = string\n}',
+        'variable "handler" {\n  type = string\n}',
+        'variable "event_bus_name" {\n  type = string\n}',
+        'variable "core_api_url" {\n  type = string\n}',
+        'variable "tags" {\n  type = map(string)\n  default = {}\n}',
+      ].join('\n\n'),
+    )
+    writeFileSync(
+      join(dir, 'outputs.tf'),
+      [
+        'output "function_arn" {\n  value = ""\n}',
+        'output "function_name" {\n  value = ""\n}',
+        'output "role_arn" {\n  value = ""\n}',
+        'output "role_name" {\n  value = ""\n}',
+        'output "dlq_arn" {\n  value = ""\n}',
+        'output "event_rule_arn" {\n  value = ""\n}',
+      ].join('\n\n'),
+    )
+
+    expect(findRetiredFrontendShape(dir)).toEqual([])
+  })
+
+  it('must-catch: an aws_s3_bucket named on the retired "-plugin-...-web" shape', () => {
+    const dir = join(cwd, 'terraform')
+    mkdirSync(dir, { recursive: true })
+    // Verbatim from biffo-plugin-ideation/terraform/main.tf and
+    // biffo-plugin-idea-scout/terraform/main.tf.
+    writeFileSync(
+      join(dir, 'main.tf'),
+      [
+        'resource "aws_s3_bucket" "frontend" {',
+        '  bucket        = "${local.name_prefix}-plugin-${var.plugin_name}-web"',
+        '  force_destroy = true',
+        '  tags          = var.tags',
+        '}',
+      ].join('\n'),
+    )
+
+    const reasons = findRetiredFrontendShape(dir)
+    expect(reasons).toEqual(['an aws_s3_bucket whose name interpolates "-plugin-...-web"'])
+  })
+
+  it('must-NOT-catch: a bucket name containing "-plugin-" and "-web" but not ending in "-web"', () => {
+    const dir = join(cwd, 'terraform')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(
+      join(dir, 'main.tf'),
+      'resource "aws_s3_bucket" "assets" {\n' +
+        '  bucket = "${local.name_prefix}-plugin-registry-web-assets"\n' +
+        '}\n',
+    )
+
+    expect(findRetiredFrontendShape(dir)).toEqual([])
+  })
+
+  it('must-catch: an output named frontend_bucket_*', () => {
+    const dir = join(cwd, 'terraform')
+    mkdirSync(dir, { recursive: true })
+    // Verbatim from biffo-plugin-ideation/terraform/outputs.tf and
+    // biffo-plugin-idea-scout/terraform/outputs.tf.
+    writeFileSync(
+      join(dir, 'outputs.tf'),
+      [
+        'output "frontend_bucket_regional_domain" {',
+        '  value = aws_s3_bucket.frontend.bucket_regional_domain_name',
+        '}',
+        'output "frontend_bucket_name" {',
+        '  value = aws_s3_bucket.frontend.id',
+        '}',
+      ].join('\n'),
+    )
+
+    const reasons = findRetiredFrontendShape(dir)
+    expect(reasons).toEqual([
+      'an output named "frontend_bucket_name"',
+      'an output named "frontend_bucket_regional_domain"',
+    ])
+  })
+
+  it('must-catch: a cdn_distribution_arn variable', () => {
+    const dir = join(cwd, 'terraform')
+    mkdirSync(dir, { recursive: true })
+    // Verbatim from biffo-plugin-ideation/terraform/variables.tf.
+    writeFileSync(
+      join(dir, 'variables.tf'),
+      'variable "cdn_distribution_arn" {\n' +
+        '  description = "ARN of the shared CloudFront distribution."\n' +
+        '  type        = string\n' +
+        '}\n',
+    )
+
+    expect(findRetiredFrontendShape(dir)).toEqual(['a "cdn_distribution_arn" variable'])
+  })
+
+  it('reports every signal present, not just the first', () => {
+    const dir = join(cwd, 'terraform')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(
+      join(dir, 'main.tf'),
+      'resource "aws_s3_bucket" "frontend" {\n' +
+        '  bucket = "${local.name_prefix}-plugin-${var.plugin_name}-web"\n' +
+        '}\n',
+    )
+    writeFileSync(
+      join(dir, 'variables.tf'),
+      'variable "cdn_distribution_arn" {\n  type = string\n}\n',
+    )
+    writeFileSync(
+      join(dir, 'outputs.tf'),
+      'output "frontend_bucket_name" {\n  value = aws_s3_bucket.frontend.id\n}\n',
+    )
+
+    expect(findRetiredFrontendShape(dir)).toHaveLength(3)
+  })
+})
+
+describe('retiredFrontendShapeError', () => {
+  it('names ADR-0021 §2 and the user_frontend contract', () => {
+    const message = retiredFrontendShapeError('ideation', [
+      'an aws_s3_bucket whose name interpolates "-plugin-...-web"',
+    ])
+    expect(message).toContain('ADR-0021 §2')
+    expect(message).toContain('user_frontend')
+    expect(message).toContain('ideation')
   })
 })

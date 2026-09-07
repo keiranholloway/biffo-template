@@ -2,6 +2,8 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { CognitoUserSession } from 'amazon-cognito-identity-js'
 import LoginPage from './page'
+import AuthLayout from '../layout'
+import { FORWARD_DELAY_MS } from './constants'
 
 const {
   pushMock,
@@ -412,9 +414,10 @@ describe('LoginPage — arriving already signed in', () => {
 
     render(<LoginPage />)
 
-    await waitFor(() => {
-      expect(screen.getByRole('heading', { name: 'Sign in' })).toBeInTheDocument()
-    })
+    // The forward attempt now runs after a deliberate delay (FORWARD_DELAY_MS,
+    // #1942) rather than immediately — wait for it to actually happen and fail
+    // before counting, rather than for the ever-present "Sign in" heading.
+    await screen.findByText('Not Found')
     // Let any re-entrant effect run before counting.
     await new Promise((resolve) => setTimeout(resolve, 50))
 
@@ -450,6 +453,100 @@ describe('LoginPage — arriving already signed in', () => {
     const signOut = await screen.findByRole('button', { name: 'Not you? Sign out' })
     fireEvent.click(signOut)
     expect(logoutMock).toHaveBeenCalled()
+  })
+
+  /**
+   * #1942 — landing on /login/ with a live session used to redirect on the
+   * same render pass that showed "Signing you in… Not you? Sign out": no
+   * identity was ever named, and the sign-out link had no real window to be
+   * clicked before the browser was already leaving.
+   */
+  it('names the resolved identity in the "Signing you in" text, not just that it is happening', async () => {
+    currentSession = {
+      getIdToken: () => ({
+        getJwtToken: () => 'mock-token',
+        decodePayload: () => ({ 'cognito:groups': [], email: 'founder@example.com' }),
+      }),
+    }
+    resolveWhoamiMock.mockResolvedValue({
+      sub: 's',
+      email: 'founder@example.com',
+      username: 'founder@example.com',
+      user_id: 'u1',
+      is_platform_admin: false,
+      permissions: [],
+      marketplace_role: null,
+      roles: [{ role: 'HQ Admin', scope_level: 'tenant' }],
+    })
+
+    render(<LoginPage />)
+
+    // Before the fix this said only "Signing you in…" — never which account.
+    expect(await screen.findByText('Signing you in as founder@example.com…')).toBeInTheDocument()
+  })
+
+  it('gives "Not you? Sign out" a real window before redirecting, instead of firing on the same render pass', async () => {
+    vi.useFakeTimers()
+    try {
+      currentSession = mockSession()
+      resolveWhoamiMock.mockResolvedValue({
+        sub: 's',
+        email: 'e',
+        username: 'u',
+        user_id: 'u1',
+        is_platform_admin: false,
+        permissions: [],
+        marketplace_role: null,
+        roles: [{ role: 'HQ Admin', scope_level: 'tenant' }],
+      })
+
+      render(<LoginPage />)
+
+      // "Not you? Sign out" is on screen, and the redirect must not already
+      // have happened — that is the whole "real window to click it" claim.
+      expect(screen.getByRole('button', { name: 'Not you? Sign out' })).toBeInTheDocument()
+      expect(assignMock).not.toHaveBeenCalled()
+      expect(pushMock).not.toHaveBeenCalled()
+
+      await vi.advanceTimersByTimeAsync(FORWARD_DELAY_MS + 50)
+
+      expect(assignMock).toHaveBeenCalledWith(ORG_DESTINATION)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('cancels the pending redirect when "Not you? Sign out" is clicked during the delay window', async () => {
+    // Regression for the second half of #1942: showing the button is not
+    // enough if clicking it during the window loses a race against the timer
+    // that was already scheduled.
+    vi.useFakeTimers()
+    try {
+      currentSession = mockSession()
+      resolveWhoamiMock.mockResolvedValue({
+        sub: 's',
+        email: 'e',
+        username: 'u',
+        user_id: 'u1',
+        is_platform_admin: false,
+        permissions: [],
+        marketplace_role: null,
+        roles: [{ role: 'HQ Admin', scope_level: 'tenant' }],
+      })
+
+      render(<LoginPage />)
+
+      fireEvent.click(screen.getByRole('button', { name: 'Not you? Sign out' }))
+
+      // Advance well past when the (cancelled) redirect would have fired.
+      await vi.advanceTimersByTimeAsync(FORWARD_DELAY_MS + 100)
+
+      expect(logoutMock).toHaveBeenCalled()
+      expect(assignMock).not.toHaveBeenCalled()
+      expect(pushMock).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 
@@ -572,5 +669,119 @@ describe('LoginPage — return_to must not outlive the user it belonged to', () 
       expect(assignMock).toHaveBeenCalledWith('/lms/course/abc/')
     })
     expect(replaceMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('LoginPage — brand tokens (issue #1945)', () => {
+  // apps/portal/ had no branding mechanism at all: every one of these classes
+  // was a Tailwind starter-default (bg-gray-50, text-gray-900, bg-blue-600 /
+  // hover:bg-blue-700, text-white, bg-red-50) hardcoded into this page, across
+  // all three of its states. Asserted by pattern, not by one class the fix
+  // happened to touch, so a partial regression to the old palette is caught
+  // the same way a full one would be.
+  //
+  // Every render below composes <LoginPage /> inside <AuthLayout>, the real
+  // route-group wrapper (`(auth)/layout.tsx`) that Next.js puts around it in
+  // the actual route tree — not the page in isolation. The full-viewport
+  // background div lives in that layout, not in page.tsx: a sweep that
+  // rendered page.tsx alone could report every legacy class gone while a
+  // hardcoded bg-gray-50 survived one file up, structurally invisible to a
+  // container scoped to page.tsx's own output (#1956).
+  const LEGACY_COLOR_CLASS =
+    /\b(?:bg|text|border|ring|hover:bg|hover:text)-(?:gray|blue|red)-\d{2,3}\b|(?:^|\s)bg-white(?:\s|$)|(?:^|\s)text-white(?:\s|$)/
+
+  function expectNoLegacyColorClasses(container: HTMLElement) {
+    const classNames = Array.from(container.querySelectorAll('[class]'))
+      .map((el) => el.className)
+      .join(' ')
+    expect(classNames).not.toMatch(LEGACY_COLOR_CLASS)
+  }
+
+  afterEach(() => {
+    vi.clearAllMocks()
+    currentSession = null
+  })
+
+  it('uses theme-token classes, not hardcoded gray/blue, on the sign-in form', () => {
+    const { container } = render(
+      <AuthLayout>
+        <LoginPage />
+      </AuthLayout>,
+    )
+
+    expect(screen.getByRole('heading', { name: 'Sign in' })).toHaveClass('text-on-surface')
+    expect(screen.getByRole('button', { name: 'Sign in' })).toHaveClass(
+      'bg-primary',
+      'text-on-primary',
+      'hover:bg-primary-hover',
+    )
+    expect(screen.getByRole('button', { name: 'Forgot password?' })).toHaveClass('text-primary')
+    expectNoLegacyColorClasses(container)
+  })
+
+  it('uses theme-token classes on the forgot-password (reset) form', () => {
+    const { container } = render(
+      <AuthLayout>
+        <LoginPage />
+      </AuthLayout>,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Forgot password?' }))
+
+    expect(screen.getByRole('heading', { name: 'Reset your password' })).toHaveClass(
+      'text-on-surface',
+    )
+    expect(screen.getByRole('button', { name: 'Send reset code' })).toHaveClass('bg-primary')
+    expectNoLegacyColorClasses(container)
+  })
+
+  it('uses theme-token classes on the set-new-password form', async () => {
+    loginMock.mockResolvedValue({
+      kind: 'new_password_required',
+      user: {},
+      userAttributes: {},
+    })
+    const { container } = render(
+      <AuthLayout>
+        <LoginPage />
+      </AuthLayout>,
+    )
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'a@b.com' } })
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'pw' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
+
+    const heading = await screen.findByRole('heading', { name: 'Set a new password' })
+    expect(heading).toHaveClass('text-on-surface')
+    expect(screen.getByRole('button', { name: 'Set password' })).toHaveClass('bg-primary')
+    expectNoLegacyColorClasses(container)
+  })
+
+  it('shows a sign-in error with the error-container tokens, not bg-red-50', async () => {
+    loginMock.mockRejectedValue(new Error('boom'))
+    const { container } = render(
+      <AuthLayout>
+        <LoginPage />
+      </AuthLayout>,
+    )
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'a@b.com' } })
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'pw' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
+
+    const errorText = await screen.findByText('boom')
+    expect(errorText).toHaveClass('bg-error-container', 'text-on-error-container')
+    expectNoLegacyColorClasses(container)
+  })
+
+  it('gives the (auth) route-group wrapper the surface-variant token, not bg-gray-50', () => {
+    const { container } = render(
+      <AuthLayout>
+        <LoginPage />
+      </AuthLayout>,
+    )
+
+    // Direct DOM access, not a testing-library query: this is the layout's
+    // own wrapper div, which has no role or text content to query by.
+    const wrapper = container.firstElementChild
+    expect(wrapper).toHaveClass('bg-surface-variant')
+    expectNoLegacyColorClasses(container)
   })
 })

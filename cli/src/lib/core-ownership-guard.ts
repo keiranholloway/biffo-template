@@ -231,6 +231,17 @@ export interface OwnershipCheckInput {
   /** Commit message, when checking a commit rather than a PR diff. */
   commitMessage?: string
   warnOnly?: DivergenceEntry[]
+  /**
+   * The template's real shipped file set — its `dev` branch's tracked paths,
+   * fetched live by the runner (`template-shipped-paths.ts`) — when it could be
+   * determined. `undefined`/`null` means "could not tell" and is NOT read as
+   * "the template ships nothing": every caller that predates this field (the
+   * commit-msg hook today, every pre-#1912 test) omits it and gets exactly the
+   * old manifest-prefix-only behaviour, unchanged. Only a caller that actually
+   * checked the template's real tree can narrow a prefix match down to a
+   * genuine one — see `knownOrphans` below, and #1362 instance #8.
+   */
+  templateShippedPaths?: Set<string> | null
 }
 
 export interface OwnershipCheckResult {
@@ -245,6 +256,17 @@ export interface OwnershipCheckResult {
   /** Reason from the `Core-Convergence:` trailer, when one allowed the change
    * (drift being reverted toward the template, #385). */
   convergenceReason: string | null
+  /**
+   * Paths the manifest's prefix list calls template-owned that the template's
+   * real tree provably does not contain (`templateShippedPaths` was supplied
+   * and does not have the path) — #1362 instance #8. Treated as instance-owned:
+   * never blocked, never needing a `Core-Divergence:` trailer, and never
+   * mislabelled in history as "diverges from the template" for a file the
+   * template never shipped. Always empty when `templateShippedPaths` was not
+   * supplied, including on every early-return skip path, since nothing has
+   * been checked against it yet.
+   */
+  knownOrphans: string[]
 }
 
 export function checkCoreOwnership({
@@ -254,8 +276,15 @@ export function checkCoreOwnership({
   branch = '',
   commitMessage = '',
   warnOnly = [],
+  templateShippedPaths = null,
 }: OwnershipCheckInput): OwnershipCheckResult {
-  const empty = { blocked: [], warned: [], divergenceReason: null, convergenceReason: null }
+  const empty = {
+    blocked: [],
+    warned: [],
+    divergenceReason: null,
+    convergenceReason: null,
+    knownOrphans: [],
+  }
 
   // The template owns these paths; editing them is its purpose.
   if (!isInstance) return { skipped: 'template', ...empty }
@@ -263,7 +292,24 @@ export function checkCoreOwnership({
   // A core upgrade is precisely when template-owned paths are meant to change.
   if (branch.startsWith(UPGRADE_BRANCH_PREFIX)) return { skipped: 'upgrade-branch', ...empty }
 
-  const templateOwned = changedFiles.filter((f) => isTemplateOwned(f, manifest))
+  const manifestTemplateOwned = changedFiles.filter((f) => isTemplateOwned(f, manifest))
+
+  // Split out paths the real template tree disagrees with the manifest about,
+  // when we have a real tree to ask. `planCoreUpgrade`'s classify()
+  // (core-upgrade.ts) already treats a path present in neither the base nor the
+  // target template tree as instance-owned (`keep-ours`, `orphaned: true`);
+  // agreeing with it here — rather than blocking and inviting a
+  // `Core-Divergence:` trailer that would misrecord "diverges from the
+  // template" for a file the template never had — is the fix.
+  const knownOrphans: string[] = []
+  const templateOwned: string[] = []
+  for (const path of manifestTemplateOwned) {
+    if (templateShippedPaths != null && !templateShippedPaths.has(path)) {
+      knownOrphans.push(path)
+    } else {
+      templateOwned.push(path)
+    }
+  }
 
   // Longest matching prefix, so a specific entry can sit inside a broad one and
   // the more specific reason is the one reported.
@@ -298,6 +344,7 @@ export function checkCoreOwnership({
         warned,
         divergenceReason,
         convergenceReason: null,
+        knownOrphans,
       }
     }
     if (convergenceReason !== null) {
@@ -307,6 +354,7 @@ export function checkCoreOwnership({
         warned,
         divergenceReason: null,
         convergenceReason,
+        knownOrphans,
       }
     }
   }
@@ -317,5 +365,6 @@ export function checkCoreOwnership({
     warned,
     divergenceReason: null,
     convergenceReason: null,
+    knownOrphans,
   }
 }

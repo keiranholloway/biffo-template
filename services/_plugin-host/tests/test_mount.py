@@ -322,6 +322,175 @@ def test_user_facing_mount_is_not_given_the_public_shell_exemption():
     assert r.status_code == 401
 
 
+# --- ADR-0021 §2 / #558 M2: the shared host serves a plugin's user_frontend ---
+#
+# Against a SYNTHETIC fixture plugin (not Ideation's real bundle) per the
+# issue's own done-when — the suite must not depend on a real plugin's build
+# output.
+
+
+def _write_fixture_frontend(tmp_path) -> str:
+    """A minimal Vite-shaped static bundle: index.html + a hashed asset."""
+    dist = tmp_path / "web-dist"
+    (dist / "assets").mkdir(parents=True)
+    (dist / "index.html").write_text("<div id='root'>shell</div>")
+    (dist / "assets" / "app-abc123.js").write_text("console.log('fixture')")
+    return str(dist)
+
+
+def test_user_frontend_shell_serves_unauthenticated_with_no_token(tmp_path):
+    """GET /<name>/ui, /<name>/ui/, an asset, and a SPA deep link all return the
+    bundle with NO Authorization header — the shell needs no group_gate at all
+    (ADR-0021 §2), unlike the admin mount's in-request exemption."""
+    frontend_dir = _write_fixture_frontend(tmp_path)
+    client = _host(
+        MountedPlugin(
+            "ideation",
+            _plugin_app("ideation"),
+            "founder",
+            user_frontend_dir=frontend_dir,
+        )
+    )
+
+    r = client.get("/ideation/ui", follow_redirects=False)
+    assert r.status_code == 200
+    assert "shell" in r.text
+
+    r = client.get("/ideation/ui/")
+    assert r.status_code == 200
+    assert "shell" in r.text
+
+    r = client.get("/ideation/ui/assets/app-abc123.js")
+    assert r.status_code == 200
+    assert "fixture" in r.text
+
+    # A client-side SPA route falls back to index.html (StaticFiles(html=True)).
+    r = client.get("/ideation/ui/session/42")
+    assert r.status_code == 200
+    assert "shell" in r.text
+
+
+def test_ui_shell_fallback_does_not_swallow_a_non_get_method(tmp_path):
+    """``_SpaStaticFiles``'s fallback only catches a 404 on GET/HEAD — a POST
+    (which StaticFiles itself rejects with 405) must stay a genuine 405, not
+    be rewritten into a 200 shell response."""
+    frontend_dir = _write_fixture_frontend(tmp_path)
+    client = _host(
+        MountedPlugin(
+            "ideation",
+            _plugin_app("ideation"),
+            "founder",
+            user_frontend_dir=frontend_dir,
+        )
+    )
+    r = client.post("/ideation/ui/session/42")
+    assert r.status_code == 405
+
+
+def test_ui_shell_fallback_reraises_a_real_404_when_index_html_is_itself_missing(tmp_path):
+    """If the bundle has no ``index.html`` at all (an empty/broken dist), the
+    fallback must not loop or invent a response — it re-raises the original
+    404 rather than crashing or masking a genuinely broken deploy."""
+    dist = tmp_path / "empty-dist"
+    dist.mkdir()
+    (dist / "robots.txt").write_text("User-agent: *\n")  # some file, but no index.html
+    client = _host(
+        MountedPlugin(
+            "ideation",
+            _plugin_app("ideation"),
+            "founder",
+            user_frontend_dir=str(dist),
+        )
+    )
+    r = client.get("/ideation/ui/session/42")
+    assert r.status_code == 404
+
+
+def test_user_frontend_shell_does_not_shadow_the_gated_json_api(tmp_path):
+    """The plugin's real JSON API at /<name>/* stays on the JWT-gated mount —
+    the /ui routes must not shadow it, and vice versa."""
+    frontend_dir = _write_fixture_frontend(tmp_path)
+    client = _host(
+        MountedPlugin(
+            "ideation",
+            _plugin_app("ideation"),
+            "founder",
+            user_frontend_dir=frontend_dir,
+        )
+    )
+
+    r = client.get("/ideation/ping")
+    assert r.status_code == 401
+    assert r.headers["content-type"] == "application/json"
+
+    r = client.get("/ideation/ping", headers={"X-Biffo-Founder-Token": "alice|founder"})
+    assert r.status_code == 200
+
+
+def test_plugin_without_user_frontend_has_no_ui_route():
+    """A plugin with no user_frontend declared mounts no /<name>/ui at all —
+    the path falls through to the founder-gated mount (there is no separate
+    /ui mount to match it first), which 404s inside once past the gate."""
+    client = _host(MountedPlugin("ideation", _plugin_app("ideation"), "founder"))
+    # No token: gated by the founder mount like any other unknown sub-path.
+    r = client.get("/ideation/ui/")
+    assert r.status_code == 401
+    # With a valid token, past the gate, the plugin's own app has no such
+    # route — a real 404, not a UI shell that was never mounted.
+    r = client.get("/ideation/ui/", headers={"X-Biffo-Founder-Token": "alice|founder"})
+    assert r.status_code == 404
+
+
+def test_a_missing_user_frontend_directory_does_not_crash_the_host(tmp_path, caplog):
+    """A declared-but-unmountable user_frontend.dir must not take the whole
+    host (and every other plugin on it) down at cold start — the host's own
+    fail-closed backstop behind deploy-app.yml's build-time check, mirroring
+    discover.py's contain-the-blast-radius rule for a malformed manifest."""
+    with caplog.at_level("ERROR"):
+        client = _host(
+            MountedPlugin(
+                "ideation",
+                _plugin_app("ideation"),
+                "founder",
+                user_frontend_dir=str(tmp_path / "does-not-exist"),
+            ),
+            MountedPlugin("crm", _plugin_app("crm"), "editor"),
+        )
+
+    # The broken plugin's UI is simply absent (falls through to the founder
+    # gate, same as "no user_frontend declared at all" above), not a
+    # host-wide crash...
+    r = client.get("/ideation/ui/")
+    assert r.status_code == 401
+    # ...its API still works...
+    r = client.get("/ideation/ping", headers={"X-Biffo-Founder-Token": "alice|founder"})
+    assert r.status_code == 200
+    # ...and an unrelated plugin on the same host is entirely unaffected.
+    r = client.get("/crm/ping", headers={"X-Biffo-Founder-Token": "u|editor"})
+    assert r.status_code == 200
+    assert any("ideation" in record.message for record in caplog.records)
+    assert any(record.levelname == "ERROR" for record in caplog.records)
+
+
+def test_bare_ui_path_with_no_trailing_slash_reaches_the_shell_not_founder(tmp_path):
+    """Regression pin, mirroring the admin equivalent above: the bare
+    "/ideation/ui" (no trailing slash) must resolve to the public shell, not
+    fall through to the founder-gated mount (biffo-template#631's Gateway
+    constraint means this bare form is the only one reachable unauthenticated)."""
+    frontend_dir = _write_fixture_frontend(tmp_path)
+    client = _host(
+        MountedPlugin(
+            "ideation",
+            _plugin_app("ideation"),
+            "founder",
+            user_frontend_dir=frontend_dir,
+        )
+    )
+    r = client.get("/ideation/ui", follow_redirects=False)
+    assert r.status_code == 200
+    assert "shell" in r.text
+
+
 def test_plugin_without_admin_app_has_no_admin_route():
     """A plugin without an admin_app (admin_app=None) has no /<name>/admin route."""
     client = _host(MountedPlugin("ideation", _plugin_app("ideation"), "founder"))

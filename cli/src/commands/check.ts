@@ -3,17 +3,21 @@ import { GitAdapter } from '../adapters/git/index.js'
 import { RegistryAdapter } from '../adapters/registry/index.js'
 import { checkPluginStaleness, formatStalenessReport } from '../lib/plugin-staleness.js'
 import { runAdrNumberingCheck } from '../scripts/check-adr-numbering.js'
+import { runApiGatewayIntegrationCheck } from '../scripts/check-api-gateway-integration.js'
 import { runBranchProtectionCheck } from '../scripts/check-branch-protection.js'
 import { runClaimInvocationCheck } from '../scripts/check-claim-invocation.js'
 import { runCodeqlSuppressionCheck } from '../scripts/check-codeql-suppression.js'
 import { runCognitoInviteTemplateCheck } from '../scripts/check-cognito-invite-template.js'
 import { runCoreDirectPathsCheck } from '../scripts/check-core-direct-paths.js'
 import { runOwnershipCheck } from '../scripts/check-core-ownership.js'
+import { runDistributionInventoryCheck } from '../scripts/check-distribution-inventory.js'
+import { runDistributionRemoteStateCheck } from '../scripts/check-distribution-remote-state.js'
 import { runEventBridgeLogPermissionCheck } from '../scripts/check-eventbridge-log-permissions.js'
 import { runInstanceAdoptionCheck } from '../scripts/check-instance-adoption.js'
 import { runLambdaOutputCheck } from '../scripts/check-lambda-output.js'
 import { runMigrationBodyChangeCheck } from '../scripts/check-migration-body-change.js'
 import { runOrphanRatchetCheck } from '../scripts/check-orphan-ratchet.js'
+import { runOwnershipHeaderClaimCheck } from '../scripts/check-ownership-header-claim.js'
 import { runPipeTrapCheck } from '../scripts/check-pipe-trap.js'
 import { runPluginAllowlistConventionCheck } from '../scripts/check-plugin-allowlist-convention.js'
 import { runPluginCollisionCheck } from '../scripts/check-plugin-collisions.js'
@@ -46,11 +50,13 @@ import { runTerraformInputCheck } from '../scripts/check-terraform-input.js'
  * code path rather than two that can drift.
  */
 export const checkCommand = new Command('check').description(
-  'Repo guards (ownership, release subject, plugin terraform, plugin collisions, ' +
+  'Repo guards (ownership, ownership-header-claim, release subject, plugin terraform, ' +
+    'plugin collisions, ' +
     'eventbridge-log-permissions, plugin-tool-supply, core-direct-paths, instance-adoption, ' +
     'orphan-ratchet, cognito-invite-template, lambda-output, pipe-trap, codeql-suppression, ' +
-    'skeleton-drift, terraform-input, plugin-allowlist-convention, migration-body-change) ' +
-    'run in CI and git hooks, plus out-of-band audits (branch protection, plugin-staleness)',
+    'skeleton-drift, terraform-input, plugin-allowlist-convention, migration-body-change, ' +
+    'distribution-inventory, distribution-remote-state, api-gateway-integration) run in CI and ' +
+    'git hooks, plus out-of-band audits (branch protection, plugin-staleness)',
 )
 
 checkCommand
@@ -199,6 +205,33 @@ checkCommand
   })
 
 checkCommand
+  .command('distribution-inventory')
+  .description(
+    'Refuse a distribution-inventory.json entry that is malformed, half-classified, or ' +
+      "inconsistent with the channel it names (#1570) -- validateInventory's own schema rules, " +
+      'self-checkable and network-free. Contrast distribution-remote-state below, its sibling, ' +
+      "which needs a real cross-repo token to check a NAMED REMOTE repo's actual content and " +
+      'runs only on a schedule.',
+  )
+  .action(async () => {
+    await runDistributionInventoryCheck()
+  })
+
+checkCommand
+  .command('distribution-remote-state')
+  .description(
+    "Refuse a distribution-inventory.json gapReason restating a REMOTE repo's content as " +
+      'current fact once that content has actually changed (#1816) -- fetches every declared ' +
+      'remoteContentAssertion via `gh api` and compares against real content, generalising ' +
+      'the one-off #1807 wording-regex guard to any entry that declares one. Needs a real ' +
+      'cross-repo token (BIFFO_GITHUB_TOKEN in CI); exits 2 (cannot tell) rather than passing ' +
+      'when a fetch fails.',
+  )
+  .action(async () => {
+    await runDistributionRemoteStateCheck()
+  })
+
+checkCommand
   .command('orphan-ratchet')
   .description(
     'Refuse an instance-written file under a template-owned path with no sanctioned carve-out ' +
@@ -236,6 +269,18 @@ checkCommand
       await runOrphanRatchetCheck(opts)
     },
   )
+
+checkCommand
+  .command('ownership-header-claim')
+  .description(
+    'Refuse a file whose own header comment claims INSTANCE-OWNED/template-owned/user-owned/' +
+      '"NOT a template file" while core-manifest.json\'s real longest-prefix-match answer ' +
+      'disagrees (#1911) — scripts/verify-deployed.checks lived this exact gap (#1706/#1707) ' +
+      'until a human happened to notice by hand; nothing else compared the two documents.',
+  )
+  .action(async () => {
+    await runOwnershipHeaderClaimCheck()
+  })
 
 checkCommand
   .command('cognito-invite-template')
@@ -306,6 +351,19 @@ checkCommand
   )
   .action(async () => {
     await runTerraformInputCheck()
+  })
+
+checkCommand
+  .command('api-gateway-integration')
+  .description(
+    "Refuse an env-owned aws_apigatewayv2_integration targeting a Lambda's raw, unqualified " +
+      'function_arn when modules/cloud/aws/api-gateway already fronts that same Lambda with an ' +
+      'alias-qualified aws_lambda_permission (#1747) — terraform validate/plan pass on both ' +
+      'sides in isolation, so this is the only signal before a real deploy 500s (biffo-' +
+      'template#1900; tabsii-platform took 11 public routes down this exact way).',
+  )
+  .action(async () => {
+    await runApiGatewayIntegrationCheck()
   })
 
 checkCommand

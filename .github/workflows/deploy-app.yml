@@ -210,6 +210,7 @@ jobs:
           # normal" reasoning as PORTAL_TITLE above -- the portal falls back
           # to its own default primary color on an empty string.
           NEXT_PUBLIC_PORTAL_PRIMARY_COLOR: ${{ vars.PORTAL_PRIMARY_COLOR }}
+          NEXT_PUBLIC_PORTAL_LOGO_URL: ${{ vars.PORTAL_LOGO_URL }}
         run: pnpm run build
       - uses: actions/upload-artifact@v5
         with:
@@ -1167,6 +1168,7 @@ jobs:
           # normal" reasoning as PORTAL_TITLE above -- the portal falls back
           # to its own default primary color on an empty string.
           NEXT_PUBLIC_PORTAL_PRIMARY_COLOR: ${{ vars.PORTAL_PRIMARY_COLOR }}
+          NEXT_PUBLIC_PORTAL_LOGO_URL: ${{ vars.PORTAL_LOGO_URL }}
         run: pnpm run build
       - uses: actions/upload-artifact@v5
         with:
@@ -2131,6 +2133,7 @@ jobs:
           # normal" reasoning as PORTAL_TITLE above -- the portal falls back
           # to its own default primary color on an empty string.
           NEXT_PUBLIC_PORTAL_PRIMARY_COLOR: ${{ vars.PORTAL_PRIMARY_COLOR }}
+          NEXT_PUBLIC_PORTAL_LOGO_URL: ${{ vars.PORTAL_LOGO_URL }}
         run: pnpm run build
       - uses: actions/upload-artifact@v5
         with:

@@ -163,6 +163,48 @@ describe('findHeaderClaim — real corpus fixtures', () => {
     const content = '#!/usr/bin/env sh\n# Does something entirely unrelated.\n'
     expect(findHeaderClaim('scripts/unrelated.sh', content)).toBeNull()
   })
+
+  // biffo-template#1959: reproduced from the exact docstring that tripped
+  // this in tabsii-platform#1392 (`services/api/tests/instance/
+  // test_boto3_absent_after_import_api_main.py`, a user-owned instance test
+  // file — that file does not exist in biffo-template itself, but the
+  // ambiguity is general and this fixture reproduces it directly). "it"
+  // grammatically refers to the DIFFERENT, template-owned file named
+  // earlier in the same sentence, not to this docstring's own (user-owned)
+  // file — the pronoun analogue of the module doc comment's "named-path-
+  // before-self" case (item 2), which SELF_REFERENTIAL_CLAIM's plain
+  // "this/it is X" grammar could not previously tell apart from a genuine
+  // self-claim.
+  it('does not read a pronoun naming a DIFFERENT file earlier in the same sentence as a self-claim (#1959)', () => {
+    const content =
+      '"""``services/api/tests/test_api_boto3_lazy_import.py`` already does the\n' +
+      'same subprocess/``sys.modules`` check, but it is template-owned — this\n' +
+      'file additionally guards the Lambda entrypoint import for the instance.\n' +
+      '"""\n'
+    const hit = findHeaderClaim(
+      'services/api/tests/instance/test_boto3_absent_after_import_api_main.py',
+      content,
+    )
+    expect(hit).toBeNull()
+  })
+
+  // The fix must not overcorrect into "any other path mentioned anywhere in
+  // the header suppresses every claim" — a path named in an EARLIER,
+  // separate sentence/paragraph must not blind the guard to a genuine
+  // self-claim made afterward. This is the real domains/__init__.py SHAPE
+  // (a different path is discussed, then the file declares itself), just
+  // via a pronoun rather than "This package" — proving the fix is scoped to
+  // the pronoun's own sentence, not the whole header.
+  it('still catches a genuine pronoun self-claim made in a later sentence than an unrelated path mention', () => {
+    const content =
+      '"""``services/api/legacy/old_check.py`` used to cover this, before the\n' +
+      'domain split.\n' +
+      '\n' +
+      'It is user-owned and lives alongside the rest of the instance test suite.\n' +
+      '"""\n'
+    const hit = findHeaderClaim('services/api/tests/instance/example.py', content)
+    expect(hit).toMatchObject({ claim: 'user' })
+  })
 })
 
 describe('checkOwnershipHeaderClaims — compares against the real manifest authority', () => {

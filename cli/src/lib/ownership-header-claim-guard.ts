@@ -66,6 +66,39 @@
  * after the copula). `INSTANCE-OWNED` and `"NOT a template file"` skip this
  * requirement — see the next section for why they get a different rule.
  *
+ * ## The pronoun variant of the same ambiguity (#1959)
+ *
+ * A bare "this"/"it" is only self-referential when nothing else in the
+ * sentence is a plausible antecedent. `tabsii-platform`'s
+ * `services/api/tests/instance/test_boto3_absent_after_import_api_main.py`
+ * (a user-owned instance test; the file does not exist in this repo, the
+ * ambiguity it exposed does) opened with: "``.../test_api_boto3_lazy_
+ * import.py`` already does the same [...] check, but **it is
+ * template-owned**" — "it" grammatically refers to the DIFFERENT,
+ * template-owned file named earlier in the SAME sentence, not to this
+ * docstring's own (correctly user-owned) file. `SELF_REFERENTIAL_CLAIM`
+ * alone cannot tell that apart from a genuine "it is X" self-claim, because
+ * it never looks at what precedes the match.
+ *
+ * Fixed by `sentenceNamesOtherPath`: before trusting a grammatical match, walk
+ * backward from the pronoun to the nearest preceding paragraph break or
+ * ". " (i.e. bound the search to the pronoun's OWN sentence, mirroring the
+ * module-level "Bounded header window" reasoning one level down) and check
+ * that sentence fragment for a path-shaped token (bare or backtick-quoted,
+ * containing a `/`) that is not this file's own path. If one is found, the
+ * match is dropped as ambiguous and scanning continues for a later,
+ * genuinely self-referential match instead. This is deliberately
+ * sentence-scoped rather than whole-header-scoped: `domains/__init__.py`'s
+ * real docstring mentions the surrounding `services/api/` path in the SAME
+ * sentence as its self-claim, but AFTER the pronoun ("This package (...) is
+ * **user-owned** [...] even though it sits inside the template-owned
+ * ``services/api/``") — only text preceding the pronoun is ever examined, so
+ * that trailing mention never counts as an antecedent and the claim is
+ * still read correctly. A cruder header-wide or first-paragraph-only rule
+ * (the issue's other suggested mitigation) would also wrongly suppress a
+ * genuine self-claim made in a later paragraph than an unrelated path
+ * mention — checked directly in the test fixtures below.
+ *
  * ## Why `INSTANCE-OWNED` and `template-owned`/`user-owned` are matched
  * differently
  *
@@ -152,9 +185,77 @@ const STRICT_MARKER = /(?<!`)(?:INSTANCE-OWNED|NOT a template file)(?!`)/
  * backtick-quoted path with no internal spaces), then `is`/`are`/`stays`/
  * `remains`, then (optionally) markdown `**`, then the claim word itself.
  * See the module doc comment for the real corpus this was checked against.
+ *
+ * Global (`g`) so `claimInText` can walk PAST a match rejected by
+ * `sentenceNamesOtherPath` (see module doc comment, "pronoun variant") to
+ * look for a later, genuinely self-referential one — callers MUST reset
+ * `.lastIndex = 0` before each fresh piece of text, since this is a shared
+ * module-level regex object and stale state from one file would otherwise
+ * corrupt matching on the next.
  */
 const SELF_REFERENTIAL_CLAIM =
-  /\b(?:[Tt]his|[Ii]t)\b(?:\s+\S+){0,3}\s+(?:is|are|stays|remains)\s+(?:\*\*)?(template-owned|user-owned)\b/
+  /\b(?:[Tt]his|[Ii]t)\b(?:\s+\S+){0,3}\s+(?:is|are|stays|remains)\s+(?:\*\*)?(template-owned|user-owned)\b/g
+
+/**
+ * A path-shaped token: ordinary path characters (letters, digits,
+ * `_.-`) either side of at least one `/`, optionally wrapped in up to two
+ * backticks — this repo's own convention for naming a path bare
+ * (Markdown/TS prose, `services/api/...`) or RST-literal-quoted (Python
+ * docstrings, ``services/api/...``). Deliberately narrower than "any
+ * non-whitespace run containing a slash": that first cut matched a bare
+ * `/**` JSDoc comment-opener as a two-character "path" (`/` then `**`),
+ * which cost the `instance-adoption.ts`-style fixture a real self-claim —
+ * requiring a path character (not `*`, `(`, `,` etc.) immediately before
+ * the `/` excludes it. Used only to find a plausible pronoun antecedent
+ * within a single sentence, not as a general path validator.
+ */
+const PATH_TOKEN = /`{0,2}([A-Za-z0-9_.-]+\/[A-Za-z0-9_./-]*)`{0,2}/g
+
+/** Strips the punctuation a path token picks up from ordinary sentence
+ * position: a leading opening paren, and a trailing closing paren/comma/
+ * semicolon/colon/sentence-ending period — the last of these matters
+ * because `.` is itself a valid path character (`PATH_TOKEN` has to allow
+ * it for `.py`/`.ts` extensions), so "...scripts/verify-deployed.checks."
+ * at the end of a sentence is captured WITH the trailing period and must
+ * have it stripped back off. Deliberately excludes `/` from the trailing
+ * class — a real directory reference legitimately ends in one
+ * (`services/api/src/api/domains/`) and stripping it would be wrong, even
+ * though no current fixture's comparison depends on keeping it. */
+function stripPathPunctuation(token: string): string {
+  return token.replace(/^[(,;:]+/, '').replace(/[),;:.]+$/, '')
+}
+
+/**
+ * Whether a path OTHER than `ownPath` is named earlier in the same sentence
+ * as a pronoun match at `pronounIndex` — in which case "this"/"it" most
+ * plausibly refers to THAT path, not to the containing file. See the module
+ * doc comment's "pronoun variant" section for the real case this fixes and
+ * why the search is scoped to the current sentence only (bounded by the
+ * nearest preceding paragraph break or ". "), not the whole header: a path
+ * named in an earlier paragraph must never suppress a later, genuine
+ * self-claim, and a path named AFTER the pronoun (as in the real
+ * `domains/__init__.py` header) is never examined at all.
+ */
+function sentenceNamesOtherPath(text: string, pronounIndex: number, ownPath: string): boolean {
+  const before = text.slice(0, pronounIndex)
+  const boundary = /\n\s*\n|\.\s/g
+  let sentenceStart = 0
+  let boundaryMatch: RegExpExecArray | null
+  while ((boundaryMatch = boundary.exec(before))) {
+    sentenceStart = boundaryMatch.index + boundaryMatch[0].length
+  }
+  const sentence = text.slice(sentenceStart, pronounIndex)
+
+  PATH_TOKEN.lastIndex = 0
+  let tokenMatch: RegExpExecArray | null
+  while ((tokenMatch = PATH_TOKEN.exec(sentence))) {
+    const token = stripPathPunctuation(tokenMatch[1]!)
+    if (!token.includes('/')) continue
+    if (token === ownPath || ownPath.startsWith(token) || token.startsWith(ownPath)) continue
+    return true
+  }
+  return false
+}
 
 /**
  * The other real self-declaring convention that has no explicit copula:
@@ -189,23 +290,30 @@ interface ClaimMatch {
  * The claim in one header-window's worth of text, or `null` — the leftmost
  * match across all three mechanisms (strict marker, self-referential
  * grammar, first-line em-dash). See the module doc comment for the corpus
- * each was checked against.
+ * each was checked against. `ownPath` is the containing file's own path,
+ * used only to resolve the self-referential-grammar mechanism's pronoun
+ * ambiguity (see `sentenceNamesOtherPath`).
  */
-function claimInText(text: string): ClaimMatch | null {
+function claimInText(text: string, ownPath: string): ClaimMatch | null {
   const candidates: ClaimMatch[] = []
 
   const strict = STRICT_MARKER.exec(text)
   if (strict)
     candidates.push({ matchedPhrase: strict[0], claim: claimFor(strict[0]), index: strict.index })
 
-  const grammatical = SELF_REFERENTIAL_CLAIM.exec(text)
-  if (grammatical) {
+  // Global regex, shared module-level object — reset before every fresh
+  // piece of text (see SELF_REFERENTIAL_CLAIM's own doc comment).
+  SELF_REFERENTIAL_CLAIM.lastIndex = 0
+  let grammatical: RegExpExecArray | null
+  while ((grammatical = SELF_REFERENTIAL_CLAIM.exec(text))) {
+    if (sentenceNamesOtherPath(text, grammatical.index, ownPath)) continue
     // Group 1 is a mandatory capturing group in SELF_REFERENTIAL_CLAIM (not
     // inside an alternation that could omit it), so it is always present
     // when the overall match succeeds — the `!` reflects that, not a
     // shortcut around `noUncheckedIndexedAccess`'s generic array-index rule.
     const phrase = grammatical[1]!
     candidates.push({ matchedPhrase: phrase, claim: claimFor(phrase), index: grammatical.index })
+    break
   }
 
   const firstLine = text.split('\n', 1)[0] ?? ''
@@ -393,7 +501,7 @@ export function findHeaderClaim(path: string, content: string): HeaderClaimHit |
   if (!range) return null
   const [start, end] = range
   const windowText = lines.slice(start, end).join('\n')
-  const found = claimInText(windowText)
+  const found = claimInText(windowText, path)
   if (!found) return null
   const line = start + windowText.slice(0, found.index).split('\n').length
   return { path, claim: found.claim, matchedPhrase: found.matchedPhrase, line }

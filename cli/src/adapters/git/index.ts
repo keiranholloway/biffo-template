@@ -408,6 +408,43 @@ export class GitAdapter {
   }
 
   /**
+   * Every local branch name that currently has a same-named remote-tracking
+   * ref under `refs/remotes/origin/` (biffo-template#1954) — i.e. `git
+   * for-each-ref refs/remotes/origin`, stripped of the `refs/remotes/origin/`
+   * prefix, with the `HEAD` symref excluded (it names no branch).
+   *
+   * This is the fact `doctor --fix`'s reap-candidate detection needs instead
+   * of trusting a branch's own *configured* upstream (`%(upstream:track)`,
+   * i.e. `git branch -vv`'s `[gone]` marker): `git worktree add -b <branch>
+   * <path> origin/dev` sets the new branch's upstream to `origin/dev` by
+   * default, and a plain `git push origin HEAD` (no `-u`) never corrects
+   * it — so a branch can be pushed, merged, and have its OWN remote copy
+   * deleted, while its `[gone]` marker never fires because the thing it is
+   * actually tracking (`origin/dev`) never goes anywhere. Checking for a
+   * same-named ref sidesteps whatever the branch happens to be configured to
+   * track entirely.
+   *
+   * Absence from this set does NOT by itself prove a branch's remote copy
+   * was deleted — a branch never pushed under its own name is equally
+   * absent. See `doctor-reaper.ts`'s `hasProvenGoneRemote` for why that
+   * distinction is safe to skip here (unlike in `upgrade-branch-reaper.ts`,
+   * which has no downstream verification and must not skip it).
+   */
+  async listRemoteBranchNames(cwd: string): Promise<Set<string>> {
+    const { stdout } = await execa(
+      'git',
+      ['for-each-ref', '--format=%(refname:lstrip=3)', 'refs/remotes/origin'],
+      { cwd },
+    )
+    return new Set(
+      stdout
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((name) => name !== '' && name !== 'HEAD'),
+    )
+  }
+
+  /**
    * `branch`'s own tip SHA, without checking it out — the bare-branch
    * counterpart to `headSha` (#1682 milestone 2). A branch with no linked
    * worktree has no `cwd` of its own to run `rev-parse HEAD` against, so this

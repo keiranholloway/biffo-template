@@ -91,6 +91,7 @@ export interface DoctorFixDeps {
     | 'removeWorktree'
     | 'headSha'
     | 'isAncestor'
+    | 'listRemoteBranchNames'
   >
   github: Pick<GithubCliAdapter, 'prVerdictForBranch' | 'mergedHeadSha'>
 }
@@ -182,7 +183,11 @@ export async function runDoctorFix(
   facts: Pick<RepoFacts, 'branches' | 'worktrees' | 'currentBranch'>,
   deps: DoctorFixDeps = { git: new GitAdapter(), github: new GithubCliAdapter() },
 ): Promise<ReapOutcome[]> {
-  return reapAll(cwd, facts.branches, facts.worktrees, facts.currentBranch, deps)
+  // #1954: the candidate-worthy signal is the branch's OWN remote copy, not
+  // its (possibly misconfigured) upstream — see `hasProvenGoneRemote`'s doc
+  // comment in `lib/doctor-reaper.ts`.
+  const remoteBranchNames = await deps.git.listRemoteBranchNames(cwd)
+  return reapAll(cwd, facts.branches, facts.worktrees, facts.currentBranch, deps, remoteBranchNames)
 }
 
 /** What `runDoctorFixBranches` needs — the same shape as `DoctorFixDeps` minus the
@@ -190,7 +195,7 @@ export async function runDoctorFix(
  * type of `DoctorFixDeps`) so a caller wiring only the branch half is not forced to also
  * satisfy `removeWorktree`/`headSha`/`isAncestor`'s worktree-flavoured signatures. */
 export interface DoctorFixBranchDeps {
-  git: Pick<GitAdapter, 'branchSha' | 'isAncestor' | 'deleteBranch'>
+  git: Pick<GitAdapter, 'branchSha' | 'isAncestor' | 'deleteBranch' | 'listRemoteBranchNames'>
   github: Pick<GithubCliAdapter, 'prVerdictForBranch' | 'mergedHeadSha'>
 }
 
@@ -206,7 +211,16 @@ export async function runDoctorFixBranches(
   facts: Pick<RepoFacts, 'branches' | 'worktrees' | 'currentBranch'>,
   deps: DoctorFixBranchDeps = { git: new GitAdapter(), github: new GithubCliAdapter() },
 ): Promise<BareBranchReapOutcome[]> {
-  return reapAllBareBranches(cwd, facts.branches, facts.worktrees, facts.currentBranch, deps)
+  // #1954: see the matching call in runDoctorFix above.
+  const remoteBranchNames = await deps.git.listRemoteBranchNames(cwd)
+  return reapAllBareBranches(
+    cwd,
+    facts.branches,
+    facts.worktrees,
+    facts.currentBranch,
+    deps,
+    remoteBranchNames,
+  )
 }
 
 /**

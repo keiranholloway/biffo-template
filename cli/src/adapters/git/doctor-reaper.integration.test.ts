@@ -238,9 +238,13 @@ describe('reapCandidate: a live fleet-worktree-claim lock stops the reap (#1833)
   it('keeps and never removes a worktree that is clean, merged, and HEAD-current, when a real fleet lock is present', async () => {
     const mergedHeadSha = git(worktreeDir, 'rev-parse', 'HEAD')
     mkdirSync(join(worktreeDir, '.fleet-worktree-claim'))
+    // A FRESH timestamp, not a hardcoded past date (#1948): this test's own
+    // job is to prove a LIVE lock still blocks the reap, and a claim old
+    // enough to cross `FLEET_CLAIM_STALE_AFTER_MS` is exactly what this fix
+    // now treats as abandoned instead — proven by the age-aware tests below.
     writeFileSync(
       join(worktreeDir, '.fleet-worktree-claim', 'holder'),
-      'some-other-session-0831-abcd\n2026-08-31T12:00:00Z\n',
+      `some-other-session-0831-abcd\n${new Date().toISOString().replace(/\.\d+Z$/, 'Z')}\n`,
     )
 
     const deps: ReapDeps = {
@@ -256,5 +260,110 @@ describe('reapCandidate: a live fleet-worktree-claim lock stops the reap (#1833)
     expect(outcome.verdict).toEqual({ action: 'keep', reason: 'fleet-worktree-claimed' })
     expect(outcome.worktreeRemoved).toBeNull()
     expect(existsSync(worktreeDir)).toBe(true)
+  })
+})
+
+/**
+ * `GitAdapter.fleetWorktreeClaimAgeMs` / `clearStaleFleetWorktreeClaim`
+ * (biffo-template#1948), proven against a real lock directory and a real
+ * `reapCandidate` run — the same "no mocked filesystem" posture the describe
+ * block above takes, for the same reason: `bin/fleet.sh worktree-claim` is a
+ * different repo's shell script, so this repo can only prove it reads and
+ * clears the directory it writes correctly, never that the script itself
+ * behaves a particular way.
+ */
+describe('GitAdapter.fleetWorktreeClaimAgeMs / clearStaleFleetWorktreeClaim (#1948)', () => {
+  let repo: string
+  let worktreeDir: string
+  const adapter = new GitAdapter()
+
+  const git = (cwd: string, ...args: string[]): string =>
+    execFileSync('git', args, { cwd, encoding: 'utf8' }).trim()
+
+  const githubStub: ReapDeps['github'] = {
+    prVerdictForBranch: async () => 'merged',
+    mergedHeadSha: async () => null,
+  }
+
+  beforeEach(() => {
+    repo = makeTmpDir('biffo-reap-fleet-claim-age')
+    git(repo, 'init', '-q', '-b', 'dev')
+    git(repo, 'config', 'user.email', 'test@example.com')
+    git(repo, 'config', 'user.name', 'Test')
+    writeFileSync(join(repo, 'a.txt'), 'base\n')
+    git(repo, 'add', '-A')
+    git(repo, 'commit', '-qm', 'base')
+    worktreeDir = join(repo, '.worktrees', 'claimed')
+    git(repo, 'worktree', 'add', worktreeDir, '-b', 'agent/1948-claimed')
+  })
+  afterEach(() => {
+    rmSync(repo, { recursive: true, force: true })
+  })
+
+  it('returns null when no lock exists', async () => {
+    expect(await adapter.fleetWorktreeClaimAgeMs(worktreeDir)).toBeNull()
+  })
+
+  it('returns null when the lock directory exists but the holder file does not (the unwritten-holder window)', async () => {
+    mkdirSync(join(worktreeDir, '.fleet-worktree-claim'))
+    expect(await adapter.fleetWorktreeClaimAgeMs(worktreeDir)).toBeNull()
+  })
+
+  it('returns a small positive age for a lock claimed moments ago', async () => {
+    mkdirSync(join(worktreeDir, '.fleet-worktree-claim'))
+    writeFileSync(
+      join(worktreeDir, '.fleet-worktree-claim', 'holder'),
+      `session-a\n${new Date().toISOString().replace(/\.\d+Z$/, 'Z')}\n`,
+    )
+    const ageMs = await adapter.fleetWorktreeClaimAgeMs(worktreeDir)
+    expect(ageMs).not.toBeNull()
+    expect(ageMs as number).toBeGreaterThanOrEqual(0)
+    expect(ageMs as number).toBeLessThan(60_000)
+  })
+
+  it('clearStaleFleetWorktreeClaim removes the lock directory outright', async () => {
+    mkdirSync(join(worktreeDir, '.fleet-worktree-claim'))
+    writeFileSync(
+      join(worktreeDir, '.fleet-worktree-claim', 'holder'),
+      'session-a\n2020-01-01T00:00:00Z\n',
+    )
+
+    await adapter.clearStaleFleetWorktreeClaim(worktreeDir)
+
+    expect(existsSync(join(worktreeDir, '.fleet-worktree-claim'))).toBe(false)
+    // The worktree itself is untouched — only the lock is cleared.
+    expect(existsSync(worktreeDir)).toBe(true)
+  })
+
+  it('clearStaleFleetWorktreeClaim is a harmless no-op when there is nothing to clear', async () => {
+    await expect(adapter.clearStaleFleetWorktreeClaim(worktreeDir)).resolves.toBeUndefined()
+  })
+
+  // End to end, real filesystem, real git: an abandoned lock (2020 — far
+  // past FLEET_CLAIM_STALE_AFTER_MS) no longer blocks a merged, clean,
+  // HEAD-current worktree from being reaped, and the lock is gone along with
+  // the rest of the worktree.
+  it('reaps a merged worktree behind an abandoned lock, clearing the lock first', async () => {
+    const mergedHeadSha = git(worktreeDir, 'rev-parse', 'HEAD')
+    mkdirSync(join(worktreeDir, '.fleet-worktree-claim'))
+    writeFileSync(
+      join(worktreeDir, '.fleet-worktree-claim', 'holder'),
+      'abandoned-session-0101\n2020-01-01T00:00:00Z\n',
+    )
+
+    const deps: ReapDeps = {
+      git: adapter,
+      github: { ...githubStub, mergedHeadSha: async () => mergedHeadSha },
+    }
+    const outcome = await reapCandidate(
+      repo,
+      { branch: 'agent/1948-claimed', worktreePath: worktreeDir },
+      deps,
+    )
+
+    expect(outcome.verdict).toEqual({ action: 'reap' })
+    expect(outcome.worktreeRemoved).toBe(true)
+    expect(outcome.staleClaimCleared).toBe(true)
+    expect(existsSync(worktreeDir)).toBe(false)
   })
 })

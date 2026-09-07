@@ -6,10 +6,17 @@ import {
   type HeaderClaimHit,
 } from './ownership-header-claim-guard.js'
 
+// `cli/` is deliberately modelled as `released`, NOT `templateOwned` — that
+// is the real shape of the repo's own `core-manifest.json` (`isTemplateOwned`
+// returns `false` for a `released`-only path; see `core-manifest.ts`'s
+// `CoreManifestSchema` doc comment), and it is exactly the shape #1937 found
+// this fixture failing to reproduce: with `cli/` in `templateOwned` instead,
+// `matchesReleased` was never exercised by any test here at all.
 const MANIFEST: CoreManifest = {
   version: 1,
-  templateOwned: ['services/api/', 'services/_plugins/', 'scripts/', 'cli/', 'infra/'],
+  templateOwned: ['services/api/', 'services/_plugins/', 'scripts/', 'infra/'],
   userOwned: ['services/api/src/api/domains/', 'scripts/verify-deployed.checks'],
+  released: ['cli/'],
 }
 
 describe('findHeaderClaim — real corpus fixtures', () => {
@@ -224,5 +231,44 @@ describe('checkOwnershipHeaderClaims — compares against the real manifest auth
     const disagreements = checkOwnershipHeaderClaims(hits, MANIFEST)
     expect(disagreements).toHaveLength(1)
     expect(disagreements[0].manifestSaysTemplateOwned).toBe(false)
+  })
+
+  // The #1937 regression: `cli/` is `released`, not `templateOwned`, so
+  // `isTemplateOwned('cli/src/...', MANIFEST)` is `false`. Before the fix,
+  // `!manifestSaysTemplateOwned` alone made ANY `'user'` claim on a `cli/`
+  // path agree unconditionally — a fabricated `INSTANCE-OWNED`/`user-owned`
+  // self-claim on an ordinary released `cli/` file was never flagged. This
+  // is the exact drift shape #1706/#1707 was about, just under `cli/`.
+  it('flags a user-owned/INSTANCE-OWNED claim on a released path as a disagreement (the #1937 blind spot)', () => {
+    const hits: HeaderClaimHit[] = [
+      {
+        path: 'cli/src/commands/deploy.ts',
+        claim: 'user',
+        matchedPhrase: 'INSTANCE-OWNED',
+        line: 3,
+      },
+    ]
+    const disagreements = checkOwnershipHeaderClaims(hits, MANIFEST)
+    expect(disagreements).toHaveLength(1)
+    expect(disagreements[0]).toMatchObject({
+      path: 'cli/src/commands/deploy.ts',
+      claim: 'user',
+      manifestSaysTemplateOwned: false,
+    })
+  })
+
+  // The carve-out's other, already-correct half, reasserted against the
+  // properly-shaped `released` fixture (not `templateOwned`) so it is
+  // actually exercising `matchesReleased` rather than `isTemplateOwned`.
+  it('does not flag a template-owned claim on a released path (the intended carve-out)', () => {
+    const hits: HeaderClaimHit[] = [
+      {
+        path: 'cli/src/lib/example.ts',
+        claim: 'template',
+        matchedPhrase: 'template-owned',
+        line: 5,
+      },
+    ]
+    expect(checkOwnershipHeaderClaims(hits, MANIFEST)).toEqual([])
   })
 })

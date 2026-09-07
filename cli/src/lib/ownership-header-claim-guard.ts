@@ -129,8 +129,21 @@ export interface OwnershipHeaderDisagreement extends HeaderClaimHit {
  * as #1911's own `git grep -E` (no `-i`) did, and trusted anywhere in the
  * header with no further grammatical qualification. See the module doc
  * comment for why lower-case "instance-owned" in ordinary prose must NOT
- * match this (`plugin_baseline_check.py`). */
-const STRICT_MARKER = /INSTANCE-OWNED|NOT a template file/
+ * match this (`plugin_baseline_check.py`).
+ *
+ * Excludes a match wrapped in a markdown code span (`` `INSTANCE-OWNED` ``,
+ * `` `NOT a template file` ``) via a lookbehind/lookahead on the backtick —
+ * this guard's OWN two source files falsify "nobody writes 'INSTANCE-OWNED'
+ * in the middle of ordinary prose" (biffo-template#1937): both quote the
+ * marker, backtick-wrapped, in a comma-separated list of the four patterns
+ * this module looks for (see this file's own module doc comment, line 3, and
+ * `check-ownership-header-claim.ts`'s), which is meta-discussion of the
+ * convention, not a live self-claim using it. Every real self-claim in this
+ * guard's corpus (`scripts/verify-deployed.checks`, the Python-docstring and
+ * shell-script test fixtures below) writes the marker bare, with no
+ * surrounding backticks — a real claim uses the shouty convention directly;
+ * a code span around it is someone quoting the convention BY NAME. */
+const STRICT_MARKER = /(?<!`)(?:INSTANCE-OWNED|NOT a template file)(?!`)/
 
 /**
  * `template-owned`/`user-owned` trusted as a claim only when immediately
@@ -442,6 +455,19 @@ function matchesReleased(relPath: string, manifest: CoreManifest): boolean {
  * when `manifest.released` covers the path (see `matchesReleased` and the
  * module doc comment's `cli/` case): `released` is a third, real ownership
  * status this repo's own prose already calls "template-owned".
+ *
+ * The `released` carve-out is deliberately ONE-SIDED: it only ever widens
+ * agreement for a `'template'` claim, never for a `'user'` claim
+ * (biffo-template#1937). `matchesReleased` being `true` says "this path's
+ * source versions with the core", which is what makes a `template-owned`
+ * self-claim correct there — it says nothing about a `user-owned`/
+ * `INSTANCE-OWNED` self-claim being correct too, and a released path is
+ * exactly where such a claim would be a real drift (`isTemplateOwned` is
+ * `false` for `released`-only paths, so before this fix `!manifestSaysTemplateOwned`
+ * alone made every `'user'` claim under a `released` path agree
+ * unconditionally, regardless of what the header actually said). So a
+ * `'user'` claim agrees only when the manifest says neither
+ * `templateOwned` NOR `released`.
  */
 export function checkOwnershipHeaderClaims(
   hits: readonly HeaderClaimHit[],
@@ -450,10 +476,11 @@ export function checkOwnershipHeaderClaims(
   const out: OwnershipHeaderDisagreement[] = []
   for (const hit of hits) {
     const manifestSaysTemplateOwned = isTemplateOwned(hit.path, manifest)
+    const released = matchesReleased(hit.path, manifest)
     const agrees =
       hit.claim === 'template'
-        ? manifestSaysTemplateOwned || matchesReleased(hit.path, manifest)
-        : !manifestSaysTemplateOwned
+        ? manifestSaysTemplateOwned || released
+        : !manifestSaysTemplateOwned && !released
     if (!agrees) {
       out.push({ ...hit, manifestSaysTemplateOwned })
     }

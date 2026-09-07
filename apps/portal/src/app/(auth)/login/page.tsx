@@ -1,6 +1,6 @@
 'use client'
 
-import { Suspense, useCallback, useEffect, useRef, useState } from 'react'
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import type { CognitoUser, CognitoUserSession } from 'amazon-cognito-identity-js'
 import { useAuth } from '@/context/auth-context'
@@ -10,6 +10,7 @@ import { createApiClient } from '@/lib/api-client'
 import { resolveWhoami } from '@/lib/whoami-api'
 import { resolveDestination } from '@/lib/login-routing'
 import { Button } from '@biffo/ui'
+import { FORWARD_DELAY_MS } from './constants'
 
 // useSearchParams() requires a Suspense boundary in the App Router (it opts
 // the tree below it out of static rendering) — the actual form lives in
@@ -168,22 +169,98 @@ function LoginForm() {
   // form; `pendingUser` and `resetMode` keep this out of the way of the
   // first-password and forgot-password flows, which run against a session that
   // may already exist.
+  //
+  // Also disables the sign-in form below while a redirect is pending: it sits
+  // underneath the "Signing you in as X… Not you? Sign out" text for the
+  // whole delay window now (#1942), and submitting a password into a form
+  // that is about to navigate away is confusing, not useful.
   const [forwarding, setForwarding] = useState(false)
+
+  // The verified ID token's own identity, shown in the "Signing you in as X…"
+  // text below. Read straight from the token rather than waiting on the
+  // `whoami` lookup `routeAfterAuth` performs — that call may hit the network,
+  // and the label needs to be on screen immediately, not after it resolves.
+  // Falls back to the Cognito username, then to '' (plain "Signing you in…")
+  // when the token carries neither, e.g. a federated identity with no email.
+  const pendingIdentity = useMemo(() => {
+    if (!session) return ''
+    const claims = session.getIdToken().decodePayload() as Record<string, unknown>
+    const email = typeof claims['email'] === 'string' ? claims['email'] : ''
+    if (email) return email
+    const username =
+      typeof claims['cognito:username'] === 'string' ? claims['cognito:username'] : ''
+    return username
+  }, [session])
+
+  // Which session object a forward-timer has already been scheduled for, so a
+  // re-render cannot schedule a second one.
+  //
+  // Deliberately never reset — same rule as `routedFor` above, and for the
+  // same reason. Resetting it when the timer is cancelled looked tempting
+  // ("this session hasn't been handled after all") but `routeAfterAuth`
+  // closes over `returnTo`/`router`, so it gets a new identity on unrelated
+  // re-renders; if a click on "Not you? Sign out" reset this, the very next
+  // such re-render would read the guard as clear and reschedule the redirect
+  // it had just cancelled. Session identity is what actually changes when a
+  // *new* sign-in happens, so keying on it alone (with no reset) is what
+  // makes "cancelled" durable without also making a real new session stick.
+  const forwardStartedFor = useRef<CognitoUserSession | null>(null)
+
+  // The pending redirect's timer id, so "Not you? Sign out" can cancel it
+  // synchronously. `session` going null via `logout()` only takes effect on a
+  // later render — not soon enough on its own, since a click a moment before
+  // the timer fires would otherwise lose the race and the redirect would fire
+  // anyway.
+  const forwardTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const cancelPendingForward = useCallback(() => {
+    if (forwardTimerRef.current !== null) {
+      clearTimeout(forwardTimerRef.current)
+      forwardTimerRef.current = null
+    }
+  }, [])
+
+  // Always the latest `routeAfterAuth`, read by the timer below without being
+  // one of the scheduling effect's own dependencies. `routeAfterAuth` closes
+  // over `router` (from `useRouter()`), whose identity is not guaranteed
+  // stable across renders — a render that changes nothing about *whether* to
+  // forward must not itself count as a reason to cancel-and-reschedule the
+  // timer that a previous render just set, which is what depending on
+  // `routeAfterAuth` directly below used to do.
+  const routeAfterAuthRef = useRef(routeAfterAuth)
   useEffect(() => {
-    if (!session || pendingUser || resetMode || forwarding) return
+    routeAfterAuthRef.current = routeAfterAuth
+  }, [routeAfterAuth])
+
+  useEffect(() => {
+    if (!session || pendingUser || resetMode) return
     // One attempt per session object. A genuinely new session (signing in
-    // again) is a different object and is retried; the one that just failed is
-    // not. See `routedFor` above.
+    // again) is a different object and is retried; the one that just failed —
+    // or was declined via "Not you? Sign out" — is not. See `routedFor` above.
     if (routedFor.current === session) return
+    if (forwardStartedFor.current === session) return
+    forwardStartedFor.current = session
     setForwarding(true)
-    void routeAfterAuth(session).catch((err: unknown) => {
-      // Fall back to showing the form rather than trapping them on a blank
-      // page — but say why. Failing silently here is what made a broken API
-      // read as a rejected password.
-      setError(err instanceof Error ? err.message : 'Could not determine where to send you')
-      setForwarding(false)
-    })
-  }, [session, pendingUser, resetMode, forwarding, routeAfterAuth])
+    // A deliberate delay rather than an immediate redirect (#1942): without
+    // it, the browser was already leaving on the same render pass that showed
+    // "Not you? Sign out", so the link had no real chance of being clicked.
+    forwardTimerRef.current = setTimeout(() => {
+      forwardTimerRef.current = null
+      void routeAfterAuthRef.current(session).catch((err: unknown) => {
+        // Fall back to showing the form rather than trapping them on a blank
+        // page — but say why. Failing silently here is what made a broken API
+        // read as a rejected password.
+        setError(err instanceof Error ? err.message : 'Could not determine where to send you')
+        setForwarding(false)
+      })
+    }, FORWARD_DELAY_MS)
+    return () => {
+      if (forwardTimerRef.current !== null) {
+        clearTimeout(forwardTimerRef.current)
+        forwardTimerRef.current = null
+      }
+    }
+  }, [session, pendingUser, resetMode])
 
   const handleSignIn = async (e: React.SyntheticEvent<HTMLFormElement>) => {
     e.preventDefault()
@@ -508,10 +585,11 @@ function LoginForm() {
       <h1 className="mb-2 text-2xl font-bold text-gray-900">Sign in</h1>
       {session ? (
         <p className="mb-6 text-sm text-gray-600">
-          Signing you in&hellip;{' '}
+          {pendingIdentity ? `Signing you in as ${pendingIdentity}…` : 'Signing you in…'}{' '}
           <button
             type="button"
             onClick={() => {
+              cancelPendingForward()
               setForwarding(false)
               logout()
             }}
@@ -544,6 +622,7 @@ function LoginForm() {
             className="w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             required
             autoComplete="email"
+            disabled={forwarding}
           />
         </div>
 
@@ -561,6 +640,7 @@ function LoginForm() {
             className="w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             required
             autoComplete="current-password"
+            disabled={forwarding}
           />
         </div>
 
@@ -571,7 +651,7 @@ function LoginForm() {
         <Button
           type="submit"
           className="mt-2 w-full rounded-lg bg-blue-600 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
-          disabled={loading}
+          disabled={loading || forwarding}
         >
           {loading ? 'Signing in…' : 'Sign in'}
         </Button>

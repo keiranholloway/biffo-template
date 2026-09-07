@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { CognitoUserSession } from 'amazon-cognito-identity-js'
 import LoginPage from './page'
+import { FORWARD_DELAY_MS } from './constants'
 
 const {
   pushMock,
@@ -412,9 +413,10 @@ describe('LoginPage — arriving already signed in', () => {
 
     render(<LoginPage />)
 
-    await waitFor(() => {
-      expect(screen.getByRole('heading', { name: 'Sign in' })).toBeInTheDocument()
-    })
+    // The forward attempt now runs after a deliberate delay (FORWARD_DELAY_MS,
+    // #1942) rather than immediately — wait for it to actually happen and fail
+    // before counting, rather than for the ever-present "Sign in" heading.
+    await screen.findByText('Not Found')
     // Let any re-entrant effect run before counting.
     await new Promise((resolve) => setTimeout(resolve, 50))
 
@@ -450,6 +452,100 @@ describe('LoginPage — arriving already signed in', () => {
     const signOut = await screen.findByRole('button', { name: 'Not you? Sign out' })
     fireEvent.click(signOut)
     expect(logoutMock).toHaveBeenCalled()
+  })
+
+  /**
+   * #1942 — landing on /login/ with a live session used to redirect on the
+   * same render pass that showed "Signing you in… Not you? Sign out": no
+   * identity was ever named, and the sign-out link had no real window to be
+   * clicked before the browser was already leaving.
+   */
+  it('names the resolved identity in the "Signing you in" text, not just that it is happening', async () => {
+    currentSession = {
+      getIdToken: () => ({
+        getJwtToken: () => 'mock-token',
+        decodePayload: () => ({ 'cognito:groups': [], email: 'founder@example.com' }),
+      }),
+    }
+    resolveWhoamiMock.mockResolvedValue({
+      sub: 's',
+      email: 'founder@example.com',
+      username: 'founder@example.com',
+      user_id: 'u1',
+      is_platform_admin: false,
+      permissions: [],
+      marketplace_role: null,
+      roles: [{ role: 'HQ Admin', scope_level: 'tenant' }],
+    })
+
+    render(<LoginPage />)
+
+    // Before the fix this said only "Signing you in…" — never which account.
+    expect(await screen.findByText('Signing you in as founder@example.com…')).toBeInTheDocument()
+  })
+
+  it('gives "Not you? Sign out" a real window before redirecting, instead of firing on the same render pass', async () => {
+    vi.useFakeTimers()
+    try {
+      currentSession = mockSession()
+      resolveWhoamiMock.mockResolvedValue({
+        sub: 's',
+        email: 'e',
+        username: 'u',
+        user_id: 'u1',
+        is_platform_admin: false,
+        permissions: [],
+        marketplace_role: null,
+        roles: [{ role: 'HQ Admin', scope_level: 'tenant' }],
+      })
+
+      render(<LoginPage />)
+
+      // "Not you? Sign out" is on screen, and the redirect must not already
+      // have happened — that is the whole "real window to click it" claim.
+      expect(screen.getByRole('button', { name: 'Not you? Sign out' })).toBeInTheDocument()
+      expect(assignMock).not.toHaveBeenCalled()
+      expect(pushMock).not.toHaveBeenCalled()
+
+      await vi.advanceTimersByTimeAsync(FORWARD_DELAY_MS + 50)
+
+      expect(assignMock).toHaveBeenCalledWith(ORG_DESTINATION)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('cancels the pending redirect when "Not you? Sign out" is clicked during the delay window', async () => {
+    // Regression for the second half of #1942: showing the button is not
+    // enough if clicking it during the window loses a race against the timer
+    // that was already scheduled.
+    vi.useFakeTimers()
+    try {
+      currentSession = mockSession()
+      resolveWhoamiMock.mockResolvedValue({
+        sub: 's',
+        email: 'e',
+        username: 'u',
+        user_id: 'u1',
+        is_platform_admin: false,
+        permissions: [],
+        marketplace_role: null,
+        roles: [{ role: 'HQ Admin', scope_level: 'tenant' }],
+      })
+
+      render(<LoginPage />)
+
+      fireEvent.click(screen.getByRole('button', { name: 'Not you? Sign out' }))
+
+      // Advance well past when the (cancelled) redirect would have fired.
+      await vi.advanceTimersByTimeAsync(FORWARD_DELAY_MS + 100)
+
+      expect(logoutMock).toHaveBeenCalled()
+      expect(assignMock).not.toHaveBeenCalled()
+      expect(pushMock).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 

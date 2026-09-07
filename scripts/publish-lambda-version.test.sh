@@ -6,6 +6,12 @@
 # AWS call itself fails — never silently leaving the alias where it was
 # while reporting success.
 #
+# Also proves the post-publish pruning it runs (#1957): keeps `live` + the
+# last 3 prior versions and deletes the rest, is a no-op with fewer than 4
+# versions total, never deletes a version still referenced by a non-`live`
+# alias, and never lets a single delete failure block the others or fail the
+# script — a stuck old version costs money, a failed deploy costs more.
+#
 # Stubs `aws` on PATH so this needs no network and no live deployment.
 #
 # Run: sh scripts/publish-lambda-version.test.sh
@@ -84,25 +90,81 @@ _assert_alias_never_moved() {
   fi
 }
 
+_assert_deleted() {
+  # _assert_deleted <scenario-name> <version>
+  name=$1
+  version=$2
+  if grep -qF "delete-function --qualifier $version" "$CALL_LOG"; then
+    echo "PASS: $name — version $version pruned"
+  else
+    echo "FAIL: $name — expected delete-function called with qualifier $version"
+    echo "--- call log ---"; cat "$CALL_LOG"; echo "----------------"
+    FAILURES=$((FAILURES + 1))
+  fi
+}
+
+_assert_not_deleted() {
+  # _assert_not_deleted <scenario-name> <version>
+  name=$1
+  version=$2
+  if grep -qF "delete-function --qualifier $version" "$CALL_LOG"; then
+    echo "FAIL: $name — version $version must NOT be pruned"
+    echo "--- call log ---"; cat "$CALL_LOG"; echo "----------------"
+    FAILURES=$((FAILURES + 1))
+  else
+    echo "PASS: $name — version $version kept"
+  fi
+}
+
+_assert_no_deletes_at_all() {
+  name=$1
+  if grep -q "delete-function" "$CALL_LOG"; then
+    echo "FAIL: $name — delete-function must not be called"
+    echo "--- call log ---"; cat "$CALL_LOG"; echo "----------------"
+    FAILURES=$((FAILURES + 1))
+  else
+    echo "PASS: $name — delete-function never called"
+  fi
+}
+
 # --- Stub aws factory ----------------------------------------------------
 # Dispatches on the `lambda <subcommand>` pair. Logs a normalised summary of
 # every invocation (subcommand + the flags this script actually passes) so
 # assertions can check both WHAT was called and with WHAT arguments, without
 # depending on flag order.
+#
+# Pruning behaviour (list-versions-by-function / list-aliases / delete-
+# function) is driven by three optional files under $STUB_DIR, set with the
+# _set_* helpers below and reset on every _write_stub call so no scenario
+# leaks into the next:
+#   versions      — newline-separated published version numbers (excluding
+#                   $LATEST) for list-versions-by-function to report. Empty
+#                   or absent means "nothing to prune" (matches tests 1-5,
+#                   which never call the setters).
+#   other-aliases — newline-separated versions referenced by a non-`live`
+#                   alias, for list-aliases to report.
+#   fail-delete   — newline-separated versions whose delete-function call
+#                   should fail (exit 1), to prove one failure doesn't block
+#                   the others.
 _write_stub() {
   publish_version=$1     # value publish-version prints on --query Version, or "" for empty
   publish_exit=${2:-0}   # exit code for publish-version
   alias_exit=${3:-0}     # exit code for update-alias
+  : > "$STUB_DIR/versions"
+  : > "$STUB_DIR/other-aliases"
+  : > "$STUB_DIR/fail-delete"
   cat > "$STUB_DIR/aws" <<STUB
 #!/usr/bin/env sh
 sub=\$2
 fn=""
 version=""
+qualifier=""
 prev=""
 for a in "\$@"; do
   case "\$prev" in
     --function-name) fn="\$a" ;;
     --function-version) version="\$a" ;;
+    --qualifier) qualifier="\$a" ;;
   esac
   prev="\$a"
 done
@@ -119,6 +181,21 @@ case "\$sub" in
     printf 'arn:aws:lambda:us-east-1:123456789012:function:\$fn:live'
     exit 0
     ;;
+  list-versions-by-function)
+    printf '%s\n' \$(cat "$STUB_DIR/versions")
+    exit 0
+    ;;
+  list-aliases)
+    printf '%s\n' \$(cat "$STUB_DIR/other-aliases")
+    exit 0
+    ;;
+  delete-function)
+    echo "delete-function --qualifier \$qualifier" >> "$CALL_LOG"
+    if grep -qxF "\$qualifier" "$STUB_DIR/fail-delete"; then
+      exit 1
+    fi
+    exit 0
+    ;;
   *)
     echo "unexpected aws subcommand: \$*" >&2
     exit 99
@@ -126,6 +203,21 @@ case "\$sub" in
 esac
 STUB
   chmod +x "$STUB_DIR/aws"
+}
+
+# _set_versions <space-separated version numbers>
+_set_versions() {
+  printf '%s\n' $1 > "$STUB_DIR/versions"
+}
+
+# _set_other_aliases <space-separated version numbers protected by a non-live alias>
+_set_other_aliases() {
+  printf '%s\n' $1 > "$STUB_DIR/other-aliases"
+}
+
+# _set_fail_delete <space-separated version numbers whose delete should fail>
+_set_fail_delete() {
+  printf '%s\n' $1 > "$STUB_DIR/fail-delete"
 }
 
 # 1. No function name argument at all — must fail without invoking aws.
@@ -175,6 +267,60 @@ _assert_alias_never_moved "publish-version call fails"
 _write_stub "7" 0 1
 _run "my-app-dev-core-api"
 _assert_exit "update-alias call fails" 1
+
+# --- Pruning (#1957) -------------------------------------------------------
+
+# 6. Normal prune — 8 published versions (including the one just published),
+#    keep live (8) plus the last 3 prior (7, 6, 5), delete the rest (4-1).
+_write_stub "8"
+_set_versions "1 2 3 4 5 6 7 8"
+_run "my-app-dev-core-api"
+_assert_exit "prune: normal case" 0
+_assert_alias_moved_to "prune: normal case" "8"
+_assert_deleted "prune: normal case" "1"
+_assert_deleted "prune: normal case" "2"
+_assert_deleted "prune: normal case" "3"
+_assert_deleted "prune: normal case" "4"
+_assert_not_deleted "prune: normal case" "5"
+_assert_not_deleted "prune: normal case" "6"
+_assert_not_deleted "prune: normal case" "7"
+_assert_not_deleted "prune: normal case" "8"
+
+# 7. Fewer than 4 versions total (including the one just published) — nothing
+#    to prune, delete-function must never be called.
+_write_stub "3"
+_set_versions "1 2 3"
+_run "my-app-dev-core-api"
+_assert_exit "prune: fewer than 4 versions total" 0
+_assert_alias_moved_to "prune: fewer than 4 versions total" "3"
+_assert_no_deletes_at_all "prune: fewer than 4 versions total"
+
+# 8. A delete failure on one version must not block pruning the others, and
+#    must not fail the script — a stuck old version costs money, a failed
+#    deploy costs more.
+_write_stub "8"
+_set_versions "1 2 3 4 5 6 7 8"
+_set_fail_delete "2"
+_run "my-app-dev-core-api"
+_assert_exit "prune: one delete failure doesn't fail the script" 0
+_assert_deleted "prune: one delete failure doesn't fail the script" "1"
+_assert_deleted "prune: one delete failure doesn't fail the script" "2"
+_assert_deleted "prune: one delete failure doesn't fail the script" "3"
+_assert_deleted "prune: one delete failure doesn't fail the script" "4"
+_assert_output_contains "prune: one delete failure doesn't fail the script — logs the failure" "failed to delete old version 2"
+
+# 9. A version outside the live+3 window but still referenced by a non-live
+#    alias must survive — pruning must never delete under an alias's feet.
+_write_stub "8"
+_set_versions "1 2 3 4 5 6 7 8"
+_set_other_aliases "2"
+_run "my-app-dev-core-api"
+_assert_exit "prune: alias-protected version kept" 0
+_assert_not_deleted "prune: alias-protected version kept" "2"
+_assert_deleted "prune: alias-protected version kept" "1"
+_assert_deleted "prune: alias-protected version kept" "3"
+_assert_deleted "prune: alias-protected version kept" "4"
+_assert_not_deleted "prune: alias-protected version kept" "5"
 
 echo
 if [ "$FAILURES" -eq 0 ]; then

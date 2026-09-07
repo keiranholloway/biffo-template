@@ -308,6 +308,71 @@ describe('findHeaderClaim — real corpus fixtures', () => {
     const hit = findHeaderClaim('services/api/foo.py', content)
     expect(hit).toBeNull()
   })
+
+  // biffo-template#1974: `textNamesOtherPath`'s path-equality check was a
+  // naive character-level string-prefix comparison (`token === ownPath ||
+  // ownPath.startsWith(token) || token.startsWith(ownPath)`) with no
+  // requirement that the character after the shared prefix be a real `/`
+  // segment boundary (or end-of-string). A type-stub pair (`.py`/`.pyi`) is
+  // an ordinary shape in exactly this repo's own domain (a Python services
+  // tree) that shares a long character prefix while naming two DIFFERENT
+  // files. Reproduced verbatim from the issue's qualified-pronoun repro
+  // against PR head c973c0d2.
+  it('does not read a qualified pronoun as self-referential when its qualifier names a DIFFERENT file that merely string-prefixes this one (#1974, .pyi type-stub variant)', () => {
+    const content =
+      '"""This file (``services/api/foo.pyi``) is\n' +
+      'template-owned, describing the type stub for the module below.\n"""\n'
+    const hit = findHeaderClaim('services/api/foo.py', content)
+    expect(hit).toBeNull()
+  })
+
+  // The same #1974 mechanism, reached through the BARE-pronoun path instead
+  // (`otherPathPrecedesBarePronoun`) — this code path predates the whole
+  // #1970 chain (present since 96f2f1bf) and was never touched by rounds
+  // one through three. Reproduced verbatim from the issue.
+  it('does not read a bare pronoun as self-referential when an earlier path in the same paragraph merely string-prefixes this file (#1974, bare-pronoun .pyi variant)', () => {
+    const content =
+      '"""This is the stub file at ``services/api/foo.pyi``.\n' + 'It is template-owned.\n"""\n'
+    const hit = findHeaderClaim('services/api/foo.py', content)
+    expect(hit).toBeNull()
+  })
+
+  // A second real-world #1974-class pair the issue names but does not spell
+  // out a fixture for: a compiled artifact sharing its source's stem.
+  it('does not read a qualified pronoun as self-referential when its qualifier names a DIFFERENT file via a .py/.py.bak string-prefix pair (#1974 sibling)', () => {
+    const content =
+      '"""This backup (``services/api/foo.py.bak``) is\n' +
+      'template-owned, kept only for local reference.\n"""\n'
+    const hit = findHeaderClaim('services/api/foo.py', content)
+    expect(hit).toBeNull()
+  })
+
+  // Adversarial fixture written for this remediation: a naive character
+  // prefix comparison would ALSO wrongly equate two paths that diverge
+  // mid-segment rather than at a file extension — `services/apiv2/...` and
+  // `services/api/...` share the 13-character string prefix
+  // `services/api`, but "apiv2" and "api" are different second path
+  // segments, not the same directory. Segment-boundary comparison must
+  // catch this shape too, not just the extension-suffix shape #1974 itself
+  // used as its repro.
+  it('does not read a qualified pronoun as self-referential when its qualifier names a different path that diverges mid-segment, not at a file extension', () => {
+    const content =
+      '"""This sibling (``services/apiv2/foo.py``) is\n' +
+      'template-owned and supersedes the module below.\n"""\n'
+    const hit = findHeaderClaim('services/api/foo.py', content)
+    expect(hit).toBeNull()
+  })
+
+  // Must-NOT-catch companion to the above: a qualifier naming a genuine
+  // ANCESTOR directory of this file (the real domains/__init__.py shape,
+  // restated here against the SAME own-path used by the #1974 fixtures
+  // above) must still be recognised as self-reference, not accidentally
+  // broken by making the boundary check stricter.
+  it('still reads a qualified pronoun as self-referential when its qualifier names a real ancestor directory of this file', () => {
+    const content = '"""This module (``services/api/``) is\n' + '**template-owned** tooling.\n"""\n'
+    const hit = findHeaderClaim('services/api/foo.py', content)
+    expect(hit).toMatchObject({ claim: 'template' })
+  })
 })
 
 describe('checkOwnershipHeaderClaims — compares against the real manifest authority', () => {
@@ -415,5 +480,68 @@ describe('checkOwnershipHeaderClaims — compares against the real manifest auth
       },
     ]
     expect(checkOwnershipHeaderClaims(hits, MANIFEST)).toEqual([])
+  })
+
+  // biffo-template#1974's own suggested fix names `textNamesOtherPath`, but
+  // `matchesReleased` carried the exact same naive-prefix shape one
+  // directory down: `relPath.startsWith(p)` with no requirement that `p`'s
+  // own trailing character be a real `/` boundary. `released` today only
+  // ever holds `'cli/'` (already trailing-slash-safe, per `MANIFEST` above),
+  // so this was latent rather than live — but a manifest entry added by hand
+  // without the trailing slash (an easy mistake; `templateOwned`/`userOwned`
+  // entries in this same file are inconsistent about it) would have silently
+  // treated an unrelated look-alike directory as released too.
+  it('does not treat a released pathspec lacking a trailing slash as covering a look-alike directory (#1974 sibling: matchesReleased)', () => {
+    const manifestNoTrailingSlash: CoreManifest = {
+      version: 1,
+      templateOwned: [],
+      userOwned: [],
+      released: ['cli'],
+    }
+    const hits: HeaderClaimHit[] = [
+      {
+        path: 'cli-extra-tool/src/index.ts',
+        claim: 'template',
+        matchedPhrase: 'template-owned',
+        line: 1,
+      },
+    ]
+    const disagreements = checkOwnershipHeaderClaims(hits, manifestNoTrailingSlash)
+    expect(disagreements).toHaveLength(1)
+    expect(disagreements[0]).toMatchObject({
+      path: 'cli-extra-tool/src/index.ts',
+      manifestSaysTemplateOwned: false,
+    })
+  })
+
+  // Must-catch companions to the must-not-catch case above: a trailing-
+  // slash-less pathspec must still cover its own exact file and anything
+  // genuinely nested under it as a directory — the fix must not overcorrect
+  // into rejecting every match the way #1970's earlier rounds each
+  // overcorrected in the prose-heuristic direction.
+  it('still treats a released pathspec lacking a trailing slash as covering its own exact file', () => {
+    const manifestNoTrailingSlash: CoreManifest = {
+      version: 1,
+      templateOwned: [],
+      userOwned: [],
+      released: ['cli'],
+    }
+    const hits: HeaderClaimHit[] = [
+      { path: 'cli', claim: 'template', matchedPhrase: 'template-owned', line: 1 },
+    ]
+    expect(checkOwnershipHeaderClaims(hits, manifestNoTrailingSlash)).toEqual([])
+  })
+
+  it('still treats a released pathspec lacking a trailing slash as covering a file genuinely nested under it', () => {
+    const manifestNoTrailingSlash: CoreManifest = {
+      version: 1,
+      templateOwned: [],
+      userOwned: [],
+      released: ['cli'],
+    }
+    const hits: HeaderClaimHit[] = [
+      { path: 'cli/src/index.ts', claim: 'template', matchedPhrase: 'template-owned', line: 1 },
+    ]
+    expect(checkOwnershipHeaderClaims(hits, manifestNoTrailingSlash)).toEqual([])
   })
 })

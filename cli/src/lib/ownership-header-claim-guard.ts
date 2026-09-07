@@ -191,6 +191,53 @@
  * say" — that is what makes this a removal of round three's flawed
  * assumption rather than a fifth narrowing of it.
  *
+ * ### Round four's flaw, and why the fix is a REPLACEMENT, not a narrowing (#1974)
+ *
+ * `textNamesOtherPath` (round four/#1970's own commit c973c0d2) was
+ * introduced as "the one check every mechanism in this module actually
+ * needs" — and then answered that question with `token === ownPath ||
+ * ownPath.startsWith(token) || token.startsWith(ownPath)`: a naive
+ * character-level string-prefix comparison with no requirement that the
+ * character immediately after the shared prefix be a real `/` segment
+ * boundary. `services/api/foo.pyi` string-prefixes `services/api/foo.py`
+ * (and vice versa on the other pairing), so it was treated as "the same
+ * file" purely by coincidence of spelling — reproducing #1959's original
+ * false-positive shape a fourth time, via a mechanism that predates the
+ * whole #1970 chain (`otherPathPrecedesBarePronoun`'s bare-pronoun path
+ * carried the same unchecked comparison back to 96f2f1bf) and was carried
+ * forward, unfixed, into round four's own "structural fix" primitive.
+ *
+ * **This one is fixed differently from rounds one through three, and the
+ * difference is deliberate, not cosmetic.** Every prior round narrowed a
+ * heuristic that answers a genuinely open-ended question — what a pronoun's
+ * antecedent is in free-form prose — which has no general algorithmic
+ * answer, so each fix could only ever be "checked against a wider real
+ * corpus," never "proven correct in general." Round four's flaw is a
+ * different kind of question: whether two path STRINGS name the same file.
+ * That question is fully bounded and has a known-correct answer — segment
+ * equality, exactly as `core-manifest.ts`'s own `matchLength` already
+ * establishes for `templateOwned`/`userOwned` prefixes (a `/` is a real,
+ * structural boundary, not incidental punctuation). So `isSameOrAncestorPath`
+ * (below) is not a fifth special case bolted onto `textNamesOtherPath` — it
+ * REPLACES the naive comparison with the general, provably-correct one, the
+ * same way rounds one/two/three each replaced (never patched around) the
+ * mechanism they found flawed. See `isSameOrAncestorPath`'s own doc comment
+ * for the algorithm and why segment comparison, not character comparison, is
+ * what makes it general rather than merely wider.
+ *
+ * The hunt for siblings this fix required (per the issue's own instruction
+ * to look for a fifth instance of the class before declaring done) found
+ * exactly one more: `matchesReleased` (see its own doc comment and
+ * `pathspecCovers`) carried the identical naive `relPath.startsWith(p)`
+ * shape, latent rather than live only because `released` happens to contain
+ * a single already-trailing-slash-safe entry (`'cli/'`) today. No other
+ * `ownPath`/`relPath` comparison in this module does a raw string
+ * `startsWith`/`endsWith`/`includes` on a path value — the sweep that found
+ * these two is `grep -n "startsWith\|endsWith\|includes(" ` over this file,
+ * checking every hit against whether it compares two PATHS (these two) or
+ * something else entirely (line boundaries, comment markers, quote
+ * delimiters — all correctly unrelated to path identity and left alone).
+ *
  * ## Why `INSTANCE-OWNED` and `template-owned`/`user-owned` are matched
  * differently
  *
@@ -329,6 +376,65 @@ function stripPathPunctuation(token: string): string {
 }
 
 /**
+ * Splits a repo-relative posix path into its `/`-separated segments,
+ * dropping any empty segment a leading or trailing slash would otherwise
+ * produce — so `"services/api/domains/"` and `"services/api/domains"`
+ * segment identically (`["services","api","domains"]`), and a boundary
+ * check against either reads the same regardless of which one the prose
+ * happened to spell.
+ */
+function pathSegments(path: string): string[] {
+  return path.split('/').filter((segment) => segment.length > 0)
+}
+
+/**
+ * Whether `token` and `ownPath` name the same file or directory, or one is a
+ * real path-SEGMENT ancestor of the other — never merely a character-level
+ * string prefix. This is the #1974 fix. The previous check was `token ===
+ * ownPath || ownPath.startsWith(token) || token.startsWith(ownPath)`, which
+ * treats `services/api/foo.pyi` as "the same file" as `services/api/foo.py`
+ * purely because one string-prefixes the other, with no requirement that the
+ * character immediately after the shared prefix be a real `/` boundary (or
+ * end-of-string). A type stub (`.pyi`/`.py`), a compiled artifact
+ * (`.pyc`/`.py`), or a backup (`.py.bak`/`.py`) are all ordinary real-world
+ * pairs a naive prefix comparison launders into "same file" in exactly this
+ * repo's own domain (a Python services tree) — and a mid-segment divergence
+ * (`services/apiv2/foo.py` vs `services/api/foo.py`, sharing the 13-
+ * character string prefix `services/api`) is the same mistake one level up.
+ *
+ * Comparing SEGMENTS rather than characters closes both: two paths are
+ * "the same" here only when the shorter one's segments are an exact,
+ * complete prefix of the longer one's — which is what makes
+ * `services/api/` a genuine ancestor of `services/api/foo.py` (the real
+ * `domains/__init__.py` qualifier shape this module's corpus depends on
+ * still resolving as self-reference) while `services/api/foo.pyi` and
+ * `services/apiv2/foo.py` are each correctly NOT an ancestor or self-match
+ * for `services/api/foo.py`.
+ *
+ * Mirrors the boundary discipline `core-manifest.ts`'s own `matchLength`
+ * already enforces for `templateOwned`/`userOwned` prefixes (a directory
+ * entry's `/` is a real, structural boundary, not incidental punctuation) —
+ * the correct, general algorithm for this bounded, well-defined path-
+ * identity question. This is deliberately a DIFFERENT class of fix from the
+ * pronoun/qualifier grammar heuristics elsewhere in this module (see the
+ * module doc comment's four-round history and its "Why this is fixed, not
+ * narrowed" section): resolving what a pronoun refers to in free prose has
+ * no general algorithmic answer, so those checks stay narrow and are
+ * validated only against an exhaustive real corpus. Whether two path STRINGS
+ * name the same file is a fully determined, bounded question with a
+ * known-correct answer — segment equality — so unlike the grammar
+ * heuristics, this one is fixed properly rather than narrowed to the
+ * reported case.
+ */
+function isSameOrAncestorPath(token: string, ownPath: string): boolean {
+  const tokenSegments = pathSegments(token)
+  const ownSegments = pathSegments(ownPath)
+  const shorter = tokenSegments.length <= ownSegments.length ? tokenSegments : ownSegments
+  const longer = tokenSegments.length <= ownSegments.length ? ownSegments : tokenSegments
+  return shorter.length > 0 && shorter.every((segment, i) => segment === longer[i])
+}
+
+/**
  * Whether `text` names a path OTHER than `ownPath` — the one structural
  * question every mechanism in this module needs answered, applied to
  * whatever span of text actually claims to supply (or fails to supply) a
@@ -340,6 +446,9 @@ function stripPathPunctuation(token: string): string {
  * qualifier (`claimInText`), and the text preceding a first-line em-dash
  * (`claimInText` again) — never with anything wider, and never skipped
  * because the span happened to be non-empty.
+ *
+ * The path-equality question itself is delegated to `isSameOrAncestorPath`
+ * (see its own doc comment for the #1974 fix this replaced).
  */
 function textNamesOtherPath(text: string, ownPath: string): boolean {
   PATH_TOKEN.lastIndex = 0
@@ -347,7 +456,7 @@ function textNamesOtherPath(text: string, ownPath: string): boolean {
   while ((tokenMatch = PATH_TOKEN.exec(text))) {
     const token = stripPathPunctuation(tokenMatch[1]!)
     if (!token.includes('/')) continue
-    if (token === ownPath || ownPath.startsWith(token) || token.startsWith(ownPath)) continue
+    if (isSameOrAncestorPath(token, ownPath)) continue
     return true
   }
   return false
@@ -706,15 +815,39 @@ export function sweepOwnershipHeaderClaims(
   return hits
 }
 
-/** Whether `manifest.released` covers `relPath` — a flat pathspec-prefix
- * list (mirrors how `core-tags.ts`'s `templateVersionedPathspecs` already
- * treats it: passed straight through as `git diff -- <pathspecs>`, never run
- * through the glob/longest-prefix machinery `isTemplateOwned` uses for
- * `templateOwned`/`userOwned`). `cli/` is the one entry today; see the
- * module doc comment for why a `template` claim on a `released` path is
- * correct rather than a disagreement. */
+/**
+ * Whether pathspec `p` covers `relPath` — matching real `git diff -- <p>`
+ * pathspec semantics (this is a flat prefix list precisely because it
+ * mirrors `core-tags.ts`'s `templateVersionedPathspecs`, passed straight
+ * through as `git diff -- <pathspecs>`, never run through the glob/longest-
+ * prefix machinery `isTemplateOwned` uses — see `matchesReleased`'s own doc
+ * comment): `p` covers itself exactly, and covers anything genuinely nested
+ * under it as a directory, on a real `/` boundary — regardless of whether
+ * `p` itself happens to be written with a trailing slash.
+ *
+ * This is the #1974-class fix applied to `matchesReleased`, not just to
+ * `textNamesOtherPath` (see that function's own doc comment for the
+ * original reported instance). The previous check was `relPath === p ||
+ * relPath.startsWith(p)`, with no requirement that the character after the
+ * shared prefix be a real `/`. `released` today only ever contains `'cli/'`
+ * (already trailing-slash-safe), so this was latent rather than live — but
+ * it is the identical naive-prefix shape #1974 was filed to stop this
+ * module reproducing, and a manifest entry added by hand without the
+ * trailing slash would have silently treated a look-alike directory
+ * (`cli-extra-tool/...`) as released too.
+ */
+function pathspecCovers(pathspec: string, relPath: string): boolean {
+  if (relPath === pathspec) return true
+  const dir = pathspec.endsWith('/') ? pathspec : `${pathspec}/`
+  return relPath.startsWith(dir)
+}
+
+/** Whether `manifest.released` covers `relPath`. `cli/` is the one entry
+ * today; see the module doc comment for why a `template` claim on a
+ * `released` path is correct rather than a disagreement, and
+ * `pathspecCovers`'s own doc comment for the boundary rule applied here. */
 function matchesReleased(relPath: string, manifest: CoreManifest): boolean {
-  return (manifest.released ?? []).some((p) => relPath === p || relPath.startsWith(p))
+  return (manifest.released ?? []).some((p) => pathspecCovers(p, relPath))
 }
 
 /**

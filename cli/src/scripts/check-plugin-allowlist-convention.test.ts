@@ -31,6 +31,20 @@
  * regression directly against a full copy of the real modules with one file
  * removed, and asserts it still fails loudly (exit 1) rather than reporting
  * "not applicable".
+ *
+ * #1908's own fix (ALL FOUR missing, not ANY) left a THIRD gap open, closed
+ * here: a real sibling app (`biffo sibling create`'s own scaffold,
+ * `_skeletons/sibling-template/modules/`) carries its OWN
+ * `modules/cloud/aws/compute/main.tf` — a real Lambda compute module for its
+ * own BFF, unrelated to the plugin-hosting one this guard reads — so a real
+ * sibling is missing only THREE of the four sources, never all four, and the
+ * #1906/#1908 file-count heuristic ran the audit anyway and threw "cannot
+ * read modules/plugins/_template/main.tf" on a perfectly healthy sibling
+ * (biffo-template#1943). `runPluginAllowlistConventionCheck` now asks
+ * `classifyRepoOwnership` directly rather than counting which of four paths
+ * happen to exist, so the fixtures below add (or omit) `core-manifest.json`/
+ * `biffo.core.json` — the actual repo-type markers — instead of relying on
+ * file-count alone.
  */
 import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -66,12 +80,17 @@ function write(root: string, rel: string, content: string): void {
   writeFileSync(p, content)
 }
 
-/** A copy of the real modules, so a test can break one and watch the guard fire. */
+/** A copy of the real modules, so a test can break one and watch the guard
+ * fire — plus a `core-manifest.json` marker, so `classifyRepoOwnership`
+ * reads this fixture as a template/instance tree rather than a satellite
+ * (the guard now asks that directly instead of counting which of the four
+ * module sources happen to exist; see this file's #1943 note above). */
 function copyRealModules(dest: string): void {
   for (const relative of SOURCES) {
     mkdirSync(dirname(join(dest, relative)), { recursive: true })
     cpSync(join(REPO_ROOT, relative), join(dest, relative))
   }
+  write(dest, 'core-manifest.json', '{}')
 }
 
 function patch(root: string, relative: string, from: string, to: string): void {
@@ -108,8 +127,29 @@ describe('runPluginAllowlistConventionCheck', () => {
 
     expect(process.exit).not.toHaveBeenCalled()
     const logged = vi.mocked(console.log).mock.calls.flat().join('\n')
-    expect(logged).toContain(COMPUTE_MAIN_TF)
     expect(logged.toLowerCase()).toContain('not applicable')
+  })
+
+  it('is not applicable (exit 0, no crash) in a real sibling tree that carries its OWN unrelated compute/main.tf (#1943)', async () => {
+    // The actual reported shape: a real `biffo sibling create` scaffold has
+    // its own modules/cloud/aws/compute/main.tf (a real Lambda module for
+    // its own BFF) but none of the other three plugin-hosting sources, and
+    // no core-manifest.json/biffo.core.json at all. That is missing THREE of
+    // the four, never all four, which the #1906/#1908 file-count heuristic
+    // ran anyway and crashed on.
+    const root = makeTmpDir('plugin-allowlist-real-sibling')
+    write(root, 'apps/frontend/package.json', '{"name": "tabsii-geo"}')
+    mkdirSync(dirname(join(root, COMPUTE_MAIN_TF)), { recursive: true })
+    cpSync(join(REPO_ROOT, COMPUTE_MAIN_TF), join(root, COMPUTE_MAIN_TF))
+    setRoot(root)
+
+    await expect(runPluginAllowlistConventionCheck()).resolves.toBeUndefined()
+
+    expect(process.exit).not.toHaveBeenCalled()
+    const logged = vi.mocked(console.log).mock.calls.flat().join('\n')
+    expect(logged.toLowerCase()).toContain('not applicable')
+    const reported = vi.mocked(console.error).mock.calls.flat().join('\n')
+    expect(reported).toBe('')
   })
 
   it('STILL fails (exit 1) on a real glob drift against a full copy of the four sources', async () => {

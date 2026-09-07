@@ -1,4 +1,4 @@
-import { cpSync, existsSync, mkdirSync, readFileSync, statSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join, relative, resolve } from 'node:path'
 import chalk from 'chalk'
 import { Command } from 'commander'
@@ -6,6 +6,12 @@ import { GitAdapter } from '../adapters/git/index.js'
 import { PluginMigrationsAdapter } from '../adapters/plugin-migrations/index.js'
 import { RegistryAdapter, type RegistryPluginEntry } from '../adapters/registry/index.js'
 import { log } from '../lib/logger.js'
+import {
+  missingRequiredConfigMessage,
+  parseConfigOptionValues,
+  resolvePluginConfigSupply,
+  type ResolvedPluginConfigValue,
+} from '../lib/plugin-config-resolution.js'
 import { pluginDir } from '../lib/plugin-locations.js'
 import { validateManifest, type PluginManifest } from '../lib/plugin-manifest.js'
 import {
@@ -39,10 +45,18 @@ export const pluginInstallCommand = new Command('install')
   )
   .option('--dry-run', 'Resolve the plugin and print planned changes without modifying the repo')
   .option('--cwd <path>', 'Project root to install into (defaults to the current directory)')
+  .option(
+    '--config <name=value>',
+    'Supply an instance value for one manifest `config:` declaration (biffo-template#1517) — ' +
+      "repeatable. For a 'secret' declaration, value must be an SSM parameter PATH, never the " +
+      'credential itself.',
+    (value: string, previous: string[]) => [...previous, value],
+    [] as string[],
+  )
   .action(
     async (
       target: string | undefined,
-      options: { local?: string; dryRun?: boolean; cwd?: string },
+      options: { local?: string; dryRun?: boolean; cwd?: string; config: string[] },
     ) => {
       const cwd = options.cwd ? resolve(options.cwd) : process.cwd()
       try {
@@ -52,6 +66,7 @@ export const pluginInstallCommand = new Command('install')
             ...(options.local ? { local: resolve(options.local) } : {}),
             dryRun: options.dryRun ?? false,
             cwd,
+            config: parseConfigOptionValues(options.config),
           },
           {
             registry: new RegistryAdapter(),
@@ -77,6 +92,14 @@ export interface PluginInstallOptions {
   local?: string
   dryRun: boolean
   cwd: string
+  /**
+   * Instance-supplied values for the manifest's `config:` declarations
+   * (biffo-template#1517), keyed by declaration name — from repeatable
+   * `--config <name>=<value>`. Defaults to `{}` for callers (and existing
+   * tests) that predate this option; a manifest with no `config` block
+   * behaves identically either way.
+   */
+  config?: Readonly<Record<string, string>>
 }
 
 /**
@@ -281,7 +304,7 @@ export async function runPluginInstall(
   }
 
   if (options.dryRun) {
-    printDryRun(entry, source!, relTargetDir, inTreeSource)
+    printDryRun(entry, source!, relTargetDir, inTreeSource, options.config ?? {})
     return
   }
 
@@ -321,6 +344,21 @@ export async function runPluginInstall(
     const retiredShapeReasons = findRetiredFrontendShape(join(source!.sourceDir, 'terraform'))
     if (retiredShapeReasons.length > 0) {
       throw new Error(retiredFrontendShapeError(pluginName, retiredShapeReasons))
+    }
+
+    // Fail-closed on the manifest's declared `config:` needs (biffo-template#1517,
+    // rule 4) — checked before anything is copied, same posture as the retired-
+    // frontend-shape check above: a refusal here must leave the checkout
+    // untouched. A `required: true` declaration with no supplied value fails
+    // installation LOUDLY, rather than mounting a plugin that fails — or worse,
+    // silently no-ops — the first time it is actually used.
+    const configSupply = resolvePluginConfigSupply(
+      pluginName,
+      manifest.config,
+      options.config ?? {},
+    )
+    if (configSupply.missingRequired.length > 0) {
+      throw new Error(missingRequiredConfigMessage(pluginName, configSupply.missingRequired))
     }
 
     // Only now — after the manifest has validated — do we touch the target repo.
@@ -432,6 +470,38 @@ export async function runPluginInstall(
       stagePaths.push(seedResult.stagedPath!)
     }
 
+    // Record where each declared config need's value comes from (biffo-template#1517)
+    // — never the value of a secret itself, only the SSM parameter PATH that
+    // holds it (or a setting's literal, which is never confidential). Written
+    // even when `resolved` is empty, so a plugin's config gate can be told
+    // apart from a plugin declaring no `config` at all.
+    if (manifest.config.length > 0) {
+      const configFilePath = join(targetDir, 'biffo.plugin-config.json')
+      writeFileSync(
+        configFilePath,
+        JSON.stringify(
+          {
+            plugin: pluginName,
+            resolved: configSupply.resolved.map(({ name, kind, envName, value }) => ({
+              name,
+              kind,
+              env: envName,
+              // For a secret this is the SSM parameter PATH, not the credential.
+              value,
+            })),
+          },
+          null,
+          2,
+        ) + '\n',
+        'utf8',
+      )
+      stagePaths.push(relative(options.cwd, configFilePath))
+      log.success(
+        `Recorded ${configSupply.resolved.length}/${manifest.config.length} declared config ` +
+          `value(s) at ${relative(options.cwd, configFilePath)}`,
+      )
+    }
+
     const commitMessage = `feat(plugins): install ${pluginName}@${source!.version}`
     await deps.git.add(options.cwd, stagePaths)
     await deps.git.commit(options.cwd, commitMessage)
@@ -442,8 +512,42 @@ export async function runPluginInstall(
     console.log('  Push and redeploy to apply its migration and register its routes:')
     console.log(chalk.dim(`    git push`))
     console.log(chalk.dim(`    biffo deploy <environment> --app-only\n`))
+    printConfigWiringInstructions(pluginName, configSupply.resolved)
   } finally {
     source!.cleanup()
+  }
+}
+
+/**
+ * Tells the operator exactly what to add to their instance's
+ * `infra/environments/<env>/plugin_host.auto.tfvars.json`'s
+ * `plugin_host_environment` map (biffo-template#1517) — this file is
+ * user-owned, so the CLI does not write it directly (same posture as the
+ * `wiring.skippedEnvironments` warning above for `enabled_plugins`). A
+ * `secret` also needs the underlying SSM parameter's `ssm:GetParameter` (and,
+ * if it's a SecureString on a customer-managed KMS key, a scoped
+ * `kms:Decrypt`) granted to the shared plugin host's execution role.
+ */
+function printConfigWiringInstructions(
+  pluginName: string,
+  resolved: readonly ResolvedPluginConfigValue[],
+): void {
+  if (resolved.length === 0) return
+
+  console.log(chalk.bold(`  ${pluginName} needs these env vars on the shared plugin host:\n`))
+  const entries: Record<string, string> = {}
+  for (const r of resolved) entries[r.envName] = r.value
+  console.log(chalk.dim(`    ${JSON.stringify(entries, null, 2).split('\n').join('\n    ')}`))
+  console.log(
+    `\n  Add them to plugin_host_environment in infra/environments/<env>/` +
+      `plugin_host.auto.tfvars.json.`,
+  )
+  if (resolved.some((r) => r.kind === 'secret')) {
+    console.log(
+      "  At least one is a secret reference — grant the shared plugin host's execution role " +
+        "ssm:GetParameter (and kms:Decrypt if it's a SecureString on a customer-managed key) " +
+        'scoped to that parameter.',
+    )
   }
 }
 
@@ -460,6 +564,7 @@ function printDryRun(
   source: ResolvedPluginSource | undefined,
   relTargetDir: string,
   inTreeSource: boolean,
+  suppliedConfig: Readonly<Record<string, string>> = {},
 ): void {
   const name = entry ? entry.name : source!.name
   const version = entry ? entry.version : source!.version
@@ -496,6 +601,25 @@ function printDryRun(
       `  Would vendor seed DDL into: ${pluginSeedImportDir(name)}/ ` +
         `(baseline_tables: ${source.manifest.seed.baseline_tables.join(', ') || 'none declared'})`,
     )
+  }
+  if (source && source.manifest.config.length > 0) {
+    // biffo-template#1517: preview whether the real (non-dry-run) install
+    // would refuse for a missing required value — computed, not guessed, so
+    // a dry run tells the truth about what install would actually do.
+    const { resolved, missingRequired } = resolvePluginConfigSupply(
+      name,
+      source.manifest.config,
+      suppliedConfig,
+    )
+    console.log(`  Declares ${source.manifest.config.length} config need(s):`)
+    for (const c of source.manifest.config) {
+      const status = missingRequired.some((m) => m.name === c.name)
+        ? 'MISSING (would fail install)'
+        : resolved.some((r) => r.name === c.name)
+          ? 'supplied'
+          : 'not supplied (optional)'
+      console.log(`    - ${c.name} (${c.kind}${c.required ? ', required' : ''}): ${status}`)
+    }
   }
   console.log(`  Would commit:  feat(plugins): install ${name}@${version}\n`)
 }

@@ -11,11 +11,21 @@
  * construction: every candidate that is not provably "PR merged, worktree
  * clean, HEAD not detached, worktree HEAD actually contained in what that PR
  * shipped (#1810 — a branch name having a merged PR is not, by itself, proof
- * of that last part), and not held by a live biffo-fleet worktree-claim
+ * of that last part), and not held by a LIVE biffo-fleet worktree-claim
  * lock (#1833, replaces #1825 — a merged, clean, attached worktree can still
  * be open for follow-up work under a live session)" is left alone and
  * reported with a reason, per the #1413 denominator rule (state what was
  * kept, not only what was removed).
+ *
+ * "Live" is judged by age, not mere existence (#1948): nothing in the estate
+ * ever releases a `.fleet-worktree-claim` lock (`fleet.sh worktree-claim
+ * --release`/`--steal` are documented and never called), so treating any
+ * existing lock as permanently live made this milestone's own "keep" a
+ * permanent one — measured directly, every `biffo-pg-test-*` Docker
+ * container that should have been reclaimed once its worktree's PR merged
+ * was instead being kept indefinitely for this exact reason. See
+ * `FLEET_CLAIM_STALE_AFTER_MS` below for the TTL and why it can afford to be
+ * generous.
  *
  * ## Why local commit reachability is not the signal
  *
@@ -39,6 +49,35 @@ import type { GithubCliAdapter, PrVerdict } from '../adapters/github-cli/index.j
 import type { GitAdapter } from '../adapters/git/index.js'
 import type { BranchRef } from './upgrade-branch-reaper.js'
 import type { WorktreeFact } from './doctor.js'
+
+/**
+ * How old a `.fleet-worktree-claim` lock must be before `--fix` stops
+ * trusting it as a live session and treats it as abandoned
+ * (biffo-template#1948). Four hours, matching `scripts/pg-test-db.sh`'s own
+ * `BIFFO_PG_CLONE_TTL_MIN` precedent (240 minutes) for the identical
+ * trade-off: generous on purpose, because the actual safety net here is not
+ * this TTL, it is the PR-verdict check that runs immediately afterward.
+ *
+ * Nothing in the estate ever calls `fleet.sh worktree-claim ... --release` or
+ * `--steal` (grepped the whole of biffo-fleet — the two verbs are documented
+ * in the command's own help text and invoked nowhere) so, absent a TTL, a
+ * lock is permanent from the moment it is written. Making that lock stale by
+ * age, rather than requiring a release nobody sends, closes the loop the same
+ * way every other unreleased-claim class in this estate was closed:
+ * mechanism, not a caller remembering a step (`claim.sh`'s `--as`,
+ * `--reaffirm` for PR#1848/#1849).
+ *
+ * Crucially, treating a lock as stale does not by itself reap anything — it
+ * only stops short-circuiting `hasFleetClaim` to `true`, and the candidate
+ * still has to clear `classifyReapCandidate`'s full table below: `isDirty`,
+ * and then a GitHub-confirmed `merged` verdict with `mergeContainsHead ===
+ * true`. A worktree a live session is genuinely still working on — no PR yet,
+ * or an open one, or uncommitted changes — keeps for that reason instead,
+ * whatever the lock's age. So this TTL can afford to be generous: it decides
+ * only whether an ALREADY-MERGED, ALREADY-CLEAN worktree gets a chance to be
+ * reaped, not whether in-progress work does.
+ */
+export const FLEET_CLAIM_STALE_AFTER_MS = 4 * 60 * 60 * 1000
 
 export type ReapAction = 'reap' | 'keep'
 
@@ -144,22 +183,63 @@ export interface ReapCandidate {
 }
 
 /**
- * The candidate pool `--fix` is willing to consider: every worktree whose
- * branch's upstream git reports `[gone]` (positive evidence its remote copy
- * was deleted — the same set `checkWorktrees`'s `worktree-merged` finding
- * already reports).
+ * A branch's OWN name is absent from the live `origin/*` refs
+ * (biffo-template#1954) — deliberately not the same test as
+ * `branch.track.includes('gone')`.
  *
- * Deliberately excludes the `worktree-stale` (far-behind-but-not-gone) class
- * entirely: a live upstream means nothing has told us this branch's PR ever
- * resolved, so there is no verdict to ask GitHub for and it stays a report,
- * never an action. Also deliberately worktree-only — a `[gone]` branch with
- * no worktree at all is a bare-branch candidate, which is milestone 2.
+ * `git worktree add -b <branch> <path> origin/dev` sets the new branch's
+ * upstream to `origin/dev` by default, and a plain `git push origin HEAD`
+ * (AGENTS.md's own documented push command, no `-u`) never corrects it — so a
+ * branch can be pushed, merged, and have `origin/<branch>` deleted on GitHub,
+ * while `%(upstream:track)` never reports `[gone]` because the ref it is
+ * actually tracking (`origin/dev`) never goes anywhere. Measured live,
+ * 2026-09-07: `agent/1900`'s PR merged two days prior and its remote branch
+ * was gone, but `git branch -vv` still read `[origin/dev: ahead 1, behind
+ * 21]` — invisible to the old `[gone]`-only filter, forever.
+ *
+ * The fix checks the branch's OWN name against the actual set of live
+ * `origin/*` refs (`listRemoteBranchNames`, config-independent) instead of
+ * trusting what the branch happens to be configured to track.
+ *
+ * Deliberately NOT gated on `branch.upstream !== ''` — that would reintroduce
+ * a version of the same bug it fixes: `git worktree add -b <branch> <path>
+ * origin/dev` sets a non-empty upstream (`origin/dev`) on every branch it
+ * creates in this repo's own documented workflow, whether or not that branch
+ * is EVER pushed under its own name, so "has some upstream" cannot
+ * distinguish "pushed then deleted" from "never pushed at all" here — it is
+ * nearly always true. That distinction does not need making, unlike in
+ * `upgrade-branch-reaper.ts` (which deletes a branch on this signal ALONE,
+ * with no downstream verification): this module's only actual safety check
+ * is the GitHub-verified judgement `classifyReapCandidate` applies afterward
+ * (`prVerdictForBranch` + `mergeContainsHead`) — a branch that was genuinely
+ * never pushed gets `prVerdict: 'none'` there and keeps for `no-pr`, exactly
+ * as safely as before. Being "wrong" here costs one extra, harmless GitHub
+ * call; being wrong the other way costs a leaked worktree forever.
+ */
+function hasProvenGoneRemote(branch: BranchRef, remoteBranchNames: Set<string>): boolean {
+  return !remoteBranchNames.has(branch.name)
+}
+
+/**
+ * The candidate pool `--fix` is willing to consider: every worktree whose
+ * branch has proven, by `hasProvenGoneRemote`, that its own remote copy is
+ * gone (the same set `checkWorktrees`'s `worktree-merged` finding reports,
+ * modulo #1954's fix — see that function's doc comment).
+ *
+ * Deliberately excludes a branch with a live same-named remote copy
+ * entirely: nothing has told us this branch's PR ever resolved, so there is
+ * no verdict worth asking GitHub for and it stays a report, never an action.
+ * Also deliberately worktree-only — a proven-gone branch with no worktree at
+ * all is a bare-branch candidate, which is milestone 2.
  */
 export function findReapCandidates(
   branches: BranchRef[],
   worktrees: WorktreeFact[],
+  remoteBranchNames: Set<string>,
 ): ReapCandidate[] {
-  const goneBranches = new Set(branches.filter((b) => b.track.includes('gone')).map((b) => b.name))
+  const goneBranches = new Set(
+    branches.filter((b) => hasProvenGoneRemote(b, remoteBranchNames)).map((b) => b.name),
+  )
   return worktrees
     .filter((w) => goneBranches.has(w.branch))
     .map((w) => ({ branch: w.branch, worktreePath: w.path }))
@@ -170,6 +250,14 @@ export interface ReapOutcome {
   verdict: ReapVerdict
   /** Only meaningful when verdict.action === 'reap'. */
   worktreeRemoved: boolean | null
+  /**
+   * True when a `.fleet-worktree-claim` lock was found older than
+   * `FLEET_CLAIM_STALE_AFTER_MS` and cleared before judgement (#1948) — worth
+   * reporting on its own, per the #1413 denominator rule, since it is the
+   * one case where `--fix` took a destructive action on a lock nothing else
+   * in the estate would ever have released.
+   */
+  staleClaimCleared: boolean
 }
 
 export interface ReapDeps {
@@ -177,6 +265,8 @@ export interface ReapDeps {
     GitAdapter,
     | 'hasUncommittedChanges'
     | 'hasFleetWorktreeClaim'
+    | 'fleetWorktreeClaimAgeMs'
+    | 'clearStaleFleetWorktreeClaim'
     | 'currentBranch'
     | 'removeWorktree'
     | 'headSha'
@@ -203,12 +293,33 @@ export async function reapCandidate(
 ): Promise<ReapOutcome> {
   const { git, github } = deps
 
-  const [current, isDirty, hasFleetClaim] = await Promise.all([
+  const [current, claimExists] = await Promise.all([
     git.currentBranch(candidate.worktreePath),
-    git.hasUncommittedChanges(candidate.worktreePath),
     git.hasFleetWorktreeClaim(candidate.worktreePath),
   ])
   const isDetached = current === 'HEAD' || current === ''
+
+  // Staleness is decided BEFORE `isDirty` is read, and a stale lock is
+  // cleared before that read too (#1948): the lock directory is untracked,
+  // so leaving it in place would trip `git status --porcelain` and keep the
+  // worktree anyway, under the less specific `uncommitted-changes` reason —
+  // silently defeating the point of deciding the claim itself is stale.
+  let hasFleetClaim = false
+  let staleClaimCleared = false
+  if (claimExists) {
+    const ageMs = await git.fleetWorktreeClaimAgeMs(candidate.worktreePath)
+    // `null` (lock present, age unreadable) is fail-closed: treated exactly
+    // like a live claim, never like a stale one — see `fleetWorktreeClaimAgeMs`'s
+    // own doc comment.
+    if (ageMs === null || ageMs < FLEET_CLAIM_STALE_AFTER_MS) {
+      hasFleetClaim = true
+    } else {
+      await git.clearStaleFleetWorktreeClaim(candidate.worktreePath)
+      staleClaimCleared = true
+    }
+  }
+
+  const isDirty = await git.hasUncommittedChanges(candidate.worktreePath)
 
   const prVerdict: PrVerdict =
     isDetached || isDirty || hasFleetClaim
@@ -239,11 +350,11 @@ export async function reapCandidate(
   })
 
   if (verdict.action === 'keep') {
-    return { candidate, verdict, worktreeRemoved: null }
+    return { candidate, verdict, worktreeRemoved: null, staleClaimCleared }
   }
 
   const worktreeRemoved = await git.removeWorktree(cwd, candidate.worktreePath)
-  return { candidate, verdict, worktreeRemoved }
+  return { candidate, verdict, worktreeRemoved, staleClaimCleared }
 }
 
 /** Runs every candidate found in `facts`, sequentially — see doc comment on why. */
@@ -253,8 +364,9 @@ export async function reapAll(
   worktrees: WorktreeFact[],
   currentBranch: string,
   deps: ReapDeps,
+  remoteBranchNames: Set<string>,
 ): Promise<ReapOutcome[]> {
-  const candidates = findReapCandidates(branches, worktrees).filter(
+  const candidates = findReapCandidates(branches, worktrees, remoteBranchNames).filter(
     (c) => c.branch !== currentBranch,
   )
   const outcomes: ReapOutcome[] = []
@@ -287,18 +399,19 @@ export interface BareBranchCandidate {
 }
 
 /**
- * Every `[gone]` local branch with **no** linked worktree. Deliberately the
- * complement of `findReapCandidates`'s own filter (worktree branches only) —
- * together the two cover every `[gone]` branch exactly once, never both ways
- * for the same name.
+ * Every proven-gone local branch (`hasProvenGoneRemote`, #1954) with **no**
+ * linked worktree. Deliberately the complement of `findReapCandidates`'s own
+ * filter (worktree branches only) — together the two cover every proven-gone
+ * branch exactly once, never both ways for the same name.
  */
 export function findBareBranchCandidates(
   branches: BranchRef[],
   worktrees: WorktreeFact[],
+  remoteBranchNames: Set<string>,
 ): BareBranchCandidate[] {
   const worktreeBranches = new Set(worktrees.map((w) => w.branch))
   return branches
-    .filter((b) => b.track.includes('gone') && !worktreeBranches.has(b.name))
+    .filter((b) => hasProvenGoneRemote(b, remoteBranchNames) && !worktreeBranches.has(b.name))
     .map((b) => ({ branch: b.name }))
 }
 
@@ -366,8 +479,9 @@ export async function reapAllBareBranches(
   worktrees: WorktreeFact[],
   currentBranch: string,
   deps: BranchReapDeps,
+  remoteBranchNames: Set<string>,
 ): Promise<BareBranchReapOutcome[]> {
-  const candidates = findBareBranchCandidates(branches, worktrees).filter(
+  const candidates = findBareBranchCandidates(branches, worktrees, remoteBranchNames).filter(
     (c) => c.branch !== currentBranch,
   )
   const outcomes: BareBranchReapOutcome[] = []

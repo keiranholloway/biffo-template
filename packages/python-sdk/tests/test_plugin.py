@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 from biffo_plugin_sdk import (
@@ -10,6 +11,7 @@ from biffo_plugin_sdk import (
     BiffoEvent,
     BiffoPluginBase,
     ColumnDefinition,
+    ConfigDeclaration,
     EventSubscription,
     IndexDefinition,
     PermissionRule,
@@ -421,6 +423,167 @@ class TestPluginManifestStrictness:
         )
         assert manifest.core_capabilities == {"owner-scoped-tables": "^1"}
         assert manifest.dependencies == {"biffo-plugin-sdk": "^1.1"}
+
+
+class TestConfigDeclaration:
+    """The `config:` mechanism (biffo-template#1517): a manifest declares
+    NEEDS — name/kind/required/description — never values.
+    """
+
+    def test_config_defaults_to_empty(self):
+        assert PluginManifest(name="x", version="1.0.0").config == []
+
+    def test_config_is_parsed_and_typed(self):
+        manifest = PluginManifest.model_validate(
+            {
+                "name": "marketing",
+                "version": "1.0.0",
+                "config": [
+                    {
+                        "name": "image_provider_api_key",
+                        "kind": "secret",
+                        "required": True,
+                        "description": "API key for the still-image provider.",
+                    },
+                    {
+                        "name": "user_ingress_group",
+                        "kind": "setting",
+                        "required": False,
+                        "description": "Which group may reach the unit-facing surface.",
+                    },
+                ],
+            }
+        )
+        assert len(manifest.config) == 2
+        secret, setting = manifest.config
+        assert secret.name == "image_provider_api_key"
+        assert secret.kind == "secret"
+        assert secret.required is True
+        assert setting.kind == "setting"
+        assert setting.required is False
+
+    def test_required_defaults_true(self):
+        decl = ConfigDeclaration(name="x", kind="setting", description="d")
+        assert decl.required is True
+
+    def test_rejects_unknown_kind(self):
+        with pytest.raises(ValidationError):
+            ConfigDeclaration(name="x", kind="credential", description="d")  # type: ignore[arg-type]
+
+    def test_requires_description(self):
+        with pytest.raises(ValidationError):
+            ConfigDeclaration(name="x", kind="setting", description="")
+
+    def test_rejects_unknown_key(self):
+        with pytest.raises(ValidationError):
+            ConfigDeclaration(name="x", kind="setting", description="d", extra_field=True)  # type: ignore[call-arg]
+
+    def test_rejects_non_snake_case_name(self):
+        with pytest.raises(ValidationError):
+            ConfigDeclaration(name="Not-Snake-Case", kind="setting", description="d")
+
+    def test_duplicate_config_names_rejected(self):
+        with pytest.raises(ValidationError, match="Duplicate config declaration"):
+            PluginManifest.model_validate(
+                {
+                    "name": "x",
+                    "version": "1.0.0",
+                    "config": [
+                        {"name": "dup", "kind": "setting", "description": "a"},
+                        {"name": "dup", "kind": "secret", "description": "b"},
+                    ],
+                }
+            )
+
+    def test_manifest_declares_needs_never_values(self):
+        """No credential, group name or platform vocabulary appears in the
+        config block itself — only the shape of what is needed."""
+        manifest = PluginManifest.model_validate(
+            {
+                "name": "x",
+                "version": "1.0.0",
+                "config": [
+                    {"name": "api_key", "kind": "secret", "description": "d"},
+                ],
+            }
+        )
+        dumped = manifest.model_dump_serializable()
+        assert dumped["config"] == [
+            {"name": "api_key", "kind": "secret", "required": True, "description": "d"}
+        ]
+
+
+class TestChatAgentRequiredGroupMigration:
+    """biffo-template#1517's owner-added acceptance criterion: a chat agent's
+    `required_group` must reference a `config` declaration of `kind:
+    "setting"`, never a literal Cognito group name baked into the manifest.
+    """
+
+    def _chat_agent(self, **overrides: Any) -> dict[str, Any]:
+        base = {
+            "key": "assistant",
+            "system_prompt": "Be helpful.",
+            "model": "anthropic/claude-3-haiku",
+            "required_group": "chat_agent_group",
+        }
+        base.update(overrides)
+        return base
+
+    def test_required_group_referencing_declared_setting_validates(self):
+        manifest = PluginManifest.model_validate(
+            {
+                "name": "ideation",
+                "version": "1.0.0",
+                "chat_agents": [self._chat_agent()],
+                "config": [
+                    {
+                        "name": "chat_agent_group",
+                        "kind": "setting",
+                        "description": "Cognito group allowed to use the chat agent.",
+                    }
+                ],
+            }
+        )
+        assert manifest.chat_agents[0].required_group == "chat_agent_group"
+
+    def test_required_group_with_no_matching_config_entry_rejected(self):
+        """The exact defect this issue names: `founder` (or any literal group)
+        baked straight into the manifest, unreachable on a platform that
+        doesn't define it — and now structurally impossible to express."""
+        with pytest.raises(ValidationError, match="must name a `config` declaration"):
+            PluginManifest.model_validate(
+                {
+                    "name": "ideation",
+                    "version": "1.0.0",
+                    "chat_agents": [self._chat_agent(required_group="founder")],
+                }
+            )
+
+    def test_required_group_referencing_a_secret_kind_rejected(self):
+        """A Cognito group name is not confidential — pointing a chat agent at
+        a `kind: secret` entry is a category mistake, not a valid reference."""
+        with pytest.raises(ValidationError, match="must name a `config` declaration"):
+            PluginManifest.model_validate(
+                {
+                    "name": "ideation",
+                    "version": "1.0.0",
+                    "chat_agents": [self._chat_agent()],
+                    "config": [
+                        {
+                            "name": "chat_agent_group",
+                            "kind": "secret",
+                            "description": "wrong kind on purpose",
+                        }
+                    ],
+                }
+            )
+
+    def test_no_chat_agents_means_no_config_is_required(self):
+        # Sanity: the cross-validator must not fire when there is nothing to
+        # cross-validate.
+        manifest = PluginManifest(name="x", version="1.0.0")
+        assert manifest.chat_agents == []
+        assert manifest.config == []
 
     @requires_skeleton
     def test_the_plugin_skeletons_own_manifest_validates(self):

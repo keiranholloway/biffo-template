@@ -40,6 +40,84 @@ def test_discover_returns_only_user_facing_plugins(tmp_path):
     ]
 
 
+def test_discover_uses_manifest_literal_required_group_when_no_override_set(
+    tmp_path, monkeypatch
+) -> None:
+    """No `BIFFO_PLUGIN_IDEATION_USER_INGRESS_REQUIRED_GROUP` in the host's
+    environment — the manifest's own literal is used unchanged, so every
+    already-shipped plugin manifest keeps working with zero changes
+    (biffo-template#1517 Option B)."""
+    monkeypatch.delenv("BIFFO_PLUGIN_IDEATION_USER_INGRESS_REQUIRED_GROUP", raising=False)
+    _write_plugin(
+        tmp_path, "ideation", ingress={"app": "ideation.app:app", "required_group": "founder"}
+    )
+
+    found = discover_plugins(tmp_path)
+
+    assert found[0].required_group == "founder"
+
+
+def test_discover_honours_an_instance_supplied_required_group_override(
+    tmp_path, monkeypatch
+) -> None:
+    """An instance-supplied `BIFFO_PLUGIN_<PLUGIN>_USER_INGRESS_REQUIRED_GROUP`
+    overrides the manifest's literal `user_ingress.required_group`
+    (biffo-template#1517 Option B — unblocks marketing#46: a group name like
+    `"founder"` baked into a third-party manifest is platform-specific and
+    unreachable on an instance that names its equivalent group differently).
+    """
+    monkeypatch.setenv("BIFFO_PLUGIN_MARKETING_USER_INGRESS_REQUIRED_GROUP", "hq-marketing-admin")
+    _write_plugin(
+        tmp_path, "marketing", ingress={"app": "marketing.app:app", "required_group": "founder"}
+    )
+
+    found = discover_plugins(tmp_path)
+
+    assert found[0].required_group == "hq-marketing-admin"
+
+
+def test_discover_required_group_override_is_scoped_by_plugin_name(tmp_path, monkeypatch) -> None:
+    """Two plugins never collide on this override — only the exact
+    `BIFFO_PLUGIN_<PLUGIN>_USER_INGRESS_REQUIRED_GROUP` for THIS plugin's name
+    is read, the same per-plugin scoping the rest of the `config:` mechanism
+    already guarantees (`pluginConfigEnvNames`/`plugin_config_env_names`)."""
+    monkeypatch.setenv("BIFFO_PLUGIN_CRM_USER_INGRESS_REQUIRED_GROUP", "crm-override")
+    _write_plugin(
+        tmp_path, "ideation", ingress={"app": "ideation.app:app", "required_group": "founder"}
+    )
+    _write_plugin(tmp_path, "crm", ingress={"app": "crm.app:app", "required_group": "editor"})
+
+    found = discover_plugins(tmp_path)
+
+    by_name = {p.name: p.required_group for p in found}
+    assert by_name == {"crm": "crm-override", "ideation": "founder"}
+
+
+def test_discover_required_group_override_is_ignored_for_an_admin_only_plugin(
+    tmp_path, monkeypatch
+) -> None:
+    """A plugin with no `user_ingress` at all has no `required_group` to
+    override — setting the env var anyway must not invent one out of an
+    admin-only plugin's admin_ingress."""
+    monkeypatch.setenv("BIFFO_PLUGIN_MARKETING_USER_INGRESS_REQUIRED_GROUP", "should-not-apply")
+    root = tmp_path / "marketing"
+    root.mkdir()
+    (root / "biffo.plugin.json").write_text(
+        json.dumps(
+            {
+                "name": "marketing",
+                "version": "1.0.0",
+                "admin_ingress": {"app": "marketing.admin_app:app", "required_group": "admin"},
+            }
+        )
+    )
+
+    found = discover_plugins(tmp_path)
+
+    assert found[0].required_group is None
+    assert found[0].admin_required_group == "admin"  # untouched — override is user_ingress-only
+
+
 def test_discover_populates_admin_ingress_when_present(tmp_path):
     d = tmp_path / "ideation"
     d.mkdir()

@@ -3,6 +3,7 @@ import {
   classifyReapCandidate,
   findBareBranchCandidates,
   findReapCandidates,
+  FLEET_CLAIM_STALE_AFTER_MS,
   reapAll,
   reapAllBareBranches,
   reapBareBranch,
@@ -128,20 +129,54 @@ describe('findReapCandidates', () => {
     { path: '/wt/merged', branch: 'chore/merged', behind: 0 },
     { path: '/wt/live', branch: 'feat/live', behind: 2 },
   ]
+  // origin still carries dev and feat/live; chore/merged and fix/orphan-bare
+  // do not — the fact `hasProvenGoneRemote` (#1954) actually reads, in place
+  // of trusting `track`.
+  const remoteBranchNames = new Set(['dev', 'feat/live'])
 
-  it('only considers worktrees whose branch has a gone upstream', () => {
-    const candidates = findReapCandidates(branches, worktrees)
+  it('only considers worktrees whose branch has proven its remote copy gone', () => {
+    const candidates = findReapCandidates(branches, worktrees, remoteBranchNames)
     expect(candidates).toEqual([{ branch: 'chore/merged', worktreePath: '/wt/merged' }])
   })
 
-  it('excludes a [gone] branch with no worktree — bare-branch reaping is findBareBranchCandidates below', () => {
-    const candidates = findReapCandidates(branches, worktrees)
+  it('excludes a proven-gone branch with no worktree — bare-branch reaping is findBareBranchCandidates below', () => {
+    const candidates = findReapCandidates(branches, worktrees, remoteBranchNames)
     expect(candidates.map((c) => c.branch)).not.toContain('fix/orphan-bare')
   })
 
-  it('excludes a worktree with a live (not gone) upstream — no verdict to ask for', () => {
-    const candidates = findReapCandidates(branches, worktrees)
+  it('excludes a worktree whose remote copy still exists — no verdict to ask for', () => {
+    const candidates = findReapCandidates(branches, worktrees, remoteBranchNames)
     expect(candidates.map((c) => c.branch)).not.toContain('feat/live')
+  })
+
+  // #1954: the exact defect this fix closes — `agent/1900`'s real upstream
+  // was misconfigured to `origin/dev`, so `track` never read `[gone]` even
+  // after its own remote copy (`origin/agent/1900`) was deleted.
+  it('considers a worktree whose branch has SOME upstream but is mistracking origin/dev, once its own remote copy is gone', () => {
+    const mistracked: BranchRef[] = [
+      { name: 'agent/1900', upstream: 'refs/remotes/origin/dev', track: '[behind 21]' },
+    ]
+    const mistrackedWorktrees: WorktreeFact[] = [
+      { path: '/wt/agent-1900', branch: 'agent/1900', behind: 21 },
+    ]
+    // origin/agent/1900 does not exist — only origin/dev does.
+    const candidates = findReapCandidates(mistracked, mistrackedWorktrees, new Set(['dev']))
+    expect(candidates).toEqual([{ branch: 'agent/1900', worktreePath: '/wt/agent-1900' }])
+  })
+
+  // A branch never pushed under any name (no upstream at all — the
+  // `upgrade-branch-reaper.ts` fossil case) IS a candidate here, deliberately
+  // — see `hasProvenGoneRemote`'s doc comment for why that distinction does
+  // not need making at this layer. `reapAll`'s own test below proves it is
+  // still never reaped: `classifyReapCandidate`'s GitHub-verified judgement
+  // is what actually keeps it safe, not this filter.
+  it('DOES include a branch with no upstream at all, since it costs one harmless GitHub call, never an unsafe reap', () => {
+    const neverPushed: BranchRef[] = [{ name: 'scratch/local-only', upstream: '', track: '' }]
+    const neverPushedWorktrees: WorktreeFact[] = [
+      { path: '/wt/local-only', branch: 'scratch/local-only', behind: 0 },
+    ]
+    const candidates = findReapCandidates(neverPushed, neverPushedWorktrees, new Set())
+    expect(candidates).toEqual([{ branch: 'scratch/local-only', worktreePath: '/wt/local-only' }])
   })
 })
 
@@ -157,6 +192,12 @@ function reapDeps(
       currentBranch: vi.fn().mockResolvedValue('chore/merged'),
       hasUncommittedChanges: vi.fn().mockResolvedValue(false),
       hasFleetWorktreeClaim: vi.fn().mockResolvedValue(false),
+      // Only ever read when hasFleetWorktreeClaim resolves true (#1948) —
+      // defaults to "just claimed" so a test that overrides only
+      // hasFleetWorktreeClaim to true still exercises the live-claim path,
+      // matching this factory's existing "clean, mergeable" default posture.
+      fleetWorktreeClaimAgeMs: vi.fn().mockResolvedValue(0),
+      clearStaleFleetWorktreeClaim: vi.fn().mockResolvedValue(undefined),
       removeWorktree: vi.fn().mockResolvedValue(true),
       // Defaults model the safe case: the worktree's HEAD IS the commit the
       // merged PR shipped, so `isAncestor` (self-is-ancestor-of-self) is true.
@@ -305,6 +346,109 @@ describe('reapCandidate', () => {
     expect(outcome.worktreeRemoved).toBeNull()
     expect(deps.git.removeWorktree as ReturnType<typeof vi.fn>).not.toHaveBeenCalled()
     expect(deps.github.prVerdictForBranch as ReturnType<typeof vi.fn>).not.toHaveBeenCalled()
+    expect(outcome.staleClaimCleared).toBe(false)
+  })
+
+  // #1948: nothing in the estate ever releases a fleet-worktree-claim lock,
+  // so treating any existing lock as permanently live made the milestone
+  // above's own "keep" permanent too — this is the fix, proven the same
+  // fail-first way #1810 was: a lock old enough to be abandoned no longer
+  // blocks the reap, and the still-merged, still-clean, still-HEAD-current
+  // worktree behind it goes on to be removed exactly as it would with no
+  // lock at all.
+  it('clears a stale fleet-worktree-claim lock and reaps the merged worktree behind it', async () => {
+    const deps = reapDeps({
+      git: {
+        hasFleetWorktreeClaim: vi.fn().mockResolvedValue(true),
+        fleetWorktreeClaimAgeMs: vi.fn().mockResolvedValue(FLEET_CLAIM_STALE_AFTER_MS + 1),
+      },
+    })
+
+    const outcome = await reapCandidate(
+      '/repo',
+      { branch: 'chore/merged', worktreePath: '/wt/claimed' },
+      deps,
+    )
+
+    expect(outcome.verdict).toEqual({ action: 'reap' })
+    expect(outcome.worktreeRemoved).toBe(true)
+    expect(outcome.staleClaimCleared).toBe(true)
+    expect(deps.git.clearStaleFleetWorktreeClaim).toHaveBeenCalledWith('/wt/claimed')
+    // The GitHub verdict this milestone's own safety net depends on is still
+    // asked for — staleness alone never skips it.
+    expect(deps.github.prVerdictForBranch).toHaveBeenCalled()
+  })
+
+  // A lock one millisecond younger than the TTL is still live — `< TTL`, not
+  // `<= TTL` — and the boundary value itself is already stale (covered by
+  // the "clears a stale lock" test above, which uses `+ 1`).
+  it('keeps a claim just under the TTL boundary as live', async () => {
+    const deps = reapDeps({
+      git: {
+        hasFleetWorktreeClaim: vi.fn().mockResolvedValue(true),
+        fleetWorktreeClaimAgeMs: vi.fn().mockResolvedValue(FLEET_CLAIM_STALE_AFTER_MS - 1),
+      },
+    })
+
+    const outcome = await reapCandidate(
+      '/repo',
+      { branch: 'chore/merged', worktreePath: '/wt/claimed' },
+      deps,
+    )
+
+    expect(outcome.verdict).toEqual({ action: 'keep', reason: 'fleet-worktree-claimed' })
+    expect(outcome.staleClaimCleared).toBe(false)
+    expect(deps.git.clearStaleFleetWorktreeClaim as ReturnType<typeof vi.fn>).not.toHaveBeenCalled()
+  })
+
+  // Fail-closed (#1948): an age that cannot be determined must never be
+  // treated as "old enough to be stale" — the same posture
+  // `fleetWorktreeClaimAgeMs`'s own doc comment specifies, and the same
+  // direction every other "cannot tell" in this module already takes
+  // (`unknown-pr-verdict`, `unknown-merge-head`).
+  it('treats an unreadable claim age as live, never as stale', async () => {
+    const deps = reapDeps({
+      git: {
+        hasFleetWorktreeClaim: vi.fn().mockResolvedValue(true),
+        fleetWorktreeClaimAgeMs: vi.fn().mockResolvedValue(null),
+      },
+    })
+
+    const outcome = await reapCandidate(
+      '/repo',
+      { branch: 'chore/merged', worktreePath: '/wt/claimed' },
+      deps,
+    )
+
+    expect(outcome.verdict).toEqual({ action: 'keep', reason: 'fleet-worktree-claimed' })
+    expect(outcome.staleClaimCleared).toBe(false)
+    expect(deps.git.clearStaleFleetWorktreeClaim as ReturnType<typeof vi.fn>).not.toHaveBeenCalled()
+  })
+
+  // A stale lock is cleared BEFORE `hasUncommittedChanges` is read (#1948):
+  // otherwise the untracked `.fleet-worktree-claim` directory itself would
+  // trip `git status --porcelain` and the worktree would be kept anyway,
+  // under the less specific `uncommitted-changes` reason — silently
+  // defeating the point of deciding the claim was stale.
+  it('reads hasUncommittedChanges only after a stale claim has already been cleared', async () => {
+    const callOrder: string[] = []
+    const deps = reapDeps({
+      git: {
+        hasFleetWorktreeClaim: vi.fn().mockResolvedValue(true),
+        fleetWorktreeClaimAgeMs: vi.fn().mockResolvedValue(FLEET_CLAIM_STALE_AFTER_MS + 1),
+        clearStaleFleetWorktreeClaim: vi.fn().mockImplementation(async () => {
+          callOrder.push('cleared')
+        }),
+        hasUncommittedChanges: vi.fn().mockImplementation(async () => {
+          callOrder.push('checked-dirty')
+          return false
+        }),
+      },
+    })
+
+    await reapCandidate('/repo', { branch: 'chore/merged', worktreePath: '/wt/claimed' }, deps)
+
+    expect(callOrder).toEqual(['cleared', 'checked-dirty'])
   })
 })
 
@@ -322,6 +466,8 @@ describe('reapAll', () => {
     { path: '/wt/merged', branch: 'chore/merged', behind: 0 },
     { path: '/wt/undici', branch: 'security/undici-advisories', behind: 0 },
   ]
+  // None of these three branches' own remote copies exist any more.
+  const remoteBranchNames = new Set<string>()
 
   it('reaps the merged one, keeps the closed-unmerged one, and never touches the current branch', async () => {
     const github = {
@@ -340,10 +486,14 @@ describe('reapAll', () => {
       isAncestor: vi.fn().mockResolvedValue(true),
     }
 
-    const outcomes = await reapAll('/repo', branches, worktrees, 'agent/1682', {
-      git: git as never,
-      github: github as never,
-    })
+    const outcomes = await reapAll(
+      '/repo',
+      branches,
+      worktrees,
+      'agent/1682',
+      { git: git as never, github: github as never },
+      remoteBranchNames,
+    )
 
     // agent/1682 (the branch this session is on) never appears as a candidate,
     // even though its own upstream is [gone] too.
@@ -375,13 +525,58 @@ describe('reapAll', () => {
       { name: 'dev', upstream: 'refs/remotes/origin/dev', track: '' },
     ]
 
-    const outcomes = await reapAll('/repo', liveBranches, [], 'dev', {
-      git: git as never,
-      github: github as never,
-    })
+    const outcomes = await reapAll(
+      '/repo',
+      liveBranches,
+      [],
+      'dev',
+      { git: git as never, github: github as never },
+      new Set(['dev']),
+    )
 
     expect(outcomes).toEqual([])
     expect(github.prVerdictForBranch).not.toHaveBeenCalled()
+  })
+
+  // #1954: the end-to-end proof that widening findReapCandidates to include a
+  // never-pushed branch (no upstream at all) never becomes an unsafe reap —
+  // GitHub's own verdict is what keeps it, not the candidate filter.
+  it('asks GitHub about a clean, never-pushed branch and keeps it for no-pr, never reaps it', async () => {
+    const github = {
+      prVerdictForBranch: vi.fn().mockResolvedValue('none'),
+      mergedHeadSha: vi.fn(),
+    }
+    const git = {
+      currentBranch: vi.fn().mockResolvedValue('scratch/local-only'),
+      hasUncommittedChanges: vi.fn().mockResolvedValue(false),
+      hasFleetWorktreeClaim: vi.fn().mockResolvedValue(false),
+      removeWorktree: vi.fn(),
+    }
+    const neverPushed: BranchRef[] = [{ name: 'scratch/local-only', upstream: '', track: '' }]
+    const worktrees: WorktreeFact[] = [
+      { path: '/wt/local-only', branch: 'scratch/local-only', behind: 0 },
+    ]
+
+    const outcomes = await reapAll(
+      '/repo',
+      neverPushed,
+      worktrees,
+      // Deliberately not the current branch, so the candidate is actually
+      // judged rather than filtered out by the current-branch exclusion.
+      'dev',
+      { git: git as never, github: github as never },
+      new Set(),
+    )
+
+    expect(outcomes).toEqual([
+      {
+        candidate: { branch: 'scratch/local-only', worktreePath: '/wt/local-only' },
+        verdict: { action: 'keep', reason: 'no-pr' },
+        worktreeRemoved: null,
+        staleClaimCleared: false,
+      },
+    ])
+    expect(git.removeWorktree as ReturnType<typeof vi.fn>).not.toHaveBeenCalled()
   })
 })
 
@@ -395,20 +590,29 @@ describe('findBareBranchCandidates', () => {
     { name: 'fix/orphan-bare', upstream: 'refs/remotes/origin/fix/orphan-bare', track: '[gone]' },
   ]
   const worktrees: WorktreeFact[] = [{ path: '/wt/merged', branch: 'chore/merged', behind: 0 }]
+  const remoteBranchNames = new Set(['dev', 'feat/live'])
 
-  it('finds a [gone] branch with no linked worktree', () => {
-    const candidates = findBareBranchCandidates(branches, worktrees)
+  it('finds a proven-gone branch with no linked worktree', () => {
+    const candidates = findBareBranchCandidates(branches, worktrees, remoteBranchNames)
     expect(candidates).toEqual([{ branch: 'fix/orphan-bare' }])
   })
 
-  it('excludes a [gone] branch that DOES have a linked worktree — that is findReapCandidates', () => {
-    const candidates = findBareBranchCandidates(branches, worktrees)
+  it('excludes a proven-gone branch that DOES have a linked worktree — that is findReapCandidates', () => {
+    const candidates = findBareBranchCandidates(branches, worktrees, remoteBranchNames)
     expect(candidates.map((c) => c.branch)).not.toContain('chore/merged')
   })
 
-  it('excludes a branch with a live (not gone) upstream', () => {
-    const candidates = findBareBranchCandidates(branches, worktrees)
+  it('excludes a branch whose remote copy still exists', () => {
+    const candidates = findBareBranchCandidates(branches, worktrees, remoteBranchNames)
     expect(candidates.map((c) => c.branch)).not.toContain('feat/live')
+  })
+
+  // Same deliberate inclusion as findReapCandidates's own test above — see
+  // `hasProvenGoneRemote`'s doc comment.
+  it('DOES include a bare branch with no upstream at all', () => {
+    const neverPushed: BranchRef[] = [{ name: 'scratch/local-only', upstream: '', track: '' }]
+    const candidates = findBareBranchCandidates(neverPushed, [], new Set())
+    expect(candidates).toEqual([{ branch: 'scratch/local-only' }])
   })
 })
 
@@ -538,10 +742,14 @@ describe('reapAllBareBranches', () => {
       deleteBranch: vi.fn().mockResolvedValue(true),
     }
 
-    const outcomes = await reapAllBareBranches('/repo', branches, [], 'agent/1682', {
-      git: git as never,
-      github: github as never,
-    })
+    const outcomes = await reapAllBareBranches(
+      '/repo',
+      branches,
+      [],
+      'agent/1682',
+      { git: git as never, github: github as never },
+      new Set<string>(),
+    )
 
     // The current branch (agent/1682) never appears as a candidate, even
     // though its own upstream is [gone] too — never delete the branch this
@@ -570,10 +778,14 @@ describe('reapAllBareBranches', () => {
       { name: 'dev', upstream: 'refs/remotes/origin/dev', track: '' },
     ]
 
-    const outcomes = await reapAllBareBranches('/repo', liveBranches, [], 'dev', {
-      git: git as never,
-      github: github as never,
-    })
+    const outcomes = await reapAllBareBranches(
+      '/repo',
+      liveBranches,
+      [],
+      'dev',
+      { git: git as never, github: github as never },
+      new Set(['dev']),
+    )
 
     expect(outcomes).toEqual([])
     expect(github.prVerdictForBranch).not.toHaveBeenCalled()

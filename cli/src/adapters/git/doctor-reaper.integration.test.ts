@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { GitAdapter } from './index.js'
 import { makeTmpDir } from '../../test-utils/tmp.js'
-import { reapCandidate, type ReapDeps } from '../../lib/doctor-reaper.js'
+import { findReapCandidates, reapCandidate, type ReapDeps } from '../../lib/doctor-reaper.js'
 
 /**
  * `GitAdapter.removeWorktree` (#1682, milestone 1), proven against real git
@@ -238,9 +238,13 @@ describe('reapCandidate: a live fleet-worktree-claim lock stops the reap (#1833)
   it('keeps and never removes a worktree that is clean, merged, and HEAD-current, when a real fleet lock is present', async () => {
     const mergedHeadSha = git(worktreeDir, 'rev-parse', 'HEAD')
     mkdirSync(join(worktreeDir, '.fleet-worktree-claim'))
+    // A FRESH timestamp, not a hardcoded past date (#1948): this test's own
+    // job is to prove a LIVE lock still blocks the reap, and a claim old
+    // enough to cross `FLEET_CLAIM_STALE_AFTER_MS` is exactly what this fix
+    // now treats as abandoned instead — proven by the age-aware tests below.
     writeFileSync(
       join(worktreeDir, '.fleet-worktree-claim', 'holder'),
-      'some-other-session-0831-abcd\n2026-08-31T12:00:00Z\n',
+      `some-other-session-0831-abcd\n${new Date().toISOString().replace(/\.\d+Z$/, 'Z')}\n`,
     )
 
     const deps: ReapDeps = {
@@ -254,6 +258,255 @@ describe('reapCandidate: a live fleet-worktree-claim lock stops the reap (#1833)
     )
 
     expect(outcome.verdict).toEqual({ action: 'keep', reason: 'fleet-worktree-claimed' })
+    expect(outcome.worktreeRemoved).toBeNull()
+    expect(existsSync(worktreeDir)).toBe(true)
+  })
+})
+
+/**
+ * `GitAdapter.fleetWorktreeClaimAgeMs` / `clearStaleFleetWorktreeClaim`
+ * (biffo-template#1948), proven against a real lock directory and a real
+ * `reapCandidate` run — the same "no mocked filesystem" posture the describe
+ * block above takes, for the same reason: `bin/fleet.sh worktree-claim` is a
+ * different repo's shell script, so this repo can only prove it reads and
+ * clears the directory it writes correctly, never that the script itself
+ * behaves a particular way.
+ */
+describe('GitAdapter.fleetWorktreeClaimAgeMs / clearStaleFleetWorktreeClaim (#1948)', () => {
+  let repo: string
+  let worktreeDir: string
+  const adapter = new GitAdapter()
+
+  const git = (cwd: string, ...args: string[]): string =>
+    execFileSync('git', args, { cwd, encoding: 'utf8' }).trim()
+
+  const githubStub: ReapDeps['github'] = {
+    prVerdictForBranch: async () => 'merged',
+    mergedHeadSha: async () => null,
+  }
+
+  beforeEach(() => {
+    repo = makeTmpDir('biffo-reap-fleet-claim-age')
+    git(repo, 'init', '-q', '-b', 'dev')
+    git(repo, 'config', 'user.email', 'test@example.com')
+    git(repo, 'config', 'user.name', 'Test')
+    writeFileSync(join(repo, 'a.txt'), 'base\n')
+    git(repo, 'add', '-A')
+    git(repo, 'commit', '-qm', 'base')
+    worktreeDir = join(repo, '.worktrees', 'claimed')
+    git(repo, 'worktree', 'add', worktreeDir, '-b', 'agent/1948-claimed')
+  })
+  afterEach(() => {
+    rmSync(repo, { recursive: true, force: true })
+  })
+
+  it('returns null when no lock exists', async () => {
+    expect(await adapter.fleetWorktreeClaimAgeMs(worktreeDir)).toBeNull()
+  })
+
+  it('returns null when the lock directory exists but the holder file does not (the unwritten-holder window)', async () => {
+    mkdirSync(join(worktreeDir, '.fleet-worktree-claim'))
+    expect(await adapter.fleetWorktreeClaimAgeMs(worktreeDir)).toBeNull()
+  })
+
+  it('returns a small positive age for a lock claimed moments ago', async () => {
+    mkdirSync(join(worktreeDir, '.fleet-worktree-claim'))
+    writeFileSync(
+      join(worktreeDir, '.fleet-worktree-claim', 'holder'),
+      `session-a\n${new Date().toISOString().replace(/\.\d+Z$/, 'Z')}\n`,
+    )
+    const ageMs = await adapter.fleetWorktreeClaimAgeMs(worktreeDir)
+    expect(ageMs).not.toBeNull()
+    expect(ageMs as number).toBeGreaterThanOrEqual(0)
+    expect(ageMs as number).toBeLessThan(60_000)
+  })
+
+  it('clearStaleFleetWorktreeClaim removes the lock directory outright', async () => {
+    mkdirSync(join(worktreeDir, '.fleet-worktree-claim'))
+    writeFileSync(
+      join(worktreeDir, '.fleet-worktree-claim', 'holder'),
+      'session-a\n2020-01-01T00:00:00Z\n',
+    )
+
+    await adapter.clearStaleFleetWorktreeClaim(worktreeDir)
+
+    expect(existsSync(join(worktreeDir, '.fleet-worktree-claim'))).toBe(false)
+    // The worktree itself is untouched — only the lock is cleared.
+    expect(existsSync(worktreeDir)).toBe(true)
+  })
+
+  it('clearStaleFleetWorktreeClaim is a harmless no-op when there is nothing to clear', async () => {
+    await expect(adapter.clearStaleFleetWorktreeClaim(worktreeDir)).resolves.toBeUndefined()
+  })
+
+  // End to end, real filesystem, real git: an abandoned lock (2020 — far
+  // past FLEET_CLAIM_STALE_AFTER_MS) no longer blocks a merged, clean,
+  // HEAD-current worktree from being reaped, and the lock is gone along with
+  // the rest of the worktree.
+  it('reaps a merged worktree behind an abandoned lock, clearing the lock first', async () => {
+    const mergedHeadSha = git(worktreeDir, 'rev-parse', 'HEAD')
+    mkdirSync(join(worktreeDir, '.fleet-worktree-claim'))
+    writeFileSync(
+      join(worktreeDir, '.fleet-worktree-claim', 'holder'),
+      'abandoned-session-0101\n2020-01-01T00:00:00Z\n',
+    )
+
+    const deps: ReapDeps = {
+      git: adapter,
+      github: { ...githubStub, mergedHeadSha: async () => mergedHeadSha },
+    }
+    const outcome = await reapCandidate(
+      repo,
+      { branch: 'agent/1948-claimed', worktreePath: worktreeDir },
+      deps,
+    )
+
+    expect(outcome.verdict).toEqual({ action: 'reap' })
+    expect(outcome.worktreeRemoved).toBe(true)
+    expect(outcome.staleClaimCleared).toBe(true)
+    expect(existsSync(worktreeDir)).toBe(false)
+  })
+})
+
+/**
+ * `GitAdapter.listRemoteBranchNames` / `hasProvenGoneRemote` (biffo-template#1954),
+ * proven against a real bare remote — the defect this closes is entirely a
+ * property of git's own bookkeeping (`%(upstream:track)` reads `[gone]` only
+ * for the ref the branch is actually CONFIGURED to track), so it has to be
+ * reproduced with real `git worktree add`, a real push, and a real branch
+ * deletion on a real remote, not asserted against a hand-built `BranchRef`.
+ */
+describe('GitAdapter.listRemoteBranchNames / mistracked-upstream reap (#1954)', () => {
+  let remote: string
+  let work: string
+  let worktreeDir: string
+  const adapter = new GitAdapter()
+
+  const git = (cwd: string, ...args: string[]): string =>
+    execFileSync('git', args, { cwd, encoding: 'utf8' }).trim()
+
+  beforeEach(() => {
+    remote = makeTmpDir('biffo-mistrack-remote')
+    work = makeTmpDir('biffo-mistrack-work')
+    git(remote, 'init', '--bare', '-q', '-b', 'dev')
+    git(work, 'init', '-q', '-b', 'dev')
+    git(work, 'config', 'user.email', 'test@example.com')
+    git(work, 'config', 'user.name', 'Test')
+    writeFileSync(join(work, 'a.txt'), 'base\n')
+    git(work, 'add', '-A')
+    git(work, 'commit', '-qm', 'base')
+    git(work, 'remote', 'add', 'origin', remote)
+    git(work, 'push', '-qu', 'origin', 'dev')
+
+    // The exact shape AGENTS.md §1 documents: `git worktree add -b <branch>
+    // <path> origin/dev` — which sets the new branch's upstream to
+    // origin/dev by default, regardless of this host's own
+    // push.autoSetupRemote setting.
+    worktreeDir = join(work, '.worktrees', 'agent-1900')
+    git(work, 'worktree', 'add', worktreeDir, '-b', 'agent/1900', 'origin/dev')
+  })
+  afterEach(() => {
+    rmSync(remote, { recursive: true, force: true })
+    rmSync(work, { recursive: true, force: true })
+  })
+
+  it('excludes a branch name with a live same-named remote ref', async () => {
+    git(worktreeDir, 'push', '-q', 'origin', 'agent/1900:agent/1900')
+    const names = await adapter.listRemoteBranchNames(work)
+    expect(names.has('agent/1900')).toBe(true)
+  })
+
+  it('excludes the HEAD symref from the result', async () => {
+    const names = await adapter.listRemoteBranchNames(work)
+    expect(names.has('HEAD')).toBe(false)
+  })
+
+  // The reproduction: push the branch under its own name (so it genuinely
+  // existed on the remote), force its upstream to origin/dev regardless of
+  // what the push itself set — deterministic proof of the mistracked shape
+  // independent of this host's push.autoSetupRemote — then delete the
+  // remote copy and prune. `git branch -vv` must NOT read `[gone]`, and
+  // `listRemoteBranchNames` must NOT list `agent/1900`.
+  it('reports a branch absent once its own remote copy is deleted, even though it is configured to track origin/dev', async () => {
+    git(worktreeDir, 'push', '-q', 'origin', 'agent/1900:agent/1900')
+    git(worktreeDir, 'branch', '--set-upstream-to=origin/dev', 'agent/1900')
+    git(remote, 'branch', '-D', 'agent/1900')
+    git(work, 'fetch', '-q', '--prune', 'origin')
+
+    const trackLine = git(
+      work,
+      'for-each-ref',
+      '--format=%(upstream:track)',
+      'refs/heads/agent/1900',
+    )
+    expect(trackLine).not.toContain('gone')
+
+    const names = await adapter.listRemoteBranchNames(work)
+    expect(names.has('agent/1900')).toBe(false)
+  })
+
+  // End to end: doctor --fix reaps this worktree even though its own
+  // `%(upstream:track)` never reads `[gone]` — proving the fix, not just the
+  // underlying git fact.
+  it('reaps a merged worktree mistracking origin/dev, once its own remote copy is deleted', async () => {
+    git(worktreeDir, 'push', '-q', 'origin', 'agent/1900:agent/1900')
+    git(worktreeDir, 'branch', '--set-upstream-to=origin/dev', 'agent/1900')
+    const mergedHeadSha = git(worktreeDir, 'rev-parse', 'HEAD')
+    git(remote, 'branch', '-D', 'agent/1900')
+    git(work, 'fetch', '-q', '--prune', 'origin')
+
+    const branches = await adapter.listBranchRefs(work)
+    const worktrees = await adapter.listWorktrees(work)
+    const remoteBranchNames = await adapter.listRemoteBranchNames(work)
+
+    const candidates = findReapCandidates(branches, worktrees, remoteBranchNames)
+    expect(candidates.map((c) => c.branch)).toContain('agent/1900')
+
+    const deps: ReapDeps = {
+      git: adapter,
+      github: {
+        prVerdictForBranch: async () => 'merged',
+        mergedHeadSha: async () => mergedHeadSha,
+      },
+    }
+    const outcome = await reapCandidate(
+      work,
+      { branch: 'agent/1900', worktreePath: worktreeDir },
+      deps,
+    )
+
+    expect(outcome.verdict).toEqual({ action: 'reap' })
+    expect(outcome.worktreeRemoved).toBe(true)
+    expect(existsSync(worktreeDir)).toBe(false)
+  })
+
+  // The negative control this whole fix hinges on: a branch never pushed
+  // under its own name at all must NOT be treated as proven-gone, even
+  // though it is equally absent from `listRemoteBranchNames`.
+  // agent/1900 here has upstream=origin/dev and was never pushed under its
+  // own name at all. It IS a candidate — see `hasProvenGoneRemote`'s doc
+  // comment for why that is deliberate — proven safe end to end: GitHub
+  // reports no PR for it, and `reapCandidate` keeps it, never removing the
+  // worktree.
+  it('includes an unpushed branch as a candidate, and reapCandidate still never removes it', async () => {
+    const branches = await adapter.listBranchRefs(work)
+    const worktrees = await adapter.listWorktrees(work)
+    const remoteBranchNames = await adapter.listRemoteBranchNames(work)
+
+    const candidates = findReapCandidates(branches, worktrees, remoteBranchNames)
+    expect(candidates.map((c) => c.branch)).toContain('agent/1900')
+
+    const deps: ReapDeps = {
+      git: adapter,
+      github: { prVerdictForBranch: async () => 'none', mergedHeadSha: async () => null },
+    }
+    const outcome = await reapCandidate(
+      work,
+      { branch: 'agent/1900', worktreePath: worktreeDir },
+      deps,
+    )
+
+    expect(outcome.verdict).toEqual({ action: 'keep', reason: 'no-pr' })
     expect(outcome.worktreeRemoved).toBeNull()
     expect(existsSync(worktreeDir)).toBe(true)
   })

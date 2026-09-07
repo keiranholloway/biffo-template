@@ -1455,11 +1455,30 @@ if [ -f scripts/biffo.sh ]; then
   # biffo.core.json's own version and compares against it -- but this repo
   # never carries biffo.core.json (it is the template, not an instance), so
   # the script itself detects that and exits 0 as a genuine skip (see its own
-  # doc comment) rather than attempting a comparison it has no tree for. Kept
-  # unconditional, exactly like the line above, for the same reason: ci.yml's
-  # exact command text must appear in `verify.sh --list`'s output or the
-  # parity test (verify-parity.test.ts, #1773) reports it uncategorised.
-  run_check orphan-ratchet-instance sh scripts/check-orphan-ratchet-instance.sh
+  # doc comment) rather than attempting a comparison it has no tree for.
+  #
+  # Guarded with `[ -f ... ] &&`, unlike the line above, because this script
+  # is a raw file path rather than a `scripts/biffo.sh check <name>` call
+  # through the versioned CLI bridge -- every other check in this block goes
+  # through that bridge, which resolves against the pinned, PACKAGED CLI and
+  # so works from any repo. This one does not, and `scripts/
+  # check-orphan-ratchet-instance.sh` is template-owned but never packaged
+  # for a satellite: not in shared-files.json's `files` (never copied to a
+  # sibling/plugin repo) and not in `PACKAGED_ROOT_ASSETS` (never bundled
+  # into the npm tarball) -- it only ever reaches a real INSTANCE, via
+  # `biffo core upgrade`'s ordinary three-way merge. A satellite running the
+  # packaged `verify.sh` through `scripts/biffo.sh verify` therefore had no
+  # such file on disk at all, and a bare `sh scripts/
+  # check-orphan-ratchet-instance.sh` failed at the shell -- "cannot open
+  # ... No such file" -- before the script's own biffo.core.json skip ever
+  # got a chance to run (biffo-template#1943). The guard is true in every
+  # checkout that actually carries the file (this repo, and any instance
+  # that has upgraded far enough to have received it), so `verify.sh --list`'s
+  # output here is unchanged and parity with ci.yml's own unconditional step
+  # holds exactly as before; it is false only in a satellite, where this now
+  # skips instead of crashing the rest of the gate.
+  [ -f scripts/check-orphan-ratchet-instance.sh ] &&
+    run_check orphan-ratchet-instance sh scripts/check-orphan-ratchet-instance.sh
   run_check cognito-invite sh scripts/biffo.sh check cognito-invite-template
   run_check lambda-output sh scripts/biffo.sh check lambda-output
   run_check pipe-trap sh scripts/biffo.sh check pipe-trap

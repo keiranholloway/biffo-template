@@ -206,6 +206,10 @@ jobs:
           # mechanism does not exist at all: setting the repo variable did
           # nothing, because the value never reached the build.
           NEXT_PUBLIC_PORTAL_TITLE: ${{ vars.PORTAL_TITLE }}
+          # Instance brand color (#1945), same mechanism and same "unset is
+          # normal" reasoning as PORTAL_TITLE above -- the portal falls back
+          # to its own default primary color on an empty string.
+          NEXT_PUBLIC_PORTAL_PRIMARY_COLOR: ${{ vars.PORTAL_PRIMARY_COLOR }}
         run: pnpm run build
       - uses: actions/upload-artifact@v5
         with:
@@ -1159,6 +1163,10 @@ jobs:
           # mechanism does not exist at all: setting the repo variable did
           # nothing, because the value never reached the build.
           NEXT_PUBLIC_PORTAL_TITLE: ${{ vars.PORTAL_TITLE }}
+          # Instance brand color (#1945), same mechanism and same "unset is
+          # normal" reasoning as PORTAL_TITLE above -- the portal falls back
+          # to its own default primary color on an empty string.
+          NEXT_PUBLIC_PORTAL_PRIMARY_COLOR: ${{ vars.PORTAL_PRIMARY_COLOR }}
         run: pnpm run build
       - uses: actions/upload-artifact@v5
         with:
@@ -2119,6 +2127,10 @@ jobs:
           # mechanism does not exist at all: setting the repo variable did
           # nothing, because the value never reached the build.
           NEXT_PUBLIC_PORTAL_TITLE: ${{ vars.PORTAL_TITLE }}
+          # Instance brand color (#1945), same mechanism and same "unset is
+          # normal" reasoning as PORTAL_TITLE above -- the portal falls back
+          # to its own default primary color on an empty string.
+          NEXT_PUBLIC_PORTAL_PRIMARY_COLOR: ${{ vars.PORTAL_PRIMARY_COLOR }}
         run: pnpm run build
       - uses: actions/upload-artifact@v5
         with:

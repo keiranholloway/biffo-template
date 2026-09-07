@@ -18,7 +18,11 @@ import {
 } from '../lib/plugin-provenance.js'
 import { pluginSeedImportDir, vendorPluginSeed } from '../lib/plugin-seed-vendor.js'
 import { copyPluginSource } from '../lib/plugin-source-copy.js'
-import { syncPluginTerraform } from '../lib/plugin-terraform-wiring.js'
+import {
+  findRetiredFrontendShape,
+  retiredFrontendShapeError,
+  syncPluginTerraform,
+} from '../lib/plugin-terraform-wiring.js'
 import { applyWorkspaceSources } from '../lib/plugin-workspace-sources.js'
 
 const TARGET_PATTERN = /^([a-z][a-z0-9-]*)@(\d+\.\d+)$/
@@ -307,6 +311,17 @@ export async function runPluginInstall(
     log.success(
       `Manifest valid — ${manifest.tables.length} table(s), ${manifest.api_routes.length} route(s)`,
     )
+
+    // Fail-closed on the retired ADR-0018 §2 per-plugin frontend hosting shape
+    // (biffo-template#1916, #558 milestone 3) — checked against the resolved
+    // source before anything is copied, so a refusal leaves the checkout
+    // untouched. `source.sourceDir` is correct whether this is a registry
+    // clone, a local out-of-tree checkout, or an in-tree `--local` install
+    // (where it already equals targetDir).
+    const retiredShapeReasons = findRetiredFrontendShape(join(source!.sourceDir, 'terraform'))
+    if (retiredShapeReasons.length > 0) {
+      throw new Error(retiredFrontendShapeError(pluginName, retiredShapeReasons))
+    }
 
     // Only now — after the manifest has validated — do we touch the target repo.
     if (inTreeSource) {

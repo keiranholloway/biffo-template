@@ -26,7 +26,11 @@ import {
 } from '../lib/plugin-provenance.js'
 import { pluginSeedImportDir, vendorPluginSeed } from '../lib/plugin-seed-vendor.js'
 import { copyPluginSource } from '../lib/plugin-source-copy.js'
-import { findPluginModuleReferences } from '../lib/plugin-terraform-wiring.js'
+import {
+  findPluginModuleReferences,
+  findRetiredFrontendShape,
+  retiredFrontendShapeError,
+} from '../lib/plugin-terraform-wiring.js'
 import { applyWorkspaceSources, readTomlStringArray } from '../lib/plugin-workspace-sources.js'
 import {
   cloneAndValidatePlugin,
@@ -235,6 +239,15 @@ export async function runPluginUpgrade(
     log.success(
       `Manifest valid — ${manifest.tables.length} table(s), ${manifest.api_routes.length} route(s)`,
     )
+
+    // Fail-closed on the retired ADR-0018 §2 per-plugin frontend hosting shape
+    // (biffo-template#1916, #558 milestone 3) — checked against the freshly-
+    // cloned source, before anything is mutated, same reasoning as the
+    // reference guard below.
+    const retiredShapeReasons = findRetiredFrontendShape(join(tmpDir, 'terraform'))
+    if (retiredShapeReasons.length > 0) {
+      throw new Error(retiredFrontendShapeError(entry.name, retiredShapeReasons))
+    }
 
     // Checked against the freshly-cloned source, before anything is mutated,
     // so a refusal leaves the checkout untouched (biffo-template#1563). Only
@@ -461,6 +474,16 @@ async function runLocalPluginRefresh(
     log.success(
       `Manifest valid — ${manifest.tables.length} table(s), ${manifest.api_routes.length} route(s)`,
     )
+
+    // Fail-closed on the retired ADR-0018 §2 per-plugin frontend hosting shape
+    // (biffo-template#1916, #558 milestone 3) — checked against the checkout
+    // on disk before anything is mutated, same reasoning as the reference
+    // guard below. `source.sourceDir` is correct whether or not this is an
+    // in-tree refresh.
+    const retiredShapeReasons = findRetiredFrontendShape(join(source.sourceDir, 'terraform'))
+    if (retiredShapeReasons.length > 0) {
+      throw new Error(retiredFrontendShapeError(source.name, retiredShapeReasons))
+    }
 
     // Checked against the checkout on disk, before anything is mutated, so a
     // refusal leaves the checkout untouched (biffo-template#1563) — same

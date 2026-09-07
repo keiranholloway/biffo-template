@@ -39,15 +39,28 @@ function makeProjectRoot(): string {
   return dir
 }
 
-function makeClonedPluginDir(manifest: unknown = NEW_MANIFEST, withTerraform = false): string {
+function makeClonedPluginDir(
+  manifest: unknown = NEW_MANIFEST,
+  withTerraform = false,
+  tfMainContent = '# plugin terraform module\n',
+): string {
   const dir = makeTmpDir('biffo-plugin-src')
   writeFileSync(join(dir, 'biffo.plugin.json'), JSON.stringify(manifest))
   if (withTerraform) {
     mkdirSync(join(dir, 'terraform'), { recursive: true })
-    writeFileSync(join(dir, 'terraform', 'main.tf'), '# plugin terraform module\n')
+    writeFileSync(join(dir, 'terraform', 'main.tf'), tfMainContent)
   }
   return dir
 }
+
+// Verbatim from biffo-plugin-ideation/terraform/main.tf — the real,
+// currently-live ADR-0018 §2 per-plugin frontend module (biffo-template#1916).
+const RETIRED_SHAPE_MAIN_TF =
+  'resource "aws_s3_bucket" "frontend" {\n' +
+  '  bucket        = "${local.name_prefix}-plugin-${var.plugin_name}-web"\n' +
+  '  force_destroy = true\n' +
+  '  tags          = var.tags\n' +
+  '}\n'
 
 function makeRegistryMock(entry: RegistryPluginEntry = REGISTRY_ENTRY) {
   return { resolvePlugin: vi.fn().mockResolvedValue(entry) }
@@ -165,6 +178,30 @@ describe('runPluginUpgrade', () => {
 
     expect(git.cloneToTemp).not.toHaveBeenCalled()
     expect(git.commit).not.toHaveBeenCalled()
+  })
+
+  describe('retired frontend shape guard (biffo-template#1916, ADR-0021 §2)', () => {
+    it('refuses, naming ADR-0021 §2, when the new version ships the retired shape', async () => {
+      const registry = makeRegistryMock()
+      const git = makeGitMock(makeClonedPluginDir(NEW_MANIFEST, true, RETIRED_SHAPE_MAIN_TF))
+      const migrations = makeMigrationsMock()
+
+      await expect(
+        runPluginUpgrade(
+          'widgets@1.1',
+          { dryRun: false, force: true, cwd: projectRoot },
+          { registry: registry as never, git: git as never, migrations: migrations as never },
+        ),
+      ).rejects.toThrow('ADR-0021 §2')
+
+      // Fail-closed: the existing install is untouched.
+      expect(
+        JSON.parse(
+          readFileSync(join(projectRoot, 'services', 'widgets', 'biffo.plugin.json'), 'utf8'),
+        ),
+      ).toMatchObject({ version: '1.0.0' })
+      expect(git.commit).not.toHaveBeenCalled()
+    })
   })
 
   describe('seed vendoring (biffo-template#1554)', () => {
@@ -497,13 +534,21 @@ describe('runPluginUpgrade', () => {
  * exactly what these tests need present to prove it gets filtered. */
 function makeLocalPluginDir(
   manifest: unknown = NEW_MANIFEST,
-  opts: { withTerraform?: boolean; pyproject?: string; extraFiles?: Record<string, string> } = {},
+  opts: {
+    withTerraform?: boolean
+    tfMainContent?: string
+    pyproject?: string
+    extraFiles?: Record<string, string>
+  } = {},
 ): string {
   const dir = makeTmpDir('biffo-plugin-local')
   writeFileSync(join(dir, 'biffo.plugin.json'), JSON.stringify(manifest))
   if (opts.withTerraform) {
     mkdirSync(join(dir, 'terraform'), { recursive: true })
-    writeFileSync(join(dir, 'terraform', 'main.tf'), '# plugin terraform module\n')
+    writeFileSync(
+      join(dir, 'terraform', 'main.tf'),
+      opts.tfMainContent ?? '# plugin terraform module\n',
+    )
   }
   if (opts.pyproject) {
     writeFileSync(join(dir, 'pyproject.toml'), opts.pyproject)
@@ -594,6 +639,33 @@ describe('runPluginUpgrade --local', () => {
       projectRoot,
       'chore(plugins): refresh widgets from local checkout',
     )
+  })
+
+  describe('retired frontend shape guard (biffo-template#1916, ADR-0021 §2)', () => {
+    it('refuses a --local refresh, naming ADR-0021 §2, when the checkout ships the retired shape', async () => {
+      const registry = makeRegistryMock()
+      const git = makeGitMock(makeClonedPluginDir())
+      const migrations = makeMigrationsMock()
+      const localDir = makeLocalPluginDir(NEW_MANIFEST, {
+        withTerraform: true,
+        tfMainContent: RETIRED_SHAPE_MAIN_TF,
+      })
+
+      await expect(
+        runPluginUpgrade(
+          undefined,
+          { local: localDir, dryRun: false, force: true, cwd: projectRoot },
+          { registry: registry as never, git: git as never, migrations: migrations as never },
+        ),
+      ).rejects.toThrow('ADR-0021 §2')
+
+      expect(
+        JSON.parse(
+          readFileSync(join(projectRoot, 'services', 'widgets', 'biffo.plugin.json'), 'utf8'),
+        ),
+      ).toMatchObject({ version: '1.0.0' })
+      expect(git.commit).not.toHaveBeenCalled()
+    })
   })
 
   it('does not destroy the plugin when --local points at its own installed location (the self-copy trap)', async () => {

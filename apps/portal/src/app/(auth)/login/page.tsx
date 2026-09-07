@@ -367,9 +367,9 @@ function LoginForm() {
 
   if (resetMode) {
     return (
-      <div className="w-full max-w-sm rounded-xl border bg-white p-8 shadow-sm">
-        <h1 className="mb-2 text-2xl font-bold text-gray-900">Reset your password</h1>
-        <p className="mb-6 text-sm text-gray-500">
+      <div className="border-outline bg-surface w-full max-w-sm rounded-xl border p-8 shadow-sm">
+        <h1 className="text-on-surface mb-2 text-2xl font-bold">Reset your password</h1>
+        <p className="text-on-surface-variant mb-6 text-sm">
           {codeSent
             ? 'Enter the code from your email along with a new password.'
             : 'Enter your email address and we will send a reset code to it.'}
@@ -383,7 +383,10 @@ function LoginForm() {
             className="flex flex-col gap-4"
           >
             <div>
-              <label htmlFor="reset-email" className="mb-1 block text-sm font-medium text-gray-700">
+              <label
+                htmlFor="reset-email"
+                className="text-on-surface-variant mb-1 block text-sm font-medium"
+              >
                 Email
               </label>
               <input
@@ -393,19 +396,21 @@ function LoginForm() {
                 onChange={(e) => {
                   setEmail(e.target.value)
                 }}
-                className="w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="border-outline focus:ring-primary w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2"
                 required
                 autoComplete="email"
               />
             </div>
 
             {resetNotice != null && (
-              <p className="rounded-lg bg-blue-50 px-3 py-2 text-sm text-blue-700">{resetNotice}</p>
+              <p className="bg-primary-container text-on-primary-container rounded-lg px-3 py-2 text-sm">
+                {resetNotice}
+              </p>
             )}
 
             <Button
               type="submit"
-              className="mt-2 w-full rounded-lg bg-blue-600 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+              className="bg-primary text-on-primary hover:bg-primary-hover mt-2 w-full rounded-lg py-2 text-sm font-medium disabled:opacity-50"
               disabled={loading}
             >
               {loading ? 'Sending code…' : 'Send reset code'}
@@ -414,7 +419,7 @@ function LoginForm() {
             <button
               type="button"
               onClick={backToSignIn}
-              className="text-sm text-blue-600 hover:underline"
+              className="text-primary text-sm hover:underline"
             >
               Back to sign in
             </button>
@@ -427,7 +432,10 @@ function LoginForm() {
             className="flex flex-col gap-4"
           >
             <div>
-              <label htmlFor="reset-code" className="mb-1 block text-sm font-medium text-gray-700">
+              <label
+                htmlFor="reset-code"
+                className="text-on-surface-variant mb-1 block text-sm font-medium"
+              >
                 Reset code
               </label>
               <input
@@ -437,7 +445,7 @@ function LoginForm() {
                 onChange={(e) => {
                   setResetCode(e.target.value)
                 }}
-                className="w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="border-outline focus:ring-primary w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2"
                 required
                 autoComplete="one-time-code"
                 inputMode="numeric"
@@ -447,7 +455,7 @@ function LoginForm() {
             <div>
               <label
                 htmlFor="reset-new-password"
-                className="mb-1 block text-sm font-medium text-gray-700"
+                className="text-on-surface-variant mb-1 block text-sm font-medium"
               >
                 New password
               </label>
@@ -458,7 +466,7 @@ function LoginForm() {
                 onChange={(e) => {
                   setResetNewPassword(e.target.value)
                 }}
-                className="w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="border-outline focus:ring-primary w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2"
                 required
                 autoComplete="new-password"
               />
@@ -467,7 +475,7 @@ function LoginForm() {
             <div>
               <label
                 htmlFor="reset-confirm-password"
-                className="mb-1 block text-sm font-medium text-gray-700"
+                className="text-on-surface-variant mb-1 block text-sm font-medium"
               >
                 Confirm password
               </label>
@@ -478,23 +486,27 @@ function LoginForm() {
                 onChange={(e) => {
                   setResetConfirmPassword(e.target.value)
                 }}
-                className="w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="border-outline focus:ring-primary w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2"
                 required
                 autoComplete="new-password"
               />
             </div>
 
             {resetNotice != null && error == null && (
-              <p className="rounded-lg bg-blue-50 px-3 py-2 text-sm text-blue-700">{resetNotice}</p>
+              <p className="bg-primary-container text-on-primary-container rounded-lg px-3 py-2 text-sm">
+                {resetNotice}
+              </p>
             )}
 
             {error != null && (
-              <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>
+              <p className="bg-error-container text-on-error-container rounded-lg px-3 py-2 text-sm">
+                {error}
+              </p>
             )}
 
             <Button
               type="submit"
-              className="mt-2 w-full rounded-lg bg-blue-600 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+              className="bg-primary text-on-primary hover:bg-primary-hover mt-2 w-full rounded-lg py-2 text-sm font-medium disabled:opacity-50"
               disabled={loading}
             >
               {loading ? 'Resetting…' : 'Reset password'}
@@ -503,7 +515,7 @@ function LoginForm() {
             <button
               type="button"
               onClick={backToSignIn}
-              className="text-sm text-blue-600 hover:underline"
+              className="text-primary text-sm hover:underline"
             >
               Back to sign in
             </button>
@@ -515,9 +527,9 @@ function LoginForm() {
 
   if (pendingUser !== null) {
     return (
-      <div className="w-full max-w-sm rounded-xl border bg-white p-8 shadow-sm">
-        <h1 className="mb-2 text-2xl font-bold text-gray-900">Set a new password</h1>
-        <p className="mb-6 text-sm text-gray-500">
+      <div className="border-outline bg-surface w-full max-w-sm rounded-xl border p-8 shadow-sm">
+        <h1 className="text-on-surface mb-2 text-2xl font-bold">Set a new password</h1>
+        <p className="text-on-surface-variant mb-6 text-sm">
           Your temporary password has expired. Please choose a permanent password.
         </p>
 
@@ -528,7 +540,10 @@ function LoginForm() {
           className="flex flex-col gap-4"
         >
           <div>
-            <label htmlFor="new-password" className="mb-1 block text-sm font-medium text-gray-700">
+            <label
+              htmlFor="new-password"
+              className="text-on-surface-variant mb-1 block text-sm font-medium"
+            >
               New password
             </label>
             <input
@@ -538,7 +553,7 @@ function LoginForm() {
               onChange={(e) => {
                 setNewPassword(e.target.value)
               }}
-              className="w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="border-outline focus:ring-primary w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2"
               required
               autoComplete="new-password"
             />
@@ -547,7 +562,7 @@ function LoginForm() {
           <div>
             <label
               htmlFor="confirm-password"
-              className="mb-1 block text-sm font-medium text-gray-700"
+              className="text-on-surface-variant mb-1 block text-sm font-medium"
             >
               Confirm password
             </label>
@@ -558,19 +573,21 @@ function LoginForm() {
               onChange={(e) => {
                 setConfirmPassword(e.target.value)
               }}
-              className="w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="border-outline focus:ring-primary w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2"
               required
               autoComplete="new-password"
             />
           </div>
 
           {error != null && (
-            <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>
+            <p className="bg-error-container text-on-error-container rounded-lg px-3 py-2 text-sm">
+              {error}
+            </p>
           )}
 
           <Button
             type="submit"
-            className="mt-2 w-full rounded-lg bg-blue-600 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+            className="bg-primary text-on-primary hover:bg-primary-hover mt-2 w-full rounded-lg py-2 text-sm font-medium disabled:opacity-50"
             disabled={loading}
           >
             {loading ? 'Setting password…' : 'Set password'}
@@ -581,10 +598,10 @@ function LoginForm() {
   }
 
   return (
-    <div className="w-full max-w-sm rounded-xl border bg-white p-8 shadow-sm">
-      <h1 className="mb-2 text-2xl font-bold text-gray-900">Sign in</h1>
+    <div className="border-outline bg-surface w-full max-w-sm rounded-xl border p-8 shadow-sm">
+      <h1 className="text-on-surface mb-2 text-2xl font-bold">Sign in</h1>
       {session ? (
-        <p className="mb-6 text-sm text-gray-600">
+        <p className="text-on-surface-variant mb-6 text-sm">
           {pendingIdentity ? `Signing you in as ${pendingIdentity}…` : 'Signing you in…'}{' '}
           <button
             type="button"
@@ -593,7 +610,7 @@ function LoginForm() {
               setForwarding(false)
               logout()
             }}
-            className="underline hover:text-gray-900"
+            className="hover:text-on-surface underline"
           >
             Not you? Sign out
           </button>
@@ -609,7 +626,7 @@ function LoginForm() {
         className="flex flex-col gap-4"
       >
         <div>
-          <label htmlFor="email" className="mb-1 block text-sm font-medium text-gray-700">
+          <label htmlFor="email" className="text-on-surface-variant mb-1 block text-sm font-medium">
             Email
           </label>
           <input
@@ -619,7 +636,7 @@ function LoginForm() {
             onChange={(e) => {
               setEmail(e.target.value)
             }}
-            className="w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="border-outline focus:ring-primary w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2"
             required
             autoComplete="email"
             disabled={forwarding}
@@ -627,7 +644,10 @@ function LoginForm() {
         </div>
 
         <div>
-          <label htmlFor="password" className="mb-1 block text-sm font-medium text-gray-700">
+          <label
+            htmlFor="password"
+            className="text-on-surface-variant mb-1 block text-sm font-medium"
+          >
             Password
           </label>
           <input
@@ -637,7 +657,7 @@ function LoginForm() {
             onChange={(e) => {
               setPassword(e.target.value)
             }}
-            className="w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="border-outline focus:ring-primary w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2"
             required
             autoComplete="current-password"
             disabled={forwarding}
@@ -645,18 +665,20 @@ function LoginForm() {
         </div>
 
         {error != null && (
-          <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>
+          <p className="bg-error-container text-on-error-container rounded-lg px-3 py-2 text-sm">
+            {error}
+          </p>
         )}
 
         <Button
           type="submit"
-          className="mt-2 w-full rounded-lg bg-blue-600 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+          className="bg-primary text-on-primary hover:bg-primary-hover mt-2 w-full rounded-lg py-2 text-sm font-medium disabled:opacity-50"
           disabled={loading || forwarding}
         >
           {loading ? 'Signing in…' : 'Sign in'}
         </Button>
 
-        <button type="button" onClick={openReset} className="text-sm text-blue-600 hover:underline">
+        <button type="button" onClick={openReset} className="text-primary text-sm hover:underline">
           Forgot password?
         </button>
       </form>

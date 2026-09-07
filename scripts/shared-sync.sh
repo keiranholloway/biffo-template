@@ -794,11 +794,31 @@ is_python_only() {
 # holds (see that function's header comment -- this was fixed once already,
 # for the file-drift check itself, after a stale checkout reported twelve
 # current repos as DRIFTED).
+#
+# `git ls-tree | grep -q` used to fold TWO different exit statuses into one --
+# grep's, since it is the last command in the pipe. That is the exact
+# `cmd | tail` trap AGENTS.md's own "Checking exit status through a pipe"
+# section names: a `git ls-tree` that fails for ANY reason (a transient lock,
+# a resource hiccup under a loaded runner -- the fetch immediately before every
+# call site already handles the ref genuinely not existing, via $UNFETCHABLE
+# in diff_files and stage_repo's own `|| return 1`) hands grep an EMPTY
+# stdin, grep correctly finds no match on nothing, and the function reports
+# "no python" -- indistinguishable from a real Python-less repo. That is a
+# silent fail-open in the direction that costs the most: it makes `stage_repo`
+# skip a real Python-only guard script for a repo that DOES have Python,
+# rather than the harmless direction (briefly delivering dead content to a
+# repo that does not, which the next round's `has_python` call corrects).
+# `git`'s own exit status is now checked on its own terms, before grep ever
+# runs, and a failure there is treated as "cannot tell, so do not withhold" --
+# the same fail-closed posture the reduction guard elsewhere in this file
+# already takes for irreversible actions.
 has_python() {
   d="$1"
   base="$2"
-  git -C "$d" ls-tree -r --name-only "origin/$base" 2>/dev/null |
-    grep -q '\(^\|/\)pyproject\.toml$'
+  _hp_tree=$(git -C "$d" ls-tree -r --name-only "origin/$base" 2>/dev/null)
+  _hp_rc=$?
+  [ "$_hp_rc" -eq 0 ] || return 0
+  printf '%s\n' "$_hp_tree" | grep -q '\(^\|/\)pyproject\.toml$'
 }
 
 # Sentinel `diff_files` returns when the clone could not be fetched at all,

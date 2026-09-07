@@ -53,6 +53,11 @@ function gitMock(overrides: Record<string, unknown> = {}) {
     // Milestone 2 (#1682): same safe-case default, for the bare-branch path.
     branchSha: vi.fn().mockResolvedValue('merged-tip-sha'),
     deleteBranch: vi.fn().mockResolvedValue(true),
+    // #1954: empty by default — every branch this file's fixtures use is
+    // meant to read as "its own remote copy is gone", matching their
+    // `track: '[gone]'` fixtures; override per test for a "still on remote"
+    // case.
+    listRemoteBranchNames: vi.fn().mockResolvedValue(new Set()),
     ...overrides,
   }
 }

@@ -1,5 +1,6 @@
 /**
- * `biffo check core-direct-paths --estate <dir>` (#1377, corrected 2026-08-10).
+ * `biffo check core-direct-paths --estate <dir>` (#1377, corrected 2026-08-10;
+ * self-check scoping fixed in #1943).
  *
  * The workflow's first real run against the live estate reported nine
  * findings, and every one was a false positive: `--core-src` was resolved to
@@ -9,12 +10,28 @@
  * `runCoreDirectPathsCheck`'s `--estate` resolution path directly, rather
  * than reasoning about it from the source — the same discipline
  * `check-branch-protection.test.ts` uses for its own CI entrypoint.
+ *
+ * `execa` is mocked (not `../lib/exec.js`, which just wraps it) so the
+ * `git rev-parse --show-toplevel` resolution can be pointed at a disposable
+ * root — needed for the self-check-default tests below, which (unlike the
+ * `--estate` tests above them) exercise the code path that reads `root`
+ * directly. The pre-existing `--estate` tests never depended on the real
+ * value, so a default mock keeps them passing unchanged.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdirSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { execa } from 'execa'
 import { makeTmpDir } from '../test-utils/tmp.js'
 import { runCoreDirectPathsCheck } from './check-core-direct-paths.js'
+
+vi.mock('execa', () => ({
+  execa: vi.fn(),
+}))
+
+function setRoot(root: string): void {
+  vi.mocked(execa).mockResolvedValue({ stdout: root } as never)
+}
 
 let exitCode: number | undefined
 
@@ -29,6 +46,10 @@ beforeEach(() => {
     exitCode = code
     throw new Error(`process.exit(${String(code)})`)
   }) as never)
+  // The `--estate` tests below always pass explicit `sibling`/`frontendSrc`
+  // options, so `root`'s value is unused in them — but it is still resolved,
+  // so it needs somewhere harmless to point.
+  setRoot(makeTmpDir('core-direct-default-root'))
 })
 
 /** Build `<estate>/<sibling>` with a `biffo.sibling.json` naming
@@ -169,3 +190,101 @@ describe('runCoreDirectPathsCheck --estate resolution', () => {
     expect(logged).not.toContain('core project:')
   })
 })
+
+describe('runCoreDirectPathsCheck self-check defaults (#1943)', () => {
+  it('skips cleanly in a sibling tree whose services/api/src is its own unrelated BFF', async () => {
+    const root = makeTmpDir('core-direct-selfcheck-satellite')
+    // Shaped exactly like a real `biffo sibling create` scaffold: no
+    // `_skeletons/` (never ships to a satellite) and its own BFF at
+    // `services/api/src`, whose routers legitimately declare an
+    // `APIRouter()` with no `prefix=` — the real shape that reported "BLIND
+    // (core)" against a real sibling (tabsii-geo) before this fix.
+    write(root, 'apps/frontend/package.json', '{"name": "satellite-app"}')
+    write(root, 'services/api/src/api/routers/whoami.py', 'router = APIRouter()\n')
+    setRoot(root)
+
+    await runCoreDirectPathsCheck()
+
+    expect(process.exit).not.toHaveBeenCalled()
+    const logged = vi.mocked(console.log).mock.calls.flat().join('\n')
+    expect(logged).toContain('skipped')
+    const errored = vi.mocked(console.error).mock.calls.flat().join('\n')
+    expect(errored).toBe('')
+  })
+
+  it('still runs the self-check (does not skip) in the template itself', async () => {
+    const root = makeTmpDir('core-direct-selfcheck-template')
+    write(root, 'core-manifest.json', '{}')
+    mkdirSync(join(root, '_skeletons', 'sibling-template', 'apps', 'frontend', 'src'), {
+      recursive: true,
+    })
+    write(root, 'services/api/src/api/main.py', 'router = APIRouter(prefix="/whoami")\n')
+    setRoot(root)
+
+    await runCoreDirectPathsCheck()
+
+    expect(process.exit).not.toHaveBeenCalled()
+    const logged = vi.mocked(console.log).mock.calls.flat().join('\n')
+    expect(logged).not.toContain('skipped —')
+    expect(logged).toContain('audited 0 core-direct call site(s)')
+  })
+
+  it('still runs the self-check (does not skip) in an instance tree', async () => {
+    const root = makeTmpDir('core-direct-selfcheck-instance')
+    write(root, 'biffo.core.json', JSON.stringify({ version: '1.0.0' }))
+    mkdirSync(join(root, '_skeletons', 'sibling-template', 'apps', 'frontend', 'src'), {
+      recursive: true,
+    })
+    write(root, 'services/api/src/api/main.py', 'router = APIRouter(prefix="/whoami")\n')
+    setRoot(root)
+
+    await runCoreDirectPathsCheck()
+
+    expect(process.exit).not.toHaveBeenCalled()
+    const logged = vi.mocked(console.log).mock.calls.flat().join('\n')
+    expect(logged).not.toContain('skipped —')
+    expect(logged).toContain('audited 0 core-direct call site(s)')
+  })
+
+  it('an explicit --sibling/--frontend-src/--estate invocation runs regardless of the calling repo (satellite-shaped)', async () => {
+    // The self-check-defaults gate must only fire when NO override was
+    // given -- an explicit, ad-hoc audit of some OTHER tree is not the
+    // self-check and must not be skipped just because it happens to be
+    // invoked from within a satellite.
+    const callingRoot = makeTmpDir('core-direct-selfcheck-satellite-caller')
+    write(callingRoot, 'apps/frontend/package.json', '{"name": "satellite-app"}')
+    setRoot(callingRoot)
+
+    const estateDir = makeTmpDir('core-direct-selfcheck-explicit-estate')
+    const { frontendSrcDir, coreApiSrcDir } = buildEstate({
+      estateDir,
+      sibling: 'tabsii-intake',
+      coreProject: 'tabsii-platform',
+    })
+    writeFileSync(
+      join(frontendSrcDir, 'lib', 'demo-requests.ts'),
+      "const CORE_API_URL = ''\nfetch(`${CORE_API_URL}/api/v1/public/demo-requests`)\n",
+    )
+    writeFileSync(
+      join(coreApiSrcDir as string, 'demo_requests.py'),
+      'router = APIRouter(prefix="/public/demo-requests", tags=["public"])\n',
+    )
+
+    await runCoreDirectPathsCheck({
+      sibling: 'tabsii-intake',
+      frontendSrc: frontendSrcDir,
+      estate: estateDir,
+    })
+
+    expect(process.exit).not.toHaveBeenCalled()
+    const logged = vi.mocked(console.log).mock.calls.flat().join('\n')
+    expect(logged).not.toContain('skipped —')
+    expect(logged).toContain('audited 1 core-direct call site(s)')
+  })
+})
+
+function write(root: string, rel: string, content: string): void {
+  const p = join(root, rel)
+  mkdirSync(dirname(p), { recursive: true })
+  writeFileSync(p, content)
+}

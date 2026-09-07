@@ -606,6 +606,107 @@ describe('runPluginInstall', () => {
     ).rejects.toThrow('does not contain a biffo.plugin.json manifest')
   })
 
+  describe('config: declarations, install-time enforcement (biffo-template#1517 Option B, #1946)', () => {
+    // A manifest declaring one required 'secret' config need — the shape
+    // resolvePluginConfigSupply/missingRequiredConfigMessage exist to gate.
+    const CONFIG_MANIFEST = {
+      ...VALID_MANIFEST,
+      config: [
+        {
+          name: 'api_key',
+          kind: 'secret',
+          required: true,
+          description: 'Widgets API credential.',
+        },
+      ],
+    }
+
+    it('refuses install when a required config value is not supplied, leaving the checkout untouched', async () => {
+      const registry = makeRegistryMock()
+      const git = makeGitMock(makeClonedPluginDir(CONFIG_MANIFEST))
+      const migrations = makeMigrationsMock()
+
+      await expect(
+        runPluginInstall(
+          'widgets@1.0',
+          { dryRun: false, cwd: projectRoot }, // no `config` supplied at all
+          { registry: registry as never, git: git as never, migrations: migrations as never },
+        ),
+      ).rejects.toThrow(/declares 1 required config value/)
+
+      // Fail-closed: nothing was written into the checkout, and nothing was
+      // staged or committed — same posture as the retired-frontend-shape and
+      // invalid-manifest guards above.
+      expect(existsSync(join(projectRoot, 'services', 'widgets'))).toBe(false)
+      expect(existsSync(join(projectRoot, 'services', 'widgets', 'biffo.plugin-config.json'))).toBe(
+        false,
+      )
+      expect(git.add).not.toHaveBeenCalled()
+      expect(git.commit).not.toHaveBeenCalled()
+    })
+
+    it('installs and writes biffo.plugin-config.json when the required config value is supplied', async () => {
+      const registry = makeRegistryMock()
+      const git = makeGitMock(makeClonedPluginDir(CONFIG_MANIFEST))
+      const migrations = makeMigrationsMock()
+
+      await runPluginInstall(
+        'widgets@1.0',
+        {
+          dryRun: false,
+          cwd: projectRoot,
+          config: { api_key: '/widgets/dev/api_key' },
+        },
+        { registry: registry as never, git: git as never, migrations: migrations as never },
+      )
+
+      expect(existsSync(join(projectRoot, 'services', 'widgets'))).toBe(true)
+      const configFile = join(projectRoot, 'services', 'widgets', 'biffo.plugin-config.json')
+      expect(existsSync(configFile)).toBe(true)
+      const written = JSON.parse(readFileSync(configFile, 'utf8'))
+      expect(written).toMatchObject({
+        plugin: 'widgets',
+        resolved: [
+          {
+            name: 'api_key',
+            kind: 'secret',
+            env: 'BIFFO_PLUGIN_WIDGETS_API_KEY_PARAMETER',
+            value: '/widgets/dev/api_key',
+          },
+        ],
+      })
+      expect(git.add).toHaveBeenCalledWith(
+        projectRoot,
+        expect.arrayContaining(['services/widgets/biffo.plugin-config.json']),
+      )
+      expect(git.commit).toHaveBeenCalledWith(projectRoot, 'feat(plugins): install widgets@1.0.0')
+    })
+
+    it('refuses a secret value that is not an SSM parameter path, leaving the checkout untouched', async () => {
+      const registry = makeRegistryMock()
+      const git = makeGitMock(makeClonedPluginDir(CONFIG_MANIFEST))
+      const migrations = makeMigrationsMock()
+
+      await expect(
+        runPluginInstall(
+          'widgets@1.0',
+          {
+            dryRun: false,
+            cwd: projectRoot,
+            // An operator pasting the credential itself by mistake, instead
+            // of the SSM parameter path holding it.
+            config: { api_key: 'sk-live-not-a-path' },
+          },
+          { registry: registry as never, git: git as never, migrations: migrations as never },
+        ),
+      ).rejects.toThrow(/must be an SSM parameter PATH/)
+
+      expect(existsSync(join(projectRoot, 'services', 'widgets'))).toBe(false)
+      expect(git.add).not.toHaveBeenCalled()
+      expect(git.commit).not.toHaveBeenCalled()
+    })
+  })
+
   describe('--dry-run', () => {
     it('does not clone, write files, or commit', async () => {
       const registry = makeRegistryMock()

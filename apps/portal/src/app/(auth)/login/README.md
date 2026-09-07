@@ -30,11 +30,35 @@ gray/blue palette, hardcoded directly into `page.tsx`'s classNames.
    `color-mix()` in `globals.css`, so one variable is enough for a coherent
    theme rather than needing one override per shade.
 
+## The logo/wordmark override (issue #1965)
+
+The same mechanism, for an actual brand mark rather than a color: `../layout.tsx`
+(the `(auth)` route-group wrapper, the one this login page renders inside —
+see #1956 above for why that distinction matters) reads
+`PORTAL_LOGO_URL`/`PORTAL_TITLE` from `../../lib/branding.ts`.
+`NEXT_PUBLIC_PORTAL_LOGO_URL` is unset by default, so an un-branded instance
+renders no `<img>` at all — never a broken image — and gets exactly today's
+text-only header. Set, it is forwarded by every "Build portal" step from the
+`PORTAL_LOGO_URL` repository variable, and `AuthLayout` renders it as a plain
+`<img>` (not `next/image`: the instance's asset host is unknown to the
+template at build time, so it cannot be added to `next.config.ts`'s
+`images.remotePatterns` allowlist) above `{children}`, so it appears across
+all three states — sign-in, set-new-password, forgot-password — the same as
+the color override.
+
+This mechanism carries only the **pointer** to a logo (a URL), never an
+instance's actual logo asset — that stays instance-owned, hosted wherever the
+instance already serves static assets, set via the `PORTAL_LOGO_URL` repo
+variable at `biffo init` or any time after.
+
 ## Adding another override
 
-Follow `NEXT_PUBLIC_PORTAL_PRIMARY_COLOR` end to end:
+Follow `NEXT_PUBLIC_PORTAL_PRIMARY_COLOR` (or `NEXT_PUBLIC_PORTAL_LOGO_URL`
+for a non-color value) end to end:
 
-1. Add the token to `globals.css` with a sane default.
+1. Add the token to `globals.css` with a sane default (color tokens), or a
+   `branding.ts` export with an `|| undefined` fallback (non-color values,
+   e.g. a URL — see `PORTAL_LOGO_URL`).
 2. Read `process.env.NEXT_PUBLIC_<NAME>` in `layout.tsx` (or extend
    `resolvePortalThemeStyle`) and apply it the same way.
 3. Forward it from a repository variable in **all three** "Build portal"

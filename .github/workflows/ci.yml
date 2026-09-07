@@ -141,6 +141,36 @@ jobs:
           NEXT_PUBLIC_COGNITO_CLIENT_ID: ciplaceholderclientid00000
           NEXT_PUBLIC_API_URL: http://localhost
           NEXT_PUBLIC_REGISTRY_URL: http://localhost
+      # apps/portal was the last unmigrated surface for the sibling skeleton's
+      # scale-guard wiring (#1738 decision memo, option C): every sibling born
+      # from _skeletons/sibling-template gets `pnpm exec biffo-scale-guard` in
+      # its own CI (see that skeleton's ci.yml), but the template's own portal
+      # never ran the same check on itself — which is exactly how 13 arbitrary
+      # `text-[10px]`/`text-[11px]` values (below Tailwind's 12px floor)
+      # accumulated with nothing to catch them (fixed in this same PR).
+      #
+      # This does NOT add a named type scale to @biffo/design-tokens or to
+      # apps/portal/tailwind.config.ts — that is options A/B from the same
+      # memo and stays a separate, later decision. With no --text-*/--space-*
+      # tokens declared yet, the guard's own design (see scale-guard.mjs's
+      # header) enforces "nothing hardcoded" rather than "on an established
+      # scale" — which is sufficient to catch a fresh off-scale value and is
+      # exactly what this step is for.
+      #
+      # Runs the checker directly via `node` rather than `pnpm exec
+      # biffo-scale-guard`: apps/portal does not depend on
+      # @biffo/design-tokens (it has adopted no tokens from it, and adding an
+      # unused dependency to gain a CLI binary is not a design decision this
+      # guard-wiring PR should make), so the bin is not linked into any
+      # node_modules/.bin. Invoking the script by path avoids that and needs
+      # no package.json change.
+      - name: Scale drift guard (portal)
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: >-
+          node packages/design-tokens/bin/scale-guard.mjs
+          --dir apps/portal
+          --tokens packages/design-tokens/tokens.css
+          --baseline apps/portal/scale-guard-baseline.json
       - name: Test
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm run test

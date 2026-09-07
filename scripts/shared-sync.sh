@@ -2300,6 +2300,21 @@ this mechanism exists.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>" >/dev/null 2>&1
 
+  # Recomputed HERE, not read from whatever stage_repo last left behind
+  # (#1958 follow-up). `repo_has_python` is a plain shell global with no
+  # `local`, and stage_repo is invoked directly (no subshell) once per repo
+  # in phase 1's loop -- so by the time phase 2 calls ship_repo, the variable
+  # holds whatever the LAST repo processed in phase 1 computed, not
+  # necessarily THIS repo's answer. The actual copy is unaffected (stage_repo
+  # already wrote and `git add -A`'d the right files against its own correct
+  # value before this function ever runs), but body_files below read the
+  # stale global directly and so named the wrong files in the PR description
+  # for every repo except the alphabetically-last one staged -- exactly the
+  # disagreement the comment on stage_repo's own computation warns about
+  # ("the reduction guard, the copy and the PR body would each disagree").
+  repo_has_python=1
+  has_python "$d" "$base" && repo_has_python=0
+
   # The PR's file list, built here rather than inline in the --body heredoc:
   # a conditional entry only appears for a repo that actually holds it, and
   # nesting that loop inside an already-interpolated double-quoted string is

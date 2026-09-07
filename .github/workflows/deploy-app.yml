@@ -965,6 +965,27 @@ jobs:
               mkdir -p "$pkg/services/$name/web-admin"
               cp -r "$plugin_dir/web-admin/dist" "$pkg/services/$name/web-admin/dist"
             fi
+            # user_frontend's built UI shell (ADR-0021 §2, biffo-template#558
+            # M2) is served by this SAME Lambda now too, from
+            # services/<name>/web/dist via BIFFO_PLUGINS_ROOT -- mirrors the
+            # web-admin block above exactly, including its fail-CLOSED error:
+            # declaring user_frontend with no web/ is a misconfiguration, not
+            # a variant to tolerate (same biffo-plugin-idea-scout#22 shape the
+            # web-admin comment above describes -- a silent skip here would
+            # 404 at GET /ui/ with nothing anywhere reporting why).
+            if jq -e '.user_frontend' "$manifest" >/dev/null 2>&1; then
+              if [ ! -d "$plugin_dir/web" ]; then
+                echo "::error file=$manifest::Plugin '$name' declares user_frontend but has no web/ directory. The UI cannot be built, so GET /ui/ would 404 at runtime. Either add web/ or remove user_frontend from the manifest."
+                exit 1
+              fi
+              (
+                cd "$plugin_dir/web"
+                pnpm install --ignore-workspace --frozen-lockfile
+                pnpm run build
+              )
+              mkdir -p "$pkg/services/$name/web"
+              cp -r "$plugin_dir/web/dist" "$pkg/services/$name/web/dist"
+            fi
             echo "::endgroup::"
           done
           # Trim runtime-provided and dead weight so the zip fits the direct
@@ -1895,6 +1916,27 @@ jobs:
               )
               mkdir -p "$pkg/services/$name/web-admin"
               cp -r "$plugin_dir/web-admin/dist" "$pkg/services/$name/web-admin/dist"
+            fi
+            # user_frontend's built UI shell (ADR-0021 §2, biffo-template#558
+            # M2) is served by this SAME Lambda now too, from
+            # services/<name>/web/dist via BIFFO_PLUGINS_ROOT -- mirrors the
+            # web-admin block above exactly, including its fail-CLOSED error:
+            # declaring user_frontend with no web/ is a misconfiguration, not
+            # a variant to tolerate (same biffo-plugin-idea-scout#22 shape the
+            # web-admin comment above describes -- a silent skip here would
+            # 404 at GET /ui/ with nothing anywhere reporting why).
+            if jq -e '.user_frontend' "$manifest" >/dev/null 2>&1; then
+              if [ ! -d "$plugin_dir/web" ]; then
+                echo "::error file=$manifest::Plugin '$name' declares user_frontend but has no web/ directory. The UI cannot be built, so GET /ui/ would 404 at runtime. Either add web/ or remove user_frontend from the manifest."
+                exit 1
+              fi
+              (
+                cd "$plugin_dir/web"
+                pnpm install --ignore-workspace --frozen-lockfile
+                pnpm run build
+              )
+              mkdir -p "$pkg/services/$name/web"
+              cp -r "$plugin_dir/web/dist" "$pkg/services/$name/web/dist"
             fi
             echo "::endgroup::"
           done
@@ -2838,6 +2880,27 @@ jobs:
               )
               mkdir -p "$pkg/services/$name/web-admin"
               cp -r "$plugin_dir/web-admin/dist" "$pkg/services/$name/web-admin/dist"
+            fi
+            # user_frontend's built UI shell (ADR-0021 §2, biffo-template#558
+            # M2) is served by this SAME Lambda now too, from
+            # services/<name>/web/dist via BIFFO_PLUGINS_ROOT -- mirrors the
+            # web-admin block above exactly, including its fail-CLOSED error:
+            # declaring user_frontend with no web/ is a misconfiguration, not
+            # a variant to tolerate (same biffo-plugin-idea-scout#22 shape the
+            # web-admin comment above describes -- a silent skip here would
+            # 404 at GET /ui/ with nothing anywhere reporting why).
+            if jq -e '.user_frontend' "$manifest" >/dev/null 2>&1; then
+              if [ ! -d "$plugin_dir/web" ]; then
+                echo "::error file=$manifest::Plugin '$name' declares user_frontend but has no web/ directory. The UI cannot be built, so GET /ui/ would 404 at runtime. Either add web/ or remove user_frontend from the manifest."
+                exit 1
+              fi
+              (
+                cd "$plugin_dir/web"
+                pnpm install --ignore-workspace --frozen-lockfile
+                pnpm run build
+              )
+              mkdir -p "$pkg/services/$name/web"
+              cp -r "$plugin_dir/web/dist" "$pkg/services/$name/web/dist"
             fi
             echo "::endgroup::"
           done

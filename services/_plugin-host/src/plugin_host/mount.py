@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 from collections.abc import AsyncIterator, Callable
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -29,11 +30,51 @@ from typing import Any
 
 from biffo_plugin_sdk import acting_as_plugin
 from starlette.applications import Starlette
+from starlette.exceptions import HTTPException
 from starlette.routing import Mount
+from starlette.staticfiles import StaticFiles
 
 from .discover import DeclaredRoute
 from .forward import DeclaredRouteForwarder, forwarding_gate
 from .lifespan import PluginLifespans
+
+_LOGGER = logging.getLogger(__name__)
+
+
+class _SpaStaticFiles(StaticFiles):
+    """``StaticFiles(html=True)`` extended with an SPA deep-link fallback
+    (ADR-0021 §2): an unknown path under the mount — a client-side route the
+    SPA's own router resolves, e.g. ``/session/42`` — serves ``index.html``
+    instead of a real 404.
+
+    Stock ``StaticFiles(html=True)`` only serves ``index.html`` for a
+    directory-shaped request (the mount root) and otherwise raises a genuine
+    404 (or serves a ``404.html`` if one exists) — proven directly against the
+    installed Starlette version before writing this, not assumed. Without this
+    override, a founder's deep link into the shell 404s instead of loading the
+    app, and — per the #647 trap this same module already documents — a CDN
+    rule could then rewrite that 404 into unrelated portal HTML.
+
+    Deliberately covers every unmatched GET/HEAD path, not just paths that
+    "look like" client-side routes: a genuinely missing asset (a stale
+    reference to a deleted hashed filename) also serves the shell rather than
+    a bare 404, which is the standard, accepted SPA-hosting trade-off (the
+    same one Netlify/Vercel-style catch-all rewrites make) and is exactly what
+    the issue's "a 404 under /ui/ must return the SPA's index.html" done-when
+    criterion asks for.
+    """
+
+    async def get_response(self, path: str, scope: Any) -> Any:
+        try:
+            return await super().get_response(path, scope)
+        except HTTPException as exc:
+            if exc.status_code != 404 or scope["method"] not in ("GET", "HEAD"):
+                raise
+            full_path, stat_result = self.lookup_path("index.html")
+            if stat_result is None:
+                raise  # no index.html at all — a genuinely empty/broken bundle
+            return self.file_response(full_path, stat_result, scope)
+
 
 #: The plugin whose router is handling the current request. None outside a gated
 #: plugin request. Bound alongside the SDK's ``acting_as_plugin`` (which the
@@ -70,6 +111,10 @@ class MountedPlugin:
     #: Manifest-declared api_routes (ADR-0003). Served by Core, not by the
     #: plugin — the host forwards them (#652). Empty means nothing to forward.
     api_routes: tuple[DeclaredRoute, ...] = ()
+    #: Filesystem directory to serve as the plugin's ``user_frontend`` shell at
+    #: ``/<name>/ui`` (already resolved against ``BIFFO_PLUGINS_ROOT/<name>``,
+    #: see ``app.py``), or ``None`` if not declared (ADR-0021 §2, #558 M2).
+    user_frontend_dir: str | None = None
 
 
 def _founder_token(headers: list[tuple[bytes, bytes]]) -> str:
@@ -101,12 +146,15 @@ async def _send_json(send: Callable, status: int, body: dict) -> None:
 
 
 #: Paths within an admin_ingress mount that are the built UI shell, not the JSON
-#: API — served publicly (no token), mirroring how a founder app's static UI is
-#: hosted unauthenticated on its own CloudFront distribution (ADR-0018) while only
-#: its *API calls* are gated. admin_ingress instead serves both from this one
-#: mount, so the exemption has to happen here. Matches Vite's own build-output
-#: convention (``dist/index.html`` + hashed files under ``dist/assets/``) — a
-#: plugin's admin API must not declare routes at ``/`` or under ``/assets/*``.
+#: API — served publicly (no token). A ``user_frontend`` shell (below) is a
+#: *separate*, wholly unauthenticated mount at ``/<name>/ui``, because it needs
+#: no group_gate at all (ADR-0021 §2 supersedes ADR-0018 §2's per-plugin
+#: CloudFront distribution). admin_ingress instead shares one mount for both
+#: its gated JSON API and its public shell, so the exemption has to happen
+#: here, in-request, rather than by simply not gating the mount. Matches
+#: Vite's own build-output convention (``dist/index.html`` + hashed files under
+#: ``dist/assets/``) — a plugin's admin API must not declare routes at ``/`` or
+#: under ``/assets/*``.
 def _is_public_admin_asset(path: str) -> bool:
     return path in ("", "/") or path.startswith("/assets/")
 
@@ -177,18 +225,24 @@ def group_gate(
 
 def _normalize_bare_admin_paths(app: Any, bare_paths: frozenset[str]) -> Callable:
     """Rewrite scope["path"] to add a trailing slash for an exact, bare
-    ``/<name>/admin`` request before Starlette's own router ever sees it.
+    ``/<name>/admin`` or ``/<name>/ui`` request before Starlette's own router
+    ever sees it.
 
-    Starlette's ``Mount("/<name>/admin", ...)`` compiles to a regex requiring a
-    trailing slash (``^/<name>/admin/(?P<path>.*)$``) — proven by inspecting
+    Starlette's ``Mount("/<name>/admin", ...)`` (and, identically,
+    ``Mount("/<name>/ui", ...)``) compiles to a regex requiring a trailing
+    slash (``^/<name>/admin/(?P<path>.*)$``) — proven by inspecting
     ``Mount(...).path_regex.pattern`` directly. A request for the bare path
     with NO trailing slash and nothing after it therefore never matches that
     Mount at all; Starlette falls through to the next route that DOES match —
     the founder-facing ``Mount("/<name>", ...)``, which happens to also match
-    ``/<name>/admin`` as "founder mount, sub-path admin" and gates it with the
-    wrong (founder) group entirely. Confirmed live: a real deployed request to
-    the bare admin path returned "No bearer token" from the FOUNDER gate, not
-    a 404 or the admin gate — i.e. it silently routed to the wrong plugin app.
+    ``/<name>/admin`` (or ``/<name>/ui``) as "founder mount, sub-path admin/ui"
+    and gates it with the wrong (founder) group entirely. Confirmed live: a
+    real deployed request to the bare admin path returned "No bearer token"
+    from the FOUNDER gate, not a 404 or the admin gate — i.e. it silently
+    routed to the wrong plugin app. The same trap applies to ``/<name>/ui``:
+    without this normalization a bare request there would fall through to the
+    founder mount and get gated with a token the caller structurally cannot
+    supply (see ADR-0021 §2's "SPA deep links").
 
     This can't be fixed by redirecting to the trailing-slash form either: the
     API Gateway route in front of this Lambda has no unauthenticated route for
@@ -259,6 +313,9 @@ def build_host(
     (self-seeding via Core's service-principal routes) has completed by then.
     """
     routes = []
+    #: Bare (no trailing slash) mount roots needing ``_normalize_bare_admin_paths``
+    #: — both ``/<name>/admin`` and ``/<name>/ui`` share the same Starlette
+    #: trailing-slash trap (see that function's docstring).
     bare_admin_paths = set()
     #: (mount label, app) for every app whose lifespan the host must run.
     mounted: list[tuple[str, Any]] = []
@@ -288,6 +345,42 @@ def build_host(
             )
             bare_admin_paths.add(f"/{p.name}/admin")
             mounted.append((admin_label, p.admin_app))
+        # user_frontend static shell mount (if declared) — ADR-0021 §2, #558 M2.
+        # Wholly unauthenticated: NO group_gate at all, unlike the admin mount
+        # above. A plain browser navigation to this URL can never attach a
+        # bearer token, and required_group has never gated this shell (see the
+        # ADR's "What required_group does and does not gate") — the API
+        # Gateway routes in front of this Lambda independently allow these
+        # paths through unauthenticated (biffo-template#627's pattern, applied
+        # here). Registered before the user-facing mount below for the same
+        # ordering reason as the admin mount: /<name>/ui/* must match before
+        # the broader /<name>/* founder mount.
+        if p.user_frontend_dir is not None:
+            ui_label = f"{p.name}/ui"
+            try:
+                static_app = _SpaStaticFiles(directory=p.user_frontend_dir, html=True)
+            except (RuntimeError, OSError) as exc:
+                # A declared-but-missing/unreadable directory must not crash
+                # the whole host at cold start (build_host runs once, for
+                # every plugin, before the first request) — the same
+                # contain-the-blast-radius rule discover.py's module docstring
+                # states for a malformed manifest. deploy-app.yml's own
+                # fail-closed check (mirroring web-admin's) should make this
+                # unreachable in a real deploy; this is the host's own
+                # fail-closed backstop if it ever isn't.
+                _LOGGER.error(
+                    "Plugin %r declares user_frontend.dir %r but it could not be "
+                    "mounted as a static directory; skipping its /ui shell so the "
+                    "rest of the host still starts: %s",
+                    p.name,
+                    p.user_frontend_dir,
+                    exc,
+                )
+            else:
+                routes.append(
+                    Mount(f"/{p.name}/ui", app=_quarantine(static_app, ui_label, failures))
+                )
+                bare_admin_paths.add(f"/{p.name}/ui")
         # User-facing app mount. When the plugin declares api_routes, the
         # forwarder wraps the gated app OUTSIDE the group gate: those routes are
         # authorised by their table's own permissions in Core (ADR-0004), and

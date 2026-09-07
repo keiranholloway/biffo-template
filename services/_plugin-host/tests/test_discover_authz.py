@@ -71,6 +71,64 @@ def test_discover_leaves_admin_fields_none_when_absent(tmp_path):
     assert plugin.admin_required_group is None
 
 
+def test_discover_populates_user_frontend_when_present(tmp_path) -> None:
+    """``user_frontend`` (dir, required_group) is carried onto DiscoveredPlugin
+    — plumbing, not new validation (ADR-0021 §2, #558 M2)."""
+    d = tmp_path / "ideation"
+    d.mkdir()
+    manifest = {
+        "name": "ideation",
+        "version": "1.0.0",
+        "user_ingress": {"app": "ideation.app:app", "required_group": "founder"},
+        "user_frontend": {"dir": "web/dist", "required_group": "founder"},
+    }
+    (d / "biffo.plugin.json").write_text(json.dumps(manifest))
+
+    found = discover_plugins(tmp_path)
+    assert len(found) == 1
+    assert found[0].user_frontend_dir == "web/dist"
+    assert found[0].user_frontend_required_group == "founder"
+
+
+def test_discover_leaves_user_frontend_fields_none_when_absent(tmp_path) -> None:
+    _write_plugin(
+        tmp_path, "ideation", ingress={"app": "ideation.app:app", "required_group": "founder"}
+    )
+
+    found = discover_plugins(tmp_path)
+    assert len(found) == 1
+    assert found[0].user_frontend_dir is None
+    assert found[0].user_frontend_required_group is None
+
+
+def test_a_malformed_user_frontend_drops_only_the_frontend_not_the_plugin(tmp_path, caplog) -> None:
+    """``user_frontend`` joined ``_SALVAGEABLE_FIELDS`` alongside user_ingress/
+    admin_ingress: an incomplete declaration (missing required_group here) must
+    drop just the frontend surface, not discard the whole plugin — the same
+    salvage rule #1517 established for the other two ingress fields."""
+    root = tmp_path / "services" / "ideation"
+    root.mkdir(parents=True)
+    (root / "biffo.plugin.json").write_text(
+        json.dumps(
+            {
+                "name": "ideation",
+                "version": "1.0.0",
+                "user_ingress": {"app": "ideation.app:app", "required_group": "founder"},
+                "user_frontend": {"dir": "web/dist"},  # missing required_group
+            }
+        )
+    )
+
+    with caplog.at_level("ERROR"):
+        found = discover_plugins(tmp_path / "services")
+
+    assert [p.name for p in found] == ["ideation"]
+    assert found[0].app_ref == "ideation.app:app"  # the valid surface survives
+    assert found[0].user_frontend_dir is None  # the malformed one was dropped
+    assert found[0].user_frontend_required_group is None
+    assert any("ideation" in record.message for record in caplog.records)
+
+
 def test_discover_empty_when_root_missing(tmp_path):
     assert discover_plugins(tmp_path / "nope") == []
 
@@ -118,6 +176,54 @@ def test_build_plugin_host_composes_discovery_and_mounting(tmp_path):
     client = TestClient(host)
     assert client.get("/demo/ping", headers={"X-Biffo-Founder-Token": "ok"}).status_code == 200
     assert client.get("/demo/ping").status_code == 401  # gate still enforced
+
+
+def test_build_plugin_host_resolves_and_serves_user_frontend(tmp_path) -> None:
+    """``build_plugin_host`` joins discover.py's manifest-relative
+    ``user_frontend_dir`` against ``BIFFO_PLUGINS_ROOT/<name>`` itself and the
+    resulting mount actually serves the bundle end to end — the seam between
+    discovery (relative path) and mounting (a real filesystem directory),
+    which neither module's own unit tests exercise alone (ADR-0021 §2, #558
+    M2)."""
+    services_root = tmp_path / "services"
+    plugin_dir = services_root / "demo"
+    plugin_dir.mkdir(parents=True)
+    (plugin_dir / "biffo.plugin.json").write_text(
+        json.dumps(
+            {
+                "name": "demo",
+                "version": "1.0.0",
+                "user_ingress": {"app": "demo:app", "required_group": "founder"},
+                "user_frontend": {"dir": "web/dist", "required_group": "founder"},
+            }
+        )
+    )
+    dist = plugin_dir / "web" / "dist"
+    dist.mkdir(parents=True)
+    (dist / "index.html").write_text("<div id='root'></div>")
+
+    async def ping(request):
+        return JSONResponse({"ok": True})
+
+    fake_app = Starlette(routes=[Route("/ping", ping)])
+
+    def fake_authorize(token, required_group):
+        if token != "ok":
+            raise GateError(401, "nope")
+        return {"sub": "u"}
+
+    host = build_plugin_host(
+        services_root,
+        authorize=fake_authorize,
+        load=lambda ref: fake_app if ref == "demo:app" else None,
+    )
+    client = TestClient(host)
+    # The API stays gated...
+    assert client.get("/demo/ping").status_code == 401
+    # ...while the resolved BIFFO_PLUGINS_ROOT/demo/web/dist shell is public.
+    r = client.get("/demo/ui/")
+    assert r.status_code == 200
+    assert "root" in r.text
 
 
 def test_an_admin_only_plugin_is_discovered(tmp_path) -> None:

@@ -31,14 +31,46 @@
  * Both checks run and report before either can end the process, so a single
  * CI run always shows both denominators rather than stopping at the first
  * failure and leaving the second unknown.
+ *
+ * ── Scoped to the template and its instances (issue #1943) ─────────────────
+ *
+ * Both halves read `services/_plugins/` and `services/api/` off whatever root
+ * they are pointed at, and a sibling app or plugin repo can carry paths with
+ * those exact same names that mean something else entirely: `biffo sibling
+ * create` scaffolds every sibling its own `services/api/` — a thin BFF
+ * (`_skeletons/sibling-template/services/api/`), not the ADR-0002 Core API
+ * this guard's model-id half is written against. That BFF's own
+ * `config.py` is a real file with a real `Settings` class, so
+ * `!existsSync(servicesApiRoot)` — the guard's only prior scope check — was
+ * never enough to skip it: the model-id half ran, found no model-named field
+ * in a config file that was never meant to have one, and reported "SETTINGS
+ * EXTRACTOR BLIND" for a repo that never declared a model id in the first
+ * place. `classifyRepoOwnership` (`core-ownership-guard.ts`) is the same
+ * repo-type discriminator `check-core-ownership.ts` already uses for exactly
+ * this "not an instance, and not the template either" case — reused rather
+ * than reinvented here, so a sibling's coincidentally-named `services/api/`
+ * is recognised as out of scope before either half ever reads it.
  */
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
+import { classifyRepoOwnership } from '../lib/core-ownership-guard.js'
 import { execa } from '../lib/exec.js'
 import { auditDeclaredModelIds, auditPluginToolSupply } from '../lib/plugin-tool-supply-audit.js'
 
 export async function runPluginToolSupplyCheck(): Promise<void> {
   const root = (await execa('git', ['rev-parse', '--show-toplevel'])).stdout.trim()
+
+  const ownership = classifyRepoOwnership(root)
+  if (ownership === 'satellite') {
+    console.log(
+      '✓ plugin tool-supply guard: skipped — this repo is not the template or an instance, ' +
+        'so it holds no services/_plugins/ tool grants and no services/api/ model-id ' +
+        'catalogue to audit (a sibling/plugin repo may carry an unrelated services/api/ of ' +
+        'its own — a BFF, not the ADR-0002 Core API this guard checks).',
+    )
+    return
+  }
+
   let allOk = true
 
   // ── Tool supply (#1409/#1413) ───────────────────────────────────────────

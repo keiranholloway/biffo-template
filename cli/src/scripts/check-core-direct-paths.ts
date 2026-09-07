@@ -47,13 +47,36 @@
  * co-checkout script would drive per sibling either way, since this module is
  * deliberately directory-parametrised for exactly that reuse (see
  * `core-direct-paths-audit.ts`'s own module doc comment).
+ *
+ * ── The self-check defaults only mean something in the template (#1943) ────
+ *
+ * With no `--sibling`/`--frontend-src`/`--core-src`, this repo audits its OWN
+ * `_skeletons/sibling-template/apps/frontend` against its OWN
+ * `services/api/src` — a real assertion only in the template (and, via `biffo
+ * core upgrade`, in an instance, which receives both as template-owned
+ * paths). A sibling or plugin repo carries neither: `_skeletons/` never
+ * ships to a satellite at all, and a sibling's OWN `services/api/src` is its
+ * BFF (`_skeletons/sibling-template/services/api/`), a different app with
+ * its own unrelated `APIRouter(...)` call sites. Scanning it as if it were
+ * core's route table is exactly how `sh scripts/biffo.sh verify` reported
+ * "BLIND (core): raw source contains APIRouter(...) call sites but no
+ * prefixes were extracted" in a real sibling (tabsii-geo) — the extractor
+ * did not break, it was pointed at the wrong app's Python source entirely.
+ * `classifyRepoOwnership` (`core-ownership-guard.ts`) is
+ * the same repo-type discriminator `check-core-ownership.ts` already uses to
+ * tell a satellite from the template/an instance; reused here rather than
+ * inventing a second one, and only gates the SELF-CHECK defaults — an
+ * explicit `--sibling`/`--frontend-src`/`--core-src`/`--estate` invocation is
+ * an ad-hoc audit of some OTHER tree entirely and must run regardless of
+ * what repo it happens to be invoked from.
  */
 import { join } from 'node:path'
-import { execa } from '../lib/exec.js'
 import {
   auditSiblingCoreDirectPaths,
   resolveSiblingCoreSrc,
 } from '../lib/core-direct-paths-audit.js'
+import { classifyRepoOwnership } from '../lib/core-ownership-guard.js'
+import { execa } from '../lib/exec.js'
 
 export interface CoreDirectPathsCheckOptions {
   sibling?: string
@@ -66,6 +89,24 @@ export async function runCoreDirectPathsCheck(
   opts: CoreDirectPathsCheckOptions = {},
 ): Promise<void> {
   const root = (await execa('git', ['rev-parse', '--show-toplevel'])).stdout.trim()
+
+  // Only the SELF-CHECK defaults are repo-type-scoped (see the module doc
+  // comment). An explicit override names an ad-hoc target of its own and
+  // must run regardless of what repo it was invoked from.
+  const usingSelfCheckDefaults = !opts.sibling && !opts.frontendSrc && !opts.coreSrc
+  if (usingSelfCheckDefaults) {
+    const ownership = classifyRepoOwnership(root)
+    if (ownership === 'satellite') {
+      console.log(
+        "✓ core-direct-paths guard: skipped — the self-check defaults compare this repo's " +
+          'own _skeletons/sibling-template scaffold against its own services/api/src, and a ' +
+          'sibling/plugin repo has neither: no _skeletons/ at all, and its own services/api/ ' +
+          "is an unrelated BFF, not core's route table. Pass --sibling/--frontend-src plus " +
+          '--estate (or --core-src) to audit a real sibling instead.',
+      )
+      return
+    }
+  }
 
   const sibling = opts.sibling ?? 'sibling-template (self-check)'
   const frontendSrcDir =

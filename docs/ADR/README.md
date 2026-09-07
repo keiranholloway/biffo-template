@@ -25,10 +25,10 @@ An ADR captures a significant architectural decision: the context that forced it
 | [ADR-0015](0015-prompt-library.md)                                    | Prompt library — composable, parameterised prompt components | Proposed | 2026-07-23 |
 | [ADR-0016](0016-agent-prompt-assistant.md)                          | Prompt assistant — a synchronous, streaming prompt-authoring agent | Proposed | 2026-07-23 |
 | [ADR-0017](0017-user-facing-plugin-chat-modules.md)                 | User-facing plugin chat modules — generalising the buffered chat spine | Accepted | 2026-07-23 |
-| [ADR-0018](0018-user-facing-plugin-hosting.md)                      | User-facing plugin hosting — a marketplace plugin as an authenticated sibling | Accepted | 2026-07-24 |
+| [ADR-0018](0018-user-facing-plugin-hosting.md)                      | User-facing plugin hosting — a marketplace plugin as an authenticated sibling | Superseded by ADR-0021 | 2026-07-24 |
 | [ADR-0019](0019-dev-staging-nat-instance-egress.md)                 | dev/staging egress defaults to a fck-nat NAT instance | Accepted | 2026-07-24 |
 | [ADR-0020](0020-agent-result-delivery-on-completion.md)             | Deliver an agent's result on completion (agent-action sub-config) | Accepted | 2026-07-24 |
-| [ADR-0021](0021-shared-plugin-hosting.md)                           | Plugins are pure code on shared hosting — one plugin runtime, one app shell (supersedes ADR-0018 backend; frontend per #558) | Accepted (partial) | 2026-07-25 |
+| [ADR-0021](0021-shared-plugin-hosting.md)                           | Plugins are pure code on shared hosting — shared runtime (§1, live) + shared-host static frontend mount (§2, specified, unbuilt); fully supersedes ADR-0018 | Accepted (partial) | 2026-07-25 |
 | [ADR-0022](0022-product-domain-modules-are-user-owned-guests.md)    | Product-domain modules are user-owned guests hosted in the core API | Accepted | 2026-07-26 |
 | [ADR-0023](0023-scheduled-workflow-actions.md)                      | Scheduled / delayed workflow actions (EventBridge Scheduler, one-time fire) | Accepted | 2026-07-26 |
 | [ADR-0024](0024-hierarchy-scoped-workflow-resolver-registry.md)     | Hierarchy-scoped workflows — a resolver-registry seam, matched in Core | Accepted | 2026-07-26 |

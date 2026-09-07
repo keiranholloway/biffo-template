@@ -127,6 +127,46 @@ runtime config rather than tenant-scoped table rows:
 > [ADR-0011](https://github.com/keiranholloway/biffo-template/blob/main/docs/ADR/0011-authorization-is-a-core-concern.md)
 > (authorization is a Core concern, not a plugin) and no longer exists.
 
+## User-facing frontend: the `user_frontend` contract (ADR-0021 §2)
+
+If your plugin ships a founder-facing UI, it declares a `user_frontend` block
+in `biffo.plugin.json`:
+
+```json
+"user_frontend": {
+  "dir": "web/dist",
+  "required_group": "founder"
+}
+```
+
+and ships **`web/` and nothing else** — a built static bundle (`index.html`
+plus hashed `assets/*`, the ordinary Vite build-output shape) at the
+repo-relative path `dir` names. That is the entire contract. In particular a
+`user_frontend` plugin ships **no** `terraform/` frontend resources and
+**no** `deploy-frontend.yml` workflow of its own.
+
+**Who serves it, and why there is nothing to provision.** The shared plugin
+host serves the bundle directly — `GET /api/v1/plugins/<name>/ui` and
+`GET /api/v1/plugins/<name>/ui/{proxy+}` on the API Gateway routes every
+installed plugin already shares — the same way it already serves
+`admin_ingress`'s admin shell. There is no per-plugin S3 origin, no per-plugin
+CloudFront behaviour, and nothing for `biffo plugin install` to provision:
+committing `web/dist/` is the whole deploy. See
+[ADR-0021](../../docs/ADR/0021-shared-plugin-hosting.md) section 2 for the
+full design and why this superseded the older, per-plugin hosting model.
+
+**This retires ADR-0018 section 2's per-plugin frontend shape** — a dedicated
+`aws_s3_bucket` behind the shared CloudFront distribution, wired through a
+`cdn_distribution_arn` module variable and a `frontend_bucket_*` output. That
+shape is fail-closed at install time: `biffo plugin install` and
+`biffo plugin upgrade` **refuse** a plugin whose `terraform/` declares it —
+an `aws_s3_bucket` whose name interpolates `-plugin-…-web`, an output named
+`frontend_bucket_*`, or a `cdn_distribution_arn` variable — with an error
+naming ADR-0021 section 2 and this contract. If you are updating an older
+plugin that still ships one of these, delete `terraform/`'s frontend
+resources (and `deploy-frontend.yml`, if present) and adopt `user_frontend`
+above instead; there is nothing left to provision once you do.
+
 ## Standalone repo, not a monorepo package
 
 Unlike biffo-template's own in-monorepo plugins (e.g. `services/_plugins/orchestrator/`,

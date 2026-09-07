@@ -17,6 +17,7 @@ import { runInstanceAdoptionCheck } from '../scripts/check-instance-adoption.js'
 import { runLambdaOutputCheck } from '../scripts/check-lambda-output.js'
 import { runMigrationBodyChangeCheck } from '../scripts/check-migration-body-change.js'
 import { runOrphanRatchetCheck } from '../scripts/check-orphan-ratchet.js'
+import { runOwnershipHeaderClaimCheck } from '../scripts/check-ownership-header-claim.js'
 import { runPipeTrapCheck } from '../scripts/check-pipe-trap.js'
 import { runPluginAllowlistConventionCheck } from '../scripts/check-plugin-allowlist-convention.js'
 import { runPluginCollisionCheck } from '../scripts/check-plugin-collisions.js'
@@ -49,7 +50,8 @@ import { runTerraformInputCheck } from '../scripts/check-terraform-input.js'
  * code path rather than two that can drift.
  */
 export const checkCommand = new Command('check').description(
-  'Repo guards (ownership, release subject, plugin terraform, plugin collisions, ' +
+  'Repo guards (ownership, ownership-header-claim, release subject, plugin terraform, ' +
+    'plugin collisions, ' +
     'eventbridge-log-permissions, plugin-tool-supply, core-direct-paths, instance-adoption, ' +
     'orphan-ratchet, cognito-invite-template, lambda-output, pipe-trap, codeql-suppression, ' +
     'skeleton-drift, terraform-input, plugin-allowlist-convention, migration-body-change, ' +
@@ -267,6 +269,18 @@ checkCommand
       await runOrphanRatchetCheck(opts)
     },
   )
+
+checkCommand
+  .command('ownership-header-claim')
+  .description(
+    'Refuse a file whose own header comment claims INSTANCE-OWNED/template-owned/user-owned/' +
+      '"NOT a template file" while core-manifest.json\'s real longest-prefix-match answer ' +
+      'disagrees (#1911) — scripts/verify-deployed.checks lived this exact gap (#1706/#1707) ' +
+      'until a human happened to notice by hand; nothing else compared the two documents.',
+  )
+  .action(async () => {
+    await runOwnershipHeaderClaimCheck()
+  })
 
 checkCommand
   .command('cognito-invite-template')

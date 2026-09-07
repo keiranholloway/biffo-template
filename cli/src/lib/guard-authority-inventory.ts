@@ -182,6 +182,26 @@ export const GUARD_AUTHORITY_INVENTORY: GuardAuthorityRecord[] = [
       "resolveBody's own comment) and hand it to documentsFor() as plain text — no second read " +
       'of the same field through a matching decode step exists to agree with the first one wrongly.',
   },
+  {
+    id: 'ownership-header-claim-guard',
+    path: 'cli/src/lib/ownership-header-claim-guard.ts',
+    inClass: true,
+    document:
+      "a file's own header comment claim (INSTANCE-OWNED, template-owned, user-owned, or " +
+      '"NOT a template file")',
+    actor:
+      "core-manifest.json's real answer via isTemplateOwned() (core-manifest.ts, longest-prefix " +
+      'match) — the actual authority `biffo core upgrade` acts on',
+    disagreementTest: 'cli/src/lib/ownership-header-claim-guard.test.ts',
+    independence: 'independent',
+    note:
+      'instance #1911, split from this class (#1362): scripts/verify-deployed.checks carried an ' +
+      'INSTANCE-OWNED header while core-manifest.json disagreed until a human noticed by hand ' +
+      '(#1706/#1707) — nothing ever compared the two documents. Independent by construction: ' +
+      'findHeaderClaim reads file content via readFileSync and a hand-written regex, while ' +
+      'isTemplateOwned reads core-manifest.json via JSON.parse and a longest-prefix-match over ' +
+      'path strings — no shared parser or decode step exists for a corruption to travel through.',
+  },
 
   // ── In-class, no TS disagreement test (out-of-language: Python) ─────────
   {

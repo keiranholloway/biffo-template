@@ -298,6 +298,19 @@ resource "aws_lambda_function" "main" {
     mode = "Active"
   }
 
+  # Warm capacity (#1748), off by default. SnapStart only ever applies to a
+  # published, numbered version (apply_on = "PublishedVersions") — it cannot
+  # attach to $LATEST, same constraint as the live alias above (#1747), which
+  # is why this milestone hard-depended on that one. See README.md's "Warm
+  # capacity" section for why SnapStart was chosen over provisioned
+  # concurrency and the figures behind it.
+  dynamic "snap_start" {
+    for_each = var.enable_warm_capacity ? [1] : []
+    content {
+      apply_on = "PublishedVersions"
+    }
+  }
+
   depends_on = [
     aws_cloudwatch_log_group.function,
     aws_iam_role_policy_attachment.vpc_access,

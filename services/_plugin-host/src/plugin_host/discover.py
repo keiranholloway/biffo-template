@@ -61,11 +61,14 @@ from pydantic import ValidationError
 
 _LOGGER = logging.getLogger(__name__)
 
-# The only two top-level fields a validation error is safe to drop and retry
+# The only top-level fields a validation error is safe to drop and retry
 # without: an incomplete/malformed declaration on one of these must not discard
 # an otherwise-valid, unrelated surface on the same manifest. Anything else
-# failing validation means the manifest itself is broken.
-_SALVAGEABLE_FIELDS = frozenset({"user_ingress", "admin_ingress"})
+# failing validation means the manifest itself is broken. ``user_frontend`` joins
+# this set for the same reason as its siblings (ADR-0021 §2, #558 M2): a
+# malformed static-frontend declaration must drop only the UI mount, never the
+# plugin's API.
+_SALVAGEABLE_FIELDS = frozenset({"user_ingress", "admin_ingress", "user_frontend"})
 
 
 @dataclass(frozen=True)
@@ -130,6 +133,15 @@ class DiscoveredPlugin:
     admin_required_group: str | None = None  # Cognito group or None if admin_ingress not declared
     #: Manifest-declared api_routes, forwarded to Core rather than served here.
     api_routes: tuple[DeclaredRoute, ...] = ()
+    #: ``user_frontend.dir`` (repo-relative, e.g. "web/dist"), or None if not
+    #: declared. The host resolves this against ``BIFFO_PLUGINS_ROOT/<name>``
+    #: (see ``app.py``'s ``build_plugin_host``) — plumbing only, PluginManifest
+    #: already validates the shape (ADR-0021 §2, #558 M2).
+    user_frontend_dir: str | None = None
+    #: ``user_frontend.required_group``. Carried for the manifest contract's
+    #: sake, not enforced anywhere yet — the shell is public by design (ADR-0021
+    #: §2's "What required_group does and does not gate").
+    user_frontend_required_group: str | None = None
 
 
 def _load_manifest_tolerant(manifest_path: Path) -> PluginManifest | None:
@@ -267,6 +279,10 @@ def discover_plugins(services_root: str | Path) -> list[DiscoveredPlugin]:
                     manifest.admin_ingress.required_group if manifest.admin_ingress else None
                 ),
                 api_routes=declared,
+                user_frontend_dir=(manifest.user_frontend.dir if manifest.user_frontend else None),
+                user_frontend_required_group=(
+                    manifest.user_frontend.required_group if manifest.user_frontend else None
+                ),
             )
         )
     return found

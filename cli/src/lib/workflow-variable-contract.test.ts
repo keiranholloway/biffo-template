@@ -54,6 +54,7 @@ const INIT_TIME_CONFIG = new Set([
   'BIFFO_DEPLOY_ENABLED', // operator kill-switch for the whole deploy
   'RUNNER_LABEL', // which runner fleet this repo targets
   'PORTAL_TITLE', // instance branding (#389); no infra derives it, and unset is valid
+  'PORTAL_PRIMARY_COLOR', // instance branding (#1945); no infra derives it, and unset is valid
 ])
 
 const consumed = (yaml: string) =>

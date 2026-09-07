@@ -2046,9 +2046,12 @@ stage_repo() {
   [ -f "$wt/package.json" ] && (cd "$wt" && pnpm install --frozen-lockfile >/dev/null 2>&1 || true)
   [ -f "$wt/pyproject.toml" ] && (cd "$wt" && uv sync --all-groups >/dev/null 2>&1 || true)
   for p in $( (cd "$wt" && sh scripts/biffo.sh verify --list 2>/dev/null) | grep -oE '\-\-dir(ectory)? \./[A-Za-z0-9_./-]+' | awk '{print $2}' | sort -u); do
-    (cd "$wt/$p" 2>/dev/null && { pnpm install --frozen-lockfile >/dev/null 2>&1 ||
-      pnpm install --frozen-lockfile --ignore-workspace >/dev/null 2>&1 ||
-      uv sync --all-groups >/dev/null 2>&1; }) || true
+    if [ -f "$wt/$p/package.json" ]; then
+      (cd "$wt/$p" && { pnpm install --frozen-lockfile >/dev/null 2>&1 ||
+        pnpm install --frozen-lockfile --ignore-workspace >/dev/null 2>&1; }) || true
+    elif [ -f "$wt/$p/pyproject.toml" ]; then
+      (cd "$wt/$p" && uv sync --all-groups >/dev/null 2>&1) || true
+    fi
   done
 
   # THEN every other nested package, discovered from the tree rather than from

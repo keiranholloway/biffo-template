@@ -3,6 +3,7 @@ import {
   classifyReapCandidate,
   findBareBranchCandidates,
   findReapCandidates,
+  FLEET_CLAIM_STALE_AFTER_MS,
   reapAll,
   reapAllBareBranches,
   reapBareBranch,
@@ -157,6 +158,12 @@ function reapDeps(
       currentBranch: vi.fn().mockResolvedValue('chore/merged'),
       hasUncommittedChanges: vi.fn().mockResolvedValue(false),
       hasFleetWorktreeClaim: vi.fn().mockResolvedValue(false),
+      // Only ever read when hasFleetWorktreeClaim resolves true (#1948) —
+      // defaults to "just claimed" so a test that overrides only
+      // hasFleetWorktreeClaim to true still exercises the live-claim path,
+      // matching this factory's existing "clean, mergeable" default posture.
+      fleetWorktreeClaimAgeMs: vi.fn().mockResolvedValue(0),
+      clearStaleFleetWorktreeClaim: vi.fn().mockResolvedValue(undefined),
       removeWorktree: vi.fn().mockResolvedValue(true),
       // Defaults model the safe case: the worktree's HEAD IS the commit the
       // merged PR shipped, so `isAncestor` (self-is-ancestor-of-self) is true.
@@ -305,6 +312,109 @@ describe('reapCandidate', () => {
     expect(outcome.worktreeRemoved).toBeNull()
     expect(deps.git.removeWorktree as ReturnType<typeof vi.fn>).not.toHaveBeenCalled()
     expect(deps.github.prVerdictForBranch as ReturnType<typeof vi.fn>).not.toHaveBeenCalled()
+    expect(outcome.staleClaimCleared).toBe(false)
+  })
+
+  // #1948: nothing in the estate ever releases a fleet-worktree-claim lock,
+  // so treating any existing lock as permanently live made the milestone
+  // above's own "keep" permanent too — this is the fix, proven the same
+  // fail-first way #1810 was: a lock old enough to be abandoned no longer
+  // blocks the reap, and the still-merged, still-clean, still-HEAD-current
+  // worktree behind it goes on to be removed exactly as it would with no
+  // lock at all.
+  it('clears a stale fleet-worktree-claim lock and reaps the merged worktree behind it', async () => {
+    const deps = reapDeps({
+      git: {
+        hasFleetWorktreeClaim: vi.fn().mockResolvedValue(true),
+        fleetWorktreeClaimAgeMs: vi.fn().mockResolvedValue(FLEET_CLAIM_STALE_AFTER_MS + 1),
+      },
+    })
+
+    const outcome = await reapCandidate(
+      '/repo',
+      { branch: 'chore/merged', worktreePath: '/wt/claimed' },
+      deps,
+    )
+
+    expect(outcome.verdict).toEqual({ action: 'reap' })
+    expect(outcome.worktreeRemoved).toBe(true)
+    expect(outcome.staleClaimCleared).toBe(true)
+    expect(deps.git.clearStaleFleetWorktreeClaim).toHaveBeenCalledWith('/wt/claimed')
+    // The GitHub verdict this milestone's own safety net depends on is still
+    // asked for — staleness alone never skips it.
+    expect(deps.github.prVerdictForBranch).toHaveBeenCalled()
+  })
+
+  // A lock one millisecond younger than the TTL is still live — `< TTL`, not
+  // `<= TTL` — and the boundary value itself is already stale (covered by
+  // the "clears a stale lock" test above, which uses `+ 1`).
+  it('keeps a claim just under the TTL boundary as live', async () => {
+    const deps = reapDeps({
+      git: {
+        hasFleetWorktreeClaim: vi.fn().mockResolvedValue(true),
+        fleetWorktreeClaimAgeMs: vi.fn().mockResolvedValue(FLEET_CLAIM_STALE_AFTER_MS - 1),
+      },
+    })
+
+    const outcome = await reapCandidate(
+      '/repo',
+      { branch: 'chore/merged', worktreePath: '/wt/claimed' },
+      deps,
+    )
+
+    expect(outcome.verdict).toEqual({ action: 'keep', reason: 'fleet-worktree-claimed' })
+    expect(outcome.staleClaimCleared).toBe(false)
+    expect(deps.git.clearStaleFleetWorktreeClaim as ReturnType<typeof vi.fn>).not.toHaveBeenCalled()
+  })
+
+  // Fail-closed (#1948): an age that cannot be determined must never be
+  // treated as "old enough to be stale" — the same posture
+  // `fleetWorktreeClaimAgeMs`'s own doc comment specifies, and the same
+  // direction every other "cannot tell" in this module already takes
+  // (`unknown-pr-verdict`, `unknown-merge-head`).
+  it('treats an unreadable claim age as live, never as stale', async () => {
+    const deps = reapDeps({
+      git: {
+        hasFleetWorktreeClaim: vi.fn().mockResolvedValue(true),
+        fleetWorktreeClaimAgeMs: vi.fn().mockResolvedValue(null),
+      },
+    })
+
+    const outcome = await reapCandidate(
+      '/repo',
+      { branch: 'chore/merged', worktreePath: '/wt/claimed' },
+      deps,
+    )
+
+    expect(outcome.verdict).toEqual({ action: 'keep', reason: 'fleet-worktree-claimed' })
+    expect(outcome.staleClaimCleared).toBe(false)
+    expect(deps.git.clearStaleFleetWorktreeClaim as ReturnType<typeof vi.fn>).not.toHaveBeenCalled()
+  })
+
+  // A stale lock is cleared BEFORE `hasUncommittedChanges` is read (#1948):
+  // otherwise the untracked `.fleet-worktree-claim` directory itself would
+  // trip `git status --porcelain` and the worktree would be kept anyway,
+  // under the less specific `uncommitted-changes` reason — silently
+  // defeating the point of deciding the claim was stale.
+  it('reads hasUncommittedChanges only after a stale claim has already been cleared', async () => {
+    const callOrder: string[] = []
+    const deps = reapDeps({
+      git: {
+        hasFleetWorktreeClaim: vi.fn().mockResolvedValue(true),
+        fleetWorktreeClaimAgeMs: vi.fn().mockResolvedValue(FLEET_CLAIM_STALE_AFTER_MS + 1),
+        clearStaleFleetWorktreeClaim: vi.fn().mockImplementation(async () => {
+          callOrder.push('cleared')
+        }),
+        hasUncommittedChanges: vi.fn().mockImplementation(async () => {
+          callOrder.push('checked-dirty')
+          return false
+        }),
+      },
+    })
+
+    await reapCandidate('/repo', { branch: 'chore/merged', worktreePath: '/wt/claimed' }, deps)
+
+    expect(callOrder).toEqual(['cleared', 'checked-dirty'])
   })
 })
 

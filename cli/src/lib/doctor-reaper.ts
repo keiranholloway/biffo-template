@@ -11,11 +11,21 @@
  * construction: every candidate that is not provably "PR merged, worktree
  * clean, HEAD not detached, worktree HEAD actually contained in what that PR
  * shipped (#1810 — a branch name having a merged PR is not, by itself, proof
- * of that last part), and not held by a live biffo-fleet worktree-claim
+ * of that last part), and not held by a LIVE biffo-fleet worktree-claim
  * lock (#1833, replaces #1825 — a merged, clean, attached worktree can still
  * be open for follow-up work under a live session)" is left alone and
  * reported with a reason, per the #1413 denominator rule (state what was
  * kept, not only what was removed).
+ *
+ * "Live" is judged by age, not mere existence (#1948): nothing in the estate
+ * ever releases a `.fleet-worktree-claim` lock (`fleet.sh worktree-claim
+ * --release`/`--steal` are documented and never called), so treating any
+ * existing lock as permanently live made this milestone's own "keep" a
+ * permanent one — measured directly, every `biffo-pg-test-*` Docker
+ * container that should have been reclaimed once its worktree's PR merged
+ * was instead being kept indefinitely for this exact reason. See
+ * `FLEET_CLAIM_STALE_AFTER_MS` below for the TTL and why it can afford to be
+ * generous.
  *
  * ## Why local commit reachability is not the signal
  *
@@ -39,6 +49,35 @@ import type { GithubCliAdapter, PrVerdict } from '../adapters/github-cli/index.j
 import type { GitAdapter } from '../adapters/git/index.js'
 import type { BranchRef } from './upgrade-branch-reaper.js'
 import type { WorktreeFact } from './doctor.js'
+
+/**
+ * How old a `.fleet-worktree-claim` lock must be before `--fix` stops
+ * trusting it as a live session and treats it as abandoned
+ * (biffo-template#1948). Four hours, matching `scripts/pg-test-db.sh`'s own
+ * `BIFFO_PG_CLONE_TTL_MIN` precedent (240 minutes) for the identical
+ * trade-off: generous on purpose, because the actual safety net here is not
+ * this TTL, it is the PR-verdict check that runs immediately afterward.
+ *
+ * Nothing in the estate ever calls `fleet.sh worktree-claim ... --release` or
+ * `--steal` (grepped the whole of biffo-fleet — the two verbs are documented
+ * in the command's own help text and invoked nowhere) so, absent a TTL, a
+ * lock is permanent from the moment it is written. Making that lock stale by
+ * age, rather than requiring a release nobody sends, closes the loop the same
+ * way every other unreleased-claim class in this estate was closed:
+ * mechanism, not a caller remembering a step (`claim.sh`'s `--as`,
+ * `--reaffirm` for PR#1848/#1849).
+ *
+ * Crucially, treating a lock as stale does not by itself reap anything — it
+ * only stops short-circuiting `hasFleetClaim` to `true`, and the candidate
+ * still has to clear `classifyReapCandidate`'s full table below: `isDirty`,
+ * and then a GitHub-confirmed `merged` verdict with `mergeContainsHead ===
+ * true`. A worktree a live session is genuinely still working on — no PR yet,
+ * or an open one, or uncommitted changes — keeps for that reason instead,
+ * whatever the lock's age. So this TTL can afford to be generous: it decides
+ * only whether an ALREADY-MERGED, ALREADY-CLEAN worktree gets a chance to be
+ * reaped, not whether in-progress work does.
+ */
+export const FLEET_CLAIM_STALE_AFTER_MS = 4 * 60 * 60 * 1000
 
 export type ReapAction = 'reap' | 'keep'
 
@@ -170,6 +209,14 @@ export interface ReapOutcome {
   verdict: ReapVerdict
   /** Only meaningful when verdict.action === 'reap'. */
   worktreeRemoved: boolean | null
+  /**
+   * True when a `.fleet-worktree-claim` lock was found older than
+   * `FLEET_CLAIM_STALE_AFTER_MS` and cleared before judgement (#1948) — worth
+   * reporting on its own, per the #1413 denominator rule, since it is the
+   * one case where `--fix` took a destructive action on a lock nothing else
+   * in the estate would ever have released.
+   */
+  staleClaimCleared: boolean
 }
 
 export interface ReapDeps {
@@ -177,6 +224,8 @@ export interface ReapDeps {
     GitAdapter,
     | 'hasUncommittedChanges'
     | 'hasFleetWorktreeClaim'
+    | 'fleetWorktreeClaimAgeMs'
+    | 'clearStaleFleetWorktreeClaim'
     | 'currentBranch'
     | 'removeWorktree'
     | 'headSha'
@@ -203,12 +252,33 @@ export async function reapCandidate(
 ): Promise<ReapOutcome> {
   const { git, github } = deps
 
-  const [current, isDirty, hasFleetClaim] = await Promise.all([
+  const [current, claimExists] = await Promise.all([
     git.currentBranch(candidate.worktreePath),
-    git.hasUncommittedChanges(candidate.worktreePath),
     git.hasFleetWorktreeClaim(candidate.worktreePath),
   ])
   const isDetached = current === 'HEAD' || current === ''
+
+  // Staleness is decided BEFORE `isDirty` is read, and a stale lock is
+  // cleared before that read too (#1948): the lock directory is untracked,
+  // so leaving it in place would trip `git status --porcelain` and keep the
+  // worktree anyway, under the less specific `uncommitted-changes` reason —
+  // silently defeating the point of deciding the claim itself is stale.
+  let hasFleetClaim = false
+  let staleClaimCleared = false
+  if (claimExists) {
+    const ageMs = await git.fleetWorktreeClaimAgeMs(candidate.worktreePath)
+    // `null` (lock present, age unreadable) is fail-closed: treated exactly
+    // like a live claim, never like a stale one — see `fleetWorktreeClaimAgeMs`'s
+    // own doc comment.
+    if (ageMs === null || ageMs < FLEET_CLAIM_STALE_AFTER_MS) {
+      hasFleetClaim = true
+    } else {
+      await git.clearStaleFleetWorktreeClaim(candidate.worktreePath)
+      staleClaimCleared = true
+    }
+  }
+
+  const isDirty = await git.hasUncommittedChanges(candidate.worktreePath)
 
   const prVerdict: PrVerdict =
     isDetached || isDirty || hasFleetClaim
@@ -239,11 +309,11 @@ export async function reapCandidate(
   })
 
   if (verdict.action === 'keep') {
-    return { candidate, verdict, worktreeRemoved: null }
+    return { candidate, verdict, worktreeRemoved: null, staleClaimCleared }
   }
 
   const worktreeRemoved = await git.removeWorktree(cwd, candidate.worktreePath)
-  return { candidate, verdict, worktreeRemoved }
+  return { candidate, verdict, worktreeRemoved, staleClaimCleared }
 }
 
 /** Runs every candidate found in `facts`, sequentially — see doc comment on why. */

@@ -8,6 +8,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execa } from '../../lib/exec.js'
@@ -169,6 +170,54 @@ export class GitAdapter {
    */
   async hasFleetWorktreeClaim(worktreePath: string): Promise<boolean> {
     return existsSync(join(worktreePath, '.fleet-worktree-claim'))
+  }
+
+  /**
+   * Milliseconds since `worktreePath`'s `.fleet-worktree-claim` lock was
+   * written (biffo-template#1948), or `null` when there is no lock, or its
+   * `holder` file cannot be read and parsed.
+   *
+   * `bin/fleet.sh worktree-claim` (biffo-fleet) writes the holder token on
+   * line 1 and a UTC ISO-8601 timestamp (`now()`, i.e. `date -u
+   * +%Y-%m-%dT%H:%M:%SZ`) on line 2 — this reads that second line and diffs
+   * it against the current time. `null` is the fail-closed default for
+   * "cannot tell": `doctor-reaper.ts` treats it exactly like a live claim,
+   * never like a stale one, the same posture `hasFleetWorktreeClaim` already
+   * takes and fleet.sh's own comment on an unwritten holder file takes ("An
+   * unwritten holder is still a HELD lock").
+   */
+  async fleetWorktreeClaimAgeMs(worktreePath: string): Promise<number | null> {
+    try {
+      const raw = await readFile(join(worktreePath, '.fleet-worktree-claim', 'holder'), 'utf8')
+      const claimedAt = raw.split('\n')[1]?.trim()
+      if (!claimedAt) return null
+      const claimedMs = Date.parse(claimedAt)
+      return Number.isNaN(claimedMs) ? null : Date.now() - claimedMs
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * Removes a `.fleet-worktree-claim` lock directory outright (biffo-template#1948).
+   *
+   * Used only once `doctor --fix` has independently judged the lock stale —
+   * see `FLEET_CLAIM_STALE_AFTER_MS` in `lib/doctor-reaper.ts`. Needed because
+   * the lock directory is untracked: leaving it in place after deciding to
+   * disregard it would trip `hasUncommittedChanges`'s `git status
+   * --porcelain` and keep the worktree anyway, under the less specific
+   * `uncommitted-changes` reason, defeating the point of ignoring it.
+   *
+   * Best-effort — swallows any error, so a permissions problem or a
+   * concurrent release falls back to the existing `isDirty` keep path rather
+   * than crashing the whole `--fix` sweep.
+   */
+  async clearStaleFleetWorktreeClaim(worktreePath: string): Promise<void> {
+    try {
+      await rm(join(worktreePath, '.fleet-worktree-claim'), { recursive: true, force: true })
+    } catch {
+      // best-effort — see doc comment
+    }
   }
 
   /** Best-effort fetch of the tracking remote, so the ahead/behind check below

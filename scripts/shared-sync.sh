@@ -269,6 +269,14 @@ trap wt_log_run_end EXIT
 FILES=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$MANIFEST','utf8')).files.join('\n'))")
 MARKERS=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$MANIFEST','utf8')).appliesTo.join(' '))")
 
+# `requiresPython`: a subset of $FILES (Python-only guard scripts) that must be
+# skipped entirely -- both for drift-detection and for staging -- in a target
+# repo with no Python anywhere in its tree. See requiresPythonNote in
+# shared-files.json (#1958): a pure TS/JS repo like tabsii-offline was
+# receiving updated copies of error_branch_coverage.py and the pip-audit
+# scripts on every sync round with nothing ever executing them.
+REQUIRES_PYTHON=$(node -e "console.log((JSON.parse(require('fs').readFileSync('$MANIFEST','utf8')).requiresPython||[]).join('\n'))")
+
 # `excludes`: repos removed from the measured set, DECLARED with a reason
 # (shared-files.json). A repo that cannot receive a change -- an archived one --
 # is not drift and counting it as such makes a ratchet unsatisfiable forever.
@@ -763,6 +771,36 @@ resolve_base() {
   echo "$b"
 }
 
+# True if `$f` is one of the Python-only guard scripts in `requiresPython`
+# (shared-files.json). Plain linear scan over a handful of paths -- same
+# idiom as $FILES/$CONDITIONAL, word-split on whitespace, which is safe
+# because none of these paths contain one.
+is_python_only() {
+  f="$1"
+  for rp in $REQUIRES_PYTHON; do
+    [ "$rp" = "$f" ] && return 0
+  done
+  return 1
+}
+
+# Whether `$d` has Python anywhere in its tree at `origin/$base` -- a
+# `pyproject.toml` at any depth, not just the root (mirrors scripts/verify.sh's
+# `py_dirs()`, which exists because the root-only version of this exact check
+# silently skipped every sibling's `services/api/pyproject.toml`, #855).
+#
+# Reads git objects at `origin/$base`, never the working tree, for the same
+# reason `diff_files` below does: a clone that has not been pulled must not
+# make this check pass or fail differently from what the remote actually
+# holds (see that function's header comment -- this was fixed once already,
+# for the file-drift check itself, after a stale checkout reported twelve
+# current repos as DRIFTED).
+has_python() {
+  d="$1"
+  base="$2"
+  git -C "$d" ls-tree -r --name-only "origin/$base" 2>/dev/null |
+    grep -q '\(^\|/\)pyproject\.toml$'
+}
+
 # Sentinel `diff_files` returns when the clone could not be fetched at all,
 # as distinct from its files having drifted. Deliberately not a valid path.
 UNFETCHABLE='__fetch-failed__'
@@ -801,7 +839,17 @@ diff_files() {
     return 0
   fi
   base=$(resolve_base "$d")
+  # Computed once per repo, not per file: a Python-only guard script (#1958,
+  # requiresPython) is skipped entirely for a repo with no Python anywhere in
+  # its tree -- absent is not drift there, the same posture $CONDITIONAL takes
+  # below, because such a repo can never execute one and re-reporting it every
+  # round just re-delivers dead content forever.
+  repo_has_python=1
+  has_python "$d" "$base" && repo_has_python=0
   for f in $FILES; do
+    if is_python_only "$f" && [ "$repo_has_python" -ne 0 ]; then
+      continue
+    fi
     remote=$(git -C "$d" show "origin/$base:$f" 2>/dev/null)
     if [ -z "$remote" ]; then
       out="$out $f(missing)"
@@ -1871,6 +1919,14 @@ stage_repo() {
   # --prune for the same reason as the drift check above (#943).
   git -C "$d" fetch origin --prune --quiet || return 1
 
+  # Computed once for the whole stage, same rule diff_files applies (#1958,
+  # requiresPython): a Python-only guard script is never staged into a repo
+  # with no Python anywhere in its tree, so every loop below that walks $FILES
+  # must skip it identically, or the reduction guard, the copy and the PR body
+  # would each disagree about what this repo received.
+  repo_has_python=1
+  has_python "$d" "$base" && repo_has_python=0
+
   # #1160: acquire before the pre-remove below, not after. The pre-remove is
   # exactly what was unsafe -- it must never run while another round still
   # holds this repo's staged tree.
@@ -1925,6 +1981,9 @@ stage_repo() {
   # is picked up by the `git add -A` below and would ship in the sync PR.
   _red_pairs=$(mktemp)
   for f in $FILES; do
+    if is_python_only "$f" && [ "$repo_has_python" -ne 0 ]; then
+      continue
+    fi
     [ -f "$wt/$f" ] || continue
     printf '%s\t%s\t%s\n' "$f" "$wt/$f" "$TEMPLATE_ROOT/$f" >> "$_red_pairs"
   done
@@ -1963,6 +2022,9 @@ stage_repo() {
   rm -f "$_red_pairs"
 
   for f in $FILES; do
+    if is_python_only "$f" && [ "$repo_has_python" -ne 0 ]; then
+      continue
+    fi
     mkdir -p "$wt/$(dirname "$f")"
     cp "$TEMPLATE_ROOT/$f" "$wt/$f"
     chmod +x "$wt/$f" 2>/dev/null
@@ -2239,7 +2301,10 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>" >/dev/null 2>&1
   # a conditional entry only appears for a repo that actually holds it, and
   # nesting that loop inside an already-interpolated double-quoted string is
   # three levels of escaping nobody should have to read.
-  body_files=$(for f in $FILES; do printf -- '- `%s`\n' "$f"; done)
+  body_files=$(for f in $FILES; do
+    if is_python_only "$f" && [ "$repo_has_python" -ne 0 ]; then continue; fi
+    printf -- '- `%s`\n' "$f"
+  done)
   if [ -n "$CONDITIONAL" ]; then
     body_files="$body_files
 $(printf '%s\n' "$CONDITIONAL" | while IFS="$TAB" read -r t s; do

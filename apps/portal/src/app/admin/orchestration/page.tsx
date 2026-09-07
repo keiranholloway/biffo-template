@@ -2137,7 +2137,7 @@ export default function OrchestrationPage() {
                 )}
                 {dryRunResult != null && (
                   <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50/40 p-3">
-                    <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">
                       Preview output
                     </p>
                     {dryRunResult.output !== '' && (
@@ -2150,7 +2150,7 @@ export default function OrchestrationPage() {
                         {/* The typed columns a write-back WOULD have written. The
                             dry run deliberately did not write them, so showing
                             them is the whole point of previewing this workflow. */}
-                        <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">
                           Would write
                         </p>
                         <pre className="mt-1 whitespace-pre-wrap break-words text-sm text-gray-800">
@@ -2163,7 +2163,7 @@ export default function OrchestrationPage() {
                         The agent finished without producing any output.
                       </p>
                     )}
-                    <div className="mt-2 flex flex-wrap gap-3 border-t border-emerald-100 pt-2 text-[11px] text-gray-500">
+                    <div className="mt-2 flex flex-wrap gap-3 border-t border-emerald-100 pt-2 text-xs text-gray-500">
                       {dryRunResult.model != null && dryRunResult.model !== '' && (
                         <span>{dryRunResult.model}</span>
                       )}

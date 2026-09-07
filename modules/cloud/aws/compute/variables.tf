@@ -103,3 +103,9 @@ variable "cloudwatch_kms_key_id" {
   type        = string
   default     = ""
 }
+
+variable "enable_warm_capacity" {
+  description = "Attach SnapStart (apply_on = \"PublishedVersions\") to the published version behind the live alias (#1747) — the mechanism biffo-template#1748 chose over provisioned concurrency, on figures measured in tabsii-platform M1 (see README.md's \"Warm capacity\" section). Off by default: no existing instance's cost or behaviour changes on upgrade. Turning it on for a real instance is a separate, instance-side decision — see the README for the version-accumulation cost risk (biffo-template#1957) that must be closed first."
+  type        = bool
+  default     = false
+}

@@ -222,9 +222,7 @@ export function AssistantDrawer({ open, onClose, onAccept, context }: AssistantD
                 data-testid="message-user"
                 className="ml-auto max-w-[90%] rounded-lg border-l-4 border-l-indigo-400 bg-indigo-50/50 p-3"
               >
-                <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">
-                  You
-                </p>
+                <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">You</p>
                 <pre className="mt-1 whitespace-pre-wrap break-words text-sm text-gray-800">
                   {m.content}
                 </pre>
@@ -236,14 +234,14 @@ export function AssistantDrawer({ open, onClose, onAccept, context }: AssistantD
                 className="mr-auto max-w-[90%] rounded-lg border-l-4 border-l-emerald-400 bg-emerald-50/40 p-3"
               >
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">
                     Assistant
                   </span>
                   {m.meta?.model != null && m.meta.model !== '' && (
-                    <span className="text-[11px] text-gray-400">{m.meta.model}</span>
+                    <span className="text-xs text-gray-400">{m.meta.model}</span>
                   )}
                   {m.meta?.cost_usd != null && (
-                    <span className="text-[11px] text-gray-400">${m.meta.cost_usd.toFixed(4)}</span>
+                    <span className="text-xs text-gray-400">${m.meta.cost_usd.toFixed(4)}</span>
                   )}
                 </div>
                 <pre className="mt-1 whitespace-pre-wrap break-words text-sm text-gray-800">

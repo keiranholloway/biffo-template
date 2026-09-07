@@ -1,0 +1,5 @@
+{
+  "count": 0,
+  "recordedAt": "2026-09-07T00:00:00.000Z",
+  "note": "Baseline for apps/portal's biffo-scale-guard ratchet (#1738, option C from the posted decision memo). The 13 off-scale text-[10px]/text-[11px] values this issue measured were fixed to text-xs in the same PR that added this CI wiring, so 0 is a real, measured count against the fixed tree -- not a placeholder. @biffo/design-tokens has not adopted a --text-*/--space-* scale yet, so this guard is currently enforcing \"nothing hardcoded\" rather than \"on an established scale\" (see packages/design-tokens/bin/scale-guard.mjs's header). Lower this only when real violations are fixed -- never raise it to silence a new one. If apps/portal or @biffo/design-tokens adopts a scale later, re-run `node packages/design-tokens/bin/scale-guard.mjs --dir apps/portal --tokens packages/design-tokens/tokens.css --baseline apps/portal/scale-guard-baseline.json --init` to re-baseline against it."
+}

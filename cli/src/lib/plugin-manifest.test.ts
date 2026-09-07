@@ -471,11 +471,24 @@ describe('validateManifest — chat agents (ADR-0017)', () => {
     key: 'ideation-challenger',
     system_prompt: 'Ask one sharp question.',
     model: 'anthropic/claude-sonnet-4',
-    required_group: 'founder',
+    required_group: 'chat_agent_group',
+  }
+  // required_group is a REFERENCE, not a value (biffo-template#1517) — it must
+  // name a declared `config` entry of kind: "setting", never a literal
+  // Cognito group name baked into the manifest.
+  const groupSetting = {
+    name: 'chat_agent_group',
+    kind: 'setting' as const,
+    description: 'Cognito group allowed to use the chat agent.',
   }
 
   it('accepts a well-formed chat_agents entry and defaults the bounds', () => {
-    const m = validateManifest({ name: 'ideation', version: '1.0.0', chat_agents: [agent] })
+    const m = validateManifest({
+      name: 'ideation',
+      version: '1.0.0',
+      chat_agents: [agent],
+      config: [groupSetting],
+    })
     expect(m.chat_agents).toHaveLength(1)
     expect(m.chat_agents[0]!.key).toBe('ideation-challenger')
     expect(m.chat_agents[0]!.max_history_messages).toBe(40)
@@ -485,11 +498,140 @@ describe('validateManifest — chat agents (ADR-0017)', () => {
   it('defaults chat_agents to empty and rejects a bad key / unknown field', () => {
     expect(validateManifest({ name: 'rbac', version: '1.0.0' }).chat_agents).toEqual([])
     expect(() =>
-      validateManifest({ name: 'x', version: '1.0.0', chat_agents: [{ ...agent, key: 'Bad' }] }),
+      validateManifest({
+        name: 'x',
+        version: '1.0.0',
+        chat_agents: [{ ...agent, key: 'Bad' }],
+        config: [groupSetting],
+      }),
     ).toThrow()
     expect(() =>
-      validateManifest({ name: 'x', version: '1.0.0', chat_agents: [{ ...agent, extra: true }] }),
+      validateManifest({
+        name: 'x',
+        version: '1.0.0',
+        chat_agents: [{ ...agent, extra: true }],
+        config: [groupSetting],
+      }),
     ).toThrow()
+  })
+
+  it('rejects a required_group with no matching config declaration (the migration this issue requires)', () => {
+    // The exact defect biffo-template#1517 names: a literal group name (e.g.
+    // "founder") baked straight into the manifest, unreachable on a platform
+    // that doesn't define it — now structurally impossible to express.
+    expect(() =>
+      validateManifest({
+        name: 'ideation',
+        version: '1.0.0',
+        chat_agents: [{ ...agent, required_group: 'founder' }],
+      }),
+    ).toThrow(/must name a 'config' declaration/)
+  })
+
+  it('rejects a required_group referencing a kind: secret config entry', () => {
+    // A Cognito group name is not confidential — pointing a chat agent at a
+    // secret is a category mistake, not a valid reference.
+    expect(() =>
+      validateManifest({
+        name: 'ideation',
+        version: '1.0.0',
+        chat_agents: [agent],
+        config: [{ ...groupSetting, kind: 'secret' as const }],
+      }),
+    ).toThrow(/must name a 'config' declaration/)
+  })
+})
+
+describe('validateManifest — config declarations (biffo-template#1517)', () => {
+  it('defaults config to empty', () => {
+    expect(validateManifest({ name: 'x', version: '1.0.0' }).config).toEqual([])
+  })
+
+  it('accepts a well-formed secret and setting declaration', () => {
+    const m = validateManifest({
+      name: 'marketing',
+      version: '1.0.0',
+      config: [
+        {
+          name: 'image_provider_api_key',
+          kind: 'secret',
+          required: true,
+          description: 'API key for the still-image provider.',
+        },
+        {
+          name: 'user_ingress_group',
+          kind: 'setting',
+          required: false,
+          description: 'Which group may reach the unit-facing surface.',
+        },
+      ],
+    })
+    expect(m.config).toHaveLength(2)
+    expect(m.config[0]!.kind).toBe('secret')
+    expect(m.config[0]!.required).toBe(true)
+    expect(m.config[1]!.required).toBe(false)
+  })
+
+  it('defaults required to true', () => {
+    const m = validateManifest({
+      name: 'x',
+      version: '1.0.0',
+      config: [{ name: 'x', kind: 'setting', description: 'd' }],
+    })
+    expect(m.config[0]!.required).toBe(true)
+  })
+
+  it('rejects an unknown kind', () => {
+    expect(() =>
+      validateManifest({
+        name: 'x',
+        version: '1.0.0',
+        config: [{ name: 'x', kind: 'credential', description: 'd' }],
+      }),
+    ).toThrow()
+  })
+
+  it('rejects a missing description', () => {
+    expect(() =>
+      validateManifest({
+        name: 'x',
+        version: '1.0.0',
+        config: [{ name: 'x', kind: 'setting', description: '' }],
+      }),
+    ).toThrow()
+  })
+
+  it('rejects an unknown key (strict schema)', () => {
+    expect(() =>
+      validateManifest({
+        name: 'x',
+        version: '1.0.0',
+        config: [{ name: 'x', kind: 'setting', description: 'd', extra: true }],
+      }),
+    ).toThrow()
+  })
+
+  it('rejects a non-snake_case name', () => {
+    expect(() =>
+      validateManifest({
+        name: 'x',
+        version: '1.0.0',
+        config: [{ name: 'Not-Snake-Case', kind: 'setting', description: 'd' }],
+      }),
+    ).toThrow()
+  })
+
+  it('rejects duplicate config declaration names', () => {
+    expect(() =>
+      validateManifest({
+        name: 'x',
+        version: '1.0.0',
+        config: [
+          { name: 'dup', kind: 'setting', description: 'a' },
+          { name: 'dup', kind: 'secret', description: 'b' },
+        ],
+      }),
+    ).toThrow(/Duplicate config declaration/)
   })
 })
 

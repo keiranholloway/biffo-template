@@ -224,6 +224,14 @@ const NON_EMPTY_GROUP = 'required_group must be a non-empty Cognito group name.'
 // the shared plugin host mounts at /api/v1/plugins/<name>/*; the host provides the
 // Lambda entry and enforces required_group. No per-plugin handler/infrastructure.
 const APP_REF = /^[a-zA-Z_]\w*(\.[a-zA-Z_]\w*)*:[a-zA-Z_]\w*$/
+// required_group here is a DEFAULT — an instance can override it without a
+// manifest change via BIFFO_PLUGIN_<PLUGIN>_USER_INGRESS_REQUIRED_GROUP,
+// resolved at discovery time (services/_plugin-host/src/plugin_host/discover.py's
+// _resolve_required_group, biffo-template#1517 Option B). Deliberately an
+// override, not a required reference into this manifest's own `config:` (the
+// shape chat_agents[].required_group uses below) — every already-shipped
+// plugin manifest bakes a literal group name in here, and requiring a
+// matching `config` declaration would break all of them at once.
 const UserIngressSchema = z
   .object({
     required_group: z.string().min(1, NON_EMPTY_GROUP),
@@ -301,6 +309,14 @@ const SeedDeclarationSchema = z
 // A buffered chat agent the plugin registers with Core (ADR-0017 seam #1). The
 // system_prompt is the install-vetted instruction channel (ADR-0016 §1) — never
 // request-supplied. `.strict()` mirrors the SDK/Core models' extra="forbid".
+//
+// `required_group` is a REFERENCE, not a value (biffo-template#1517) — mirrors
+// biffo_plugin_sdk.plugin.ChatAgentDeclaration's docstring. It must name a
+// `config` declaration (below) of `kind: "setting"` on this same manifest,
+// never a literal Cognito group name baked in directly (the same defect
+// UserIngress/AdminIngress's required_group has, one layer up — marketing#46).
+// Cross-checked in PluginManifestSchema's superRefine, since it needs the
+// sibling `config` array to validate against.
 const ChatAgentDeclarationSchema = z
   .object({
     key: z.string().regex(/^[a-z][a-z0-9-]*$/, 'must be a lowercase kebab-case slug'),
@@ -311,6 +327,24 @@ const ChatAgentDeclarationSchema = z
     max_history_messages: z.number().int().positive().default(40),
     max_output_tokens: z.number().int().positive().default(1024),
     timeout_seconds: z.number().positive().default(20),
+  })
+  .strict()
+
+// A named need this plugin's manifest declares that the INSTANCE must supply
+// (biffo-template#1517) — never a value, only the shape of one. Mirrors
+// biffo_plugin_sdk.plugin.ConfigDeclaration field-for-field; see that class's
+// docstring for the full mechanism (the `<NAME>_PARAMETER` SSM convention,
+// the install-time fail-closed gate, the per-plugin-scoped env var names this
+// schema's sibling `pluginConfigEnvNames()` in plugin-config-resolution.ts
+// computes from `name`).
+const ConfigDeclarationSchema = z
+  .object({
+    name: z.string().regex(/^[a-z][a-z0-9_]*$/, 'must be snake_case, e.g. image_provider_api_key'),
+    kind: z.enum(['secret', 'setting']),
+    required: z.boolean().default(true),
+    description: z
+      .string()
+      .min(1, 'description is required so an installer knows what this need is for'),
   })
   .strict()
 
@@ -351,6 +385,9 @@ export const PluginManifestSchema = z
     // Optional — a plugin with no baseline data omits this entirely, and
     // `biffo plugin install`/`upgrade` vendor nothing for it.
     seed: SeedDeclarationSchema.optional(),
+    // The needs this plugin declares the instance must supply (biffo-template#1517)
+    // — never values, only name/kind/required/description.
+    config: z.array(ConfigDeclarationSchema).default([]),
   })
   .superRefine((manifest, ctx) => {
     const tableNames = new Set(manifest.tables.map((t) => t.name))
@@ -379,6 +416,40 @@ export const PluginManifestSchema = z
               `in this manifest's 'tables' (${[...tableNames].sort().join(', ') || 'none'})`,
           })
         }
+      }
+    }
+
+    // config declaration names must be unique — "the config entry named X" has
+    // to be unambiguous for both the install-time gate and the host's runtime
+    // resolution (biffo-template#1517).
+    const configCounts = new Map<string, number>()
+    for (const c of manifest.config) configCounts.set(c.name, (configCounts.get(c.name) ?? 0) + 1)
+    for (const [name, count] of configCounts) {
+      if (count > 1) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Duplicate config declaration name '${name}'`,
+        })
+      }
+    }
+
+    // chat_agents[].required_group must reference a declared `config` entry of
+    // kind: "setting" — mirrors biffo_plugin_sdk.plugin.PluginManifest's own
+    // `_validate_config_declarations`. Never a literal Cognito group name
+    // (marketing#46's defect, one level up).
+    const settingNames = new Set(
+      manifest.config.filter((c) => c.kind === 'setting').map((c) => c.name),
+    )
+    for (const agent of manifest.chat_agents) {
+      if (!settingNames.has(agent.required_group)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            `chat_agents[key=${agent.key}].required_group '${agent.required_group}' must name ` +
+            `a 'config' declaration with kind: "setting" on this same manifest — a literal ` +
+            `Cognito group name is no longer accepted here (biffo-template#1517). Declared ` +
+            `setting config names: ${[...settingNames].sort().join(', ') || 'none'}`,
+        })
       }
     }
   })

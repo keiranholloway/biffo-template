@@ -336,6 +336,22 @@ class ChatAgentDeclaration(BaseModel):
     carries, never from prompt text in the request (ADR-0016 §1) — so the
     ``system_prompt`` here is the INSTALL-VETTED instruction channel. The bounds
     default to Core's own assistant values; a plugin declares only the essentials.
+
+    ``required_group`` is a **reference**, not a value (biffo-template#1517).
+    Before this it was a raw Cognito group name baked directly into the
+    manifest — exactly the defect this issue's proposal calls out for
+    ``UserIngress``/``AdminIngress``: a name like ``founder`` exists only on
+    the platform that happens to define it, so a plugin declaring it directly
+    is unreachable on every other instance. It must instead name a ``config``
+    declaration (this same manifest's ``config`` list) whose ``kind`` is
+    ``"setting"`` — ``PluginManifest``'s own after-validator enforces that
+    cross-reference, so a manifest with chat agents but no matching
+    ``kind: setting`` config entry fails validation rather than shipping a
+    platform-specific group name silently. The field keeps its old name and
+    type (a non-empty ``str``) so a manifest that already looks like
+    ``required_group: "some-setting-name"`` needs no key rename — only the
+    *meaning* changed, from "the group itself" to "the config entry that
+    resolves to the group at install time".
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -344,7 +360,12 @@ class ChatAgentDeclaration(BaseModel):
     agent_name: str | None = None
     system_prompt: str = Field(min_length=1)
     model: str = Field(min_length=1)
-    required_group: str = Field(min_length=1)
+    required_group: str = Field(
+        min_length=1,
+        description="Name of a `config` declaration (kind: setting) on this same "
+        "manifest that resolves to the Cognito group a caller must be in. Never "
+        "a literal group name — see the class docstring.",
+    )
     max_history_messages: int = Field(default=40, gt=0)
     max_output_tokens: int = Field(default=1024, gt=0)
     timeout_seconds: float = Field(default=20.0, gt=0)
@@ -429,6 +450,17 @@ class UserIngress(BaseModel):
     existed (biffo-template#1517) — so the shared plugin host, the one reader that
     actually acts on these fields, was parsing them by hand with no validation.
     If either copy changes, update the other.
+
+    ``required_group`` here is the **default** Cognito group, baked into the
+    manifest — an instance can override it without a manifest change by
+    setting ``BIFFO_PLUGIN_<PLUGIN>_USER_INGRESS_REQUIRED_GROUP`` in the shared
+    plugin host's environment (biffo-template#1517 Option B); see
+    ``plugin_host.discover._resolve_required_group``, which is where the
+    override is actually read. Deliberately an *override*, not a required
+    reference into this manifest's own ``config:`` list the way
+    ``ChatAgentDeclaration.required_group`` is — every already-shipped plugin
+    manifest bakes in a literal group name here, and requiring a matching
+    ``config`` declaration would break all of them at once.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -564,6 +596,79 @@ class UIComponent(BaseModel):
     requires_auth: bool = True
 
 
+#: The only two kinds a `config` declaration may name (biffo-template#1517).
+#: `secret` resolves to an SSM parameter *path*, `setting` to a literal value —
+#: see `ConfigDeclaration`'s docstring for why the manifest never carries either
+#: value itself.
+ConfigKind = Literal["secret", "setting"]
+
+
+class ConfigDeclaration(BaseModel):
+    """A named need this plugin's manifest declares that the INSTANCE must
+    supply (biffo-template#1517) — never a value, only the shape of one.
+
+    This is the mechanism the issue's four blocked children (marketing#69,
+    #46, #40, #31) all turned out to be the same missing thing: a plugin can
+    declare it needs an API credential or a group name, but until now there
+    was no channel for an instance to say what that credential or group
+    actually is, other than baking a platform-specific value straight into
+    the manifest (``UserIngress.required_group`` is exactly that defect, one
+    layer up — see marketing#46).
+
+    ``kind`` decides how ``biffo plugin install`` records where the value
+    comes from, and how the shared host resolves it at runtime, over the
+    already-shipped env-passing channel (``var.plugin_host_environment``,
+    biffo-template#1534/#1535/#1550/#1560/#1561):
+
+    - ``"secret"`` — the instance supplies an **SSM parameter path**, never
+      the credential itself. Matches the existing ``<NAME>_PARAMETER``
+      convention already used by ``services/_plugins/agent-runtime`` and
+      ``orchestrator`` (``OPENROUTER_API_KEY_PARAMETER``,
+      ``WHATSAPP_ACCESS_TOKEN_PARAMETER``) — this just gives that convention
+      a manifest-declared name and a per-plugin scope instead of a
+      hand-invented one per plugin author.
+    - ``"setting"`` — the instance supplies a literal value (a Cognito group
+      name, a feature flag, a numeric limit). Safe to commit; nothing here is
+      confidential.
+
+    ``required`` controls the install-time gate (``cli/src/commands/
+    plugin-install.ts``): a ``required: true`` declaration with no supplied
+    value fails installation loudly, rather than mounting a plugin that will
+    fail — or worse, silently no-op — the first time it is actually used
+    (this issue's rule 4: this estate's dominant defect is a gate that passes
+    because it could not run).
+
+    ``description`` is mandatory (not merely conventional) because this
+    declaration is read by a human deciding what to supply at install time —
+    an undocumented need is exactly as useless as no declaration at all.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(
+        pattern=r"^[a-z][a-z0-9_]*$",
+        description="Config key, snake_case. Referenced by other manifest "
+        "fields (e.g. chat_agents[].required_group) and used as the "
+        "per-plugin, per-name lookup key the host resolves at runtime.",
+    )
+    kind: ConfigKind = Field(
+        description="'secret' (instance supplies an SSM parameter path) or "
+        "'setting' (instance supplies a literal value). Never a value itself — "
+        "see the class docstring."
+    )
+    required: bool = Field(
+        default=True,
+        description="If true, `biffo plugin install` fails loudly when the "
+        "instance supplies no value for this name, rather than installing an "
+        "unconfigured plugin.",
+    )
+    description: str = Field(
+        min_length=1,
+        description="What this need is for, shown to whoever installs the "
+        "plugin so they know what to supply.",
+    )
+
+
 class PluginManifest(BaseModel):
     """Validated manifest for a Biffo plugin.
 
@@ -628,6 +733,10 @@ class PluginManifest(BaseModel):
     user_ingress: UserIngress | None = None
     admin_ingress: AdminIngress | None = None
     user_frontend: UserFrontend | None = None
+    # The needs this plugin declares the instance must supply (biffo-template#1517)
+    # — never values, only name/kind/required/description. See ConfigDeclaration's
+    # docstring for the full mechanism this closes.
+    config: list[ConfigDeclaration] = []
 
     @model_validator(mode="after")
     def _validate_routes_reference_declared_tables(self) -> PluginManifest:
@@ -651,6 +760,40 @@ class PluginManifest(BaseModel):
                         f"which is not declared in this manifest's 'tables' "
                         f"({sorted(table_names)})."
                     )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_config_declarations(self) -> PluginManifest:
+        """Two checks over ``config`` (biffo-template#1517):
+
+        1. Names are unique — two declarations sharing a name would make "the
+           config entry named X" ambiguous for both the install-time gate and
+           the host's runtime resolution.
+        2. Every ``chat_agents[].required_group`` names a **declared**
+           ``config`` entry of ``kind: "setting"`` — the migration this issue's
+           owner-added acceptance criterion asks for. A chat agent cannot
+           point at a config entry that does not exist, and cannot point at a
+           ``secret`` (a Cognito group name is not confidential) — either
+           mistake would otherwise surface only at runtime, on the shared
+           host, as a group nobody can ever satisfy.
+        """
+        names = [c.name for c in self.config]
+        counts = Counter(names)
+        dupes = sorted(n for n, c in counts.items() if c > 1)
+        if dupes:
+            raise ValueError(f"Duplicate config declaration name(s): {dupes}")
+
+        settings = {c.name for c in self.config if c.kind == "setting"}
+        for agent in self.chat_agents:
+            if agent.required_group not in settings:
+                raise ValueError(
+                    f"chat_agents[key={agent.key!r}].required_group "
+                    f"{agent.required_group!r} must name a `config` declaration "
+                    f'with kind: "setting" on this same manifest — a literal '
+                    f"Cognito group name is no longer accepted here "
+                    f"(biffo-template#1517). Declared setting config names: "
+                    f"{sorted(settings) or 'none'}."
+                )
         return self
 
     def model_dump_serializable(self) -> dict[str, Any]:

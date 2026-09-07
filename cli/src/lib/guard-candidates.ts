@@ -307,6 +307,16 @@ export const GUARD_CANDIDATE_CLASSIFICATION: Record<string, GuardCandidateVerdic
       "than a throw (see the module's own docstring for why a hard fail would be worse here), " +
       'which does not change that it is a standalone check module, not internal machinery.',
   },
+  'ownership-header-claim-guard.ts': {
+    isGuard: true,
+    reason:
+      'matches the *-guard.ts convention; exports checkOwnershipHeaderClaims (#1911, split from ' +
+      "#1362's own class): a real document/actor comparison — a file's own header comment claim " +
+      '(INSTANCE-OWNED/template-owned/user-owned/"NOT a template file") versus core-manifest.json\'s ' +
+      'real longest-prefix-match answer (isTemplateOwned). scripts/verify-deployed.checks lived ' +
+      'this exact disagreement (#1706/#1707) with nothing ever comparing the two documents. See ' +
+      'guard-authority-inventory.ts for the full classification.',
+  },
 }
 
 /** The `isGuard: true` subset of `discoverGuardCandidates(dir)` — what

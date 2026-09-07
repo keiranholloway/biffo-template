@@ -40,6 +40,7 @@ describe('biffo check', () => {
     'migration-body-change',
     'orphan-ratchet',
     'ownership',
+    'ownership-header-claim',
     'pipe-trap',
     'plugin-allowlist-convention',
     'plugin-collisions',

@@ -1449,6 +1449,7 @@ if [ -f scripts/biffo.sh ]; then
   run_check plugin-tool-supply sh scripts/biffo.sh check plugin-tool-supply
   run_check core-direct-paths sh scripts/biffo.sh check core-direct-paths
   run_check orphan-ratchet sh scripts/biffo.sh check orphan-ratchet
+  run_check ownership-header-claim sh scripts/biffo.sh check ownership-header-claim
   # #1714 second remediation: the INSTANCE-mode caller, distinct from the
   # self-check above. It clones a real template tree pinned to
   # biffo.core.json's own version and compares against it -- but this repo

@@ -291,6 +291,18 @@ jobs:
       - name: Orphan-ratchet guard (instance mode) self-test
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: sh scripts/check-orphan-ratchet-instance.test.sh
+      # A file's own header comment claiming INSTANCE-OWNED/template-owned/
+      # user-owned/"NOT a template file" is a claim nothing ever checked
+      # against core-manifest.json's real longest-prefix-match answer (#1911,
+      # split from #1362's "a guard reads a different document from the one
+      # that acts" class). scripts/verify-deployed.checks lived this exact
+      # gap until a human noticed by hand (#1706/#1707) — a header saying
+      # INSTANCE-OWNED while the manifest disagreed. Runs in both the
+      # template and an instance; skips cleanly on a satellite repo that
+      # carries no core-manifest.json at all.
+      - name: Ownership-header-claim guard
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: sh scripts/biffo.sh check ownership-header-claim
       # A Cognito invite_message_template missing email_subject/email_message/
       # sms_message, or one of the {username}/{####} placeholders Cognito's
       # CreateUserPool requires — terraform validate is silent on this, so a

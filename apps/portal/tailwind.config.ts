@@ -19,6 +19,7 @@ const config: Config = {
         'primary-container': 'var(--primary-container)',
         'on-primary-container': 'var(--on-primary-container)',
         surface: 'var(--surface)',
+        'surface-variant': 'var(--surface-variant)',
         'on-surface': 'var(--on-surface)',
         'on-surface-variant': 'var(--on-surface-variant)',
         outline: 'var(--outline)',

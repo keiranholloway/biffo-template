@@ -46,6 +46,7 @@
   --on-primary-container: #1d4ed8; /* blue-700 */
 
   --surface: #ffffff;
+  --surface-variant: #f9fafb; /* gray-50 — the (auth) route-group's full-viewport background */
   --on-surface: #111827; /* gray-900 */
   --on-surface-variant: #4b5563; /* gray-600 */
   --outline: #d1d5db; /* gray-300 */

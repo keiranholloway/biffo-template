@@ -28,7 +28,7 @@ Biffo has converged on three tiers with genuinely different coupling:
 
 The distinction that matters is **which version something must track**, not where its code runs. The core admin UI belongs to core because it is a client of the core API's admin surface. A sibling belongs to nobody because it shares almost nothing — its frontend never calls the core API (ADR-0007), and its backend reaches core server-side through a documented HTTP contract.
 
-Plugins sit between: they extend the **core data model**, which a sibling cannot do (ADR-0002 forbids any component but the Core API touching the database), while remaining **optional**, which core capability is not. The Plugin tier's runtime split — event/data Lambda vs. shared-host mount, selected by the manifest's `user_ingress` field — is covered by ADR-0018/ADR-0021; this section focuses on the ownership tier distinction.
+Plugins sit between: they extend the **core data model**, which a sibling cannot do (ADR-0002 forbids any component but the Core API touching the database), while remaining **optional**, which core capability is not. The Plugin tier's runtime split — event/data Lambda vs. shared-host mount, selected by the manifest's `user_ingress` field — is covered by ADR-0021 (§1/§1a backend, §2 frontend; ADR-0018, which covered the same ground before the shared host existed, is now fully superseded — see its own Status line); this section focuses on the ownership tier distinction.
 
 ### What the tier is actually for
 

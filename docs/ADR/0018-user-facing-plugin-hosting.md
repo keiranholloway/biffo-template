@@ -1,14 +1,32 @@
 # ADR-0018: User-facing plugin hosting — a marketplace plugin as an authenticated sibling
 
-**Status:** Accepted
+**Status:** Superseded by ADR-0021
 **Date:** 2026-07-24
 **Deciders:** Keiran Holloway (Technical Architect)
 
-> **Superseded in part by [ADR-0021](0021-shared-plugin-hosting.md):**
-> the backend hosting shape (§1, per-plugin Lambda) is **superseded** by the shared
-> plugin host; see ADR-0021 for the current backend design. The frontend hosting
-> pattern (§2, path-routed S3 + CloudFront) remains current and is reused by
-> ADR-0021; full retirement of this ADR's per-plugin backend hosting is tracked in
+> **Fully superseded by [ADR-0021](0021-shared-plugin-hosting.md).** Both
+> halves of this ADR's decision are replaced:
+>
+> - **§1 (the plugin's own authenticated Lambda)** is superseded by ADR-0021
+>   §1/§1a's single shared plugin-host Lambda. Built and live.
+> - **§2 (a path-routed S3 + CloudFront origin per plugin)** is superseded by
+>   ADR-0021 §2's shared-host static mount
+>   (`/api/v1/plugins/<name>/ui/*`, no per-plugin origin), decided
+>   2026-08-16/2026-09-06 (#558 Milestone 1, issue #1914) and **not yet built**
+>   — see ADR-0021 §2 for what remains and the migration order. Until it
+>   lands, `biffo-plugin-ideation` and `biffo-plugin-idea-scout` still serve
+>   their frontends the way this section describes.
+>
+> **§2's `required_group` claim is corrected, not merely superseded.** This
+> section says `required_group` "gates the UI client-side (a non-founder is
+> bounced)". Nothing has ever implemented that gate — established at
+> `docs/guides/development-practices.md:239` — and ADR-0021 §2 explains why
+> the mechanism that replaces this one cannot implement it either. Read that
+> section, not this one, for the current, correct account of what the field
+> does.
+>
+> Full retirement of this ADR's remaining machinery (the per-plugin deploy
+> path in `deploy-app.yml`, `cdn_distribution_arn` wiring) is tracked in
 > [#558](https://github.com/keiranholloway/biffo-template/issues/558).
 
 ---

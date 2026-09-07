@@ -68,8 +68,8 @@
  *
  * ## The pronoun variant of the same ambiguity (#1959)
  *
- * A bare "this"/"it" is only self-referential when nothing else in the
- * sentence is a plausible antecedent. `tabsii-platform`'s
+ * A bare "this"/"it" is only self-referential when nothing else nearby is a
+ * plausible antecedent. `tabsii-platform`'s
  * `services/api/tests/instance/test_boto3_absent_after_import_api_main.py`
  * (a user-owned instance test; the file does not exist in this repo, the
  * ambiguity it exposed does) opened with: "``.../test_api_boto3_lazy_
@@ -80,24 +80,81 @@
  * alone cannot tell that apart from a genuine "it is X" self-claim, because
  * it never looks at what precedes the match.
  *
- * Fixed by `sentenceNamesOtherPath`: before trusting a grammatical match, walk
- * backward from the pronoun to the nearest preceding paragraph break or
- * ". " (i.e. bound the search to the pronoun's OWN sentence, mirroring the
- * module-level "Bounded header window" reasoning one level down) and check
- * that sentence fragment for a path-shaped token (bare or backtick-quoted,
- * containing a `/`) that is not this file's own path. If one is found, the
- * match is dropped as ambiguous and scanning continues for a later,
- * genuinely self-referential match instead. This is deliberately
- * sentence-scoped rather than whole-header-scoped: `domains/__init__.py`'s
- * real docstring mentions the surrounding `services/api/` path in the SAME
- * sentence as its self-claim, but AFTER the pronoun ("This package (...) is
- * **user-owned** [...] even though it sits inside the template-owned
- * ``services/api/``") — only text preceding the pronoun is ever examined, so
- * that trailing mention never counts as an antecedent and the claim is
- * still read correctly. A cruder header-wide or first-paragraph-only rule
- * (the issue's other suggested mitigation) would also wrongly suppress a
- * genuine self-claim made in a later paragraph than an unrelated path
- * mention — checked directly in the test fixtures below.
+ * ### Two rounds of a punctuation heuristic, and why round two was wrong to add
+ *
+ * #1970's first fix (`sentenceNamesOtherPath`, now removed) tried to bound
+ * "the pronoun's own sentence" by walking backward to the nearest preceding
+ * paragraph break OR `. ` (period-space), on the theory that a sentence
+ * boundary is where a competing antecedent stops counting. Two independent
+ * fleet-prosecutor gates each reproduced a live gap in that theory, and both
+ * gaps trace to the SAME cause rather than to two unrelated bugs:
+ *
+ * - **#1971**: `. ` also appears inside an ellipsis (`etc... it is`) and
+ *   after an abbreviation. Regex has no way to distinguish those from a real
+ *   sentence-ending period, so the boundary walk sometimes lands AFTER the
+ *   competing antecedent instead of before it, silently dropping it from the
+ *   scanned fragment — reintroducing #1959's exact false-positive shape via
+ *   punctuation instead of via a missing check.
+ * - **#1972**: the boundary walk's OTHER effect was to suppress every
+ *   grammatical match with another path named anywhere earlier in its
+ *   "sentence" — including a match whose subject already names a concrete,
+ *   unambiguous noun ("this module is user-owned"), which no reasonable
+ *   reading would send back to an unrelated path mentioned purely as a
+ *   cross-reference. That is a false NEGATIVE: a genuine self-claim silently
+ *   disappears.
+ *
+ * Patching #1971 alone (tighten the period regex to exclude ellipses/
+ * abbreviations) would be a second layer of the identical mistake: a regex
+ * still cannot reliably tell a real sentence boundary from an abbreviation in
+ * general prose, so the next punctuation shape (a mid-sentence quotation, a
+ * decimal, a versioned filename) would reopen the same class again. The
+ * actual cause both prosecutors named is the same: **no fixed-text scan can
+ * reliably parse sentence structure or pronoun antecedents in free-form
+ * prose.** So this round removes the sentence-boundary regex outright rather
+ * than tightening it, and separately narrows WHEN the antecedent check even
+ * applies, rather than adding a fourth special case to WHERE it applies.
+ *
+ * ### The actual fix: two structural narrowings, not a third special case
+ *
+ * 1. **No more period-based boundary.** The only boundary a fixed-text scan
+ *    can find in prose without trying to interpret punctuation is a blank
+ *    line (`\n\s*\n`) — unlike a period, a blank line is never also an
+ *    abbreviation, an ellipsis, a decimal or a versioned filename, so there
+ *    is no punctuation ambiguity left to get wrong. `otherPathPrecedesBarePronoun`
+ *    scopes its scan to the pronoun's own PARAGRAPH (bounded only by blank
+ *    lines), never to a period-delimited "sentence". This is coarser than a
+ *    real sentence boundary — it can still see a path named in an earlier
+ *    sentence of the same paragraph — but coarser-and-reliable beats
+ *    finer-and-wrong: it closes #1971 completely, because there is no longer
+ *    any punctuation test for an ellipsis or abbreviation to fool.
+ * 2. **The antecedent check no longer runs at all for a QUALIFIED match.**
+ *    `SELF_REFERENTIAL_CLAIM` now captures what sits between the pronoun and
+ *    the copula (its "qualifier" — `package`, `directory`, `module`, a
+ *    backtick-quoted own-path parenthetical, etc.). A BARE pronoun ("this
+ *    is"/"it is", nothing in between) is exactly the ambiguous shape #1959
+ *    was about — pure "this"/"it" genuinely can refer to whatever was most
+ *    recently mentioned, so it is still checked against the paragraph for a
+ *    competing path. A QUALIFIED pronoun ("this module is", "this package
+ *    (...) is") already carries its own concrete grammatical subject, which
+ *    is what makes it unambiguous regardless of what else the same sentence
+ *    happens to mention in passing — so it is trusted unconditionally, with
+ *    no antecedent scan at all. This is not "detect the #1972 shape and
+ *    suppress it"; it is "the antecedent question was never well-formed for
+ *    this shape in the first place", so the check is narrowed to where the
+ *    ambiguity actually lives (a bare pronoun) rather than widened to cover
+ *    one more reported example.
+ *
+ * `domains/__init__.py`'s real docstring mentions the surrounding
+ * `services/api/` path in the SAME sentence as its self-claim, but AFTER the
+ * pronoun ("This package (...) is **user-owned** [...] even though it sits
+ * inside the template-owned ``services/api/``") — only text preceding the
+ * pronoun is ever examined (and this match is qualified — "This package" —
+ * so the scan never runs anyway), so that trailing mention never counts as
+ * an antecedent and the claim is still read correctly. A cruder header-wide
+ * or first-paragraph-only rule (the issue's other suggested mitigation)
+ * would also wrongly suppress a genuine self-claim made in a later paragraph
+ * than an unrelated path mention — checked directly in the test fixtures
+ * below.
  *
  * ## Why `INSTANCE-OWNED` and `template-owned`/`user-owned` are matched
  * differently
@@ -186,15 +243,24 @@ const STRICT_MARKER = /(?<!`)(?:INSTANCE-OWNED|NOT a template file)(?!`)/
  * `remains`, then (optionally) markdown `**`, then the claim word itself.
  * See the module doc comment for the real corpus this was checked against.
  *
- * Global (`g`) so `claimInText` can walk PAST a match rejected by
- * `sentenceNamesOtherPath` (see module doc comment, "pronoun variant") to
- * look for a later, genuinely self-referential one — callers MUST reset
- * `.lastIndex = 0` before each fresh piece of text, since this is a shared
- * module-level regex object and stale state from one file would otherwise
- * corrupt matching on the next.
+ * Group 1 captures the "qualifier" — whatever sits between the pronoun and
+ * the copula, possibly nothing (an empty string, when `this`/`it` is
+ * immediately followed by the copula). `claimInText` uses whether group 1 is
+ * empty to decide whether the match is a BARE pronoun (ambiguous, checked
+ * against its paragraph — see `otherPathPrecedesBarePronoun`) or a QUALIFIED
+ * one (already unambiguous on its own grammar, never checked). See the
+ * module doc comment's "pronoun variant" section for why that split replaced
+ * a sentence-boundary heuristic rather than extending it. Group 2 is the
+ * claim word itself.
+ *
+ * Global (`g`) so `claimInText` can walk PAST a match rejected as an
+ * ambiguous bare pronoun to look for a later, genuinely self-referential one
+ * — callers MUST reset `.lastIndex = 0` before each fresh piece of text,
+ * since this is a shared module-level regex object and stale state from one
+ * file would otherwise corrupt matching on the next.
  */
 const SELF_REFERENTIAL_CLAIM =
-  /\b(?:[Tt]his|[Ii]t)\b(?:\s+\S+){0,3}\s+(?:is|are|stays|remains)\s+(?:\*\*)?(template-owned|user-owned)\b/g
+  /\b(?:[Tt]his|[Ii]t)\b((?:\s+\S+){0,3})\s+(?:is|are|stays|remains)\s+(?:\*\*)?(template-owned|user-owned)\b/g
 
 /**
  * A path-shaped token: ordinary path characters (letters, digits,
@@ -226,29 +292,44 @@ function stripPathPunctuation(token: string): string {
 }
 
 /**
- * Whether a path OTHER than `ownPath` is named earlier in the same sentence
- * as a pronoun match at `pronounIndex` — in which case "this"/"it" most
- * plausibly refers to THAT path, not to the containing file. See the module
- * doc comment's "pronoun variant" section for the real case this fixes and
- * why the search is scoped to the current sentence only (bounded by the
- * nearest preceding paragraph break or ". "), not the whole header: a path
- * named in an earlier paragraph must never suppress a later, genuine
- * self-claim, and a path named AFTER the pronoun (as in the real
- * `domains/__init__.py` header) is never examined at all.
+ * Whether a path OTHER than `ownPath` is named earlier in the same PARAGRAPH
+ * as a BARE pronoun match at `pronounIndex` — in which case "this"/"it" most
+ * plausibly refers to THAT path, not to the containing file. Only ever
+ * called for a bare pronoun (see `claimInText`); a qualified one ("this
+ * module", "this package (...)") already has its own concrete grammatical
+ * subject and is trusted unconditionally, no matter what else the paragraph
+ * names — see the module doc comment's "pronoun variant" section.
+ *
+ * Scoped to the paragraph (bounded only by the nearest preceding blank line,
+ * `\n\s*\n`) rather than to a period-delimited "sentence". A blank line is
+ * the one boundary a fixed-text scan can find without trying to interpret
+ * prose punctuation — unlike a period, it is never also an abbreviation, an
+ * ellipsis, a decimal or part of a versioned filename, so there is no
+ * boundary-detection heuristic left to fool (#1971 was exactly that: `. `
+ * misread inside `etc...`). This is coarser than a real sentence boundary —
+ * it can still see a path named in an earlier sentence of the same
+ * paragraph — but a path named AFTER the pronoun (as in the real
+ * `domains/__init__.py` header) is never examined at all, and a path named
+ * in an EARLIER, separate paragraph must never suppress a later, genuine
+ * self-claim — both checked directly in the test fixtures below.
  */
-function sentenceNamesOtherPath(text: string, pronounIndex: number, ownPath: string): boolean {
+function otherPathPrecedesBarePronoun(
+  text: string,
+  pronounIndex: number,
+  ownPath: string,
+): boolean {
   const before = text.slice(0, pronounIndex)
-  const boundary = /\n\s*\n|\.\s/g
-  let sentenceStart = 0
-  let boundaryMatch: RegExpExecArray | null
-  while ((boundaryMatch = boundary.exec(before))) {
-    sentenceStart = boundaryMatch.index + boundaryMatch[0].length
+  const paragraphBreak = /\n\s*\n/g
+  let paragraphStart = 0
+  let breakMatch: RegExpExecArray | null
+  while ((breakMatch = paragraphBreak.exec(before))) {
+    paragraphStart = breakMatch.index + breakMatch[0].length
   }
-  const sentence = text.slice(sentenceStart, pronounIndex)
+  const paragraph = text.slice(paragraphStart, pronounIndex)
 
   PATH_TOKEN.lastIndex = 0
   let tokenMatch: RegExpExecArray | null
-  while ((tokenMatch = PATH_TOKEN.exec(sentence))) {
+  while ((tokenMatch = PATH_TOKEN.exec(paragraph))) {
     const token = stripPathPunctuation(tokenMatch[1]!)
     if (!token.includes('/')) continue
     if (token === ownPath || ownPath.startsWith(token) || token.startsWith(ownPath)) continue
@@ -292,7 +373,7 @@ interface ClaimMatch {
  * grammar, first-line em-dash). See the module doc comment for the corpus
  * each was checked against. `ownPath` is the containing file's own path,
  * used only to resolve the self-referential-grammar mechanism's pronoun
- * ambiguity (see `sentenceNamesOtherPath`).
+ * ambiguity (see `otherPathPrecedesBarePronoun`).
  */
 function claimInText(text: string, ownPath: string): ClaimMatch | null {
   const candidates: ClaimMatch[] = []
@@ -306,12 +387,19 @@ function claimInText(text: string, ownPath: string): ClaimMatch | null {
   SELF_REFERENTIAL_CLAIM.lastIndex = 0
   let grammatical: RegExpExecArray | null
   while ((grammatical = SELF_REFERENTIAL_CLAIM.exec(text))) {
-    if (sentenceNamesOtherPath(text, grammatical.index, ownPath)) continue
-    // Group 1 is a mandatory capturing group in SELF_REFERENTIAL_CLAIM (not
-    // inside an alternation that could omit it), so it is always present
-    // when the overall match succeeds — the `!` reflects that, not a
-    // shortcut around `noUncheckedIndexedAccess`'s generic array-index rule.
-    const phrase = grammatical[1]!
+    // Group 1 (the qualifier) and group 2 (the claim word) are both mandatory
+    // capturing groups in SELF_REFERENTIAL_CLAIM (neither is inside an
+    // alternation that could omit it), so both are always present when the
+    // overall match succeeds — the `!`s reflect that, not a shortcut around
+    // `noUncheckedIndexedAccess`'s generic array-index rule. An empty group 1
+    // means a BARE pronoun ("this is"/"it is"), which is the only shape
+    // still checked against its paragraph for a competing antecedent — a
+    // QUALIFIED one ("this module is") is unambiguous on its own grammar and
+    // skips the check entirely. See SELF_REFERENTIAL_CLAIM's own doc comment
+    // and the module doc comment's "pronoun variant" section.
+    const isBarePronoun = grammatical[1]! === ''
+    if (isBarePronoun && otherPathPrecedesBarePronoun(text, grammatical.index, ownPath)) continue
+    const phrase = grammatical[2]!
     candidates.push({ matchedPhrase: phrase, claim: claimFor(phrase), index: grammatical.index })
     break
   }

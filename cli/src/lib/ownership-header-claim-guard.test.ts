@@ -205,6 +205,35 @@ describe('findHeaderClaim — real corpus fixtures', () => {
     const hit = findHeaderClaim('services/api/tests/instance/example.py', content)
     expect(hit).toMatchObject({ claim: 'user' })
   })
+
+  // biffo-template#1971: #1970's own sentence-boundary walk used `\.\s` to
+  // find "the end of the previous sentence", which misreads an ellipsis (or
+  // an abbreviation's period) as a real sentence break. That lets the
+  // boundary land AFTER the other-path mention instead of before it, so the
+  // bare pronoun's own paragraph/sentence scan never sees the antecedent —
+  // reproducing the #1959 false-positive shape via punctuation instead of a
+  // missing check. Reproduced verbatim from the issue against 5f93d4a1.
+  it('does not read a bare pronoun as self-referential when an ellipsis sits between it and an earlier other-path mention (#1971)', () => {
+    const content =
+      '"""``other/path/here.py`` already covers cases like malformed input, empty\n' +
+      'strings, etc... it is template-owned, unlike this file.\n"""\n'
+    const hit = findHeaderClaim('services/api/tests/instance/adv.py', content)
+    expect(hit).toBeNull()
+  })
+
+  // biffo-template#1972: #1970's sentenceNamesOtherPath suppressed ANY
+  // grammatical match with another path named earlier in its sentence, even
+  // when the matched pronoun already carries its own concrete, unambiguous
+  // subject ("this module") rather than being a bare "this"/"it". A path
+  // named earlier purely as a cross-reference must not blind the guard to a
+  // genuine, unambiguous self-claim later in the same sentence.
+  it('still catches a genuine self-claim through a qualified "this <noun>" even when another path is named earlier in the same sentence (#1972)', () => {
+    const content =
+      '"""See ``services/api/other_thing.py`` for details; this module is\n' +
+      'user-owned and separate.\n"""\n'
+    const hit = findHeaderClaim('services/api/tests/instance/example2.py', content)
+    expect(hit).toMatchObject({ claim: 'user' })
+  })
 })
 
 describe('checkOwnershipHeaderClaims — compares against the real manifest authority', () => {

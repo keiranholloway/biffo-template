@@ -127,34 +127,69 @@
  *    sentence of the same paragraph — but coarser-and-reliable beats
  *    finer-and-wrong: it closes #1971 completely, because there is no longer
  *    any punctuation test for an ellipsis or abbreviation to fool.
- * 2. **The antecedent check no longer runs at all for a QUALIFIED match.**
- *    `SELF_REFERENTIAL_CLAIM` now captures what sits between the pronoun and
- *    the copula (its "qualifier" — `package`, `directory`, `module`, a
- *    backtick-quoted own-path parenthetical, etc.). A BARE pronoun ("this
- *    is"/"it is", nothing in between) is exactly the ambiguous shape #1959
- *    was about — pure "this"/"it" genuinely can refer to whatever was most
- *    recently mentioned, so it is still checked against the paragraph for a
- *    competing path. A QUALIFIED pronoun ("this module is", "this package
- *    (...) is") already carries its own concrete grammatical subject, which
- *    is what makes it unambiguous regardless of what else the same sentence
- *    happens to mention in passing — so it is trusted unconditionally, with
- *    no antecedent scan at all. This is not "detect the #1972 shape and
- *    suppress it"; it is "the antecedent question was never well-formed for
- *    this shape in the first place", so the check is narrowed to where the
- *    ambiguity actually lives (a bare pronoun) rather than widened to cover
- *    one more reported example.
+ * 2. **The antecedent check runs for every match, BARE or QUALIFIED — but
+ *    over a different span each time, chosen by what could possibly supply
+ *    the claim's grammatical subject.** `SELF_REFERENTIAL_CLAIM` captures
+ *    what sits between the pronoun and the copula (its "qualifier" —
+ *    `package`, `directory`, `module`, a backtick-quoted own-path
+ *    parenthetical, etc.). A BARE pronoun ("this is"/"it is", nothing in
+ *    between) supplies no subject of its own at all, so the only place a
+ *    competing one can come from is the surrounding prose — it is checked
+ *    against its paragraph, exactly as before. A QUALIFIED pronoun ("this
+ *    module is", "this package (...) is") supplies its OWN subject, so
+ *    nothing outside the match needs checking — but that subject is only
+ *    trustworthy if the qualifier's own text doesn't itself embed a
+ *    reference to a DIFFERENT path (see "Round three's flaw", below) — so it
+ *    is checked too, just over the qualifier text itself rather than the
+ *    surrounding paragraph.
  *
  * `domains/__init__.py`'s real docstring mentions the surrounding
  * `services/api/` path in the SAME sentence as its self-claim, but AFTER the
- * pronoun ("This package (...) is **user-owned** [...] even though it sits
- * inside the template-owned ``services/api/``") — only text preceding the
- * pronoun is ever examined (and this match is qualified — "This package" —
- * so the scan never runs anyway), so that trailing mention never counts as
- * an antecedent and the claim is still read correctly. A cruder header-wide
- * or first-paragraph-only rule (the issue's other suggested mitigation)
- * would also wrongly suppress a genuine self-claim made in a later paragraph
- * than an unrelated path mention — checked directly in the test fixtures
- * below.
+ * copula ("This package (...) is **user-owned** [...] even though it sits
+ * inside the template-owned ``services/api/``") — text after the copula is
+ * never examined by either check, so that trailing mention never counts as
+ * an antecedent and the claim is still read correctly. The qualifier itself
+ * ("package (``services/api/src/api/domains/``)") DOES get scanned under the
+ * fix below, and DOES contain a path token — but that token is a prefix of
+ * the file's own path, so it is excluded as self-reference rather than
+ * flagged as a competing one. A cruder header-wide or first-paragraph-only
+ * rule (the issue's other suggested mitigation) would also wrongly suppress
+ * a genuine self-claim made in a later paragraph than an unrelated path
+ * mention — checked directly in the test fixtures below.
+ *
+ * ### Round three's flaw, and the actual structural fix (#1973)
+ *
+ * The reasoning above ("a qualified pronoun already carries its own concrete
+ * grammatical subject") was half right and half a mistake that a third
+ * fleet-prosecutor gate caught: it treated the qualifier's mere PRESENCE —
+ * group 1 being non-empty — as proof of being unambiguous, and never once
+ * looked at what the qualifier's text actually said. "This package
+ * (``services/api/other_module_entirely.py``) is template-owned" has a
+ * non-empty qualifier, exactly like "this module is", but its qualifier is
+ * an appositive naming a DIFFERENT file — the true grammatical subject of
+ * "is" is that other file, not "this package". Trusting non-emptiness as a
+ * proxy for unambiguity reproduced #1959's original false-positive shape a
+ * third time, just relocated from before the pronoun (round one/two's
+ * concern) to inside the qualifier itself.
+ *
+ * This is not patched by adding a fourth special case ("also reject when the
+ * qualifier looks like #1973's example"). The fix is the same structural
+ * question rounds one and two already answered correctly for the bare case,
+ * applied to the one span round three skipped: **does the text that is
+ * actually supposed to supply this claim's subject contain a reference to a
+ * different file?** `textNamesOtherPath` (below) is the one check every
+ * mechanism in this module now runs — against the paragraph for a bare
+ * pronoun (nothing else could supply its subject), against the qualifier
+ * text for a qualified one (that IS its subject, so nothing outside it is
+ * relevant), and against the text preceding the em-dash for the first-line
+ * em-dash convention (see `EM_DASH_FIRST_LINE_CLAIM` below — an em-dash has
+ * no subject of its own either, so what precedes it on the line supplies
+ * one, and "``other/path.py`` — template-owned, for comparison" is the
+ * em-dash sibling of the exact same mistake, found by asking whether the
+ * fix generalises rather than by waiting for a fourth issue to report it).
+ * Never "is there text here", always "what does the text here actually
+ * say" — that is what makes this a removal of round three's flawed
+ * assumption rather than a fifth narrowing of it.
  *
  * ## Why `INSTANCE-OWNED` and `template-owned`/`user-owned` are matched
  * differently
@@ -246,12 +281,14 @@ const STRICT_MARKER = /(?<!`)(?:INSTANCE-OWNED|NOT a template file)(?!`)/
  * Group 1 captures the "qualifier" — whatever sits between the pronoun and
  * the copula, possibly nothing (an empty string, when `this`/`it` is
  * immediately followed by the copula). `claimInText` uses whether group 1 is
- * empty to decide whether the match is a BARE pronoun (ambiguous, checked
- * against its paragraph — see `otherPathPrecedesBarePronoun`) or a QUALIFIED
- * one (already unambiguous on its own grammar, never checked). See the
- * module doc comment's "pronoun variant" section for why that split replaced
- * a sentence-boundary heuristic rather than extending it. Group 2 is the
- * claim word itself.
+ * empty to decide WHERE to check for a competing path, not WHETHER to check:
+ * a BARE pronoun is checked against its paragraph (see
+ * `otherPathPrecedesBarePronoun`, since nothing else can supply its
+ * subject); a QUALIFIED one is checked against its own captured qualifier
+ * text instead (see `textNamesOtherPath`, since the qualifier IS its
+ * subject, and #1973 showed that subject is only trustworthy when it
+ * doesn't itself embed a different file). See the module doc comment's
+ * "Round three's flaw" section. Group 2 is the claim word itself.
  *
  * Global (`g`) so `claimInText` can walk PAST a match rejected as an
  * ambiguous bare pronoun to look for a later, genuinely self-referential one
@@ -292,13 +329,38 @@ function stripPathPunctuation(token: string): string {
 }
 
 /**
+ * Whether `text` names a path OTHER than `ownPath` — the one structural
+ * question every mechanism in this module needs answered, applied to
+ * whatever span of text actually claims to supply (or fails to supply) a
+ * match's grammatical subject. See the module doc comment's "Round three's
+ * flaw" section for why this single check, applied to three different
+ * spans, replaced three separately-reasoned special cases: the SAME
+ * function is called with a bare pronoun's paragraph
+ * (`otherPathPrecedesBarePronoun`), a qualified pronoun's own captured
+ * qualifier (`claimInText`), and the text preceding a first-line em-dash
+ * (`claimInText` again) — never with anything wider, and never skipped
+ * because the span happened to be non-empty.
+ */
+function textNamesOtherPath(text: string, ownPath: string): boolean {
+  PATH_TOKEN.lastIndex = 0
+  let tokenMatch: RegExpExecArray | null
+  while ((tokenMatch = PATH_TOKEN.exec(text))) {
+    const token = stripPathPunctuation(tokenMatch[1]!)
+    if (!token.includes('/')) continue
+    if (token === ownPath || ownPath.startsWith(token) || token.startsWith(ownPath)) continue
+    return true
+  }
+  return false
+}
+
+/**
  * Whether a path OTHER than `ownPath` is named earlier in the same PARAGRAPH
  * as a BARE pronoun match at `pronounIndex` — in which case "this"/"it" most
  * plausibly refers to THAT path, not to the containing file. Only ever
  * called for a bare pronoun (see `claimInText`); a qualified one ("this
- * module", "this package (...)") already has its own concrete grammatical
- * subject and is trusted unconditionally, no matter what else the paragraph
- * names — see the module doc comment's "pronoun variant" section.
+ * module", "this package (...)") is checked a different way — see
+ * `textNamesOtherPath` and the module doc comment's "Round three's flaw"
+ * section.
  *
  * Scoped to the paragraph (bounded only by the nearest preceding blank line,
  * `\n\s*\n`) rather than to a period-delimited "sentence". A blank line is
@@ -326,16 +388,7 @@ function otherPathPrecedesBarePronoun(
     paragraphStart = breakMatch.index + breakMatch[0].length
   }
   const paragraph = text.slice(paragraphStart, pronounIndex)
-
-  PATH_TOKEN.lastIndex = 0
-  let tokenMatch: RegExpExecArray | null
-  while ((tokenMatch = PATH_TOKEN.exec(paragraph))) {
-    const token = stripPathPunctuation(tokenMatch[1]!)
-    if (!token.includes('/')) continue
-    if (token === ownPath || ownPath.startsWith(token) || token.startsWith(ownPath)) continue
-    return true
-  }
-  return false
+  return textNamesOtherPath(paragraph, ownPath)
 }
 
 /**
@@ -349,7 +402,15 @@ function otherPathPrecedesBarePronoun(
  * `services/api/src/api/identity/__init__.py` and siblings) puts its
  * unrelated mention of a DIFFERENT path's ownership several lines further
  * in, past a title/summary line naming the actual subject. Restricting to
- * line 1 only is what makes trusting a bare em-dash (no copula at all) safe.
+ * line 1 only narrows WHERE a false positive could hide; it does not by
+ * itself rule one out — "``other/path.py`` — template-owned, for
+ * comparison" is a real, constructible line-1 shape that names a different
+ * file right before the dash, so `claimInText` also runs
+ * `textNamesOtherPath` over the text preceding the matched dash, the same
+ * check applied to a qualified pronoun's qualifier (see the module doc
+ * comment's "Round three's flaw" section) — an em-dash supplies no subject
+ * of its own either, so what precedes it on the line is what must be
+ * checked.
  */
 const EM_DASH_FIRST_LINE_CLAIM = /[—–]\s*(template-owned|user-owned)\b/
 
@@ -392,13 +453,21 @@ function claimInText(text: string, ownPath: string): ClaimMatch | null {
     // alternation that could omit it), so both are always present when the
     // overall match succeeds — the `!`s reflect that, not a shortcut around
     // `noUncheckedIndexedAccess`'s generic array-index rule. An empty group 1
-    // means a BARE pronoun ("this is"/"it is"), which is the only shape
-    // still checked against its paragraph for a competing antecedent — a
-    // QUALIFIED one ("this module is") is unambiguous on its own grammar and
-    // skips the check entirely. See SELF_REFERENTIAL_CLAIM's own doc comment
-    // and the module doc comment's "pronoun variant" section.
-    const isBarePronoun = grammatical[1]! === ''
-    if (isBarePronoun && otherPathPrecedesBarePronoun(text, grammatical.index, ownPath)) continue
+    // means a BARE pronoun ("this is"/"it is"): nothing supplies its subject
+    // except the surrounding prose, so it is checked against its paragraph.
+    // A non-empty group 1 ("this module is", "this package (...) is") IS its
+    // own subject — but #1973 showed that subject is only trustworthy when
+    // it doesn't itself embed a reference to a different path, so it gets
+    // the same `textNamesOtherPath` check applied to its own captured text
+    // instead of the paragraph. See SELF_REFERENTIAL_CLAIM's own doc comment
+    // and the module doc comment's "Round three's flaw" section.
+    const qualifier = grammatical[1]!
+    const isBarePronoun = qualifier === ''
+    if (isBarePronoun) {
+      if (otherPathPrecedesBarePronoun(text, grammatical.index, ownPath)) continue
+    } else if (textNamesOtherPath(qualifier, ownPath)) {
+      continue
+    }
     const phrase = grammatical[2]!
     candidates.push({ matchedPhrase: phrase, claim: claimFor(phrase), index: grammatical.index })
     break
@@ -406,7 +475,12 @@ function claimInText(text: string, ownPath: string): ClaimMatch | null {
 
   const firstLine = text.split('\n', 1)[0] ?? ''
   const emDash = EM_DASH_FIRST_LINE_CLAIM.exec(firstLine)
-  if (emDash) {
+  // An em-dash supplies no subject of its own either — what precedes it on
+  // the line is what must actually be about this file (see
+  // EM_DASH_FIRST_LINE_CLAIM's own doc comment and the module doc comment's
+  // "Round three's flaw" section for why this is the same check as the
+  // qualifier one above, not a fifth special case).
+  if (emDash && !textNamesOtherPath(firstLine.slice(0, emDash.index), ownPath)) {
     // Same reasoning as above: group 1 is mandatory in EM_DASH_FIRST_LINE_CLAIM.
     const phrase = emDash[1]!
     candidates.push({ matchedPhrase: phrase, claim: claimFor(phrase), index: emDash.index })

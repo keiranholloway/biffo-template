@@ -234,6 +234,80 @@ describe('findHeaderClaim — real corpus fixtures', () => {
     const hit = findHeaderClaim('services/api/tests/instance/example2.py', content)
     expect(hit).toMatchObject({ claim: 'user' })
   })
+
+  // biffo-template#1973: round three ("bare vs qualified") trusted ANY
+  // qualified pronoun unconditionally, without ever inspecting what the
+  // qualifier text itself said. A qualifier that is itself an appositive
+  // naming a DIFFERENT path is not actually unambiguous — the file's own
+  // module doc comment cites the real `domains/__init__.py` shape
+  // ("This package (<path>) is user-owned") as what a genuine qualified
+  // self-claim looks like; this fixture is that same shape with the
+  // parenthetical pointed at a different file instead. Reproduced verbatim
+  // from the issue against 68aa4d1a.
+  it('does not read a qualified pronoun as self-referential when its own qualifier names a DIFFERENT path (#1973, parenthetical variant)', () => {
+    const content =
+      '"""This package (``services/api/other_module_entirely.py``) is\n' +
+      '**template-owned**, mirroring the layout described there.\n"""\n'
+    const hit = findHeaderClaim('services/api/tests/instance/candD.py', content)
+    expect(hit).toBeNull()
+  })
+
+  // #1973's second reported variant — an appositive introduced by a comma
+  // rather than parentheses, proving the fix isn't keyed to `(...)` syntax.
+  it('does not read a qualified pronoun as self-referential when its own qualifier names a DIFFERENT path (#1973, comma-appositive variant)', () => {
+    const content =
+      '"""This module\'s counterpart, ``services/api/other_module.py``, is\n' +
+      'template-owned and handles the shared-path variant.\n"""\n'
+    const hit = findHeaderClaim('services/api/tests/instance/candD.py', content)
+    expect(hit).toBeNull()
+  })
+
+  // Adversarial fixture written for this remediation, deliberately a THIRD
+  // qualifier phrasing (a preposition, no parentheses or comma at all) not
+  // covered by either of #1973's own two examples — proving the fix checks
+  // what the qualifier's text actually contains rather than matching one
+  // more literal shape.
+  it('does not read a qualified pronoun as self-referential when its qualifier names another path via a bare preposition, not parens or a comma', () => {
+    const content =
+      '"""This wrapper around ``services/api/legacy_thing.py`` is\n' +
+      'template-owned and adapts it for the new interface.\n"""\n'
+    const hit = findHeaderClaim('services/api/tests/instance/candD.py', content)
+    expect(hit).toBeNull()
+  })
+
+  // Adversarial fixture written for this remediation: the SAME underlying
+  // mistake (trusting a claim word because non-path-shaped/non-empty text
+  // sits next to it, without checking what that text says) reachable through
+  // the first-line em-dash convention instead of a pronoun at all — an
+  // em-dash supplies no grammatical subject any more than a bare pronoun
+  // does, so what precedes it must be checked the same way.
+  it('does not read a first-line em-dash claim as self-referential when a DIFFERENT path is named before the dash on the same line', () => {
+    const content =
+      '# See ``other/path/thing.py`` — template-owned, for comparison purposes.\n' +
+      '# This file below is different and user-owned instance test code.\n'
+    const hit = findHeaderClaim('services/api/tests/instance/emdash.py', content)
+    expect(hit).toBeNull()
+  })
+
+  // Mixed adversarial case: BOTH the file's own path and a different path
+  // appear before the em-dash. The own-path mention must not accidentally
+  // launder the other, genuinely competing path through the exclusion meant
+  // only for self-references.
+  it("still rejects a first-line em-dash claim when the file's own path AND a different path both precede the dash", () => {
+    const content =
+      '# ``services/api/foo.py`` and ``other/bar.py`` — template-owned, both of them.\n'
+    const hit = findHeaderClaim('services/api/foo.py', content)
+    expect(hit).toBeNull()
+  })
+
+  // Same mixed-path check for the qualifier path, not just the em-dash path.
+  it("still rejects a qualified pronoun claim when the qualifier names the file's own path AND a different path", () => {
+    const content =
+      '"""This module (see also ``services/api/foo.py`` and ``other/bar.py``) is\n' +
+      'template-owned.\n"""\n'
+    const hit = findHeaderClaim('services/api/foo.py', content)
+    expect(hit).toBeNull()
+  })
 })
 
 describe('checkOwnershipHeaderClaims — compares against the real manifest authority', () => {

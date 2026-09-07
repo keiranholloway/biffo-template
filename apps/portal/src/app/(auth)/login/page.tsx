@@ -10,6 +10,7 @@ import { createApiClient } from '@/lib/api-client'
 import { resolveWhoami } from '@/lib/whoami-api'
 import { resolveDestination } from '@/lib/login-routing'
 import { Button } from '@biffo/ui'
+import { FORWARD_DELAY_MS } from './constants'
 
 // useSearchParams() requires a Suspense boundary in the App Router (it opts
 // the tree below it out of static rendering) — the actual form lives in
@@ -44,17 +45,6 @@ function confirmResetErrorMessage(err: unknown): string {
 // request-time error worth surfacing, since it is actionable.
 const RESET_CODE_SENT_NOTICE =
   'If an account exists for that email address, a reset code has been sent to it.'
-
-// How long the "Signing you in as X… Not you? Sign out" state stays on screen
-// before the automatic forward actually fires, for someone who lands on
-// /login/ already holding a live session (#1942). Before this existed the
-// redirect fired on the same render pass that showed the text, so "Not you?
-// Sign out" was never on screen long enough to have a real chance of being
-// clicked, and the text never said *whose* session was being resumed. Long
-// enough to read and act on, short enough that an ordinary bookmark-triggered
-// forward does not feel broken. Exported so tests can assert against this
-// value rather than a number that could silently drift from it.
-export const FORWARD_DELAY_MS = 1500
 
 function requestResetOutcome(err: unknown): { notice: string; sent: boolean } {
   const name = err instanceof Error ? err.name : ''

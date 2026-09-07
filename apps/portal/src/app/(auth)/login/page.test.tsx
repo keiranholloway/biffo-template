@@ -1,7 +1,8 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { CognitoUserSession } from 'amazon-cognito-identity-js'
-import LoginPage, { FORWARD_DELAY_MS } from './page'
+import LoginPage from './page'
+import { FORWARD_DELAY_MS } from './constants'
 
 const {
   pushMock,

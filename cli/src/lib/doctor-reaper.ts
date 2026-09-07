@@ -183,22 +183,63 @@ export interface ReapCandidate {
 }
 
 /**
- * The candidate pool `--fix` is willing to consider: every worktree whose
- * branch's upstream git reports `[gone]` (positive evidence its remote copy
- * was deleted — the same set `checkWorktrees`'s `worktree-merged` finding
- * already reports).
+ * A branch's OWN name is absent from the live `origin/*` refs
+ * (biffo-template#1954) — deliberately not the same test as
+ * `branch.track.includes('gone')`.
  *
- * Deliberately excludes the `worktree-stale` (far-behind-but-not-gone) class
- * entirely: a live upstream means nothing has told us this branch's PR ever
- * resolved, so there is no verdict to ask GitHub for and it stays a report,
- * never an action. Also deliberately worktree-only — a `[gone]` branch with
- * no worktree at all is a bare-branch candidate, which is milestone 2.
+ * `git worktree add -b <branch> <path> origin/dev` sets the new branch's
+ * upstream to `origin/dev` by default, and a plain `git push origin HEAD`
+ * (AGENTS.md's own documented push command, no `-u`) never corrects it — so a
+ * branch can be pushed, merged, and have `origin/<branch>` deleted on GitHub,
+ * while `%(upstream:track)` never reports `[gone]` because the ref it is
+ * actually tracking (`origin/dev`) never goes anywhere. Measured live,
+ * 2026-09-07: `agent/1900`'s PR merged two days prior and its remote branch
+ * was gone, but `git branch -vv` still read `[origin/dev: ahead 1, behind
+ * 21]` — invisible to the old `[gone]`-only filter, forever.
+ *
+ * The fix checks the branch's OWN name against the actual set of live
+ * `origin/*` refs (`listRemoteBranchNames`, config-independent) instead of
+ * trusting what the branch happens to be configured to track.
+ *
+ * Deliberately NOT gated on `branch.upstream !== ''` — that would reintroduce
+ * a version of the same bug it fixes: `git worktree add -b <branch> <path>
+ * origin/dev` sets a non-empty upstream (`origin/dev`) on every branch it
+ * creates in this repo's own documented workflow, whether or not that branch
+ * is EVER pushed under its own name, so "has some upstream" cannot
+ * distinguish "pushed then deleted" from "never pushed at all" here — it is
+ * nearly always true. That distinction does not need making, unlike in
+ * `upgrade-branch-reaper.ts` (which deletes a branch on this signal ALONE,
+ * with no downstream verification): this module's only actual safety check
+ * is the GitHub-verified judgement `classifyReapCandidate` applies afterward
+ * (`prVerdictForBranch` + `mergeContainsHead`) — a branch that was genuinely
+ * never pushed gets `prVerdict: 'none'` there and keeps for `no-pr`, exactly
+ * as safely as before. Being "wrong" here costs one extra, harmless GitHub
+ * call; being wrong the other way costs a leaked worktree forever.
+ */
+function hasProvenGoneRemote(branch: BranchRef, remoteBranchNames: Set<string>): boolean {
+  return !remoteBranchNames.has(branch.name)
+}
+
+/**
+ * The candidate pool `--fix` is willing to consider: every worktree whose
+ * branch has proven, by `hasProvenGoneRemote`, that its own remote copy is
+ * gone (the same set `checkWorktrees`'s `worktree-merged` finding reports,
+ * modulo #1954's fix — see that function's doc comment).
+ *
+ * Deliberately excludes a branch with a live same-named remote copy
+ * entirely: nothing has told us this branch's PR ever resolved, so there is
+ * no verdict worth asking GitHub for and it stays a report, never an action.
+ * Also deliberately worktree-only — a proven-gone branch with no worktree at
+ * all is a bare-branch candidate, which is milestone 2.
  */
 export function findReapCandidates(
   branches: BranchRef[],
   worktrees: WorktreeFact[],
+  remoteBranchNames: Set<string>,
 ): ReapCandidate[] {
-  const goneBranches = new Set(branches.filter((b) => b.track.includes('gone')).map((b) => b.name))
+  const goneBranches = new Set(
+    branches.filter((b) => hasProvenGoneRemote(b, remoteBranchNames)).map((b) => b.name),
+  )
   return worktrees
     .filter((w) => goneBranches.has(w.branch))
     .map((w) => ({ branch: w.branch, worktreePath: w.path }))
@@ -323,8 +364,9 @@ export async function reapAll(
   worktrees: WorktreeFact[],
   currentBranch: string,
   deps: ReapDeps,
+  remoteBranchNames: Set<string>,
 ): Promise<ReapOutcome[]> {
-  const candidates = findReapCandidates(branches, worktrees).filter(
+  const candidates = findReapCandidates(branches, worktrees, remoteBranchNames).filter(
     (c) => c.branch !== currentBranch,
   )
   const outcomes: ReapOutcome[] = []
@@ -357,18 +399,19 @@ export interface BareBranchCandidate {
 }
 
 /**
- * Every `[gone]` local branch with **no** linked worktree. Deliberately the
- * complement of `findReapCandidates`'s own filter (worktree branches only) —
- * together the two cover every `[gone]` branch exactly once, never both ways
- * for the same name.
+ * Every proven-gone local branch (`hasProvenGoneRemote`, #1954) with **no**
+ * linked worktree. Deliberately the complement of `findReapCandidates`'s own
+ * filter (worktree branches only) — together the two cover every proven-gone
+ * branch exactly once, never both ways for the same name.
  */
 export function findBareBranchCandidates(
   branches: BranchRef[],
   worktrees: WorktreeFact[],
+  remoteBranchNames: Set<string>,
 ): BareBranchCandidate[] {
   const worktreeBranches = new Set(worktrees.map((w) => w.branch))
   return branches
-    .filter((b) => b.track.includes('gone') && !worktreeBranches.has(b.name))
+    .filter((b) => hasProvenGoneRemote(b, remoteBranchNames) && !worktreeBranches.has(b.name))
     .map((b) => ({ branch: b.name }))
 }
 
@@ -436,8 +479,9 @@ export async function reapAllBareBranches(
   worktrees: WorktreeFact[],
   currentBranch: string,
   deps: BranchReapDeps,
+  remoteBranchNames: Set<string>,
 ): Promise<BareBranchReapOutcome[]> {
-  const candidates = findBareBranchCandidates(branches, worktrees).filter(
+  const candidates = findBareBranchCandidates(branches, worktrees, remoteBranchNames).filter(
     (c) => c.branch !== currentBranch,
   )
   const outcomes: BareBranchReapOutcome[] = []

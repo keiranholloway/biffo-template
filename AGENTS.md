@@ -321,8 +321,21 @@ way. `.husky/pre-push` runs the whole-project `pyright`; against a stale `.venv`
 push**. Combined with the piped-exit trap above, the rejection reads as success,
 and the dropped commits get squash-merged missing.
 
-- **Push with the exit status visible:** `git push origin HEAD; echo $?`. Never
-  trust a "pushed" message printed unconditionally after a pipe.
+- **Push with the exit status visible, and record the upstream:**
+  `git push -u origin HEAD; echo $?`. Never trust a "pushed" message printed
+  unconditionally after a pipe.
+- **The `-u` is not optional (#1954).** `git worktree add -b <branch> <path>
+origin/dev` (§1) sets the new branch's upstream to `origin/dev` by default —
+  a plain `git push origin HEAD`, with no `-u`, never corrects it. A branch
+  left tracking `origin/dev` can be pushed, merged, and have its own remote
+  copy deleted, while `git branch -vv` never reports it `[gone]` (the ref it
+  is actually tracking never goes anywhere) — so `doctor --fix` and every
+  other tool that reads that marker stays permanently blind to it. Measured
+  live: `agent/1900`'s PR merged two days prior and its remote branch was
+  gone, yet `git branch -vv` still read `[origin/dev: ahead 1, behind 21]`.
+  Setting `git config --global push.autoSetupRemote true` once fixes every
+  future bare `git push` on a machine too, but do not rely on a host
+  happening to have it set — pass `-u` explicitly.
 - **Confirm the remote actually has the commit before you rely on it** —
   especially before merging: `git log origin/<branch> -1`, or `git show
 origin/<branch>:<path>` for a specific change. A green PR page is not proof

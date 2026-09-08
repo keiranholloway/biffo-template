@@ -124,7 +124,14 @@ jobs:
       # invocation in this job.
       - name: Lambda output guard
         if: ${{ !cancelled() }}
-        run: sh scripts/biffo.sh check lambda-output
+        # This job's working-directory default is apps/frontend (top of this
+        # job), but scripts/biffo.sh lives at the repo root -- same relative-
+        # path convention as the js-audit job's own
+        # `sh ../../scripts/js-dependency-audit.sh` below. A bare
+        # `scripts/biffo.sh` here fails unconditionally with "No such file",
+        # on every run, regardless of whether there is a real
+        # lambda-output/terraform-input violation (biffo-template#1983).
+        run: sh ../../scripts/biffo.sh check lambda-output
       # A Terraform subcommand that can prompt for an unresolved variable
       # without -input=false, or a workflow running Terraform at all without
       # TF_INPUT set as a backstop, hangs forever on a GitHub Actions runner --
@@ -136,7 +143,10 @@ jobs:
       # either would stay true (#1968).
       - name: Terraform-input guard
         if: ${{ !cancelled() }}
-        run: sh scripts/biffo.sh check terraform-input
+        # Same cwd fix as the Lambda output guard step above -- this job's
+        # working-directory default is apps/frontend, and scripts/biffo.sh
+        # lives at the repo root (biffo-template#1983).
+        run: sh ../../scripts/biffo.sh check terraform-input
 
   e2e:
     name: E2E (Playwright)

@@ -230,9 +230,16 @@ describe('the local gate no longer passes by being absent', () => {
    * With the gate inside the versioned package there is no absent case, and
    * which version a repo runs is its `.biffo-shared-version`.
    */
-  it('pre-push execs the gate through the bridge', () => {
+  it('pre-push runs the gate through the bridge', () => {
     const hook = readFileSync(join(repoRoot, '.githooks/pre-push'), 'utf8')
-    expect(hook).toContain('exec sh scripts/biffo.sh verify')
+    // Not `exec` since #1985 — the hook needs to run one more line after
+    // verify.sh exits (a disambiguating message so a local-gate block cannot
+    // read as a git/GitHub auth failure), which `exec` would prevent by
+    // replacing the hook's process outright. The property this test actually
+    // guards — the gate is invoked through the versioned bridge, not a
+    // per-repo copy — holds either way.
+    expect(hook).toContain('sh scripts/biffo.sh verify')
+    expect(hook).not.toContain('exec sh scripts/biffo.sh verify')
   })
 
   it('has no branch that exits 0 because the gate is missing', () => {

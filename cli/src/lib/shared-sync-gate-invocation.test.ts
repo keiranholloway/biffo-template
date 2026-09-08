@@ -30,10 +30,21 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
 const SYNC = readFileSync(join(repoRoot, 'scripts/shared-sync.sh'), 'utf8')
 const PRE_PUSH = readFileSync(join(repoRoot, '.githooks/pre-push'), 'utf8')
 
-/** How pre-push actually runs the gate, e.g. `sh scripts/biffo.sh verify`. */
+/**
+ * How pre-push actually runs the gate, e.g. `sh scripts/biffo.sh verify`.
+ *
+ * Not `exec sh ...` since #1985: the hook now captures verify's exit status
+ * to print a disambiguating line before returning control to git (so a push
+ * blocked by this local gate cannot be misread as a git/GitHub auth or
+ * network failure), which means the call can no longer replace the hook's own
+ * process. The invocation TEXT the rehearsal must mirror is unchanged — only
+ * the leading `exec ` is gone — so this still matches on the same anchored,
+ * unindented `sh scripts/biffo.sh verify` line to keep this test failing loud
+ * if the two ever diverge again the way #1241 did.
+ */
 function prePushGateInvocation(): string {
-  const m = PRE_PUSH.match(/^exec (sh .+)$/m)
-  if (!m) throw new Error('no `exec sh ...` gate invocation found in .githooks/pre-push')
+  const m = PRE_PUSH.match(/^(?:exec )?(sh .+)$/m)
+  if (!m) throw new Error('no `sh ...` gate invocation found in .githooks/pre-push')
   return m[1].trim()
 }
 

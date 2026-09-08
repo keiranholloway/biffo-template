@@ -1,10 +1,15 @@
+import { writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   classifyScratchClones,
+  findScratchCloneCandidates,
   repoNameFromRemoteUrl,
   type ScratchCloneCandidate,
 } from './scratch-clone-scan.js'
+import { makeTmpDir } from '../test-utils/tmp.js'
 import type { PrVerdict } from '../adapters/github-cli/index.js'
+import type { GitAdapter } from '../adapters/git/index.js'
 
 describe('repoNameFromRemoteUrl (#1949)', () => {
   // Corpus-grounded must-catch / must-NOT-catch table — every URL shape a
@@ -39,6 +44,37 @@ describe('repoNameFromRemoteUrl (#1949)', () => {
   it('returns null for an empty remote', () => {
     expect(repoNameFromRemoteUrl('')).toBeNull()
     expect(repoNameFromRemoteUrl('   ')).toBeNull()
+  })
+})
+
+describe('findScratchCloneCandidates — estateRoot could not be read (#1988)', () => {
+  // findScratchCloneCandidates must never swallow a readdirSync failure on
+  // estateRoot itself into an empty candidate list: runScratchCloneScan in
+  // commands/doctor.ts documents itself as exiting non-zero exactly when the
+  // scan itself could not run, and its own catch block only fires if this
+  // rejects rather than resolving to []. A git stub that throws if called
+  // proves the failure surfaces before any candidate is even considered.
+  const unreachableGitDeps = {
+    git: {
+      currentBranch: async () => {
+        throw new Error('must not be called: readdirSync should have thrown first')
+      },
+      getRemoteUrl: async () => {
+        throw new Error('must not be called: readdirSync should have thrown first')
+      },
+    } satisfies Pick<GitAdapter, 'currentBranch' | 'getRemoteUrl'>,
+  }
+
+  it('rejects rather than returning [] for a missing estateRoot', async () => {
+    const estateRoot = join(makeTmpDir('biffo-scratch-missing'), 'does-not-exist')
+    await expect(findScratchCloneCandidates(estateRoot, unreachableGitDeps)).rejects.toThrow()
+  })
+
+  it('rejects rather than returning [] for an estateRoot that is a file, not a directory', async () => {
+    const dir = makeTmpDir('biffo-scratch-notdir')
+    const filePath = join(dir, 'im-a-file.txt')
+    writeFileSync(filePath, 'not a directory\n')
+    await expect(findScratchCloneCandidates(filePath, unreachableGitDeps)).rejects.toThrow()
   })
 })
 

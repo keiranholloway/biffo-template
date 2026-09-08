@@ -127,14 +127,16 @@ export async function findScratchCloneCandidates(
   estateRoot: string,
   deps: ScratchCloneScanDeps,
 ): Promise<ScratchCloneCandidate[]> {
-  let names: string[]
-  try {
-    names = readdirSync(estateRoot, { withFileTypes: true })
-      .filter((e) => e.isDirectory())
-      .map((e) => e.name)
-  } catch {
-    return []
-  }
+  // No try/catch here, deliberately (#1988): a `readdirSync` failure on
+  // `estateRoot` itself — missing, not a directory, unreadable — means the
+  // scan could not run at all, which is exactly the case `runScratchCloneScan`
+  // in `commands/doctor.ts` documents itself as exiting non-zero for. Turning
+  // that into an empty candidate list here would make it indistinguishable
+  // from a genuinely clean scan of a real, populated estate root — the
+  // estate's own broken-denominator class, applied to its own new scan.
+  const names = readdirSync(estateRoot, { withFileTypes: true })
+    .filter((e) => e.isDirectory())
+    .map((e) => e.name)
 
   const candidates: ScratchCloneCandidate[] = []
   for (const name of names) {

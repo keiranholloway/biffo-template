@@ -66,6 +66,178 @@
  * after the copula). `INSTANCE-OWNED` and `"NOT a template file"` skip this
  * requirement — see the next section for why they get a different rule.
  *
+ * ## The pronoun variant of the same ambiguity (#1959)
+ *
+ * A bare "this"/"it" is only self-referential when nothing else nearby is a
+ * plausible antecedent. `tabsii-platform`'s
+ * `services/api/tests/instance/test_boto3_absent_after_import_api_main.py`
+ * (a user-owned instance test; the file does not exist in this repo, the
+ * ambiguity it exposed does) opened with: "``.../test_api_boto3_lazy_
+ * import.py`` already does the same [...] check, but **it is
+ * template-owned**" — "it" grammatically refers to the DIFFERENT,
+ * template-owned file named earlier in the SAME sentence, not to this
+ * docstring's own (correctly user-owned) file. `SELF_REFERENTIAL_CLAIM`
+ * alone cannot tell that apart from a genuine "it is X" self-claim, because
+ * it never looks at what precedes the match.
+ *
+ * ### Two rounds of a punctuation heuristic, and why round two was wrong to add
+ *
+ * #1970's first fix (`sentenceNamesOtherPath`, now removed) tried to bound
+ * "the pronoun's own sentence" by walking backward to the nearest preceding
+ * paragraph break OR `. ` (period-space), on the theory that a sentence
+ * boundary is where a competing antecedent stops counting. Two independent
+ * fleet-prosecutor gates each reproduced a live gap in that theory, and both
+ * gaps trace to the SAME cause rather than to two unrelated bugs:
+ *
+ * - **#1971**: `. ` also appears inside an ellipsis (`etc... it is`) and
+ *   after an abbreviation. Regex has no way to distinguish those from a real
+ *   sentence-ending period, so the boundary walk sometimes lands AFTER the
+ *   competing antecedent instead of before it, silently dropping it from the
+ *   scanned fragment — reintroducing #1959's exact false-positive shape via
+ *   punctuation instead of via a missing check.
+ * - **#1972**: the boundary walk's OTHER effect was to suppress every
+ *   grammatical match with another path named anywhere earlier in its
+ *   "sentence" — including a match whose subject already names a concrete,
+ *   unambiguous noun ("this module is user-owned"), which no reasonable
+ *   reading would send back to an unrelated path mentioned purely as a
+ *   cross-reference. That is a false NEGATIVE: a genuine self-claim silently
+ *   disappears.
+ *
+ * Patching #1971 alone (tighten the period regex to exclude ellipses/
+ * abbreviations) would be a second layer of the identical mistake: a regex
+ * still cannot reliably tell a real sentence boundary from an abbreviation in
+ * general prose, so the next punctuation shape (a mid-sentence quotation, a
+ * decimal, a versioned filename) would reopen the same class again. The
+ * actual cause both prosecutors named is the same: **no fixed-text scan can
+ * reliably parse sentence structure or pronoun antecedents in free-form
+ * prose.** So this round removes the sentence-boundary regex outright rather
+ * than tightening it, and separately narrows WHEN the antecedent check even
+ * applies, rather than adding a fourth special case to WHERE it applies.
+ *
+ * ### The actual fix: two structural narrowings, not a third special case
+ *
+ * 1. **No more period-based boundary.** The only boundary a fixed-text scan
+ *    can find in prose without trying to interpret punctuation is a blank
+ *    line (`\n\s*\n`) — unlike a period, a blank line is never also an
+ *    abbreviation, an ellipsis, a decimal or a versioned filename, so there
+ *    is no punctuation ambiguity left to get wrong. `otherPathPrecedesBarePronoun`
+ *    scopes its scan to the pronoun's own PARAGRAPH (bounded only by blank
+ *    lines), never to a period-delimited "sentence". This is coarser than a
+ *    real sentence boundary — it can still see a path named in an earlier
+ *    sentence of the same paragraph — but coarser-and-reliable beats
+ *    finer-and-wrong: it closes #1971 completely, because there is no longer
+ *    any punctuation test for an ellipsis or abbreviation to fool.
+ * 2. **The antecedent check runs for every match, BARE or QUALIFIED — but
+ *    over a different span each time, chosen by what could possibly supply
+ *    the claim's grammatical subject.** `SELF_REFERENTIAL_CLAIM` captures
+ *    what sits between the pronoun and the copula (its "qualifier" —
+ *    `package`, `directory`, `module`, a backtick-quoted own-path
+ *    parenthetical, etc.). A BARE pronoun ("this is"/"it is", nothing in
+ *    between) supplies no subject of its own at all, so the only place a
+ *    competing one can come from is the surrounding prose — it is checked
+ *    against its paragraph, exactly as before. A QUALIFIED pronoun ("this
+ *    module is", "this package (...) is") supplies its OWN subject, so
+ *    nothing outside the match needs checking — but that subject is only
+ *    trustworthy if the qualifier's own text doesn't itself embed a
+ *    reference to a DIFFERENT path (see "Round three's flaw", below) — so it
+ *    is checked too, just over the qualifier text itself rather than the
+ *    surrounding paragraph.
+ *
+ * `domains/__init__.py`'s real docstring mentions the surrounding
+ * `services/api/` path in the SAME sentence as its self-claim, but AFTER the
+ * copula ("This package (...) is **user-owned** [...] even though it sits
+ * inside the template-owned ``services/api/``") — text after the copula is
+ * never examined by either check, so that trailing mention never counts as
+ * an antecedent and the claim is still read correctly. The qualifier itself
+ * ("package (``services/api/src/api/domains/``)") DOES get scanned under the
+ * fix below, and DOES contain a path token — but that token is a prefix of
+ * the file's own path, so it is excluded as self-reference rather than
+ * flagged as a competing one. A cruder header-wide or first-paragraph-only
+ * rule (the issue's other suggested mitigation) would also wrongly suppress
+ * a genuine self-claim made in a later paragraph than an unrelated path
+ * mention — checked directly in the test fixtures below.
+ *
+ * ### Round three's flaw, and the actual structural fix (#1973)
+ *
+ * The reasoning above ("a qualified pronoun already carries its own concrete
+ * grammatical subject") was half right and half a mistake that a third
+ * fleet-prosecutor gate caught: it treated the qualifier's mere PRESENCE —
+ * group 1 being non-empty — as proof of being unambiguous, and never once
+ * looked at what the qualifier's text actually said. "This package
+ * (``services/api/other_module_entirely.py``) is template-owned" has a
+ * non-empty qualifier, exactly like "this module is", but its qualifier is
+ * an appositive naming a DIFFERENT file — the true grammatical subject of
+ * "is" is that other file, not "this package". Trusting non-emptiness as a
+ * proxy for unambiguity reproduced #1959's original false-positive shape a
+ * third time, just relocated from before the pronoun (round one/two's
+ * concern) to inside the qualifier itself.
+ *
+ * This is not patched by adding a fourth special case ("also reject when the
+ * qualifier looks like #1973's example"). The fix is the same structural
+ * question rounds one and two already answered correctly for the bare case,
+ * applied to the one span round three skipped: **does the text that is
+ * actually supposed to supply this claim's subject contain a reference to a
+ * different file?** `textNamesOtherPath` (below) is the one check every
+ * mechanism in this module now runs — against the paragraph for a bare
+ * pronoun (nothing else could supply its subject), against the qualifier
+ * text for a qualified one (that IS its subject, so nothing outside it is
+ * relevant), and against the text preceding the em-dash for the first-line
+ * em-dash convention (see `EM_DASH_FIRST_LINE_CLAIM` below — an em-dash has
+ * no subject of its own either, so what precedes it on the line supplies
+ * one, and "``other/path.py`` — template-owned, for comparison" is the
+ * em-dash sibling of the exact same mistake, found by asking whether the
+ * fix generalises rather than by waiting for a fourth issue to report it).
+ * Never "is there text here", always "what does the text here actually
+ * say" — that is what makes this a removal of round three's flawed
+ * assumption rather than a fifth narrowing of it.
+ *
+ * ### Round four's flaw, and why the fix is a REPLACEMENT, not a narrowing (#1974)
+ *
+ * `textNamesOtherPath` (round four/#1970's own commit c973c0d2) was
+ * introduced as "the one check every mechanism in this module actually
+ * needs" — and then answered that question with `token === ownPath ||
+ * ownPath.startsWith(token) || token.startsWith(ownPath)`: a naive
+ * character-level string-prefix comparison with no requirement that the
+ * character immediately after the shared prefix be a real `/` segment
+ * boundary. `services/api/foo.pyi` string-prefixes `services/api/foo.py`
+ * (and vice versa on the other pairing), so it was treated as "the same
+ * file" purely by coincidence of spelling — reproducing #1959's original
+ * false-positive shape a fourth time, via a mechanism that predates the
+ * whole #1970 chain (`otherPathPrecedesBarePronoun`'s bare-pronoun path
+ * carried the same unchecked comparison back to 96f2f1bf) and was carried
+ * forward, unfixed, into round four's own "structural fix" primitive.
+ *
+ * **This one is fixed differently from rounds one through three, and the
+ * difference is deliberate, not cosmetic.** Every prior round narrowed a
+ * heuristic that answers a genuinely open-ended question — what a pronoun's
+ * antecedent is in free-form prose — which has no general algorithmic
+ * answer, so each fix could only ever be "checked against a wider real
+ * corpus," never "proven correct in general." Round four's flaw is a
+ * different kind of question: whether two path STRINGS name the same file.
+ * That question is fully bounded and has a known-correct answer — segment
+ * equality, exactly as `core-manifest.ts`'s own `matchLength` already
+ * establishes for `templateOwned`/`userOwned` prefixes (a `/` is a real,
+ * structural boundary, not incidental punctuation). So `isSameOrAncestorPath`
+ * (below) is not a fifth special case bolted onto `textNamesOtherPath` — it
+ * REPLACES the naive comparison with the general, provably-correct one, the
+ * same way rounds one/two/three each replaced (never patched around) the
+ * mechanism they found flawed. See `isSameOrAncestorPath`'s own doc comment
+ * for the algorithm and why segment comparison, not character comparison, is
+ * what makes it general rather than merely wider.
+ *
+ * The hunt for siblings this fix required (per the issue's own instruction
+ * to look for a fifth instance of the class before declaring done) found
+ * exactly one more: `matchesReleased` (see its own doc comment and
+ * `pathspecCovers`) carried the identical naive `relPath.startsWith(p)`
+ * shape, latent rather than live only because `released` happens to contain
+ * a single already-trailing-slash-safe entry (`'cli/'`) today. No other
+ * `ownPath`/`relPath` comparison in this module does a raw string
+ * `startsWith`/`endsWith`/`includes` on a path value — the sweep that found
+ * these two is `grep -n "startsWith\|endsWith\|includes(" ` over this file,
+ * checking every hit against whether it compares two PATHS (these two) or
+ * something else entirely (line boundaries, comment markers, quote
+ * delimiters — all correctly unrelated to path identity and left alone).
+ *
  * ## Why `INSTANCE-OWNED` and `template-owned`/`user-owned` are matched
  * differently
  *
@@ -152,9 +324,181 @@ const STRICT_MARKER = /(?<!`)(?:INSTANCE-OWNED|NOT a template file)(?!`)/
  * backtick-quoted path with no internal spaces), then `is`/`are`/`stays`/
  * `remains`, then (optionally) markdown `**`, then the claim word itself.
  * See the module doc comment for the real corpus this was checked against.
+ *
+ * Group 1 captures the "qualifier" — whatever sits between the pronoun and
+ * the copula, possibly nothing (an empty string, when `this`/`it` is
+ * immediately followed by the copula). `claimInText` uses whether group 1 is
+ * empty to decide WHERE to check for a competing path, not WHETHER to check:
+ * a BARE pronoun is checked against its paragraph (see
+ * `otherPathPrecedesBarePronoun`, since nothing else can supply its
+ * subject); a QUALIFIED one is checked against its own captured qualifier
+ * text instead (see `textNamesOtherPath`, since the qualifier IS its
+ * subject, and #1973 showed that subject is only trustworthy when it
+ * doesn't itself embed a different file). See the module doc comment's
+ * "Round three's flaw" section. Group 2 is the claim word itself.
+ *
+ * Global (`g`) so `claimInText` can walk PAST a match rejected as an
+ * ambiguous bare pronoun to look for a later, genuinely self-referential one
+ * — callers MUST reset `.lastIndex = 0` before each fresh piece of text,
+ * since this is a shared module-level regex object and stale state from one
+ * file would otherwise corrupt matching on the next.
  */
 const SELF_REFERENTIAL_CLAIM =
-  /\b(?:[Tt]his|[Ii]t)\b(?:\s+\S+){0,3}\s+(?:is|are|stays|remains)\s+(?:\*\*)?(template-owned|user-owned)\b/
+  /\b(?:[Tt]his|[Ii]t)\b((?:\s+\S+){0,3})\s+(?:is|are|stays|remains)\s+(?:\*\*)?(template-owned|user-owned)\b/g
+
+/**
+ * A path-shaped token: ordinary path characters (letters, digits,
+ * `_.-`) either side of at least one `/`, optionally wrapped in up to two
+ * backticks — this repo's own convention for naming a path bare
+ * (Markdown/TS prose, `services/api/...`) or RST-literal-quoted (Python
+ * docstrings, ``services/api/...``). Deliberately narrower than "any
+ * non-whitespace run containing a slash": that first cut matched a bare
+ * `/**` JSDoc comment-opener as a two-character "path" (`/` then `**`),
+ * which cost the `instance-adoption.ts`-style fixture a real self-claim —
+ * requiring a path character (not `*`, `(`, `,` etc.) immediately before
+ * the `/` excludes it. Used only to find a plausible pronoun antecedent
+ * within a single sentence, not as a general path validator.
+ */
+const PATH_TOKEN = /`{0,2}([A-Za-z0-9_.-]+\/[A-Za-z0-9_./-]*)`{0,2}/g
+
+/** Strips the punctuation a path token picks up from ordinary sentence
+ * position: a leading opening paren, and a trailing closing paren/comma/
+ * semicolon/colon/sentence-ending period — the last of these matters
+ * because `.` is itself a valid path character (`PATH_TOKEN` has to allow
+ * it for `.py`/`.ts` extensions), so "...scripts/verify-deployed.checks."
+ * at the end of a sentence is captured WITH the trailing period and must
+ * have it stripped back off. Deliberately excludes `/` from the trailing
+ * class — a real directory reference legitimately ends in one
+ * (`services/api/src/api/domains/`) and stripping it would be wrong, even
+ * though no current fixture's comparison depends on keeping it. */
+function stripPathPunctuation(token: string): string {
+  return token.replace(/^[(,;:]+/, '').replace(/[),;:.]+$/, '')
+}
+
+/**
+ * Splits a repo-relative posix path into its `/`-separated segments,
+ * dropping any empty segment a leading or trailing slash would otherwise
+ * produce — so `"services/api/domains/"` and `"services/api/domains"`
+ * segment identically (`["services","api","domains"]`), and a boundary
+ * check against either reads the same regardless of which one the prose
+ * happened to spell.
+ */
+function pathSegments(path: string): string[] {
+  return path.split('/').filter((segment) => segment.length > 0)
+}
+
+/**
+ * Whether `token` and `ownPath` name the same file or directory, or one is a
+ * real path-SEGMENT ancestor of the other — never merely a character-level
+ * string prefix. This is the #1974 fix. The previous check was `token ===
+ * ownPath || ownPath.startsWith(token) || token.startsWith(ownPath)`, which
+ * treats `services/api/foo.pyi` as "the same file" as `services/api/foo.py`
+ * purely because one string-prefixes the other, with no requirement that the
+ * character immediately after the shared prefix be a real `/` boundary (or
+ * end-of-string). A type stub (`.pyi`/`.py`), a compiled artifact
+ * (`.pyc`/`.py`), or a backup (`.py.bak`/`.py`) are all ordinary real-world
+ * pairs a naive prefix comparison launders into "same file" in exactly this
+ * repo's own domain (a Python services tree) — and a mid-segment divergence
+ * (`services/apiv2/foo.py` vs `services/api/foo.py`, sharing the 13-
+ * character string prefix `services/api`) is the same mistake one level up.
+ *
+ * Comparing SEGMENTS rather than characters closes both: two paths are
+ * "the same" here only when the shorter one's segments are an exact,
+ * complete prefix of the longer one's — which is what makes
+ * `services/api/` a genuine ancestor of `services/api/foo.py` (the real
+ * `domains/__init__.py` qualifier shape this module's corpus depends on
+ * still resolving as self-reference) while `services/api/foo.pyi` and
+ * `services/apiv2/foo.py` are each correctly NOT an ancestor or self-match
+ * for `services/api/foo.py`.
+ *
+ * Mirrors the boundary discipline `core-manifest.ts`'s own `matchLength`
+ * already enforces for `templateOwned`/`userOwned` prefixes (a directory
+ * entry's `/` is a real, structural boundary, not incidental punctuation) —
+ * the correct, general algorithm for this bounded, well-defined path-
+ * identity question. This is deliberately a DIFFERENT class of fix from the
+ * pronoun/qualifier grammar heuristics elsewhere in this module (see the
+ * module doc comment's four-round history and its "Why this is fixed, not
+ * narrowed" section): resolving what a pronoun refers to in free prose has
+ * no general algorithmic answer, so those checks stay narrow and are
+ * validated only against an exhaustive real corpus. Whether two path STRINGS
+ * name the same file is a fully determined, bounded question with a
+ * known-correct answer — segment equality — so unlike the grammar
+ * heuristics, this one is fixed properly rather than narrowed to the
+ * reported case.
+ */
+function isSameOrAncestorPath(token: string, ownPath: string): boolean {
+  const tokenSegments = pathSegments(token)
+  const ownSegments = pathSegments(ownPath)
+  const shorter = tokenSegments.length <= ownSegments.length ? tokenSegments : ownSegments
+  const longer = tokenSegments.length <= ownSegments.length ? ownSegments : tokenSegments
+  return shorter.length > 0 && shorter.every((segment, i) => segment === longer[i])
+}
+
+/**
+ * Whether `text` names a path OTHER than `ownPath` — the one structural
+ * question every mechanism in this module needs answered, applied to
+ * whatever span of text actually claims to supply (or fails to supply) a
+ * match's grammatical subject. See the module doc comment's "Round three's
+ * flaw" section for why this single check, applied to three different
+ * spans, replaced three separately-reasoned special cases: the SAME
+ * function is called with a bare pronoun's paragraph
+ * (`otherPathPrecedesBarePronoun`), a qualified pronoun's own captured
+ * qualifier (`claimInText`), and the text preceding a first-line em-dash
+ * (`claimInText` again) — never with anything wider, and never skipped
+ * because the span happened to be non-empty.
+ *
+ * The path-equality question itself is delegated to `isSameOrAncestorPath`
+ * (see its own doc comment for the #1974 fix this replaced).
+ */
+function textNamesOtherPath(text: string, ownPath: string): boolean {
+  PATH_TOKEN.lastIndex = 0
+  let tokenMatch: RegExpExecArray | null
+  while ((tokenMatch = PATH_TOKEN.exec(text))) {
+    const token = stripPathPunctuation(tokenMatch[1]!)
+    if (!token.includes('/')) continue
+    if (isSameOrAncestorPath(token, ownPath)) continue
+    return true
+  }
+  return false
+}
+
+/**
+ * Whether a path OTHER than `ownPath` is named earlier in the same PARAGRAPH
+ * as a BARE pronoun match at `pronounIndex` — in which case "this"/"it" most
+ * plausibly refers to THAT path, not to the containing file. Only ever
+ * called for a bare pronoun (see `claimInText`); a qualified one ("this
+ * module", "this package (...)") is checked a different way — see
+ * `textNamesOtherPath` and the module doc comment's "Round three's flaw"
+ * section.
+ *
+ * Scoped to the paragraph (bounded only by the nearest preceding blank line,
+ * `\n\s*\n`) rather than to a period-delimited "sentence". A blank line is
+ * the one boundary a fixed-text scan can find without trying to interpret
+ * prose punctuation — unlike a period, it is never also an abbreviation, an
+ * ellipsis, a decimal or part of a versioned filename, so there is no
+ * boundary-detection heuristic left to fool (#1971 was exactly that: `. `
+ * misread inside `etc...`). This is coarser than a real sentence boundary —
+ * it can still see a path named in an earlier sentence of the same
+ * paragraph — but a path named AFTER the pronoun (as in the real
+ * `domains/__init__.py` header) is never examined at all, and a path named
+ * in an EARLIER, separate paragraph must never suppress a later, genuine
+ * self-claim — both checked directly in the test fixtures below.
+ */
+function otherPathPrecedesBarePronoun(
+  text: string,
+  pronounIndex: number,
+  ownPath: string,
+): boolean {
+  const before = text.slice(0, pronounIndex)
+  const paragraphBreak = /\n\s*\n/g
+  let paragraphStart = 0
+  let breakMatch: RegExpExecArray | null
+  while ((breakMatch = paragraphBreak.exec(before))) {
+    paragraphStart = breakMatch.index + breakMatch[0].length
+  }
+  const paragraph = text.slice(paragraphStart, pronounIndex)
+  return textNamesOtherPath(paragraph, ownPath)
+}
 
 /**
  * The other real self-declaring convention that has no explicit copula:
@@ -167,7 +511,15 @@ const SELF_REFERENTIAL_CLAIM =
  * `services/api/src/api/identity/__init__.py` and siblings) puts its
  * unrelated mention of a DIFFERENT path's ownership several lines further
  * in, past a title/summary line naming the actual subject. Restricting to
- * line 1 only is what makes trusting a bare em-dash (no copula at all) safe.
+ * line 1 only narrows WHERE a false positive could hide; it does not by
+ * itself rule one out — "``other/path.py`` — template-owned, for
+ * comparison" is a real, constructible line-1 shape that names a different
+ * file right before the dash, so `claimInText` also runs
+ * `textNamesOtherPath` over the text preceding the matched dash, the same
+ * check applied to a qualified pronoun's qualifier (see the module doc
+ * comment's "Round three's flaw" section) — an em-dash supplies no subject
+ * of its own either, so what precedes it on the line is what must be
+ * checked.
  */
 const EM_DASH_FIRST_LINE_CLAIM = /[—–]\s*(template-owned|user-owned)\b/
 
@@ -189,28 +541,55 @@ interface ClaimMatch {
  * The claim in one header-window's worth of text, or `null` — the leftmost
  * match across all three mechanisms (strict marker, self-referential
  * grammar, first-line em-dash). See the module doc comment for the corpus
- * each was checked against.
+ * each was checked against. `ownPath` is the containing file's own path,
+ * used only to resolve the self-referential-grammar mechanism's pronoun
+ * ambiguity (see `otherPathPrecedesBarePronoun`).
  */
-function claimInText(text: string): ClaimMatch | null {
+function claimInText(text: string, ownPath: string): ClaimMatch | null {
   const candidates: ClaimMatch[] = []
 
   const strict = STRICT_MARKER.exec(text)
   if (strict)
     candidates.push({ matchedPhrase: strict[0], claim: claimFor(strict[0]), index: strict.index })
 
-  const grammatical = SELF_REFERENTIAL_CLAIM.exec(text)
-  if (grammatical) {
-    // Group 1 is a mandatory capturing group in SELF_REFERENTIAL_CLAIM (not
-    // inside an alternation that could omit it), so it is always present
-    // when the overall match succeeds — the `!` reflects that, not a
-    // shortcut around `noUncheckedIndexedAccess`'s generic array-index rule.
-    const phrase = grammatical[1]!
+  // Global regex, shared module-level object — reset before every fresh
+  // piece of text (see SELF_REFERENTIAL_CLAIM's own doc comment).
+  SELF_REFERENTIAL_CLAIM.lastIndex = 0
+  let grammatical: RegExpExecArray | null
+  while ((grammatical = SELF_REFERENTIAL_CLAIM.exec(text))) {
+    // Group 1 (the qualifier) and group 2 (the claim word) are both mandatory
+    // capturing groups in SELF_REFERENTIAL_CLAIM (neither is inside an
+    // alternation that could omit it), so both are always present when the
+    // overall match succeeds — the `!`s reflect that, not a shortcut around
+    // `noUncheckedIndexedAccess`'s generic array-index rule. An empty group 1
+    // means a BARE pronoun ("this is"/"it is"): nothing supplies its subject
+    // except the surrounding prose, so it is checked against its paragraph.
+    // A non-empty group 1 ("this module is", "this package (...) is") IS its
+    // own subject — but #1973 showed that subject is only trustworthy when
+    // it doesn't itself embed a reference to a different path, so it gets
+    // the same `textNamesOtherPath` check applied to its own captured text
+    // instead of the paragraph. See SELF_REFERENTIAL_CLAIM's own doc comment
+    // and the module doc comment's "Round three's flaw" section.
+    const qualifier = grammatical[1]!
+    const isBarePronoun = qualifier === ''
+    if (isBarePronoun) {
+      if (otherPathPrecedesBarePronoun(text, grammatical.index, ownPath)) continue
+    } else if (textNamesOtherPath(qualifier, ownPath)) {
+      continue
+    }
+    const phrase = grammatical[2]!
     candidates.push({ matchedPhrase: phrase, claim: claimFor(phrase), index: grammatical.index })
+    break
   }
 
   const firstLine = text.split('\n', 1)[0] ?? ''
   const emDash = EM_DASH_FIRST_LINE_CLAIM.exec(firstLine)
-  if (emDash) {
+  // An em-dash supplies no subject of its own either — what precedes it on
+  // the line is what must actually be about this file (see
+  // EM_DASH_FIRST_LINE_CLAIM's own doc comment and the module doc comment's
+  // "Round three's flaw" section for why this is the same check as the
+  // qualifier one above, not a fifth special case).
+  if (emDash && !textNamesOtherPath(firstLine.slice(0, emDash.index), ownPath)) {
     // Same reasoning as above: group 1 is mandatory in EM_DASH_FIRST_LINE_CLAIM.
     const phrase = emDash[1]!
     candidates.push({ matchedPhrase: phrase, claim: claimFor(phrase), index: emDash.index })
@@ -393,7 +772,7 @@ export function findHeaderClaim(path: string, content: string): HeaderClaimHit |
   if (!range) return null
   const [start, end] = range
   const windowText = lines.slice(start, end).join('\n')
-  const found = claimInText(windowText)
+  const found = claimInText(windowText, path)
   if (!found) return null
   const line = start + windowText.slice(0, found.index).split('\n').length
   return { path, claim: found.claim, matchedPhrase: found.matchedPhrase, line }
@@ -436,15 +815,39 @@ export function sweepOwnershipHeaderClaims(
   return hits
 }
 
-/** Whether `manifest.released` covers `relPath` — a flat pathspec-prefix
- * list (mirrors how `core-tags.ts`'s `templateVersionedPathspecs` already
- * treats it: passed straight through as `git diff -- <pathspecs>`, never run
- * through the glob/longest-prefix machinery `isTemplateOwned` uses for
- * `templateOwned`/`userOwned`). `cli/` is the one entry today; see the
- * module doc comment for why a `template` claim on a `released` path is
- * correct rather than a disagreement. */
+/**
+ * Whether pathspec `p` covers `relPath` — matching real `git diff -- <p>`
+ * pathspec semantics (this is a flat prefix list precisely because it
+ * mirrors `core-tags.ts`'s `templateVersionedPathspecs`, passed straight
+ * through as `git diff -- <pathspecs>`, never run through the glob/longest-
+ * prefix machinery `isTemplateOwned` uses — see `matchesReleased`'s own doc
+ * comment): `p` covers itself exactly, and covers anything genuinely nested
+ * under it as a directory, on a real `/` boundary — regardless of whether
+ * `p` itself happens to be written with a trailing slash.
+ *
+ * This is the #1974-class fix applied to `matchesReleased`, not just to
+ * `textNamesOtherPath` (see that function's own doc comment for the
+ * original reported instance). The previous check was `relPath === p ||
+ * relPath.startsWith(p)`, with no requirement that the character after the
+ * shared prefix be a real `/`. `released` today only ever contains `'cli/'`
+ * (already trailing-slash-safe), so this was latent rather than live — but
+ * it is the identical naive-prefix shape #1974 was filed to stop this
+ * module reproducing, and a manifest entry added by hand without the
+ * trailing slash would have silently treated a look-alike directory
+ * (`cli-extra-tool/...`) as released too.
+ */
+function pathspecCovers(pathspec: string, relPath: string): boolean {
+  if (relPath === pathspec) return true
+  const dir = pathspec.endsWith('/') ? pathspec : `${pathspec}/`
+  return relPath.startsWith(dir)
+}
+
+/** Whether `manifest.released` covers `relPath`. `cli/` is the one entry
+ * today; see the module doc comment for why a `template` claim on a
+ * `released` path is correct rather than a disagreement, and
+ * `pathspecCovers`'s own doc comment for the boundary rule applied here. */
 function matchesReleased(relPath: string, manifest: CoreManifest): boolean {
-  return (manifest.released ?? []).some((p) => relPath === p || relPath.startsWith(p))
+  return (manifest.released ?? []).some((p) => pathspecCovers(p, relPath))
 }
 
 /**

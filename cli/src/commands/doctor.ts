@@ -13,6 +13,11 @@ import {
   reapAll,
   reapAllBareBranches,
 } from '../lib/doctor-reaper.js'
+import {
+  classifyScratchClones,
+  findScratchCloneCandidates,
+  type ScratchCloneReport,
+} from '../lib/scratch-clone-scan.js'
 import { log } from '../lib/logger.js'
 
 /** The integration branch in every Biffo repo (AGENTS.md §2). */
@@ -33,30 +38,46 @@ export const doctorCommand = new Command('doctor')
       'PR, PR open, PR closed unmerged, detached HEAD, uncommitted changes, commits ahead of ' +
       'what merged, or that containment could not be confirmed) is reported, never touched.',
   )
-  .action(async (options: { cwd?: string; fetch?: boolean; fix?: boolean }) => {
-    const cwd = options.cwd ? resolve(options.cwd) : process.cwd()
-    const git = new GitAdapter()
-    try {
-      const facts = await gatherRepoFacts({ cwd, fetch: options.fetch !== false }, { git })
-      const findings = runDoctorChecks(facts)
-      printFindings(findings)
-
-      if (options.fix === true) {
-        const github = new GithubCliAdapter()
-        const outcomes = await runDoctorFix(cwd, facts, { git, github })
-        printReapOutcomes(outcomes)
-        const branchOutcomes = await runDoctorFixBranches(cwd, facts, { git, github })
-        printBranchReapOutcomes(branchOutcomes)
+  .option(
+    '--scratch-clones <estateRoot>',
+    'Instead of checking one repo, scan <estateRoot> for top-level plain `git clone` ' +
+      'directories (#1949) — invisible to every check above, which all start from `git ' +
+      'worktree list`. Each is classified the same way `--fix` classifies a worktree ' +
+      "(GitHub's own PR verdict), but nothing is ever removed by this mode: a wrongly-excluded " +
+      'directory costs a report line, an `rm -rf` on a wrongly-included one would not be ' +
+      'recoverable the way `git worktree remove` is.',
+  )
+  .action(
+    async (options: { cwd?: string; fetch?: boolean; fix?: boolean; scratchClones?: string }) => {
+      if (options.scratchClones !== undefined) {
+        await runScratchCloneScan(resolve(options.scratchClones))
+        return
       }
 
-      // Non-zero on findings so CI can use this. Warnings alone do not fail:
-      // a stale branch is worth reporting and is nobody's blocker.
-      if (findings.some((f) => f.severity === 'error')) process.exit(1)
-    } catch (err) {
-      log.error((err as Error).message)
-      process.exit(1)
-    }
-  })
+      const cwd = options.cwd ? resolve(options.cwd) : process.cwd()
+      const git = new GitAdapter()
+      try {
+        const facts = await gatherRepoFacts({ cwd, fetch: options.fetch !== false }, { git })
+        const findings = runDoctorChecks(facts)
+        printFindings(findings)
+
+        if (options.fix === true) {
+          const github = new GithubCliAdapter()
+          const outcomes = await runDoctorFix(cwd, facts, { git, github })
+          printReapOutcomes(outcomes)
+          const branchOutcomes = await runDoctorFixBranches(cwd, facts, { git, github })
+          printBranchReapOutcomes(branchOutcomes)
+        }
+
+        // Non-zero on findings so CI can use this. Warnings alone do not fail:
+        // a stale branch is worth reporting and is nobody's blocker.
+        if (findings.some((f) => f.severity === 'error')) process.exit(1)
+      } catch (err) {
+        log.error((err as Error).message)
+        process.exit(1)
+      }
+    },
+  )
 
 export interface DoctorOptions {
   cwd: string
@@ -220,6 +241,69 @@ export async function runDoctorFixBranches(
     facts.currentBranch,
     deps,
     remoteBranchNames,
+  )
+}
+
+/**
+ * `--scratch-clones <estateRoot>` (#1949): find and classify every top-level
+ * plain `git clone` directory under `estateRoot`, then print a report.
+ * Read-only — see `lib/scratch-clone-scan.ts`'s module doc for why this mode
+ * never deletes anything itself. Exits non-zero only when the scan itself
+ * could not run (`estateRoot` missing, not a directory); a report full of
+ * reapable candidates is the expected, successful output of a healthy scan,
+ * the same way `stale-branches`/`worktree-merged` are `warn`-severity
+ * findings that do not fail plain `doctor`.
+ */
+export async function runScratchCloneScan(estateRoot: string): Promise<void> {
+  const git = new GitAdapter()
+  const github = new GithubCliAdapter()
+  try {
+    const candidates = await findScratchCloneCandidates(estateRoot, { git })
+    const reports = await classifyScratchClones(candidates, { git, github })
+    printScratchCloneReports(estateRoot, reports)
+  } catch (err) {
+    log.error((err as Error).message)
+    process.exit(1)
+  }
+}
+
+/**
+ * Same denominator-honesty shape as `printReapOutcomes` (#1413/#1805): what
+ * was found reapable, and — just as loudly — what was kept and why, rather
+ * than only ever announcing the interesting half.
+ */
+export function printScratchCloneReports(estateRoot: string, reports: ScratchCloneReport[]): void {
+  if (reports.length === 0) {
+    console.log(
+      chalk.dim(`  scratch-clones: no plain git-clone directory found under ${estateRoot}.\n`),
+    )
+    return
+  }
+
+  const reapable = reports.filter((r) => r.verdict.action === 'reap')
+  const kept = reports.filter((r) => r.verdict.action === 'keep')
+
+  console.log('')
+  for (const r of reapable) {
+    console.log(
+      chalk.yellow(
+        `  reapable  ${r.candidate.path} (${r.candidate.branch}) — branch's PR merged and this ` +
+          "clone's tip is contained in what shipped; plain git clone, not a worktree, so " +
+          '`git worktree remove` does not apply — remove by hand once confirmed: rm -rf ' +
+          `'${r.candidate.path}'`,
+      ),
+    )
+  }
+  for (const r of kept) {
+    const reason = r.verdict.reason === undefined ? 'unknown' : KEEP_REASON_TEXT[r.verdict.reason]
+    console.log(chalk.dim(`  kept      ${r.candidate.path} (${r.candidate.branch}) — ${reason}`))
+  }
+  console.log(
+    chalk.dim(
+      `\n  scratch-clones: ${String(reapable.length)} reapable, ${String(kept.length)} kept, ` +
+        `of ${String(reports.length)} plain git-clone director${reports.length === 1 ? 'y' : 'ies'} ` +
+        `found under ${estateRoot}.\n`,
+    ),
   )
 }
 

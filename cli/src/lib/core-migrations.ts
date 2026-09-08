@@ -457,58 +457,129 @@ export function parseBodyChangeDeclaration(content: string): BodyChangeDeclarati
 const BODY_CHANGE_LINE_ONLY_RE = /^[ \t]*# biffo:body-change:[ \t]*(.*)$/
 
 /**
- * The line range, within `newLines`, that a plain prefix/suffix comparison
- * against `oldLines` cannot explain as unchanged — i.e. the smallest
- * contiguous region that must have been touched for `newLines` to differ
- * from `oldLines` at all. Everything outside it is byte-identical to the old
- * file, at the same position.
+ * One contiguous run of physical lines in `newLines`, grouped the way
+ * Python's own bracket nesting groups them — not the way a line-diff would.
+ * A single `op.create_table(...)` call spanning several lines is one group;
+ * two `op.add_column(...)` calls on consecutive lines, each balanced on its
+ * own, are two separate groups even with no blank line between them. See
+ * {@link findEditScopedBodyChangeDeclarations} for why this, rather than a
+ * line-diff hunk, is the right unit for "one edit."
  *
- * Deliberately not a minimal-edit-distance diff (Myers et al.): it only needs
- * to be *conservative*, and the corresponding tighter property is more
- * important than a compact diff — content that never changed, positioned
- * before or after everything that did, is guaranteed to fall outside it. That
- * is exactly the property {@link findEditScopedBodyChangeDeclaration} needs:
- * a marker sitting beside an earlier, already-merged edit elsewhere in the
- * file must never be read as covering a *different* edit made later.
+ * Depth is tracked with a simple character scan that skips the contents of
+ * string literals (single/double, backslash-escaped) — the same level of
+ * care {@link stripPythonDocstrings} already applies to triple-quoted
+ * strings, not a general Python parser. Docstring lines are skipped
+ * entirely (their characters never touch `depth`/`quote`), so stray quotes
+ * inside prose can't desynchronise the statement that follows them.
  */
-function coreChangedRegion(
-  oldLines: string[],
-  newLines: string[],
-): { newStart: number; newEnd: number } {
-  const maxCommon = Math.min(oldLines.length, newLines.length)
-  let prefix = 0
-  while (prefix < maxCommon && oldLines[prefix] === newLines[prefix]) prefix++
+function pythonStatementGroups(lines: string[], docLineMask: boolean[]): number[] {
+  const groupId: number[] = new Array(lines.length)
+  let depth = 0
+  let quote: string | null = null
+  let currentGroup = -1
 
-  let suffix = 0
-  const maxSuffix = maxCommon - prefix
-  while (
-    suffix < maxSuffix &&
-    oldLines[oldLines.length - 1 - suffix] === newLines[newLines.length - 1 - suffix]
-  ) {
-    suffix++
+  for (let li = 0; li < lines.length; li++) {
+    if (docLineMask[li]) {
+      groupId[li] = currentGroup
+      continue
+    }
+    if (depth === 0 && quote === null) currentGroup++
+    groupId[li] = currentGroup
+
+    const line = lines[li] as string
+    for (let ci = 0; ci < line.length; ci++) {
+      const ch = line[ci]
+      if (quote) {
+        if (ch === '\\') {
+          ci++
+          continue
+        }
+        if (ch === quote) quote = null
+        continue
+      }
+      if (ch === '"' || ch === "'") {
+        quote = ch
+        continue
+      }
+      if (ch === '#') break // rest of the line is a comment, not code
+      if (ch === '(' || ch === '[' || ch === '{') depth++
+      else if (ch === ')' || ch === ']' || ch === '}') depth = Math.max(0, depth - 1)
+    }
   }
 
-  return { newStart: prefix, newEnd: newLines.length - suffix }
+  return groupId
 }
 
-/** @see findEditScopedBodyChangeDeclaration */
+/**
+ * Above this many old-lines × new-lines cells, the O(n·m) LCS table below
+ * would cost more memory and time than a merge guard should ever spend on
+ * one file. Alembic migrations in this repo run to the low hundreds of
+ * lines at most — 4,000 × 4,000 (16M cells) is already a wildly generous
+ * ceiling — so the fallback below (nothing recognised as matched) only ever
+ * fires on a pathological input, and degrades to a coarser-but-safe read
+ * (every substantive line demands its own marker) rather than hanging CI.
+ */
+const MAX_DIFF_CELLS = 4_000 * 4_000
+
+/**
+ * Which lines of `newLines` are byte-identical, in the same relative order,
+ * to some line of `oldLines` — a standard LCS line diff, the same
+ * granularity `git diff` itself uses. A line in this set existed before this
+ * edit; a line outside it is new or changed by this diff.
+ */
+function computeMatchedNewLineIndices(oldLines: string[], newLines: string[]): Set<number> {
+  const n = oldLines.length
+  const m = newLines.length
+  if (n * m > MAX_DIFF_CELLS) return new Set()
+
+  const stride = m + 1
+  const dp = new Uint32Array((n + 1) * stride)
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      dp[i * stride + j] =
+        oldLines[i] === newLines[j]
+          ? (dp[(i + 1) * stride + (j + 1)] as number) + 1
+          : Math.max(dp[(i + 1) * stride + j] as number, dp[i * stride + (j + 1)] as number)
+    }
+  }
+
+  const matchedNew = new Set<number>()
+  let i = 0
+  let j = 0
+  while (i < n && j < m) {
+    if (oldLines[i] === newLines[j]) {
+      matchedNew.add(j)
+      i++
+      j++
+    } else if ((dp[(i + 1) * stride + j] as number) >= (dp[i * stride + (j + 1)] as number)) {
+      i++
+    } else {
+      j++
+    }
+  }
+  return matchedNew
+}
+
+/** @see findEditScopedBodyChangeDeclarations */
 export interface EditScopedBodyChangeResult {
-  /** A fresh declaration found beside the lines this diff actually changed. */
+  /** A fresh declaration found directly above the specific statement it covers. */
   declaration: BodyChangeDeclaration | null
   /**
-   * True when a `# biffo:body-change:` marker line DOES fall within the
-   * changed region, but its exact text already existed, unchanged, somewhere
-   * in `oldContent` — i.e. it is left over from an earlier, already-merged
-   * edit and does not describe this one. `declaration` is still null in this
-   * case; the field exists only so a caller can report a more specific
-   * reason than "no marker at all".
+   * True when a `# biffo:body-change:` marker line sits directly above this
+   * statement, but its exact text already existed, unchanged, somewhere in
+   * `oldContent` — a marker copy-pasted from (or simply left beside) a
+   * *different* edit does not describe this one, even when the wording
+   * happens to match. `declaration` is still null in this case; the field
+   * exists only so a caller can report a more specific reason than "no
+   * marker at all".
    */
   staleOnly: boolean
 }
 
 /**
  * The edit-scoped counterpart to {@link parseBodyChangeDeclaration} — #751's
- * precondition D.
+ * precondition D, extended by #1981 to bind a declaration to one specific
+ * *statement*, not one whole file-level diff.
  *
  * `parseBodyChangeDeclaration` has no notion of *which* edit a marker
  * describes: it `exec`s the marker regex against the whole file and returns
@@ -516,76 +587,113 @@ export interface EditScopedBodyChangeResult {
  * `planMigrationCarry`'s reporting, which has no diff to scope against — it
  * relates the template's current file to what an instance carried, once, at
  * plan time (see that field's doc). It is the wrong tool for a merge guard
- * deciding whether *this* diff's body change is declared: a marker committed
- * for an earlier, already-merged edit reads identically to a fresh
- * declaration for a new one, so a second, differently-classified edit to the
- * same migration can silently inherit the first edit's marker and pass
- * {@link checkMigrationBodyChangeMarkers} while claiming the wrong
- * classification — or none at all.
+ * deciding whether *this* diff's body change is declared.
  *
- * Two checks close that gap together, because neither is sufficient alone:
+ * A first cut (#751 precondition D) scoped a single declaration to the
+ * whole file-level *changed region* — a prefix/suffix trim, not a real
+ * diff. That was enough to stop a marker from an earlier, already-merged PR
+ * silently covering a completely different, later PR's edit (the cross-PR
+ * case, still exercised by `migration-body-change-guard.test.ts`'s
+ * "precondition D" suite). It was NOT enough for a single PR making two
+ * distinct edits to the same migration in one diff, with a marker adjacent
+ * to only one of them (#1981): a file-level region still credits one
+ * declaration to every statement inside it, marked or not.
  *
- * 1. **Region** — only a marker inside {@link coreChangedRegion} is even
- *    considered. An untouched marker positioned well away from a new edit
- *    (the common case — a stale marker sitting beside its own, unrelated,
- *    already-merged DDL) never enters the search at all.
- * 2. **Text** — a marker inside the region still doesn't count if its exact
- *    line already existed, verbatim, anywhere in `oldContent`. This is the
- *    safety net for when (1) isn't precise enough to separate two edits on
- *    its own: `coreChangedRegion` is a cheap prefix/suffix comparison, not a
- *    real multi-hunk diff, so an edit positioned *before* an unrelated,
- *    unchanged marker can drag that marker's line into the region by
- *    shifting every line after it out of positional alignment. Re-checking
- *    the line's *text* against the whole old file (not just the region)
- *    catches that case regardless of where the line ends up landing.
+ * This function returns one {@link EditScopedBodyChangeResult} per
+ * *statement* in `newContent` that (a) changes relative to `oldContent` and
+ * (b) is substantive — not blank, not a whole-line comment, not the
+ * `revision`/`down_revision` assignment, not inside a docstring; exactly the
+ * filter {@link migrationBodyHash} itself applies to a line, reused via
+ * {@link isSubstantiveLine} rather than reimplemented so the two can never
+ * drift apart (the same reasoning `migration-body-change-guard.ts`'s module
+ * doc gives for reusing the hash directly).
+ *
+ * "Statement" is Python's own bracket-depth grouping
+ * ({@link pythonStatementGroups}), not a line-diff hunk: a single
+ * `op.create_table(...)` call spanning several lines is one statement and
+ * needs exactly one marker above its first line — multi-line `op.*` calls
+ * are the dominant style in this repo's own migrations (verified against
+ * `services/api/migrations/versions/`, not assumed). A raw line-diff hunk
+ * gets the *other* shape wrong: #1981's own repro is two single-line
+ * `op.add_column` calls back-to-back, with no blank line between them, only
+ * the first carrying a marker — a line-diff hunk sees one undifferentiated
+ * changed block (nothing separates them), while Python's own grouping
+ * correctly sees two independent statements, because each is
+ * bracket-balanced on its own line.
+ *
+ * A statement's declaration comes from the line *directly* above its first
+ * line, and only from there — no blank line and no other statement may sit
+ * between a marker and the statement it declares. That line must itself be
+ * new to this diff (not matched to `oldContent`) and must not be a
+ * byte-for-byte duplicate of a marker line that already existed somewhere
+ * in `oldContent` (`staleOnly`) — the second check is a safety net for the
+ * narrower case the first can't resolve on its own: a marker's *text*
+ * reused (by copy-paste, or because it happens to read identically) for a
+ * genuinely different edit is exactly as unreviewable as an absent one.
  *
  * Throws on a marker that matches the line shape but not the value shape,
  * exactly like `parseBodyChangeDeclaration` — an unreviewable declaration is
- * worse than none, in or out of scope.
+ * worse than none.
  */
-export function findEditScopedBodyChangeDeclaration(
+export function findEditScopedBodyChangeDeclarations(
   oldContent: string,
   newContent: string,
-): EditScopedBodyChangeResult {
+): EditScopedBodyChangeResult[] {
   const oldLines = oldContent.split('\n')
   const newLines = newContent.split('\n')
-  const { newStart, newEnd } = coreChangedRegion(oldLines, newLines)
-
+  const matchedNew = computeMatchedNewLineIndices(oldLines, newLines)
+  const newDocMask = pythonDocstringLineMask(newContent)
+  const groupIds = pythonStatementGroups(newLines, newDocMask)
   const oldMarkerLines = new Set(oldLines.filter((line) => BODY_CHANGE_LINE_ONLY_RE.test(line)))
 
-  let staleOnly = false
-  for (let i = newStart; i < newEnd; i++) {
-    const line = newLines[i] as string
-    const match = BODY_CHANGE_LINE_ONLY_RE.exec(line)
-    if (!match) continue
+  const results: EditScopedBodyChangeResult[] = []
+  let i = 0
+  while (i < newLines.length) {
+    const gid = groupIds[i]
+    let end = i
+    while (end < newLines.length && groupIds[end] === gid) end++
 
-    if (oldMarkerLines.has(line)) {
-      // In scope, but its text already existed before this edit — a stale
-      // leftover, not a declaration of THIS change. Keep scanning: a later
-      // line in the same region may still be a genuinely fresh marker.
-      staleOnly = true
-      continue
+    let needsDeclaration = false
+    for (let k = i; k < end; k++) {
+      if (!matchedNew.has(k) && isSubstantiveLine(newLines[k] as string, newDocMask[k] ?? false)) {
+        needsDeclaration = true
+        break
+      }
     }
 
-    const rest = (match[1] ?? '').trim()
-    const value = BODY_CHANGE_VALUE_RE.exec(rest)
-    if (!value) {
-      throw new Error(
-        `Malformed ${BODY_CHANGE_MARKER} marker: expected ` +
-          `"${BODY_CHANGE_MARKER} replay-safe — <reason>" or ` +
-          `"${BODY_CHANGE_MARKER} outcome-changing — <reason>", got "${rest}".`,
-      )
+    if (needsDeclaration) {
+      const aboveIdx = i - 1
+      const above = aboveIdx >= 0 ? (newLines[aboveIdx] as string) : null
+      const aboveMatch = above !== null ? BODY_CHANGE_LINE_ONLY_RE.exec(above) : null
+
+      if (!aboveMatch) {
+        results.push({ declaration: null, staleOnly: false })
+      } else if (oldMarkerLines.has(above as string)) {
+        results.push({ declaration: null, staleOnly: true })
+      } else {
+        const rest = (aboveMatch[1] ?? '').trim()
+        const value = BODY_CHANGE_VALUE_RE.exec(rest)
+        if (!value) {
+          throw new Error(
+            `Malformed ${BODY_CHANGE_MARKER} marker: expected ` +
+              `"${BODY_CHANGE_MARKER} replay-safe — <reason>" or ` +
+              `"${BODY_CHANGE_MARKER} outcome-changing — <reason>", got "${rest}".`,
+          )
+        }
+        results.push({
+          declaration: {
+            classification: value[1] as BodyChangeClassification,
+            reason: value[2] as string,
+          },
+          staleOnly: false,
+        })
+      }
     }
-    return {
-      declaration: {
-        classification: value[1] as BodyChangeClassification,
-        reason: value[2] as string,
-      },
-      staleOnly: false,
-    }
+
+    i = end
   }
 
-  return { declaration: null, staleOnly }
+  return results
 }
 
 /** Opens a triple-quoted string at the start of a line (an `r`/`u` prefix is
@@ -597,7 +705,13 @@ const DEF_OR_CLASS_RE = /^(async\s+def|def|class)\b/
 const HEADER_END_RE = /:\s*(#.*)?$/
 
 /**
- * Drop every **docstring** from Python source, leaving the executable text.
+ * Per-line version of {@link stripPythonDocstrings}: `mask[i]` is true when
+ * `source`'s line `i` is part of a docstring (its opening/closing delimiter
+ * lines included). Both `stripPythonDocstrings` and
+ * {@link findEditScopedBodyChangeDeclarations}'s statement grouping need
+ * exactly this scan — the former to drop the lines, the latter to skip their
+ * characters when tracking bracket depth — so it is written once here and
+ * shared, rather than reimplemented per caller.
  *
  * A docstring is a triple-quoted string in a docstring *position*: the first
  * statement of the module, or the first statement after a `def` / `async def` /
@@ -614,9 +728,9 @@ const HEADER_END_RE = /:\s*(#.*)?$/
  * failing when an instance's toolchain is not on PATH — a worse trade for a
  * shape that does not occur in Alembic migrations.
  */
-export function stripPythonDocstrings(source: string): string {
+function pythonDocstringLineMask(source: string): boolean[] {
   const lines = source.split('\n')
-  const out: string[] = []
+  const mask: boolean[] = new Array(lines.length).fill(false)
   // A module docstring is the first statement, so the file opens in a
   // docstring position.
   let expectDocstring = true
@@ -626,11 +740,10 @@ export function stripPythonDocstrings(source: string): string {
   while (i < lines.length) {
     const line = lines[i] as string
     const trimmed = line.trim()
-    // Blank lines and whole-line comments are dropped by the filter below
-    // anyway, and neither ends a docstring position: `def f():` may be followed
-    // by a comment and then its docstring.
+    // Blank lines and whole-line comments neither carry mask=true nor end a
+    // docstring position: `def f():` may be followed by a comment and then
+    // its docstring.
     if (trimmed === '' || trimmed.startsWith('#')) {
-      out.push(line)
       i++
       continue
     }
@@ -639,14 +752,21 @@ export function stripPythonDocstrings(source: string): string {
     if (open) {
       const delim = open[1] as string
       expectDocstring = false
+      mask[i] = true
       // A one-line docstring closes on its own line.
       if (trimmed.slice(open[0].length).includes(delim)) {
         i++
         continue
       }
       i++
-      while (i < lines.length && !(lines[i] as string).includes(delim)) i++
-      if (i < lines.length) i++ // drop the closing line too
+      while (i < lines.length && !(lines[i] as string).includes(delim)) {
+        mask[i] = true
+        i++
+      }
+      if (i < lines.length) {
+        mask[i] = true // the closing line too
+        i++
+      }
       continue
     }
 
@@ -657,11 +777,20 @@ export function stripPythonDocstrings(source: string): string {
     } else {
       expectDocstring = false
     }
-    out.push(line)
     i++
   }
 
-  return out.join('\n')
+  return mask
+}
+
+/**
+ * Drop every **docstring** from Python source, leaving the executable text.
+ * @see pythonDocstringLineMask for what counts as a docstring line.
+ */
+export function stripPythonDocstrings(source: string): string {
+  const lines = source.split('\n')
+  const mask = pythonDocstringLineMask(source)
+  return lines.filter((_, i) => !mask[i]).join('\n')
 }
 
 /**
@@ -711,18 +840,32 @@ export function stripPythonDocstrings(source: string): string {
  * which needs a Python parser. Whole-line comments cover the real case.
  */
 export function migrationBodyHash(content: string): string {
-  const normalised = stripPythonDocstrings(content)
-    .split('\n')
+  const lines = content.split('\n')
+  const docMask = pythonDocstringLineMask(content)
+  const normalised = lines
+    .filter((line, i) => isSubstantiveLine(line, docMask[i] ?? false))
     .map((line) => line.trimEnd())
-    .filter(
-      (line) =>
-        !REVISION_RE.test(line) &&
-        !DOWN_REVISION_RE.test(line) &&
-        !line.trimStart().startsWith('#') &&
-        line !== '',
-    )
     .join('\n')
   return createHash('sha256').update(normalised).digest('hex')
+}
+
+/**
+ * Whether one line of a migration counts toward its {@link migrationBodyHash}
+ * — not blank, not a whole-line `#` comment, not the `revision` /
+ * `down_revision` assignment, and not part of a docstring (per
+ * `inDocstring`, from {@link pythonDocstringLineMask}). Factored out so
+ * {@link findEditScopedBodyChangeDeclarations} can ask the identical
+ * question per statement without a second, independently-drifting
+ * definition of "substance."
+ */
+function isSubstantiveLine(rawLine: string, inDocstring: boolean): boolean {
+  if (inDocstring) return false
+  const line = rawLine.trimEnd()
+  if (line === '') return false
+  if (line.trimStart().startsWith('#')) return false
+  if (REVISION_RE.test(line)) return false
+  if (DOWN_REVISION_RE.test(line)) return false
+  return true
 }
 
 /**

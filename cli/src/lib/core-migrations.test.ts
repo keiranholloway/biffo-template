@@ -7,7 +7,7 @@ import { isInstanceRepo } from './core-version.js'
 import {
   MIGRATIONS_VERSIONS_DIR,
   applyMigrationCarry,
-  findEditScopedBodyChangeDeclaration,
+  findEditScopedBodyChangeDeclarations,
   findMigrationTestPairings,
   migrationBodyHash,
   parseBodyChangeDeclaration,
@@ -891,7 +891,7 @@ describe('parseBodyChangeDeclaration (#751)', () => {
   })
 })
 
-describe('findEditScopedBodyChangeDeclaration (#751 precondition D)', () => {
+describe('findEditScopedBodyChangeDeclarations (#751 precondition D, #1981)', () => {
   it('finds a fresh marker sitting beside the changed lines', () => {
     const oldContent = migration('0010', '0001', 'op.add_column("t", sa.Column("a", sa.String()))')
     const newContent = migration(
@@ -901,20 +901,21 @@ describe('findEditScopedBodyChangeDeclaration (#751 precondition D)', () => {
         '    op.add_column("t", sa.Column("a", sa.Integer()))',
     )
 
-    expect(findEditScopedBodyChangeDeclaration(oldContent, newContent)).toEqual({
-      declaration: { classification: 'replay-safe', reason: 'widens a column' },
-      staleOnly: false,
-    })
+    expect(findEditScopedBodyChangeDeclarations(oldContent, newContent)).toEqual([
+      {
+        declaration: { classification: 'replay-safe', reason: 'widens a column' },
+        staleOnly: false,
+      },
+    ])
   })
 
   it('reports no declaration when nothing near the change carries a marker', () => {
     const oldContent = migration('0010', '0001', 'op.add_column("t", sa.Column("a", sa.String()))')
     const newContent = migration('0010', '0001', 'op.add_column("t", sa.Column("a", sa.Integer()))')
 
-    expect(findEditScopedBodyChangeDeclaration(oldContent, newContent)).toEqual({
-      declaration: null,
-      staleOnly: false,
-    })
+    expect(findEditScopedBodyChangeDeclarations(oldContent, newContent)).toEqual([
+      { declaration: null, staleOnly: false },
+    ])
   })
 
   it('does not let a marker outside the changed region cover an unrelated edit', () => {
@@ -927,16 +928,71 @@ describe('findEditScopedBodyChangeDeclaration (#751 precondition D)', () => {
     const oldContent = migration('0010', '0001', body('String'))
     const newContent = migration('0010', '0001', body('Integer'))
 
-    expect(findEditScopedBodyChangeDeclaration(oldContent, newContent)).toEqual({
-      declaration: null,
-      staleOnly: false,
-    })
+    expect(findEditScopedBodyChangeDeclarations(oldContent, newContent)).toEqual([
+      { declaration: null, staleOnly: false },
+    ])
   })
 
-  it('reports staleOnly when the only marker in scope already existed, unchanged, before this edit', () => {
-    // An edit on both sides of an untouched marker+DDL pulls it into the
-    // diff's "core" region by position alone, even though its text never
-    // changed — the exact-text check must still refuse to credit it.
+  it('binds a declaration to ONE statement — a second, unmarked statement in the same diff is its own finding (#1981)', () => {
+    // The exact shape #1981 was filed against: a single PR/diff makes TWO
+    // edits to an already-released migration — widening column "a" (marked
+    // replay-safe) and adding column "b" with a real server_default (never
+    // marked) — with no blank line between the two `op.add_column` calls.
+    // A line-diff hunk would see one undifferentiated changed block here;
+    // Python's own statement grouping correctly sees two.
+    const oldContent = migration('0010', '0001', 'op.add_column("t", sa.Column("a", sa.Integer()))')
+    const newContent = migration(
+      '0010',
+      '0001',
+      '# biffo:body-change: replay-safe — widens column a, no-op on an applied database\n' +
+        '    op.add_column("t", sa.Column("a", sa.BigInteger()))\n' +
+        '    op.add_column("t", sa.Column("b", sa.Integer(), server_default="0"))',
+    )
+
+    expect(findEditScopedBodyChangeDeclarations(oldContent, newContent)).toEqual([
+      {
+        declaration: {
+          classification: 'replay-safe',
+          reason: 'widens column a, no-op on an applied database',
+        },
+        staleOnly: false,
+      },
+      // Column "b"'s own statement: no marker directly above IT (the line
+      // above it is column "a"'s DDL, not a marker) — undeclared, even
+      // though the file also contains a valid declaration for column "a".
+      { declaration: null, staleOnly: false },
+    ])
+  })
+
+  it('a multi-line statement needs exactly one marker above its first line, not one per physical line', () => {
+    // Real migrations in this repo overwhelmingly write `op.add_column(...)`
+    // / `op.create_table(...)` across several lines — verified against
+    // services/api/migrations/versions/, not assumed. A per-physical-line
+    // read would wrongly demand a marker above every continuation line.
+    const oldContent = migration(
+      '0010',
+      '0001',
+      'op.add_column(\n        "t",\n        sa.Column("a", sa.String()),\n    )',
+    )
+    const newContent = migration(
+      '0010',
+      '0001',
+      '# biffo:body-change: replay-safe — widen\n' +
+        '    op.add_column(\n        "t",\n        sa.Column("a", sa.Integer()),\n    )',
+    )
+
+    expect(findEditScopedBodyChangeDeclarations(oldContent, newContent)).toEqual([
+      { declaration: { classification: 'replay-safe', reason: 'widen' }, staleOnly: false },
+    ])
+  })
+
+  it('two edits sandwiching an untouched, already-declared edit are each their own finding, neither inherits its marker', () => {
+    // Supersedes the old file-scoped-region "staleOnly by position" case:
+    // under real per-statement grouping, column "a"'s marker+DDL are
+    // byte-identical to the old file and simply never enter either new
+    // statement's search at all — column "b" (before) and column "c"
+    // (after) are each their own statement, and neither has anything
+    // directly above it that could plausibly declare it.
     const declaredEdit =
       '# biffo:body-change: replay-safe — widens column a\n' +
       '    op.add_column("t", sa.Column("a", sa.Integer()))'
@@ -949,13 +1005,39 @@ describe('findEditScopedBodyChangeDeclaration (#751 precondition D)', () => {
         '\n    op.add_column("t", sa.Column("c", sa.Integer()))',
     )
 
-    expect(findEditScopedBodyChangeDeclaration(oldContent, newContent)).toEqual({
-      declaration: null,
-      staleOnly: true,
-    })
+    expect(findEditScopedBodyChangeDeclarations(oldContent, newContent)).toEqual([
+      { declaration: null, staleOnly: false },
+      { declaration: null, staleOnly: false },
+    ])
   })
 
-  it('throws on a malformed marker inside the changed region', () => {
+  it('reports staleOnly when a marker directly above a new statement duplicates one that already existed, unchanged, elsewhere', () => {
+    // The residual case position-based grouping alone can't resolve: a
+    // template author copy-pastes an EXISTING marker's exact text (same
+    // classification, same reason) to sit above a brand new, different
+    // statement. The two are byte-identical, so the LCS line-diff prefers
+    // matching the old marker to its original, still-present occurrence —
+    // leaving the copy-pasted one structurally "new" by position, which is
+    // exactly why the text-based staleness check exists independently of
+    // position.
+    const declaredEdit =
+      '# biffo:body-change: replay-safe — widens column a\n' +
+      '    op.add_column("t", sa.Column("a", sa.Integer()))'
+    const oldContent = migration('0010', '0001', declaredEdit)
+    const newContent = migration(
+      '0010',
+      '0001',
+      `${declaredEdit}\n` +
+        '    # biffo:body-change: replay-safe — widens column a\n' +
+        '    op.add_column("t", sa.Column("c", sa.Integer()))',
+    )
+
+    expect(findEditScopedBodyChangeDeclarations(oldContent, newContent)).toEqual([
+      { declaration: null, staleOnly: true },
+    ])
+  })
+
+  it('throws on a malformed marker directly above a changed statement', () => {
     const oldContent = migration('0010', '0001', 'op.add_column("t", sa.Column("a", sa.String()))')
     const newContent = migration(
       '0010',
@@ -964,7 +1046,7 @@ describe('findEditScopedBodyChangeDeclaration (#751 precondition D)', () => {
         '    op.add_column("t", sa.Column("a", sa.Integer()))',
     )
 
-    expect(() => findEditScopedBodyChangeDeclaration(oldContent, newContent)).toThrow(
+    expect(() => findEditScopedBodyChangeDeclarations(oldContent, newContent)).toThrow(
       /Malformed # biffo:body-change: marker/,
     )
   })

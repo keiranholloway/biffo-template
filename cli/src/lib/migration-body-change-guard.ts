@@ -1,7 +1,7 @@
 import {
   type BodyChangeClassification,
   BODY_CHANGE_MARKER,
-  findEditScopedBodyChangeDeclaration,
+  findEditScopedBodyChangeDeclarations,
   migrationBodyHash,
 } from './core-migrations.js'
 
@@ -33,16 +33,23 @@ import {
  * second implementation of its normalisation, so the two can never drift
  * apart the way two independent parsers of the same marker format would.
  *
- * ## Why the marker must be edit-scoped, not file-scoped (#751 precondition D)
+ * ## Why the marker must be edit-scoped, not file-scoped (#751 precondition D,
+ * #1981)
  *
- * The declaration is parsed with {@link findEditScopedBodyChangeDeclaration},
+ * The declaration is parsed with {@link findEditScopedBodyChangeDeclarations},
  * not the simpler `parseBodyChangeDeclaration` that reads the whole file for
  * the first marker anywhere in it. A whole-file read cannot tell a fresh
  * declaration from one left over from an earlier, already-merged edit to the
  * same migration — so a second, differently-classified (or wholly
  * undeclared) edit could silently inherit the first edit's marker and pass
- * this guard. See that function's doc (`core-migrations.ts`) for how it
- * binds a marker to the specific lines this diff actually changed.
+ * this guard. Nor is a single declaration per *diff* enough: a single PR can
+ * make two distinct edits to the same already-released migration in one
+ * commit, with a marker adjacent to only one of them (#1981) — so this
+ * guard asks for a declaration **per statement**, not per file, and a file
+ * fails if *any* of its substantive statements lacks one, even when another
+ * statement in the same file is properly declared. See that function's doc
+ * (`core-migrations.ts`) for how it binds a marker to the one statement it
+ * sits directly above.
  *
  * ## Why "already-released", not "any migration this PR touches"
  *
@@ -78,19 +85,27 @@ export interface MigrationBodyChangeViolation {
 export interface MigrationBodyChangeCheckResult {
   /**
    * How many already-released migration files this run actually compared —
-   * `unchanged.length + declared.length + violations.length`. Printed
-   * unconditionally by the caller: a check that passes having examined zero
-   * files is indistinguishable from one that never ran, and this repo has
-   * sixteen recorded instances of exactly that failure shape (#1363).
+   * one count per FILE, not per statement. Printed unconditionally by the
+   * caller: a check that passes having examined zero files is
+   * indistinguishable from one that never ran, and this repo has sixteen
+   * recorded instances of exactly that failure shape (#1363). Since #1981,
+   * `declared` and `violations` can each hold several entries for one file
+   * (one per statement that needed, or lacked, its own declaration), so this
+   * is tracked directly rather than derived by summing their lengths — doing
+   * that would inflate the denominator by the number of statements, not the
+   * number of files actually looked at.
    */
   examined: number
   /** Newly added in this PR — never released, so exempt from the marker requirement. */
   exemptAdded: string[]
   /** Hash-identical to the merge base — a docstring/comment-only edit, #931's shape. */
   unchanged: string[]
-  /** Hash-changed, with a valid declaration. */
+  /** One entry per hash-changing statement with a valid declaration — a file with
+   * several declared edits appears here once per edit, not once overall. */
   declared: { file: string; classification: BodyChangeClassification }[]
-  /** Hash-changed, with no declaration or a malformed one. */
+  /** One entry per hash-changing statement with no declaration, a stale one, or a
+   * malformed one — a file can appear more than once if more than one statement
+   * is at fault. */
   violations: MigrationBodyChangeViolation[]
 }
 
@@ -106,6 +121,12 @@ export function checkMigrationBodyChangeMarkers(
   const unchanged: string[] = []
   const declared: { file: string; classification: BodyChangeClassification }[] = []
   const violations: MigrationBodyChangeViolation[] = []
+  // Files actually compared with a hash change — the true denominator (see
+  // MigrationBodyChangeCheckResult.examined's doc, #1363). `declared` and
+  // `violations` can now hold several entries for ONE file (one per
+  // undeclared or declared statement, #1981), so summing their lengths would
+  // over-count; this is incremented at most once per file instead.
+  let examinedChanged = 0
 
   for (const d of diffs) {
     if (d.status === 'added') {
@@ -123,38 +144,57 @@ export function checkMigrationBodyChangeMarkers(
       unchanged.push(d.file)
       continue
     }
+    examinedChanged++
 
-    let result
+    let results
     try {
-      result = findEditScopedBodyChangeDeclaration(d.oldContent ?? '', d.newContent ?? '')
+      results = findEditScopedBodyChangeDeclarations(d.oldContent ?? '', d.newContent ?? '')
     } catch (err) {
       violations.push({ file: d.file, reason: (err as Error).message })
       continue
     }
 
-    if (result.declaration) {
-      declared.push({ file: d.file, classification: result.declaration.classification })
-    } else if (result.staleOnly) {
+    // The hash proved SOMETHING in this file changed the hashed body; an
+    // empty result here would mean the per-statement scan disagreed with
+    // the hash about whether anything did. That should never happen (both
+    // read the same `isSubstantiveLine` filter), but fail closed rather
+    // than silently pass a file this guard could not actually account for.
+    if (results.length === 0) {
       violations.push({
         file: d.file,
         reason:
-          "this edit changes the migration's hashed body (DDL, not just a docstring or " +
-          `comment), and the only \`${BODY_CHANGE_MARKER}\` marker near the change already ` +
-          'existed, unchanged, before this edit — a stale declaration left over from an ' +
-          'earlier change does not cover this one.',
+          "this edit changes the migration's hashed body, but no specific statement " +
+          'could be isolated to require a declaration from — reported as undeclared ' +
+          'rather than silently passed.',
       })
-    } else {
-      violations.push({
-        file: d.file,
-        reason:
-          "this edit changes the migration's hashed body (DDL, not just a docstring or " +
-          `comment) with no \`${BODY_CHANGE_MARKER}\` declaration.`,
-      })
+      continue
+    }
+
+    for (const result of results) {
+      if (result.declaration) {
+        declared.push({ file: d.file, classification: result.declaration.classification })
+      } else if (result.staleOnly) {
+        violations.push({
+          file: d.file,
+          reason:
+            "this edit changes the migration's hashed body (DDL, not just a docstring or " +
+            `comment), and the only \`${BODY_CHANGE_MARKER}\` marker directly above it already ` +
+            'existed, unchanged, before this edit — a stale declaration left over from a ' +
+            'different change does not cover this one.',
+        })
+      } else {
+        violations.push({
+          file: d.file,
+          reason:
+            "this edit changes the migration's hashed body (DDL, not just a docstring or " +
+            `comment) with no \`${BODY_CHANGE_MARKER}\` declaration directly above it.`,
+        })
+      }
     }
   }
 
   return {
-    examined: unchanged.length + declared.length + violations.length,
+    examined: unchanged.length + examinedChanged,
     exemptAdded,
     unchanged,
     declared,

@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
+import { parseBodyChangeDeclaration } from './core-migrations.js'
 import {
   checkMigrationBodyChangeMarkers,
   type MigrationBodyChangeDiff,
@@ -184,6 +185,159 @@ def upgrade() -> None:
     expect(result.violations).toEqual([])
     expect(result.unchanged).toEqual([])
     expect(result.declared).toEqual([])
+  })
+
+  // #751 precondition D. The marker used to be FILE-scoped: the guard used to
+  // call `parseBodyChangeDeclaration(newContent)`, which `exec`s the marker
+  // regex against the whole file and returns the first match wherever it
+  // sits — nothing bound a declaration to the specific edit it was meant to
+  // describe. A marker committed for an earlier, already-merged edit reads
+  // identically to a fresh declaration for a completely different, later one.
+  describe('a stale marker from an earlier edit cannot cover a new one (#751 precondition D)', () => {
+    // Base state, already on `dev`: an earlier PR declared its own edit to
+    // column "a" replay-safe, and merged.
+    const declaredEdit =
+      '# biffo:body-change: replay-safe — widens column a, no-op on an applied database\n' +
+      '    op.add_column("t", sa.Column("a", sa.Integer()))'
+    const merged = migration(declaredEdit)
+
+    it('FAILS: proves the OLD file-scoped read would have wrongly accepted a second, silent edit', () => {
+      // This PR makes a SECOND, unrelated edit further down in the same
+      // file — adding a column with a real default, which is exactly the
+      // outcome-changing shape — and never touches the first marker or its
+      // column at all.
+      const secondEditNoMarker = migration(
+        `${declaredEdit}\n` +
+          '    op.add_column("t", sa.Column("b", sa.Integer(), server_default="0"))',
+      )
+
+      // This is the vulnerability, demonstrated directly: reading the new
+      // file's ONLY marker, file-wide, finds and accepts the first edit's
+      // marker — which is exactly what the guard used to do before this fix.
+      expect(parseBodyChangeDeclaration(secondEditNoMarker)).toEqual({
+        classification: 'replay-safe',
+        reason: 'widens column a, no-op on an applied database',
+      })
+
+      // The fixed guard must not make the same mistake: the second edit has
+      // no marker of its own, so it must be rejected even though the file
+      // already contains ONE valid-looking declaration.
+      const result = checkMigrationBodyChangeMarkers([
+        {
+          file: '0010_x.py',
+          status: 'modified',
+          oldContent: merged,
+          newContent: secondEditNoMarker,
+        },
+      ])
+
+      expect(result.declared).toEqual([])
+      expect(result.violations).toHaveLength(1)
+      expect(result.violations[0]?.file).toBe('0010_x.py')
+      expect(result.violations[0]?.reason).toMatch(/no `# biffo:body-change:` declaration/)
+    })
+
+    it('FAILS both edits sandwiching an untouched, already-declared edit — neither inherits its marker', () => {
+      // Two NEW statements (columns "b" and "c") sandwich the untouched,
+      // already-merged column "a" edit+marker. Per-statement grouping
+      // (#1981) sees column "a"'s marker+DDL as byte-identical to the old
+      // file, so it never enters either new statement's own search — "b"
+      // and "c" are each their own statement, and neither has a marker
+      // directly above it. (This case used to need a dedicated exact-text
+      // staleness check to catch, back when a single file-wide "changed
+      // region" would otherwise have swept a *positionally* dragged-in
+      // marker back into scope; per-statement grouping makes that
+      // positional ambiguity impossible in the first place — see
+      // `core-migrations.test.ts`'s "duplicate marker text" test for the
+      // narrower case the staleness check still exists for.)
+      const secondEditSandwiched = migration(
+        'op.add_column("t", sa.Column("b", sa.Integer(), server_default="0"))\n    ' +
+          declaredEdit +
+          '\n    op.add_column("t", sa.Column("c", sa.Integer(), server_default="0"))',
+      )
+
+      const result = checkMigrationBodyChangeMarkers([
+        {
+          file: '0010_x.py',
+          status: 'modified',
+          oldContent: merged,
+          newContent: secondEditSandwiched,
+        },
+      ])
+
+      expect(result.declared).toEqual([])
+      // One violation per undeclared statement — columns "b" and "c" are
+      // independently at fault, not one file-wide finding.
+      expect(result.violations).toHaveLength(2)
+      for (const v of result.violations) {
+        expect(v.file).toBe('0010_x.py')
+        expect(v.reason).toMatch(/no `# biffo:body-change:` declaration/)
+      }
+    })
+
+    it('PASSES once the second edit gets its OWN fresh marker, with its OWN classification', () => {
+      const secondEditWithFreshMarker = migration(
+        `${declaredEdit}\n` +
+          '    # biffo:body-change: outcome-changing — column b needs a real per-row default\n' +
+          '    op.add_column("t", sa.Column("b", sa.Integer(), server_default="0"))',
+      )
+
+      const result = checkMigrationBodyChangeMarkers([
+        {
+          file: '0010_x.py',
+          status: 'modified',
+          oldContent: merged,
+          newContent: secondEditWithFreshMarker,
+        },
+      ])
+
+      expect(result.violations).toEqual([])
+      // Declared as outcome-changing — the SECOND edit's own marker — not
+      // replay-safe, the stale classification the first edit's marker would
+      // have reported if the guard were still reading the whole file.
+      expect(result.declared).toEqual([{ file: '0010_x.py', classification: 'outcome-changing' }])
+    })
+  })
+
+  // #1981: the precondition-D fix above closed the CROSS-PR case (a marker
+  // from an earlier, already-merged PR silently covering a later PR's
+  // edit) by scoping a declaration to the diff's changed region. It did NOT
+  // close the SAME-DIFF case — a single PR making two distinct edits to an
+  // already-released migration in one commit, with a marker adjacent to
+  // only one of them — because a whole changed region still credited its
+  // one declaration to every statement inside it, marked or not. Filed
+  // directly against the shipped code on `agent/751` (872917b3): this
+  // reproduction was confirmed to return `violations: []` and
+  // `declared: [{ classification: 'replay-safe' }]` — a clean pass — before
+  // the per-statement fix above; it must FAIL now.
+  it('FAILS a second, unmarked edit in the SAME diff as a marked one (#1981)', () => {
+    const old = migration('op.add_column("t", sa.Column("a", sa.Integer()))')
+
+    // ONE diff: edit 1 (column "a") gets a fresh marker declaring it
+    // replay-safe; edit 2 (column "b", added with a real server_default —
+    // the textbook outcome-changing shape) gets NO marker of its own, and
+    // there is no blank line between the two `op.add_column` calls.
+    const bothEditsOnePR = migration(
+      '# biffo:body-change: replay-safe — widens column a, no-op on an applied database\n' +
+        '    op.add_column("t", sa.Column("a", sa.BigInteger()))\n' +
+        '    op.add_column("t", sa.Column("b", sa.Integer(), server_default="0"))',
+    )
+
+    const result = checkMigrationBodyChangeMarkers([
+      { file: '0010_x.py', status: 'modified', oldContent: old, newContent: bothEditsOnePR },
+    ])
+
+    // Column "a" is properly declared…
+    expect(result.declared).toEqual([{ file: '0010_x.py', classification: 'replay-safe' }])
+    // …but column "b" is not, and that must still block the PR: a file with
+    // ONE declared and ONE undeclared statement is not a clean pass.
+    expect(result.violations).toHaveLength(1)
+    expect(result.violations[0]?.file).toBe('0010_x.py')
+    expect(result.violations[0]?.reason).toMatch(/no `# biffo:body-change:` declaration/)
+    // Still examined as exactly one file, not two — #1363's denominator is
+    // per-file even though this file now has both a declared and an
+    // undeclared finding.
+    expect(result.examined).toBe(1)
   })
 
   it('examines several files independently in one run', () => {

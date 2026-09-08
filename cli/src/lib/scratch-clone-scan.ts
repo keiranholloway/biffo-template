@@ -80,6 +80,17 @@ const INTEGRATION_BRANCH = 'dev'
 export interface ScratchCloneCandidate {
   path: string
   branch: string
+  /**
+   * True when `path/.git` exists as a directory (so `isPlainCloneDir`
+   * accepted it) but git itself could not resolve a current branch there —
+   * empty, or missing its internals (#1990). `branch` is `''` in this case;
+   * it was never readable, and nothing downstream should trust it. Set
+   * exactly once, in `findScratchCloneCandidates`, and consulted first thing
+   * in `classifyScratchClones` — every OTHER git/GitHub call in this module
+   * assumes a resolvable repo and is never reached for a candidate carrying
+   * this flag.
+   */
+  invalidRepo?: true
 }
 
 /**
@@ -143,7 +154,23 @@ export async function findScratchCloneCandidates(
     const path = join(estateRoot, name)
     if (!isPlainCloneDir(path)) continue
 
-    const branch = await deps.git.currentBranch(path)
+    // #1990: `isPlainCloneDir` only checks that `.git` is a directory, never
+    // that it is a RESOLVABLE one — an empty or half-initialised `.git`
+    // directory (an interrupted `git clone`, a killed `git init`, a test
+    // fixture that scaffolds the directory without ever running git inside
+    // it) passes that check and reaches here. Caught explicitly, right at
+    // the one call that first touches git for this candidate, so a single
+    // malformed directory anywhere under `estateRoot` is reported as its own
+    // candidate instead of throwing out of this loop and silently discarding
+    // every OTHER real candidate the scan would otherwise have found.
+    let branch: string
+    try {
+      branch = await deps.git.currentBranch(path)
+    } catch {
+      candidates.push({ path, branch: '', invalidRepo: true })
+      continue
+    }
+
     const remoteUrl = await deps.git.getRemoteUrl(path).catch(() => '')
     const repoName = remoteUrl === '' ? null : repoNameFromRemoteUrl(remoteUrl)
 
@@ -184,6 +211,15 @@ export async function classifyScratchClones(
   const reports: ScratchCloneReport[] = []
 
   for (const candidate of candidates) {
+    // #1990: never let a candidate `findScratchCloneCandidates` could not
+    // even read a branch for reach any further git/GitHub call — every call
+    // below assumes a resolvable repo, and none of them is defensively
+    // wrapped against the same "not a git repository" failure individually.
+    if (candidate.invalidRepo === true) {
+      reports.push({ candidate, verdict: { action: 'keep', reason: 'not-a-git-repository' } })
+      continue
+    }
+
     const isDetached = candidate.branch === 'HEAD' || candidate.branch === ''
     const isDirty = await deps.git.hasUncommittedChanges(candidate.path)
 

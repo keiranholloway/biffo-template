@@ -701,6 +701,22 @@ describe('printScratchCloneReports', () => {
     )
   })
 
+  it('reports a malformed .git directory with its own keep reason, not a crash (#1990)', () => {
+    const reports: ScratchCloneReport[] = [
+      {
+        candidate: { path: '/estate/broken-git', branch: '', invalidRepo: true },
+        verdict: { action: 'keep', reason: 'not-a-git-repository' },
+      },
+    ]
+
+    printScratchCloneReports('/estate', reports)
+
+    expect(capturedOutput(logSpy)).toContain(
+      'kept      /estate/broken-git () — the .git directory exists but is not a resolvable, ' +
+        'initialised git repository',
+    )
+  })
+
   it('reports nothing-to-scan plainly when no candidate was found', () => {
     printScratchCloneReports('/estate', [])
     expect(capturedOutput(logSpy)).toContain(

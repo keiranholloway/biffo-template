@@ -417,6 +417,8 @@ const KEEP_REASON_TEXT: Record<KeepReason, string> = {
   'unknown-pr-verdict': "could not read this branch's PR state from GitHub",
   'commits-not-in-merge': 'worktree HEAD includes commits the merged PR never shipped',
   'unknown-merge-head': 'could not confirm worktree HEAD is contained in what merged',
+  'not-a-git-repository':
+    'the .git directory exists but is not a resolvable, initialised git repository',
 }
 
 /**

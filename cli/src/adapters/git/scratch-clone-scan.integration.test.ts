@@ -113,6 +113,46 @@ describe('scratch-clone-scan against real git (#1949)', () => {
     expect(report?.verdict).toEqual({ action: 'reap' })
   })
 
+  it('does not abort the whole scan on a malformed .git directory, and still reports every other real candidate (#1990)', async () => {
+    // Exact repro from #1990: `mkdir -p estate/broken-git/.git` — a `.git`
+    // DIRECTORY (so `isPlainCloneDir` accepts it as a candidate, same as a
+    // real clone) that is not, and was never, an initialised git repository.
+    // No `git init` ever ran inside it, unlike every other directory in this
+    // suite's `beforeEach`.
+    const brokenDir = join(estate, 'broken-git')
+    mkdirSync(join(brokenDir, '.git'), { recursive: true })
+
+    // A real, ordinary scratch clone alongside it — this is the candidate
+    // that a caught-but-unhandled exception on `broken-git` would silently
+    // discard if the fix only suppressed the error rather than isolating it
+    // per-candidate.
+    const scratchDir = join(estate, 'prosecute-1234')
+    git(estate, 'clone', '-q', realRepo, scratchDir)
+    git(scratchDir, 'checkout', '-qb', 'review/pr-77')
+
+    const candidates = await findScratchCloneCandidates(estate, { git: adapter })
+    const paths = candidates.map((c) => c.path)
+    expect(paths).toContain(brokenDir)
+    expect(paths).toContain(scratchDir)
+
+    const broken = candidates.find((c) => c.path === brokenDir)
+    expect(broken).toEqual({ path: brokenDir, branch: '', invalidRepo: true })
+
+    const githubStub: ScratchCloneClassifyDeps['github'] = {
+      prVerdictForBranch: async () => 'merged',
+      mergedHeadSha: async () => git(scratchDir, 'rev-parse', 'HEAD'),
+    }
+    const reports = await classifyScratchClones(candidates, { git: adapter, github: githubStub })
+
+    const brokenReport = reports.find((r) => r.candidate.path === brokenDir)
+    expect(brokenReport?.verdict).toEqual({ action: 'keep', reason: 'not-a-git-repository' })
+
+    // The real candidate beside it is still fully classified — the scan
+    // completed rather than throwing out of the loop on `broken-git`.
+    const scratchReport = reports.find((r) => r.candidate.path === scratchDir)
+    expect(scratchReport?.verdict).toEqual({ action: 'reap' })
+  })
+
   it('keeps a scratch clone with uncommitted changes rather than proposing it for removal', async () => {
     const scratchDir = join(estate, 'prosecute-5678')
     git(estate, 'clone', '-q', realRepo, scratchDir)

@@ -1,4 +1,4 @@
-import { writeFileSync } from 'node:fs'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
@@ -6,6 +6,7 @@ import {
   findScratchCloneCandidates,
   repoNameFromRemoteUrl,
   type ScratchCloneCandidate,
+  type ScratchCloneScanDeps,
 } from './scratch-clone-scan.js'
 import { makeTmpDir } from '../test-utils/tmp.js'
 import type { PrVerdict } from '../adapters/github-cli/index.js'
@@ -75,6 +76,84 @@ describe('findScratchCloneCandidates — estateRoot could not be read (#1988)', 
     const filePath = join(dir, 'im-a-file.txt')
     writeFileSync(filePath, 'not a directory\n')
     await expect(findScratchCloneCandidates(filePath, unreachableGitDeps)).rejects.toThrow()
+  })
+})
+
+describe('findScratchCloneCandidates — a malformed .git directory (#1990)', () => {
+  // Matches #1990's own repro exactly: `mkdir -p estate/broken-git/.git`
+  // leaves a `.git` DIRECTORY (so `isPlainCloneDir` accepts it as a
+  // candidate) that git itself cannot resolve — no HEAD, no refs, no
+  // objects. The real `GitAdapter.currentBranch` shells out to `git
+  // rev-parse --abbrev-ref HEAD` and throws (`fatal: not a git repository`)
+  // for exactly this shape; this stub reproduces that behaviour without a
+  // real git subprocess, matched by path the same way #1988's own
+  // `unreachableGitDeps` stub is.
+  function gitStub(brokenPaths: Set<string>) {
+    const getRemoteUrlCalls: string[] = []
+    return {
+      getRemoteUrlCalls,
+      git: {
+        currentBranch: async (path: string) => {
+          if (brokenPaths.has(path)) {
+            throw new Error('fatal: not a git repository (or any parent up to mount point /)')
+          }
+          return 'dev'
+        },
+        getRemoteUrl: async (path: string) => {
+          getRemoteUrlCalls.push(path)
+          return ''
+        },
+      } satisfies ScratchCloneScanDeps['git'],
+    }
+  }
+
+  it('reports every OTHER real candidate rather than aborting the whole scan on one malformed .git', async () => {
+    const estateRoot = makeTmpDir('biffo-scratch-broken-git')
+    const brokenDir = join(estateRoot, 'broken-git')
+    const goodDir = join(estateRoot, 'good-clone')
+    mkdirSync(join(brokenDir, '.git'), { recursive: true })
+    mkdirSync(join(goodDir, '.git'), { recursive: true })
+
+    const { git, getRemoteUrlCalls } = gitStub(new Set([brokenDir]))
+    const candidates = await findScratchCloneCandidates(estateRoot, { git })
+
+    expect(candidates).toHaveLength(2)
+    const broken = candidates.find((c) => c.path === brokenDir)
+    const good = candidates.find((c) => c.path === goodDir)
+    expect(broken).toEqual({ path: brokenDir, branch: '', invalidRepo: true })
+    expect(good).toEqual({ path: goodDir, branch: 'dev' })
+    // A repo git could not even find a branch for has nothing worth asking
+    // `getRemoteUrl` about — proves the malformed candidate is excluded from
+    // the rest of the per-candidate work, not merely tolerated by it.
+    expect(getRemoteUrlCalls).toEqual([goodDir])
+  })
+
+  it('classifyScratchClones keeps an invalid-repo candidate with its own reason, calling no git/GitHub method at all', async () => {
+    const unreachable = {
+      hasUncommittedChanges: async () => {
+        throw new Error('must not be called: invalidRepo must short-circuit first')
+      },
+      headSha: async () => {
+        throw new Error('must not be called: invalidRepo must short-circuit first')
+      },
+      isAncestor: async () => {
+        throw new Error('must not be called: invalidRepo must short-circuit first')
+      },
+    }
+    const unreachableGithub = {
+      prVerdictForBranch: async () => {
+        throw new Error('must not be called: invalidRepo must short-circuit first')
+      },
+      mergedHeadSha: async () => {
+        throw new Error('must not be called: invalidRepo must short-circuit first')
+      },
+    }
+
+    const [report] = await classifyScratchClones(
+      [{ path: '/estate/broken-git', branch: '', invalidRepo: true }],
+      { git: unreachable, github: unreachableGithub },
+    )
+    expect(report?.verdict).toEqual({ action: 'keep', reason: 'not-a-git-repository' })
   })
 })
 

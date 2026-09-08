@@ -109,6 +109,44 @@ jobs:
       - name: Scale drift guard
         if: ${{ !cancelled() }}
         run: pnpm exec biffo-scale-guard
+      # An unsuppressed `aws lambda update-function-*` prints the whole
+      # resolved function configuration -- every env var, plaintext -- into
+      # the Actions log, and the response is never consumed (biffo-template
+      # #334). deploy.yml's own `aws lambda update-function-code` call already
+      # follows the convention (--output text --query 'LastUpdateStatus'), but
+      # nothing in this repo's own CI asserted it would keep doing so: the
+      # guard existed only in biffo-template's root ci.yml, which scans this
+      # skeleton's tree from the template side but never runs inside a
+      # scaffolded sibling's own CI, so a regression added directly to a live
+      # sibling's deploy.yml was regression-proof only by a human reading the
+      # diff (#1968). `scripts/biffo.sh` resolves the version-pinned CLI this
+      # sibling was stamped with at birth (#1109), same as every other guard
+      # invocation in this job.
+      - name: Lambda output guard
+        if: ${{ !cancelled() }}
+        # This job's working-directory default is apps/frontend (top of this
+        # job), but scripts/biffo.sh lives at the repo root -- same relative-
+        # path convention as the js-audit job's own
+        # `sh ../../scripts/js-dependency-audit.sh` below. A bare
+        # `scripts/biffo.sh` here fails unconditionally with "No such file",
+        # on every run, regardless of whether there is a real
+        # lambda-output/terraform-input violation (biffo-template#1983).
+        run: sh ../../scripts/biffo.sh check lambda-output
+      # A Terraform subcommand that can prompt for an unresolved variable
+      # without -input=false, or a workflow running Terraform at all without
+      # TF_INPUT set as a backstop, hangs forever on a GitHub Actions runner --
+      # there is no stdin to answer the prompt with (biffo-template#322).
+      # `-auto-approve` does NOT prevent this. Same gap as the lambda-output
+      # guard above: deploy.yml's terraform invocations already pass
+      # `-input=false` and the workflow-level `TF_INPUT: '0'` above already
+      # exists as a backstop, but nothing in this repo's own CI asserted
+      # either would stay true (#1968).
+      - name: Terraform-input guard
+        if: ${{ !cancelled() }}
+        # Same cwd fix as the Lambda output guard step above -- this job's
+        # working-directory default is apps/frontend, and scripts/biffo.sh
+        # lives at the repo root (biffo-template#1983).
+        run: sh ../../scripts/biffo.sh check terraform-input
 
   e2e:
     name: E2E (Playwright)

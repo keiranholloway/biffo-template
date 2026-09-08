@@ -2312,13 +2312,37 @@ ship_repo() {
   # reason to make the next round wait on that).
   require_staged_worktree "$wt" "$label" || { release_stage_lock "$d" "$label"; return 1; }
 
-  git -C "$wt" -c commit.gpgsign=false commit -q --no-verify -m "chore(shared): sync template-shared files
+  # Explicit identity env vars, same reasoning as allocate-module-number.sh's
+  # lock commit: this may be the first git-writing operation in a fresh CI
+  # checkout, where no global user.name/user.email is configured. Without
+  # them `git commit` fails with "Author identity unknown" -- and until now
+  # the exit status was discarded (`>/dev/null 2>&1`, no `$?` check), so the
+  # failure was invisible: HEAD stayed at whatever `require_staged_worktree`
+  # left it on, `--force-with-lease` push below still succeeds (a branch
+  # legitimately pointing at the same commit as origin/$base is not a push
+  # error), and `gh pr create` opens a PR with a diff of nothing. The PR
+  # looked shipped in every log line printed; only the actual pushed content
+  # revealed the round had committed nothing. #1962's own CI run reproduced
+  # this deterministically -- every developer machine that ran this script
+  # locally had a global git identity already configured, so nothing here
+  # ever needed one before.
+  commit_out=$(
+    GIT_AUTHOR_NAME="biffo-shared-sync" GIT_AUTHOR_EMAIL="biffo-shared-sync@invalid" \
+    GIT_COMMITTER_NAME="biffo-shared-sync" GIT_COMMITTER_EMAIL="biffo-shared-sync@invalid" \
+    git -C "$wt" -c commit.gpgsign=false commit -q --no-verify -m "chore(shared): sync template-shared files
 
 Distributed by biffo-template's scripts/shared-sync.sh. These files are held
 verbatim from the template; see shared-files.json there for the list and why
 this mechanism exists.
 
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>" >/dev/null 2>&1
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>" 2>&1
+  )
+  commit_rc=$?
+  if [ "$commit_rc" -ne 0 ]; then
+    printf '%-26s \033[31mcommit failed\033[0m: %s\n' "$label" "$(printf '%s' "$commit_out" | tail -1)"
+    release_stage_lock "$d" "$label"
+    return 1
+  fi
 
   # Recomputed HERE, not read from whatever stage_repo last left behind
   # (#1958 follow-up). `repo_has_python` is a plain shell global with no

@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
+import { parseBodyChangeDeclaration } from './core-migrations.js'
 import {
   checkMigrationBodyChangeMarkers,
   type MigrationBodyChangeDiff,
@@ -184,6 +185,110 @@ def upgrade() -> None:
     expect(result.violations).toEqual([])
     expect(result.unchanged).toEqual([])
     expect(result.declared).toEqual([])
+  })
+
+  // #751 precondition D. The marker used to be FILE-scoped: the guard used to
+  // call `parseBodyChangeDeclaration(newContent)`, which `exec`s the marker
+  // regex against the whole file and returns the first match wherever it
+  // sits — nothing bound a declaration to the specific edit it was meant to
+  // describe. A marker committed for an earlier, already-merged edit reads
+  // identically to a fresh declaration for a completely different, later one.
+  describe('a stale marker from an earlier edit cannot cover a new one (#751 precondition D)', () => {
+    // Base state, already on `dev`: an earlier PR declared its own edit to
+    // column "a" replay-safe, and merged.
+    const declaredEdit =
+      '# biffo:body-change: replay-safe — widens column a, no-op on an applied database\n' +
+      '    op.add_column("t", sa.Column("a", sa.Integer()))'
+    const merged = migration(declaredEdit)
+
+    it('FAILS: proves the OLD file-scoped read would have wrongly accepted a second, silent edit', () => {
+      // This PR makes a SECOND, unrelated edit further down in the same
+      // file — adding a column with a real default, which is exactly the
+      // outcome-changing shape — and never touches the first marker or its
+      // column at all.
+      const secondEditNoMarker = migration(
+        `${declaredEdit}\n` +
+          '    op.add_column("t", sa.Column("b", sa.Integer(), server_default="0"))',
+      )
+
+      // This is the vulnerability, demonstrated directly: reading the new
+      // file's ONLY marker, file-wide, finds and accepts the first edit's
+      // marker — which is exactly what the guard used to do before this fix.
+      expect(parseBodyChangeDeclaration(secondEditNoMarker)).toEqual({
+        classification: 'replay-safe',
+        reason: 'widens column a, no-op on an applied database',
+      })
+
+      // The fixed guard must not make the same mistake: the second edit has
+      // no marker of its own, so it must be rejected even though the file
+      // already contains ONE valid-looking declaration.
+      const result = checkMigrationBodyChangeMarkers([
+        {
+          file: '0010_x.py',
+          status: 'modified',
+          oldContent: merged,
+          newContent: secondEditNoMarker,
+        },
+      ])
+
+      expect(result.declared).toEqual([])
+      expect(result.violations).toHaveLength(1)
+      expect(result.violations[0]?.file).toBe('0010_x.py')
+      expect(result.violations[0]?.reason).toMatch(/no `# biffo:body-change:` declaration/)
+    })
+
+    it('FAILS a stale marker dragged into the changed region by edits on both sides of it', () => {
+      // A single insertion either before OR after the first edit's
+      // marker+DDL is fully absorbed by prefix/suffix trimming alone — the
+      // marker positions itself back into the "unchanged" common region by
+      // matching from whichever end wasn't touched, and the region-only
+      // check (with no text check) would correctly exclude it on its own.
+      // The case that actually needs the exact-text staleness check is an
+      // edit on BOTH sides of the untouched marker+DDL in the same diff:
+      // neither prefix nor suffix trimming can skip past it then, so it
+      // lands inside the widened region purely by position, unchanged.
+      const secondEditSandwiched = migration(
+        'op.add_column("t", sa.Column("b", sa.Integer(), server_default="0"))\n    ' +
+          declaredEdit +
+          '\n    op.add_column("t", sa.Column("c", sa.Integer(), server_default="0"))',
+      )
+
+      const result = checkMigrationBodyChangeMarkers([
+        {
+          file: '0010_x.py',
+          status: 'modified',
+          oldContent: merged,
+          newContent: secondEditSandwiched,
+        },
+      ])
+
+      expect(result.declared).toEqual([])
+      expect(result.violations).toHaveLength(1)
+      expect(result.violations[0]?.reason).toMatch(/stale declaration/)
+    })
+
+    it('PASSES once the second edit gets its OWN fresh marker, with its OWN classification', () => {
+      const secondEditWithFreshMarker = migration(
+        `${declaredEdit}\n` +
+          '    # biffo:body-change: outcome-changing — column b needs a real per-row default\n' +
+          '    op.add_column("t", sa.Column("b", sa.Integer(), server_default="0"))',
+      )
+
+      const result = checkMigrationBodyChangeMarkers([
+        {
+          file: '0010_x.py',
+          status: 'modified',
+          oldContent: merged,
+          newContent: secondEditWithFreshMarker,
+        },
+      ])
+
+      expect(result.violations).toEqual([])
+      // Declared as outcome-changing — the SECOND edit's own marker — not
+      // replay-safe, the stale classification the first edit's marker would
+      // have reported if the guard were still reading the whole file.
+      expect(result.declared).toEqual([{ file: '0010_x.py', classification: 'outcome-changing' }])
+    })
   })
 
   it('examines several files independently in one run', () => {

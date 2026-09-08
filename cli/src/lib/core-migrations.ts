@@ -452,6 +452,142 @@ export function parseBodyChangeDeclaration(content: string): BodyChangeDeclarati
   return { classification: value[1] as BodyChangeClassification, reason: value[2] as string }
 }
 
+/** Per-line variant of {@link BODY_CHANGE_LINE_RE}, for testing one specific
+ * line rather than `exec`-ing the first match across a whole file. */
+const BODY_CHANGE_LINE_ONLY_RE = /^[ \t]*# biffo:body-change:[ \t]*(.*)$/
+
+/**
+ * The line range, within `newLines`, that a plain prefix/suffix comparison
+ * against `oldLines` cannot explain as unchanged — i.e. the smallest
+ * contiguous region that must have been touched for `newLines` to differ
+ * from `oldLines` at all. Everything outside it is byte-identical to the old
+ * file, at the same position.
+ *
+ * Deliberately not a minimal-edit-distance diff (Myers et al.): it only needs
+ * to be *conservative*, and the corresponding tighter property is more
+ * important than a compact diff — content that never changed, positioned
+ * before or after everything that did, is guaranteed to fall outside it. That
+ * is exactly the property {@link findEditScopedBodyChangeDeclaration} needs:
+ * a marker sitting beside an earlier, already-merged edit elsewhere in the
+ * file must never be read as covering a *different* edit made later.
+ */
+function coreChangedRegion(
+  oldLines: string[],
+  newLines: string[],
+): { newStart: number; newEnd: number } {
+  const maxCommon = Math.min(oldLines.length, newLines.length)
+  let prefix = 0
+  while (prefix < maxCommon && oldLines[prefix] === newLines[prefix]) prefix++
+
+  let suffix = 0
+  const maxSuffix = maxCommon - prefix
+  while (
+    suffix < maxSuffix &&
+    oldLines[oldLines.length - 1 - suffix] === newLines[newLines.length - 1 - suffix]
+  ) {
+    suffix++
+  }
+
+  return { newStart: prefix, newEnd: newLines.length - suffix }
+}
+
+/** @see findEditScopedBodyChangeDeclaration */
+export interface EditScopedBodyChangeResult {
+  /** A fresh declaration found beside the lines this diff actually changed. */
+  declaration: BodyChangeDeclaration | null
+  /**
+   * True when a `# biffo:body-change:` marker line DOES fall within the
+   * changed region, but its exact text already existed, unchanged, somewhere
+   * in `oldContent` — i.e. it is left over from an earlier, already-merged
+   * edit and does not describe this one. `declaration` is still null in this
+   * case; the field exists only so a caller can report a more specific
+   * reason than "no marker at all".
+   */
+  staleOnly: boolean
+}
+
+/**
+ * The edit-scoped counterpart to {@link parseBodyChangeDeclaration} — #751's
+ * precondition D.
+ *
+ * `parseBodyChangeDeclaration` has no notion of *which* edit a marker
+ * describes: it `exec`s the marker regex against the whole file and returns
+ * the first match, wherever it sits. That is the right tool for
+ * `planMigrationCarry`'s reporting, which has no diff to scope against — it
+ * relates the template's current file to what an instance carried, once, at
+ * plan time (see that field's doc). It is the wrong tool for a merge guard
+ * deciding whether *this* diff's body change is declared: a marker committed
+ * for an earlier, already-merged edit reads identically to a fresh
+ * declaration for a new one, so a second, differently-classified edit to the
+ * same migration can silently inherit the first edit's marker and pass
+ * {@link checkMigrationBodyChangeMarkers} while claiming the wrong
+ * classification — or none at all.
+ *
+ * Two checks close that gap together, because neither is sufficient alone:
+ *
+ * 1. **Region** — only a marker inside {@link coreChangedRegion} is even
+ *    considered. An untouched marker positioned well away from a new edit
+ *    (the common case — a stale marker sitting beside its own, unrelated,
+ *    already-merged DDL) never enters the search at all.
+ * 2. **Text** — a marker inside the region still doesn't count if its exact
+ *    line already existed, verbatim, anywhere in `oldContent`. This is the
+ *    safety net for when (1) isn't precise enough to separate two edits on
+ *    its own: `coreChangedRegion` is a cheap prefix/suffix comparison, not a
+ *    real multi-hunk diff, so an edit positioned *before* an unrelated,
+ *    unchanged marker can drag that marker's line into the region by
+ *    shifting every line after it out of positional alignment. Re-checking
+ *    the line's *text* against the whole old file (not just the region)
+ *    catches that case regardless of where the line ends up landing.
+ *
+ * Throws on a marker that matches the line shape but not the value shape,
+ * exactly like `parseBodyChangeDeclaration` — an unreviewable declaration is
+ * worse than none, in or out of scope.
+ */
+export function findEditScopedBodyChangeDeclaration(
+  oldContent: string,
+  newContent: string,
+): EditScopedBodyChangeResult {
+  const oldLines = oldContent.split('\n')
+  const newLines = newContent.split('\n')
+  const { newStart, newEnd } = coreChangedRegion(oldLines, newLines)
+
+  const oldMarkerLines = new Set(oldLines.filter((line) => BODY_CHANGE_LINE_ONLY_RE.test(line)))
+
+  let staleOnly = false
+  for (let i = newStart; i < newEnd; i++) {
+    const line = newLines[i] as string
+    const match = BODY_CHANGE_LINE_ONLY_RE.exec(line)
+    if (!match) continue
+
+    if (oldMarkerLines.has(line)) {
+      // In scope, but its text already existed before this edit — a stale
+      // leftover, not a declaration of THIS change. Keep scanning: a later
+      // line in the same region may still be a genuinely fresh marker.
+      staleOnly = true
+      continue
+    }
+
+    const rest = (match[1] ?? '').trim()
+    const value = BODY_CHANGE_VALUE_RE.exec(rest)
+    if (!value) {
+      throw new Error(
+        `Malformed ${BODY_CHANGE_MARKER} marker: expected ` +
+          `"${BODY_CHANGE_MARKER} replay-safe — <reason>" or ` +
+          `"${BODY_CHANGE_MARKER} outcome-changing — <reason>", got "${rest}".`,
+      )
+    }
+    return {
+      declaration: {
+        classification: value[1] as BodyChangeClassification,
+        reason: value[2] as string,
+      },
+      staleOnly: false,
+    }
+  }
+
+  return { declaration: null, staleOnly }
+}
+
 /** Opens a triple-quoted string at the start of a line (an `r`/`u` prefix is
  * still a docstring; `f`/`b` prefixes are not, and never appear as one). */
 const DOCSTRING_OPEN_RE = /^[rRuU]?("""|''')/

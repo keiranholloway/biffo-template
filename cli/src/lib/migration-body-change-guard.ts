@@ -1,8 +1,8 @@
 import {
   type BodyChangeClassification,
   BODY_CHANGE_MARKER,
+  findEditScopedBodyChangeDeclaration,
   migrationBodyHash,
-  parseBodyChangeDeclaration,
 } from './core-migrations.js'
 
 /**
@@ -32,6 +32,17 @@ import {
  * useful. This guard reuses {@link migrationBodyHash} directly rather than a
  * second implementation of its normalisation, so the two can never drift
  * apart the way two independent parsers of the same marker format would.
+ *
+ * ## Why the marker must be edit-scoped, not file-scoped (#751 precondition D)
+ *
+ * The declaration is parsed with {@link findEditScopedBodyChangeDeclaration},
+ * not the simpler `parseBodyChangeDeclaration` that reads the whole file for
+ * the first marker anywhere in it. A whole-file read cannot tell a fresh
+ * declaration from one left over from an earlier, already-merged edit to the
+ * same migration — so a second, differently-classified (or wholly
+ * undeclared) edit could silently inherit the first edit's marker and pass
+ * this guard. See that function's doc (`core-migrations.ts`) for how it
+ * binds a marker to the specific lines this diff actually changed.
  *
  * ## Why "already-released", not "any migration this PR touches"
  *
@@ -113,16 +124,25 @@ export function checkMigrationBodyChangeMarkers(
       continue
     }
 
-    let decl
+    let result
     try {
-      decl = parseBodyChangeDeclaration(d.newContent ?? '')
+      result = findEditScopedBodyChangeDeclaration(d.oldContent ?? '', d.newContent ?? '')
     } catch (err) {
       violations.push({ file: d.file, reason: (err as Error).message })
       continue
     }
 
-    if (decl) {
-      declared.push({ file: d.file, classification: decl.classification })
+    if (result.declaration) {
+      declared.push({ file: d.file, classification: result.declaration.classification })
+    } else if (result.staleOnly) {
+      violations.push({
+        file: d.file,
+        reason:
+          "this edit changes the migration's hashed body (DDL, not just a docstring or " +
+          `comment), and the only \`${BODY_CHANGE_MARKER}\` marker near the change already ` +
+          'existed, unchanged, before this edit — a stale declaration left over from an ' +
+          'earlier change does not cover this one.',
+      })
     } else {
       violations.push({
         file: d.file,

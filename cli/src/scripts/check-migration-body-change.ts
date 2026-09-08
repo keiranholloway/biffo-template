@@ -162,6 +162,10 @@ ${BOLD}What to do${OFF}
   converges it. Neither label is enforced yet (#751 is reporting-only, pending
   more examples) — but recording it now is what lets that decision be made
   later instead of never.
+
+  A marker left over from an earlier, already-merged edit to this same file
+  does ${DIM}not${OFF} cover a new one — add a fresh marker beside THIS change,
+  even if the classification happens to match (#751 precondition D).
 `)
   process.exit(1)
 }

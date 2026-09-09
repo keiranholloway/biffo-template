@@ -162,7 +162,19 @@ beforeAll(() => {
   // Build + mirror + pack + a real npm install of every runtime dependency
   // comfortably clears the suite's default 10s hook timeout; give this one
   // real headroom.
-}, 120_000)
+  //
+  // 120s was measured generous once, but this hook does a real `npm install`
+  // against the live registry with no cache reuse between runs (a fresh
+  // `installDir` every time), so its wall time tracks host disk/CPU
+  // contention rather than anything this repo controls. On a loaded shared
+  // workstation it was measured at 145-219s across four independent runs of
+  // an otherwise-unrelated change (#2021's js-yaml/sharp override-floor
+  // bump touches neither dependency of the published CLI package, and
+  // `npm install` of the packed tarball never reads pnpm's overrides in the
+  // first place) -- so the timeout, not the install, was what was too
+  // tight. 300s keeps this a real ceiling rather than a guess matched to
+  // the one bad run that found it.
+}, 300_000)
 
 describe('the built bundle, run in place', () => {
   it('stays under a 3MB ceiling', () => {

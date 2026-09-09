@@ -28,8 +28,21 @@ import {
   readDivergenceConfig,
   resolveBranch,
 } from '../lib/core-ownership-guard.js'
+import { UPGRADE_BRANCH_PREFIX } from '../lib/core-upgrade.js'
 import { readCoreManifest } from '../lib/core-manifest.js'
 import { fetchTemplateShippedPaths } from '../lib/template-shipped-paths.js'
+import { resolveUpgradeCommitFiles } from '../lib/upgrade-commit-files.js'
+
+/**
+ * The integration branch is `dev` in every Biffo repo (AGENTS.md §2), and an
+ * upgrade branch is always cut from it (`git switch -c <upgrade-branch>` off
+ * a caller checkout that is on `dev`) -- so it is the correct, offline-safe
+ * base for the local commit-msg hook to compare against when scoping the
+ * upgrade-branch exemption to the mechanical commit alone (#1993). This reads
+ * whatever `origin/dev` already resolves to locally; it never fetches, which
+ * is why the hook stays fast and safe to run disconnected.
+ */
+const LOCAL_UPGRADE_BASE = 'origin/dev'
 
 const BOLD = '[1m'
 const DIM = '[2m'
@@ -62,6 +75,10 @@ export async function runOwnershipCheck(argv: string[]): Promise<void> {
   let changedFiles: string[]
   let deletedFiles: string[] = []
   let commitMessage = ''
+  // CI-mode base ref, as `origin/<base>` -- kept in outer scope because it is
+  // also the base the upgrade-commit-file resolver below diffs against, once
+  // the branch is known to be an upgrade branch.
+  let ciBase: string | null = null
 
   if (staged) {
     // --name-status, unfiltered, exactly as the CI branch below. Deletions are
@@ -81,12 +98,13 @@ export async function runOwnershipCheck(argv: string[]): Promise<void> {
       process.exit(2)
     }
     await execa('git', ['fetch', '--quiet', 'origin', base], { cwd: root, reject: false })
-    const { stdout } = await execa('git', ['diff', '--name-status', `origin/${base}...HEAD`], {
+    ciBase = `origin/${base}`
+    const { stdout } = await execa('git', ['diff', '--name-status', `${ciBase}...HEAD`], {
       cwd: root,
     })
     ;({ changed: changedFiles, deleted: deletedFiles } = parseNameStatus(stdout))
     // On a PR the trailer lives in the commits, not in a message file.
-    const { stdout: log } = await execa('git', ['log', '--format=%B', `origin/${base}..HEAD`], {
+    const { stdout: log } = await execa('git', ['log', '--format=%B', `${ciBase}..HEAD`], {
       cwd: root,
       reject: false,
     })
@@ -98,6 +116,21 @@ export async function runOwnershipCheck(argv: string[]): Promise<void> {
     reject: false,
   })
   const branch = resolveBranch(process.env, gitBranch)
+
+  // Scope the upgrade-branch exemption to the CLI's own mechanical commit,
+  // not the whole branch (#1993) -- reproduced live on tabsii-platform#1420,
+  // where a second, human/agent commit on an upgrade branch edited a
+  // user-owned path and the whole-branch skip let it through unchecked.
+  // `resolveUpgradeCommitFiles` returns `null` ("could not tell") on any
+  // failure, which `checkCoreOwnership` treats as "exempt nothing" -- never
+  // the old fail-open "exempt everything" this replaces.
+  const upgradeCommitFiles = branch.startsWith(UPGRADE_BRANCH_PREFIX)
+    ? await resolveUpgradeCommitFiles(
+        root,
+        ciBase ?? LOCAL_UPGRADE_BASE,
+        staged ? { stagedFallbackFiles: changedFiles } : {},
+      )
+    : null
 
   // Only in CI/PR-diff mode: this is the check this file's own docstring says
   // cannot be bypassed with `--no-verify`, and GitHub Actions runners always
@@ -124,6 +157,7 @@ export async function runOwnershipCheck(argv: string[]): Promise<void> {
     branch,
     commitMessage,
     warnOnly: readDivergenceConfig(root).warnOnly,
+    upgradeCommitFiles,
     templateShippedPaths,
   })
 

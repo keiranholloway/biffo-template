@@ -5,11 +5,13 @@ import {
   gatherRepoFacts,
   printBranchReapOutcomes,
   printReapOutcomes,
+  printScratchCloneReports,
   runDoctor,
   runDoctorFix,
   runDoctorFixBranches,
 } from './doctor.js'
 import type { BareBranchReapOutcome, ReapOutcome } from '../lib/doctor-reaper.js'
+import type { ScratchCloneReport } from '../lib/scratch-clone-scan.js'
 import { capturedOutput } from '../test-utils/console.js'
 import { makeTmpDir } from '../test-utils/tmp.js'
 
@@ -646,6 +648,79 @@ describe('printBranchReapOutcomes', () => {
     printBranchReapOutcomes([])
     expect(capturedOutput(logSpy)).toContain(
       '--fix (branches): no bare branch with a gone upstream to consider.',
+    )
+  })
+})
+
+/**
+ * `printScratchCloneReports` (#1949) — `--scratch-clones`'s report, same
+ * denominator-honesty shape as `printReapOutcomes`/`printBranchReapOutcomes`:
+ * what is reapable AND what was kept, never only the interesting half.
+ */
+describe('printScratchCloneReports', () => {
+  let logSpy: ReturnType<typeof vi.spyOn>
+
+  beforeEach(() => {
+    logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+  })
+
+  afterEach(() => {
+    logSpy.mockRestore()
+  })
+
+  it('reports a reapable clone with an rm -rf remedy, since git worktree remove does not apply', () => {
+    const reports: ScratchCloneReport[] = [
+      {
+        candidate: { path: '/estate/prosecute-1234', branch: 'review/pr-77' },
+        verdict: { action: 'reap' },
+      },
+    ]
+
+    printScratchCloneReports('/estate', reports)
+
+    const out = capturedOutput(logSpy)
+    expect(out).toContain('reapable  /estate/prosecute-1234 (review/pr-77)')
+    expect(out).toContain("rm -rf '/estate/prosecute-1234'")
+    expect(out).toContain(
+      'scratch-clones: 1 reapable, 0 kept, of 1 plain git-clone directory found under /estate.',
+    )
+  })
+
+  it('reports a kept clone with its plain-English keep reason', () => {
+    const reports: ScratchCloneReport[] = [
+      {
+        candidate: { path: '/estate/gate-556', branch: 'chore/gate' },
+        verdict: { action: 'keep', reason: 'pr-open' },
+      },
+    ]
+
+    printScratchCloneReports('/estate', reports)
+
+    expect(capturedOutput(logSpy)).toContain(
+      'kept      /estate/gate-556 (chore/gate) — PR is still open',
+    )
+  })
+
+  it('reports a malformed .git directory with its own keep reason, not a crash (#1990)', () => {
+    const reports: ScratchCloneReport[] = [
+      {
+        candidate: { path: '/estate/broken-git', branch: '', invalidRepo: true },
+        verdict: { action: 'keep', reason: 'not-a-git-repository' },
+      },
+    ]
+
+    printScratchCloneReports('/estate', reports)
+
+    expect(capturedOutput(logSpy)).toContain(
+      'kept      /estate/broken-git () — the .git directory exists but is not a resolvable, ' +
+        'initialised git repository',
+    )
+  })
+
+  it('reports nothing-to-scan plainly when no candidate was found', () => {
+    printScratchCloneReports('/estate', [])
+    expect(capturedOutput(logSpy)).toContain(
+      'scratch-clones: no plain git-clone directory found under /estate.',
     )
   })
 })

@@ -91,6 +91,18 @@ export type KeepReason =
   | 'unknown-pr-verdict'
   | 'commits-not-in-merge'
   | 'unknown-merge-head'
+  /**
+   * Not produced by `classifyReapCandidate` itself — no worktree candidate
+   * can reach this table without a working git repo to walk in the first
+   * place. Reserved for `scratch-clone-scan.ts` (#1990): a top-level
+   * directory whose `.git` is a directory (so `isPlainCloneDir` accepts it
+   * as a candidate) but is not a resolvable, initialised repository — empty,
+   * or missing its internals. That candidate is classified here, as its own
+   * verdict, BEFORE any git/GitHub call runs against it, precisely so a
+   * malformed `.git` cannot throw out of `classifyScratchClones` and abort
+   * the whole scan the way an unwrapped `currentBranch` call once did.
+   */
+  | 'not-a-git-repository'
 
 export interface ReapVerdict {
   action: ReapAction

@@ -591,6 +591,19 @@ synced=0
 current=0
 failed=0
 considered=0
+# A drifted repo that already carries an OPEN sync PR is a distinct condition
+# from ordinary drift (biffo-template#2004 defect 2): nothing merges these PRs
+# automatically, so one left untouched round after round falls BEHIND its base
+# and, once base has moved far enough past it, goes DIRTY -- a real merge
+# conflict that then needs hand work to recover. `rotting` counts how many were
+# already in that state when this round started (see the survey loop below);
+# `rotting_refreshed` counts how many had their branch rebuilt onto the current
+# base THIS round regardless of whether today's candidate content passed
+# rehearsal in that repo (see refresh_rotting_pr below) -- refusing to refresh
+# an already-open channel on a rehearsal failure is what let the branch rot in
+# the first place, and is a different thing from refusing to open a NEW one.
+rotting=0
+rotting_refreshed=0
 
 # Field separator for the two state files below. A literal tab in a `grep`
 # pattern or a `${var%%...}` expansion is invisible in a diff and one editor
@@ -2476,13 +2489,85 @@ Run \`sh scripts/gate-coverage.sh\` after merging to see this repo's gate measur
   return 0
 }
 
+# Refresh an already-open sync PR's branch onto the CURRENT base, even though
+# today's candidate content just failed its own rehearsal in this repo
+# (biffo-template#2004 defect 2). Called only from phase 2's FAIL handling,
+# and only when the survey loop above already found this repo carrying an
+# open PR -- opening a brand-new PR still waits for a clean rehearsal exactly
+# as before; this is about not abandoning one that is already out.
+#
+# The worktree at $d/.worktrees/shared-sync is exactly what phase 1's
+# stage_repo call for this repo already built: checked out fresh from
+# `origin/$base`, candidate files copied over it, `git add -A` already run.
+# rehearse_repo only RAN the gate against that tree; it never touched it. So
+# committing and force-pushing it here is not a second staging pass, it is
+# the same push ship_repo does on a PASS, minus opening a PR that already
+# exists.
+#
+# Level 3, fail closed: the only way to guarantee a sync branch can never
+# reach DIRTY is to rebuild it from the base every round that touches it at
+# all, regardless of whether today's content happens to pass this repo's own
+# gate -- a red check on an already-open PR is a known, visible, actionable
+# state; a DIRTY branch is not, it needs hand work just to look at again. The
+# rehearsal failure itself is untouched by this: still reported, still
+# counted in `failed` by the phase 1 loop above, still left as the thing to
+# go and fix in the template. This only stops the SYMPTOM from compounding
+# every day nobody has fixed it yet.
+refresh_rotting_pr() {
+  d="$1"
+  label="$2"
+  base="$3"
+  wt="$d/.worktrees/shared-sync"
+  if [ ! -d "$wt" ]; then
+    printf '%-26s \033[31mcould not refresh its rotting PR\033[0m - staged tree missing\n' "$label"
+    return 1
+  fi
+
+  commit_out=$(
+    GIT_AUTHOR_NAME="biffo-shared-sync" GIT_AUTHOR_EMAIL="biffo-shared-sync@invalid" \
+    GIT_COMMITTER_NAME="biffo-shared-sync" GIT_COMMITTER_EMAIL="biffo-shared-sync@invalid" \
+    git -C "$wt" -c commit.gpgsign=false commit -q --no-verify -m "chore(shared): sync template-shared files
+
+Distributed by biffo-template's scripts/shared-sync.sh. These files are held
+verbatim from the template; see shared-files.json there for the list and why
+this mechanism exists.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>" 2>&1
+  )
+  if [ $? -ne 0 ]; then
+    printf '%-26s \033[31mcould not refresh its rotting PR\033[0m - commit failed: %s\n' \
+      "$label" "$(printf '%s' "$commit_out" | tail -1)"
+    return 1
+  fi
+
+  push_out=$(git -C "$wt" push --force-with-lease -u origin HEAD 2>&1)
+  if [ $? -ne 0 ]; then
+    printf '%-26s \033[31mcould not refresh its rotting PR\033[0m - push failed: %s\n' \
+      "$label" "$(printf '%s' "$push_out" | tail -1)"
+    return 1
+  fi
+  printf '%-26s \033[33mopen sync PR refreshed onto %s\033[0m - rehearsal is still failing there (see above); its branch can no longer be BEHIND or DIRTY\n' \
+    "$label" "$base"
+
+  wt_log remove-post-rotting-refresh "$label" "$wt"
+  git -C "$d" worktree remove --force "$wt" 2>/dev/null
+  git -C "$d" branch -D chore/sync-shared >/dev/null 2>&1
+  release_stage_lock "$d" "$label"
+  return 0
+}
+
 # The list of repos this run will touch, one `label<TAB>dir<TAB>slug<TAB>base`
 # per line. Written in the survey pass and read twice afterwards, so both phases
 # work from the same set: a rehearsal that proved a different list of repos than
 # the one that ships is worth nothing.
 TARGETS=$(mktemp)
 VERDICTS=$(mktemp)
-trap 'rm -f "$TARGETS" "$VERDICTS"; wt_log_run_end' EXIT
+# `label<TAB>number<TAB>mergeStateStatus<TAB>url` for every drifted repo that
+# already carries an open `chore/sync-shared` PR, written once per repo in the
+# survey loop below. Phase 2 reads it to decide whether a repo whose rehearsal
+# just FAILED still gets its branch refreshed onto the base (biffo-template#2004).
+ROTTEN=$(mktemp)
+trap 'rm -f "$TARGETS" "$VERDICTS" "$ROTTEN"; wt_log_run_end' EXIT
 
 printf '\nshared-file sync - template -> repos core upgrade cannot reach\n\n'
 
@@ -2562,6 +2647,31 @@ for d in "$ESTATE"/*/; do
   fi
   printf '%s\t%s\t%s\t%s\n' "$label" "$d" "$slug" "$base" >> "$TARGETS"
   printf '%-26s \033[33mdrifted\033[0m%s\n' "$label" "$delta"
+
+  # Does this repo already carry an open sync PR, and if so is it already
+  # falling behind or unmergeable? Recorded regardless of state (phase 2 needs
+  # to know a PR exists at all, to decide whether to refresh a repo whose
+  # rehearsal fails) but only REPORTED here as its own condition when the
+  # state is one a human would have to notice -- an ordinary CLEAN open PR is
+  # not news, it is the expected state of "drifted, PR already out".
+  #
+  # `2>/dev/null` folds "no PR exists yet" and "gh could not tell" into the
+  # same empty read on purpose: this is an ADDITIONAL signal layered on top of
+  # the drift detection above, not a required one, so "cannot tell" here must
+  # fail closed to the behaviour this round already had before defect 2 was
+  # fixed (leave the repo alone) rather than risk acting on a guess.
+  _pr_info=$(gh pr view chore/sync-shared -R "$slug" \
+    --json number,mergeStateStatus,url --jq '[.number,.mergeStateStatus,.url] | @tsv' 2>/dev/null)
+  if [ -n "$_pr_info" ]; then
+    printf '%s%s%s\n' "$label" "$TAB" "$_pr_info" >> "$ROTTEN"
+    case "$(printf '%s' "$_pr_info" | cut -f2)" in
+      BEHIND | DIRTY)
+        rotting=$((rotting + 1))
+        printf '%-26s   \033[31mits open sync PR is %s\033[0m - %s (biffo-template#2004: this round refreshes the branch onto %s regardless of today'"'"'s rehearsal, so it cannot stay unmergeable)\n' \
+          '' "$(printf '%s' "$_pr_info" | cut -f2)" "$(printf '%s' "$_pr_info" | cut -f3)" "$base"
+        ;;
+    esac
+  fi
 done
 
 # `current + drifted + failed` is every repo the loop above actually looked
@@ -3100,7 +3210,17 @@ else
       NO-CI) printf '%-26s \033[90mNO-CI\033[0m %s\n' "$label" "$detail" ;;
       *)
         printf '%-26s \033[31mFAIL\033[0m  %s\n' "$label" "$detail"
-        printf '%-26s       staged tree left at %s\n' '' "$d/.worktrees/shared-sync"
+        # biffo-template#2004 defect 2: a repo already carrying an open sync
+        # PR (recorded in $ROTTEN by the survey loop, before phase 1 ever
+        # runs) does NOT keep this staged tree around -- phase 2 commits and
+        # pushes it anyway, to refresh that PR's branch onto the base, then
+        # reaps it exactly as a successful ship would. Saying "left at ..."
+        # for a tree that is about to be pushed and removed would be false.
+        if grep -q "^$label${TAB}" "$ROTTEN" 2>/dev/null; then
+          printf '%-26s       has an open sync PR -- phase 2 refreshes its branch onto the base despite this failure, then reaps this tree\n' ''
+        else
+          printf '%-26s       staged tree left at %s\n' '' "$d/.worktrees/shared-sync"
+        fi
         rehearsal_failures=$((rehearsal_failures + 1)) ;;
     esac
     printf '%s%s%s%s%s\n' "$label" "$TAB" "$verdict" "$TAB" "$detail" >> "$VERDICTS"
@@ -3161,12 +3281,34 @@ while IFS="$TAB" read -r label d slug base; do
   # stage_repo would just reproduce the identical refusal a second time.
   grep -q "^$label${TAB}BLOCKED${TAB}" "$VERDICTS" 2>/dev/null && continue
   # biffo-template#1632: a rehearsal FAILURE is isolated to its own repo (see
-  # the phase 1 report above) -- already counted in `failed` there. Its staged
-  # worktree is deliberately left in place for a human to inspect (the FAIL
-  # branch in phase 1 says so), and ship_repo must never run against it: the
-  # tree failed ITS OWN gate, so pushing it would open a PR nobody asked for
-  # and this loop must not silently drop the worktree it was left there for.
-  grep -q "^$label${TAB}FAIL${TAB}" "$VERDICTS" 2>/dev/null && continue
+  # the phase 1 report above) -- already counted in `failed` there. ship_repo
+  # (which would open a PR nobody asked for on a tree that failed its own
+  # gate) must never run against it, and that part is unchanged.
+  #
+  # biffo-template#2004 defect 2: what changed is that a repo whose rehearsal
+  # just failed is not necessarily starting from nothing -- the survey loop
+  # recorded, in $ROTTEN, every drifted repo that already carries an open
+  # sync PR. For one of those, leaving the staged worktree untouched (the old
+  # behaviour) means the branch that PR points at never moves again until
+  # someone happens to fix the rehearsal failure in the template -- which is
+  # exactly how two real PRs fell BEHIND and then went DIRTY while this
+  # repo's own gate kept failing for other reasons. refresh_rotting_pr commits
+  # and force-pushes the SAME staged tree onto the current base regardless,
+  # so the branch itself can never be BEHIND or DIRTY even while the content
+  # it carries keeps failing the gate -- and it reaps the worktree on success,
+  # same as ship_repo does. A repo with no open PR yet gets none of this: the
+  # worktree is left in place for a human to inspect, same as before.
+  if grep -q "^$label${TAB}FAIL${TAB}" "$VERDICTS" 2>/dev/null; then
+    if grep -q "^$label${TAB}" "$ROTTEN" 2>/dev/null; then
+      if refresh_rotting_pr "$d" "$label" "$base"; then
+        rotting_refreshed=$((rotting_refreshed + 1))
+      fi
+      # Not `failed=$((failed + 1))` either way: phase 1's own FAIL-verdict
+      # loop already counted this repo once, and a refresh outcome here is
+      # additional information about the SAME failure, not a second one.
+    fi
+    continue
+  fi
   # --no-rehearse skips phase 1 entirely, so nothing has staged these yet.
   if [ -n "$NO_REHEARSE" ]; then
     stage_repo "$d" "$label" "$base"
@@ -3179,6 +3321,12 @@ while IFS="$TAB" read -r label d slug base; do
   fi
   if ship_repo "$d" "$label" "$slug" "$base"; then
     synced=$((synced + 1))
+    # A repo that rehearsed PASS and was already in $ROTTEN got refreshed by
+    # the ordinary ship_repo push above (it rebuilds the branch from the
+    # current base every time, same as refresh_rotting_pr does for a FAIL) --
+    # count it here so the summary below never says a rotting PR was left
+    # unrefreshed when it was fixed by the normal path.
+    grep -q "^$label${TAB}" "$ROTTEN" 2>/dev/null && rotting_refreshed=$((rotting_refreshed + 1))
   else
     failed=$((failed + 1))
   fi
@@ -3186,6 +3334,22 @@ done < "$TARGETS"
 
 printf '\n%s current, %s drifted, %s PR(s) opened' "$current" "$drifted" "$synced"
 [ "${failed:-0}" -gt 0 ] && printf ', \033[31m%s failed\033[0m' "$failed"
-printf '\n\n'
+printf '\n'
+# Distinct from the drifted count above on purpose (biffo-template#2004 defect
+# 2): a rotting PR is not "drift nothing has shipped for yet", it is "already
+# shipped, and nothing merged it before its branch started decaying" -- folding
+# it into `drifted` is what let two of them decay all the way to DIRTY while
+# every daily report kept saying only "drifted".
+if [ "${rotting:-0}" -gt 0 ]; then
+  printf '\033[33m%s already-open sync PR(s) were BEHIND or DIRTY\033[0m going into this round' \
+    "$rotting"
+  if [ "${rotting_refreshed:-0}" -gt 0 ]; then
+    printf ' -- %s refreshed onto the current base, so %s branch can no longer be unmergeable\n' \
+      "$rotting_refreshed" "$([ "$rotting_refreshed" -eq 1 ] && echo its || echo their)"
+  else
+    printf ' -- see the lines above for why none could be refreshed this round\n'
+  fi
+fi
+printf '\n'
 [ "${failed:-0}" -gt 0 ] && exit 1
 exit 0

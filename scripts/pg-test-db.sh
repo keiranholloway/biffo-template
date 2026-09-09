@@ -598,7 +598,7 @@ fi
 # unverifiable, not innocent, so it rebuilds rather than being trusted.
 if [ -n "$HAVE" ] && [ "$HAVE" = "$WANT" ]; then
   if [ -z "$HAVE_POLICIES" ] || [ -z "$HAVE_MODULES" ]; then
-    say "fingerprint matches but this row predates stored counts (#2023) - unverifiable, rebuilding rather than trusting it"
+    say "fingerprint matches but this row predates stored policy/module counts - unverifiable, rebuilding rather than trusting it"
   else
     _live_policies=$(psql -tAq -h "$HOST" -p "$PORT" -U "$USER_" -d "$DB" \
       -c "SELECT count(*) FROM pg_policies" 2>/dev/null || echo 0)

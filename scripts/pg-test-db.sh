@@ -35,8 +35,9 @@
 # `verify.sh` does: forks drift, and a per-instance copy of this would drift from
 # the DDL layout it is meant to build. Everything instance-specific is DERIVED --
 # the schema directories from `db/imports/*/`, the engine image from whether the
-# DDL asks for PostGIS, and the did-it-build threshold from the number of
-# policies the DDL itself declares. Nothing here names a product.
+# DDL asks for PostGIS, and the did-it-build check from what THIS repo's own
+# last known-good build actually produced (see #2023 below), never from a
+# guessed ratio. Nothing here names a product.
 #
 # ## Usage
 #
@@ -557,20 +558,63 @@ fingerprint() {
 
 WANT=$(fingerprint)
 HAVE=""
+HAVE_POLICIES=""
+HAVE_MODULES=""
 if [ "$RECREATE" -eq 0 ] &&
   psql_admin -tAc "SELECT 1 FROM pg_database WHERE datname='$DB'" 2>/dev/null | grep -q 1; then
   HAVE=$(psql -tAq -h "$HOST" -p "$PORT" -U "$USER_" -d "$DB" \
     -c "SELECT value FROM biffo_pg_test_fingerprint LIMIT 1" 2>/dev/null || true)
+  # policy_count/module_count were added alongside this guard (#2023). A row
+  # written before that migration has neither column, so this query fails
+  # (unknown column) rather than returning NULL, and `|| true` turns that
+  # failure into the same empty string a genuinely missing value would give --
+  # which is exactly what "unverifiable, so rebuild" needs below: it must read
+  # identically to "no stored count", never silently as "verified".
+  HAVE_POLICIES=$(psql -tAq -h "$HOST" -p "$PORT" -U "$USER_" -d "$DB" \
+    -c "SELECT policy_count FROM biffo_pg_test_fingerprint LIMIT 1" 2>/dev/null || true)
+  HAVE_MODULES=$(psql -tAq -h "$HOST" -p "$PORT" -U "$USER_" -d "$DB" \
+    -c "SELECT module_count FROM biffo_pg_test_fingerprint LIMIT 1" 2>/dev/null || true)
 fi
 
+# ── #2023: reuse must be verified against a known-good build, not a guess ────
+#
+# The old guard compared the live policy count to HALF of what the DDL
+# *declares* (`grep -c CREATE POLICY`) -- a number a correct, complete build
+# never reaches (521 declared vs. 362 produced on tabsii-platform, so the
+# healthy ratio is ~0.70, not 1.0). A database missing a quarter of its schema
+# passed it and was then blessed with a fingerprint every later run trusted.
+#
+# Worse, that check only ever ran on a fresh REBUILD (old section 4 below). The
+# reuse path here never re-verified anything beyond the content hash matching --
+# so a template that drifted after being blessed, by any means, was reused
+# forever with no check of its own at all.
+#
+# The fix compares against reality instead of a guess: on every successful
+# build (section 4), THIS script records the counts that build actually
+# produced. A fingerprint match only says the DDL inputs are unchanged; it says
+# nothing about whether the database in front of us still reflects what was
+# built from them. So reuse additionally requires the live counts to equal the
+# stored ones, exactly -- and a row with no stored counts (pre-#2023) is
+# unverifiable, not innocent, so it rebuilds rather than being trusted.
 if [ -n "$HAVE" ] && [ "$HAVE" = "$WANT" ]; then
-  say "schema is current, reusing $DB"
-  clone_for_this_run
-  emit
-  exit 0
+  if [ -z "$HAVE_POLICIES" ] || [ -z "$HAVE_MODULES" ]; then
+    say "fingerprint matches but this row predates stored policy/module counts - unverifiable, rebuilding rather than trusting it"
+  else
+    _live_policies=$(psql -tAq -h "$HOST" -p "$PORT" -U "$USER_" -d "$DB" \
+      -c "SELECT count(*) FROM pg_policies" 2>/dev/null || echo 0)
+    _live_modules=0
+    [ -n "$DDL_FILES" ] && _live_modules=$(echo "$DDL_FILES" | wc -l | tr -d ' ')
+    if [ "${_live_policies:-0}" = "$HAVE_POLICIES" ] && [ "$_live_modules" = "$HAVE_MODULES" ]; then
+      say "schema is current ($_live_policies policies, $_live_modules modules), reusing $DB"
+      clone_for_this_run
+      emit
+      exit 0
+    fi
+    say "fingerprint matches but live schema diverged from its own record (have $_live_policies policies/$_live_modules modules, recorded $HAVE_POLICIES/$HAVE_MODULES) - rebuilding rather than reusing a partial schema"
+  fi
 fi
 
-[ -n "$HAVE" ] && say "schema inputs changed - rebuilding rather than serving a stale schema"
+[ -n "$HAVE" ] && [ "$HAVE" != "$WANT" ] && say "schema inputs changed - rebuilding rather than serving a stale schema"
 
 # --- 3. rebuild the way the app and CI do ------------------------------------
 say "rebuilding $DB"
@@ -589,6 +633,7 @@ if [ -n "$ALEMBIC_DIR" ]; then
   say "alembic upgrade head"
 fi
 
+_module_count=0
 if [ -n "$DDL_FILES" ]; then
   # ONE psql session, sorted by filename, mirroring the API's own DDL import.
   # Session state an early module sets -- typically `SET search_path` in the
@@ -598,38 +643,37 @@ if [ -n "$DDL_FILES" ]; then
   # shellcheck disable=SC2046
   psql -q -v ON_ERROR_STOP=1 -h "$HOST" -p "$PORT" -U "$USER_" -d "$DB" \
     --single-transaction $(echo "$DDL_FILES" | sed 's/^/-f /' | tr '\n' ' ') >/dev/null
-  say "$(echo "$DDL_FILES" | wc -l | tr -d ' ') DDL modules applied"
+  _module_count=$(echo "$DDL_FILES" | wc -l | tr -d ' ')
+  say "$_module_count DDL modules applied"
 fi
 
-# --- 4. refuse to bless a half-built schema ----------------------------------
+# --- 4. record what this build actually produced (#2023) ---------------------
 #
-# The threshold is derived, not guessed: count the policies the DDL declares and
-# require the database to hold at least half. Recording a fingerprint against a
-# partial schema is worse than failing, because the NEXT run would trust it and
-# every failure after that would look like the developer's own change.
+# No guessed threshold here anymore. The DDL apply above is one
+# `--single-transaction`, `ON_ERROR_STOP=1` psql session, so a build that fails
+# partway already aborts the whole script before reaching this line -- it does
+# not limp to here half-applied. What DOES reach here is simply recorded, and
+# it is that RECORD -- this build's own live counts, not a guess at what they
+# "should" be -- that the reuse guard above checks every later database
+# against. See the comment there for why a guessed ratio (521 declared, 362
+# produced) blessed a schema missing a quarter of itself.
+_policy_count=0
 if [ -n "$DDL_FILES" ]; then
-  _declared=$(echo "$DDL_FILES" | xargs grep -ciE '^[[:space:]]*CREATE[[:space:]]+POLICY' 2>/dev/null |
-    awk -F: '{s+=$NF} END {print s+0}')
-  if [ "${_declared:-0}" -gt 0 ]; then
-    _actual=$(psql -tAq -h "$HOST" -p "$PORT" -U "$USER_" -d "$DB" \
-      -c "SELECT count(*) FROM pg_policies" 2>/dev/null || echo 0)
-    if [ "${_actual:-0}" -lt $((_declared / 2)) ]; then
-      say "only ${_actual:-0} policies present against $_declared declared - the schema did not build."
-      say "Not recording a fingerprint; fix the DDL and re-run."
-      exit 1
-    fi
-    say "$_actual RLS policies ($_declared declared)"
-  fi
+  _policy_count=$(psql -tAq -h "$HOST" -p "$PORT" -U "$USER_" -d "$DB" \
+    -c "SELECT count(*) FROM pg_policies" 2>/dev/null || echo 0)
+  say "$_policy_count RLS policies, $_module_count DDL modules applied"
 fi
 
 psql_db \
   -c "CREATE TABLE IF NOT EXISTS biffo_pg_test_fingerprint (value text primary key)" \
+  -c "ALTER TABLE biffo_pg_test_fingerprint ADD COLUMN IF NOT EXISTS policy_count integer" \
+  -c "ALTER TABLE biffo_pg_test_fingerprint ADD COLUMN IF NOT EXISTS module_count integer" \
   -c "TRUNCATE biffo_pg_test_fingerprint" \
-  -c "INSERT INTO biffo_pg_test_fingerprint (value) VALUES ('$WANT')" >/dev/null
+  -c "INSERT INTO biffo_pg_test_fingerprint (value, policy_count, module_count) VALUES ('$WANT', $_policy_count, $_module_count)" >/dev/null
 
-# Only now, with the fingerprint recorded against a schema that passed the
-# check above, is the template fit to copy. Cloning earlier would hand out a
-# half-built database and record the failure against whoever ran next.
+# Only now, with the fingerprint and its counts recorded against a build that
+# actually completed, is the template fit to copy. Cloning earlier would hand
+# out a half-built database and record the failure against whoever ran next.
 clone_for_this_run
 
 say "ready"

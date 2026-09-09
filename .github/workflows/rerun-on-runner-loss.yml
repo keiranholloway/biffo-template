@@ -1,0 +1,78 @@
+# Re-run a test lane once when the RUNNER died, not when the change is broken.
+#
+# A reclaimed self-hosted spot runner produces a check whose conclusion is
+# `failure`, indistinguishable at that level from a real test failure. The
+# distinguishing evidence is the annotation the Actions service writes on the
+# dead job, and nothing fetches it -- so a PR sits red until a person looks, and
+# both people and agents routinely read it as a broken change. On
+# tabsii-com/tabsii-platform#1420 that cost three builder dispatches and a
+# blocker filed at the owner, for a failure one re-run would have cleared.
+#
+# scripts/rerun-on-runner-loss.sh holds the whole decision and its own
+# self-test; this file is only the trigger and the permission grant.
+name: Re-run on runner loss
+
+on:
+  # WHICH WORKFLOWS, NAMED EXPLICITLY, AND WHY NOT ALL OF THEM.
+  #
+  # Omitting this list would make the workflow fire on EVERY workflow's
+  # completion -- including its own, which is an infinite loop. It is also
+  # deliberately test lanes only: a deploy killed part-way is not safely
+  # re-runnable without knowing what it had already applied, and that judgement
+  # belongs to a person, not to this file.
+  #
+  # Names that do not exist in a given instance are simply inert, so this one
+  # list can carry the estate's lane names without every repo having all of them
+  # (`RLS Tests` exists in tabsii-platform, not here).
+  workflow_run:
+    workflows: ['CI', 'RLS Tests', 'Release Guards']
+    types: [completed]
+  # For exercising the real thing against a real run id without waiting for an
+  # eviction. Needed because a `workflow_run` workflow cannot be tested from a
+  # pull request at all -- see the note on the default branch below.
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: The workflow run id to consider re-running
+        required: true
+        type: string
+
+# `actions: write` is the whole point -- it is what `gh run rerun` needs.
+# `contents: read` for the checkout. Nothing else: this workflow must not be
+# able to touch code, statuses or pull requests.
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  rerun:
+    name: Re-run once if the runner was lost
+    # CHEAP BEFORE EXPENSIVE. These two conditions are re-asserted inside the
+    # script (so a `workflow_dispatch` by hand is judged identically), but
+    # evaluating them here means an ordinary green run never starts a job at all.
+    #
+    # `run_attempt == 1` is simultaneously the once-only rule and the recursion
+    # guard: this workflow's own re-run produces attempt 2, which can never
+    # satisfy this condition, so it cannot re-trigger itself. There is no
+    # counter to keep and no state to store.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'failure' &&
+       github.event.workflow_run.run_attempt == 1)
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    timeout-minutes: 10
+    steps:
+      # A `workflow_run` workflow ALWAYS runs the default branch's copy of
+      # itself and of everything it checks out, whatever branch the run it is
+      # reacting to came from. Two consequences, both wanted:
+      #   1. This has no effect at all until it is merged to the default branch,
+      #      so it cannot be verified on the pull request that adds it. Use the
+      #      `workflow_dispatch` input above against a real failed run instead.
+      #   2. A pull request cannot alter the re-run logic that judges it.
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - name: Re-run the failed jobs, only if a runner was lost
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.event.inputs.run_id || github.event.workflow_run.id }}
+        run: sh scripts/rerun-on-runner-loss.sh "$RUN_ID"

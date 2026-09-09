@@ -1516,6 +1516,14 @@ fi
 [ -f scripts/verify-deployed.test.sh ] && run_check verify-deployed sh scripts/verify-deployed.test.sh
 [ -f scripts/branch-health-plan-only-detection.test.sh ] &&
   run_check branch-health-plan-only sh scripts/branch-health-plan-only-detection.test.sh
+# Same shape (#1997): stubs `gh` on PATH, so no network and no Actions run.
+# Measured here: ~0.2s. It belongs in the local gate rather than CI alone because
+# the workflow it guards CANNOT be exercised by CI at all -- a `workflow_run`
+# workflow only ever runs the default branch's copy, so the pull request that
+# adds or changes one never runs it, and this self-test is the only thing that
+# sees the change before it is live.
+[ -f scripts/rerun-on-runner-loss.test.sh ] &&
+  run_check rerun-on-runner-loss sh scripts/rerun-on-runner-loss.test.sh
 
 # The DDL module-number allocator's own race-freedom proof (#1886): races real
 # `git` processes against throwaway local bare repos (never a mock of git, and

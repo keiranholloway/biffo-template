@@ -16,17 +16,31 @@
 # (biffo-plugin-idea-scout PR #126) -- is the evidence for that exact
 # wording; this file does not re-derive it.
 #
+# That same "I/O error" shape hit Case 1's own negative control for real, in
+# guard-self-test-wiring.sh's CI run (34391849474, job 102607880682, head
+# eeabce12): the runner's dash does not die to SIGPIPE the way this
+# workstation's does -- its printf builtin catches the broken pipe, reports
+# "printf: printf: I/O error" to stderr, returns a nonzero status, and lets
+# the subshell keep running past it. Case 1's check used to recognise only
+# the SIGPIPE-death shape (marker file absent) and treated any marker
+# present as "the defect didn't reproduce" -- so on that runner it failed
+# for the same reason the fix exists: an outcome the control's own author
+# had not seen. The fix is to the control's DETECTION, not the mechanism
+# under test: it accepts either manifestation of the same defect (killed
+# outright, or survived with a reported failure) as reproduced.
+#
 # ## Case 1: deterministic proof of the pipe-shape defect and its fix
 #
 # Removes scheduling luck from the underlying mechanism instead of racing
 # for it: the writer sleeps briefly before writing, so a reader that exits
 # immediately is GUARANTEED to have already closed its read end before the
 # writer's first write() call. Shows the OLD shape (writer piped straight
-# into a reader that may close early) reliably kills the writer before it
-# can even report its own exit code, and the NEW shape this fix uses (write
-# to a regular file first, read the FINISHED file) never does, regardless of
-# payload size or timing -- because there is no concurrent writer left for a
-# reader to break.
+# into a reader that may close early) never gets through cleanly -- either
+# the writer is killed before it can report anything, or it survives but its
+# own write reports the broken pipe as a failure -- and the NEW shape this
+# fix uses (write to a regular file first, read the FINISHED file) never
+# does either, regardless of payload size or timing -- because there is no
+# concurrent writer left for a reader to break.
 #
 # ## Case 2: the real script, end to end, with a >4000-byte finding
 #
@@ -84,16 +98,52 @@ PAYLOAD="$(head -c 2000000 /dev/zero | tr '\0' 'a')"
 # reads nothing and exits immediately). The `sleep 0.5` guarantees the
 # reader has already exited and closed its read end before the writer's
 # first write() call -- this is not racing the scheduler, it is removing
-# the race. If the writer is killed by SIGPIPE mid-write, it never reaches
-# its own `echo "$?" > marker` line, so the marker file is the proof: absent
-# means the writer did not survive to report anything.
+# the race.
+#
+# The manifestation of "the writer did not survive" is NOT uniform across
+# dash builds. On this workstation, the write gets SIGPIPE and the whole
+# subshell dies mid-write, so it never reaches the `printf_rc` capture below
+# and the marker file is simply absent -- that used to be the only shape
+# this case checked for. But the CI runner's dash does NOT die to the
+# signal: its printf builtin catches the broken pipe itself, prints
+# "printf: printf: I/O error" to stderr, returns a NONZERO exit status, and
+# the subshell keeps running past it -- there is no `&&`/`set -e` between
+# these statements -- so the marker gets written anyway. Confirmed verbatim
+# in run 34391849474 job 102607880682: line 91 (this line) is exactly where
+# "I/O error" was reported, and the case still failed with "unexpectedly let
+# the writer complete", because the old check only recognised the
+# SIGPIPE-death shape and treated ANY marker as proof the writer silently
+# succeeded -- including one written after printf itself had just reported
+# failure.
+#
+# So the marker now carries printf's own exit status instead of a fixed
+# "wrote", and either manifestation of the same underlying defect counts as
+# reproduced: the writer is killed outright (marker absent), or it survives
+# but printf reports the broken pipe as a failure (marker present with a
+# nonzero code, or stderr non-empty). Only a marker present with an
+# unqualified rc=0 and empty stderr -- meaning the write to an
+# already-closed reader somehow succeeded without a trace -- fails to
+# reproduce the defect this case exists to demonstrate.
 old_marker="$WORK_DIR/old_marker"
-( sleep 0.5; printf '%s' "$PAYLOAD"; echo "wrote" > "$old_marker" ) | { : ; } 2>"$WORK_DIR/old_stderr"
+old_stderr="$WORK_DIR/old_stderr"
+(
+  sleep 0.5
+  printf '%s' "$PAYLOAD"
+  printf_rc=$?
+  echo "$printf_rc" > "$old_marker"
+) | { : ; } 2>"$old_stderr"
+
+old_rc=""
+if [ -s "$old_marker" ]; then
+  old_rc=$(cat "$old_marker")
+fi
 
 if [ ! -s "$old_marker" ]; then
-  echo "PASS: old pipe shape (writer | early-closing reader) kills the writer before it can complete -- the defect #1995 reports, reproduced deterministically"
+  echo "PASS: old pipe shape (writer | early-closing reader) kills the writer before it can report anything -- the defect #1995 reports, reproduced deterministically (writer terminated outright, e.g. by SIGPIPE)"
+elif [ "$old_rc" != "0" ] || [ -s "$old_stderr" ]; then
+  echo "PASS: old pipe shape (writer | early-closing reader) lets the writer survive but its own write reports the broken pipe as a failure -- the defect #1995 reports, reproduced deterministically (printf exit=$old_rc, stderr: $(tr '\n' ' ' < "$old_stderr"))"
 else
-  echo "FAIL: old pipe shape unexpectedly let the writer complete -- the defect this case exists to demonstrate did not reproduce"
+  echo "FAIL: old pipe shape unexpectedly let the writer complete with no error of any kind -- the defect this case exists to demonstrate did not reproduce"
   FAILURES=$((FAILURES + 1))
 fi
 

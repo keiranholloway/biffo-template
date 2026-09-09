@@ -1,12 +1,22 @@
+import asyncio
 import json
 from collections.abc import AsyncGenerator
 from urllib.parse import quote
 
+from aws_lambda_powertools import Logger
+from sqlalchemy import text
 from sqlalchemy.engine import make_url
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 from sqlalchemy.pool import NullPool
 
 from .config import settings
+
+logger = Logger()
 
 
 def _fetch_secret(secret_arn: str) -> dict:
@@ -136,19 +146,113 @@ def _connect_args_for(search_path: str) -> dict[str, object]:
     return {}
 
 
-engine = create_async_engine(
-    resolve_app_database_url(),
-    # Both arguments are load-bearing — see the `sql_echo` comment in config.py.
-    # `echo` is off unless someone explicitly sets BIFFO_SQL_ECHO (no Biffo
-    # environment does), and `hide_parameters` keeps the values out of the log
-    # even then — and out of StatementError messages regardless.
-    echo=settings.sql_echo,
-    hide_parameters=True,
-    poolclass=NullPool,
-    connect_args=_connect_args_for(settings.db_search_path),
-)
+def _build_engine() -> AsyncEngine:
+    """Construct the request-path engine from *currently* resolved settings.
+
+    Factored out of the module-level assignment below so it can be called
+    again later, from `rebuild_engine_after_restore()` (#2003) — the same
+    construction, re-run rather than reused, is what lets a SnapStart restore
+    pick up a rotated credential instead of resuming whatever `resolve_app_
+    database_url()` returned once, at import time, months before a given
+    restore happens.
+    """
+    return create_async_engine(
+        resolve_app_database_url(),
+        # Both arguments are load-bearing — see the `sql_echo` comment in
+        # config.py. `echo` is off unless someone explicitly sets
+        # BIFFO_SQL_ECHO (no Biffo environment does), and `hide_parameters`
+        # keeps the values out of the log even then — and out of
+        # StatementError messages regardless.
+        echo=settings.sql_echo,
+        hide_parameters=True,
+        poolclass=NullPool,
+        connect_args=_connect_args_for(settings.db_search_path),
+    )
+
+
+engine = _build_engine()
 
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
+
+
+async def _prime_connection(target_engine: AsyncEngine) -> None:
+    """Open and release one connection so its TCP/TLS/Postgres-startup cost is
+    paid now, not on the first real request.
+
+    NullPool means the connection this opens is not retained (see the module
+    comment above `_build_engine` for why an app-side pool is not the fix
+    here) — the very next request still opens its own. What this buys is
+    *timing*, not a cache: SnapStart's restore phase already runs, and is
+    measured, before the platform dispatches the invoke it restored for
+    (tabsii-platform#1239 measured ~700ms for it, independent of anything
+    this repo controls), so a connection opened here is one a concurrent
+    burst of restores does not all have to open for the first time inside
+    the handler `Duration` a user is waiting on.
+    """
+    async with target_engine.connect() as conn:
+        await conn.execute(text("SELECT 1"))
+
+
+def rebuild_engine_after_restore() -> None:
+    """Re-derive the engine (and its session factory) from current state.
+
+    `engine` is a module-level singleton built once, at import time (#2003) —
+    exactly what a SnapStart snapshot captures. Every future restore of that
+    snapshot resumes the identical object, however stale the credential or
+    endpoint `resolve_app_database_url()` returned has become by the time a
+    given restore actually happens, potentially long after the snapshot was
+    taken and across many separate restores of it. NullPool means no live
+    connection is captured — each request opens and releases its own, so
+    there is no stale socket to worry about — but the URL/credentials baked
+    into the engine object itself do not re-resolve on their own.
+
+    Registered as the SnapStart `afterRestore` hook (main.py), so every
+    restored container re-derives this rather than resuming whatever import
+    time happened to capture (#2003's fix level 2: automatic, not a detector).
+
+    Best-effort by construction, and the two try/excepts below are what make
+    that true — `main.py` registers this function directly with
+    `snapshot_restore_py` and wraps nothing around the call itself (its only
+    try/except guards the *registration-time* `import snapshot_restore_py`,
+    which is unrelated). So every failure mode this function can hit,
+    including `_build_engine()` re-fetching a credential from Secrets
+    Manager, has to be caught in here or it propagates uncaught out of the
+    SnapStart `afterRestore` hook and fails that restore/invocation (#2015).
+    Neither a credential re-fetch nor a warm-up connection is worth failing a
+    restore over:
+
+    - If `_build_engine()` or the sessionmaker construction raises, `engine`/
+      `AsyncSessionLocal` are left untouched — still the pre-restore objects
+      — so the next request opens its own connection through them exactly as
+      it does today, same as if this hook had not run at all.
+    - If only the warm-up connection below fails, the rebuild has already
+      succeeded and is kept: `engine`/`AsyncSessionLocal` are the new
+      objects, just not pre-warmed. The next request pays the connection
+      cost itself, same as it always does under `NullPool`.
+    """
+    global engine, AsyncSessionLocal
+    try:
+        new_engine = _build_engine()
+        new_session_local = async_sessionmaker(new_engine, expire_on_commit=False)
+    except Exception:
+        # Never let a rebuild failure (Secrets Manager throttled or briefly
+        # unreachable at restore time, a mid-rotation credential, ...) fail
+        # the restore itself. `engine`/`AsyncSessionLocal` are untouched
+        # here, so the next real request falls back to today's behaviour: it
+        # opens its own connection through the pre-restore engine, same as
+        # if this hook did not exist.
+        logger.warning("SnapStart afterRestore: engine rebuild failed", exc_info=True)
+        return
+    engine = new_engine
+    AsyncSessionLocal = new_session_local
+    try:
+        asyncio.run(_prime_connection(engine))
+    except Exception:
+        # Never let a warm-up failure (DB briefly unreachable at restore time,
+        # a mid-rotation credential, ...) fail the restore itself. The first
+        # real request falls back to today's behaviour: it opens its own
+        # connection, same as if this hook did not exist.
+        logger.warning("SnapStart afterRestore: connection warm-up failed", exc_info=True)
 
 
 async def get_db() -> AsyncGenerator[AsyncSession]:

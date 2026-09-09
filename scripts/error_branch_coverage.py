@@ -204,7 +204,57 @@ class Branch:
     label: str
 
     def key(self) -> str:
-        return f"{self.path}:{self.kind}:{self.label}"
+        """The ratchet's identity for this branch. Must not collide (#2026).
+
+        Two textually-identical branches in one file — two different
+        functions each with a bare `except ValueError:` — are common: the
+        vocabulary of exception type names is finite and heavily reused, and
+        `label` for a `fallback` is truncated to 50 chars on top of that. A
+        key of `path:kind:label` alone collapses both onto one entry, so a
+        second, genuinely new, never-executed branch sharing a label with an
+        already-baselined one in the same file was silently absorbed into
+        that entry: it was printed (the analyser saw it) but never marked
+        NEW, and `--check` exited 0 over an unverified branch nobody had
+        looked at. Confirmed live: a second unexecuted `except ValueError`
+        added in the same file as an already-baselined one produced no NEW
+        marker and exit 0, while a distinctly-labeled addition in the same
+        run was correctly flagged — isolating the cause to the missing
+        position, not to anything else about the change.
+
+        `line` is included to close that gap, chosen deliberately over an
+        occurrence ordinal among same-labeled branches in the file (e.g.
+        "2nd `except ValueError` in this file"). Both carry a cost and
+        neither is free:
+
+        - **Line number** (chosen): a new branch cannot collide with an
+          existing key at all, short of landing on the exact line number a
+          deleted branch used to occupy — vanishingly unlikely, since that
+          requires a line-count-preserving edit that puts an unrelated new
+          branch at that exact spot. The cost is churn: an unrelated edit
+          that shifts a baselined branch down a few lines (an import added
+          above it, a docstring reflowed) makes its key change too, so it
+          reads as NEW and the gate cries wolf until `--write` re-accepts
+          it. `unexecuted()`'s own docstring already documents that this
+          script's line-based coverage join is shift-sensitive in exactly
+          this way, so this does not introduce a new fragility, only extends
+          an existing one from the coverage join into the baseline key.
+        - **Occurrence ordinal** (rejected): stable under a line shift
+          elsewhere in the file, but ambiguous under reordering. If a
+          baselined branch is removed and an unrelated new same-labeled
+          branch appears earlier in the file than a survivor, the survivor's
+          ordinal shifts onto the new branch's — reproducing this exact
+          issue by a different route, because an ordinal is still a
+          position, just a fragile relative one instead of a stable
+          absolute one.
+
+        Level reached: 3 (fail-closed) rather than 4 (detect-only) — a
+        distinct line number for every distinct AST node means a genuinely
+        new branch cannot be absorbed into an existing entry at all, not
+        merely flagged more often. Changing this format means every
+        instance's committed baseline must be regenerated; see the PR that
+        introduced this comment for the exact command.
+        """
+        return f"{self.path}:{self.line}:{self.kind}:{self.label}"
 
 
 def _handler_label(node: ast.ExceptHandler) -> str:

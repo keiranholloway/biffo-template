@@ -322,7 +322,7 @@ class TestSourceRootMustMatchTheMeasuredRevision:
         accepted = under_test / ebc.BASELINE_REL
         accepted.parent.mkdir(parents=True, exist_ok=True)
         accepted.write_text(
-            json.dumps({"total": 1, "branches": ["m.py:fallback:if BAD -> None"]}) + "\n"
+            json.dumps({"total": 1, "branches": ["m.py:3:fallback:if BAD -> None"]}) + "\n"
         )
         cov = tmp_path / "coverage.json"
         cov.write_text(json.dumps(self.COVERAGE))
@@ -550,3 +550,122 @@ class TestEmptyCoverageReportFailsClosed:
         monkeypatch.setattr("sys.argv", ["x", "--check", "--coverage", str(cov)])
         assert ebc.main() == 0
         assert "1 file" in capsys.readouterr().out
+
+
+class TestSameLabeledBranchesDoNotCollideOnOneKey:
+    """#2026 — `Branch.key()` used to be `path:kind:label`, with no position.
+
+    Two textually-identical branches in one file (two different functions
+    each with a bare `except ValueError:`) collapsed onto the same key. If
+    one was already baselined, a second, genuinely new, never-executed
+    branch sharing its label was silently absorbed into that baseline entry.
+    The real corpus reproduction (issue body): a second, unexecuted
+    `except ValueError` at line 523 of a file whose line 181 handler was
+    already baselined was listed in the report but carried no `NEW` marker,
+    and `--check` exited 0.
+
+    `Branch.key()` now includes the branch's line number, so two branches
+    can only collide if they sit at the exact same line — impossible for
+    two distinct AST nodes in one file.
+    """
+
+    def test_two_branches_sharing_a_label_in_one_file_get_distinct_keys(self):
+        # Mirrors the issue's shape: two unrelated functions, each with its
+        # own bare `except ValueError:`.
+        src = (
+            "def a():\n"
+            "    try:\n"
+            "        f()\n"
+            "    except ValueError:\n"
+            "        pass\n"
+            "\n"
+            "\n"
+            "def b():\n"
+            "    try:\n"
+            "        g()\n"
+            "    except ValueError:\n"
+            "        pass\n"
+        )
+        found = _branches(src)
+        assert [b.label for b in found] == ["except ValueError", "except ValueError"]
+        # This is the assertion that fails against the pre-fix key format
+        # (`path:kind:label`) — see the class docstring and the PR body for
+        # the captured failing output:
+        #   >>> {b.key() for b in found}
+        #   {'x.py:except:except ValueError'}   # len 1 -- the two collapsed
+        keys = {b.key() for b in found}
+        assert len(keys) == 2, f"two distinct branches collapsed onto one key: {keys}"
+
+
+class TestSecondSameLabeledBranchInABaselinedFileIsNotAbsorbed:
+    """#2026 end to end, through `main()` exactly as the ratchet runs it.
+
+    The issue's exact scenario: a file already has one baselined
+    `except ValueError`. A second, entirely new, never-executed
+    `except ValueError` is added elsewhere in the SAME file. `--check` must
+    flag it `NEW` and exit 1 — not silently absorb it into the existing
+    baseline entry.
+    """
+
+    def _write(self, tmp_path: Path, name: str, coverage: dict) -> Path:
+        p = tmp_path / name
+        p.write_text(json.dumps(coverage))
+        return p
+
+    # One already-baselined `except ValueError`, in function `a`, body at
+    # line 5.
+    _BEFORE = "def a():\n    try:\n        f()\n    except ValueError:\n        pass\n"
+
+    def test_the_new_occurrence_is_flagged_and_check_fails(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setattr(ebc, "REPO_ROOT", tmp_path)
+        baseline = tmp_path / "baseline.json"
+        monkeypatch.setattr(ebc, "BASELINE", baseline)
+
+        (tmp_path / "m.py").write_text(self._BEFORE)
+        cov_before = self._write(
+            tmp_path,
+            "coverage.json",
+            {"files": {"m.py": {"executed_lines": [2, 3], "missing_lines": [5]}}},
+        )
+        monkeypatch.setattr("sys.argv", ["x", "--write", "--coverage", str(cov_before)])
+        assert ebc.main() == 0
+        recorded = json.loads(baseline.read_text())
+        assert recorded["total"] == 1
+
+        # Add a second, entirely new, uncalled, never-executed
+        # `except ValueError` in a different function in the SAME file --
+        # the issue's exact shape (a second unexecuted handler sharing a
+        # label with one already in the baseline).
+        after_src = self._BEFORE + (
+            "\n\ndef b():\n    try:\n        g()\n    except ValueError:\n        pass\n"
+        )
+        (tmp_path / "m.py").write_text(after_src)
+        # Confirm the fixture actually adds a second same-labelled branch at
+        # a genuinely different line before asserting anything about main().
+        new_branch_line = ebc.error_branches(ast.parse(after_src), "m.py")[1].line
+        assert new_branch_line != 5
+
+        cov_after = self._write(
+            tmp_path,
+            "coverage.json",
+            {
+                "files": {
+                    "m.py": {
+                        "executed_lines": [2, 3, 9, 10],
+                        "missing_lines": [5, new_branch_line],
+                    }
+                }
+            },
+        )
+        monkeypatch.setattr("sys.argv", ["x", "--check", "--coverage", str(cov_after)])
+
+        assert ebc.main() == 1, (
+            "the second, never-executed except ValueError was silently absorbed "
+            "into the first's baseline entry instead of being flagged NEW (#2026)"
+        )
+        out, err = capsys.readouterr()
+        new_marker_lines = [line for line in out.splitlines() if line.strip().startswith("NEW")]
+        assert any(f":{new_branch_line}" in line for line in new_marker_lines), out
+        # The already-baselined branch (line 5) must NOT be flagged new.
+        assert not any(":5 " in line for line in new_marker_lines)
+        assert "1 error branch(es) added" in err

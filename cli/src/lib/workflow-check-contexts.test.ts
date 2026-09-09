@@ -118,6 +118,10 @@ describe.runIf(SKELETON)('against the real plugin skeleton', () => {
       'Lint',
       'Type Check',
       'Test',
+      // biffo-template#2009. Proves the `user_frontend` bundle (web/dist,
+      // ADR-0021 §2) actually builds — a scaffolded plugin repo cannot merge
+      // a `web/` that fails to lint, typecheck, test or build.
+      'Frontend (web/)',
       'Validate biffo.plugin.json',
       // #1244. The skeleton ships a terraform/ module and, until now, nothing
       // that looked at it. Adding the job adds a required context, which is the

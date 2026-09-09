@@ -231,7 +231,20 @@ audit_deps() {
         done < "$findings_file"
         rm -f "$findings_file"
 
-        printf '%s' "$out" | jq '[.dependencies[] | select(.vulns | length > 0)]' 2>/dev/null | head -c 4000
+        # Written to a regular file first, then truncated with `head -c` from
+        # that file rather than from a live pipe -- the same reason
+        # `findings_file` above does it. `head -c 4000` piped directly onto
+        # `jq`'s output closes its read end the instant it has enough bytes;
+        # if the filtered JSON exceeds 4000 bytes, jq (and on a big enough
+        # payload, the upstream `printf` still writing into jq's now-closed
+        # stdin) can get SIGPIPE and dash's builtin `printf` reports that as a
+        # stray "printf: I/O error" line into an otherwise-clean, passing log
+        # (#1995). Reading a finished, regular file has no concurrent writer
+        # to break, so there is no pipe left for `head` to close early on.
+        dump_file="$(mktemp)"
+        printf '%s' "$out" | jq '[.dependencies[] | select(.vulns | length > 0)]' 2>/dev/null > "$dump_file"
+        head -c 4000 "$dump_file"
+        rm -f "$dump_file"
 
         if [ "$introduced_count" -gt 0 ]; then
           echo "::error::${label}: ${introduced_count} vulnerability(ies) introduced or upgraded by this diff (${preexisting_count} more pre-existing, not counted against it)."

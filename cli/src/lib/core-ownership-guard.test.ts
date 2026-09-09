@@ -134,9 +134,75 @@ describe('checkCoreOwnership — what it lets through', () => {
     const result = check({
       changedFiles: ['services/api/src/api/main.py'],
       branch: upgradeBranchName('0.23.3', '0.41.18'),
+      // Simulates the CLI's own mechanical commit: every changed path is
+      // also one the mechanical commit itself touched (#1993).
+      upgradeCommitFiles: ['services/api/src/api/main.py'],
     })
     expect(result.skipped).toBe('upgrade-branch')
     expect(result.blocked).toEqual([])
+  })
+
+  /**
+   * #1993 regression, reproduced live on tabsii-platform#1420: the CLI's own
+   * mechanical commit exempted the whole BRANCH, so a second, human/agent
+   * commit pushed onto the same branch was never re-evaluated against the
+   * manifest at all. `test_divergence_declaration.py` sits under
+   * `services/api/src/api/domains/`, which THIS repo's own real manifest (not
+   * a fixture) declares user-owned by longest prefix -- so it was never going
+   * to be *blocked* either way. The defect is that the pre-fix guard never
+   * even looked: it returned `skipped: 'upgrade-branch'` for the WHOLE diff,
+   * so a template-owned file riding along on that same later commit would
+   * have been waved through identically. Fail-first: against the pre-fix
+   * logic (a bare `branch.startsWith(UPGRADE_BRANCH_PREFIX)` early return)
+   * this failed — `result.skipped` was `'upgrade-branch'`, not `null`,
+   * because the whole branch was exempted regardless of `upgradeCommitFiles`.
+   */
+  it('re-evaluates a LATER commit on the same upgrade branch instead of blanket-skipping it (#1993)', () => {
+    const mechanical = 'services/api/src/api/main.py'
+    const laterCommit = 'services/api/src/api/domains/tabsii/tests/test_divergence_declaration.py'
+    const result = check({
+      changedFiles: [mechanical, laterCommit],
+      branch: upgradeBranchName('0.312.0', '0.312.5'),
+      // Only the mechanical commit's own path is exempt -- `laterCommit` was
+      // added by a second commit the CLI never wrote.
+      upgradeCommitFiles: [mechanical],
+    })
+    // Correctly unblocked (it genuinely is user-owned)... but via the guard
+    // actually running on it, not via a blanket branch-name skip.
+    expect(result.skipped).toBeNull()
+    expect(result.blocked).toEqual([])
+  })
+
+  /**
+   * The sibling of the test above, and the one that shows the actual teeth:
+   * a LATER commit that touches a genuinely TEMPLATE-owned path (the general
+   * class #1993 describes, not just the one literal file from the issue) IS
+   * blocked, exactly as it would be on any non-upgrade branch. The pre-fix
+   * whole-branch skip would have exempted this too — it does not distinguish
+   * one changed path from another once the branch name matches.
+   */
+  it('DOES block a LATER commit that edits a genuinely template-owned path (#1993)', () => {
+    const mechanical = 'services/api/src/api/main.py'
+    const laterCommit = 'packages/ui/src/index.ts' // template-owned, per this repo's manifest
+    const result = check({
+      changedFiles: [mechanical, laterCommit],
+      branch: upgradeBranchName('0.312.0', '0.312.5'),
+      upgradeCommitFiles: [mechanical],
+    })
+    expect(result.skipped).toBeNull()
+    expect(result.blocked).toEqual([laterCommit])
+  })
+
+  it('exempts NOTHING on an upgrade branch when the mechanical commit could not be determined (#1993)', () => {
+    // `upgradeCommitFiles` unset/null means "could not tell" and must fail
+    // CLOSED -- the opposite of the pre-fix behaviour, which fell back to
+    // exempting the entire branch on name alone.
+    const result = check({
+      changedFiles: ['services/api/src/api/main.py'],
+      branch: upgradeBranchName('0.23.3', '0.41.18'),
+    })
+    expect(result.skipped).toBeNull()
+    expect(result.blocked).toEqual(['services/api/src/api/main.py'])
   })
 
   /**
@@ -221,9 +287,12 @@ describe('resolveBranch', () => {
   })
 
   it('exempts the upgrade PR end to end, which is the whole point', () => {
+    const changedFiles = ['services/api/src/api/main.py', 'packages/ui/src/index.ts']
     const result = check({
-      changedFiles: ['services/api/src/api/main.py', 'packages/ui/src/index.ts'],
+      changedFiles,
       branch: resolveBranch({ GITHUB_HEAD_REF: upgradeBranch }, 'HEAD'),
+      // Both paths came from the mechanical commit itself in this scenario.
+      upgradeCommitFiles: changedFiles,
     })
     expect(result.skipped).toBe('upgrade-branch')
     expect(result.blocked).toEqual([])

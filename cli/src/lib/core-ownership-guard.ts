@@ -242,6 +242,29 @@ export interface OwnershipCheckInput {
    * genuine one — see `knownOrphans` below, and #1362 instance #8.
    */
   templateShippedPaths?: Set<string> | null
+  /**
+   * Paths touched by the upgrade branch's OWN mechanical commit — the one
+   * `biffo core upgrade --apply` itself writes. On an upgrade branch, ONLY a
+   * changed path that is also in this set is exempted from the ownership
+   * check; every other changed path is evaluated exactly as it would be on
+   * any other branch (#1993).
+   *
+   * `undefined`/`null` means the caller could not determine the mechanical
+   * commit's own diff. Unlike `templateShippedPaths`, this does NOT fall back
+   * to the old behaviour — the old behaviour (skip the whole branch on name
+   * alone) IS the bug this field exists to close. "Could not tell" therefore
+   * exempts nothing, the same fail-closed posture the rest of this guard
+   * takes. Both real callers (the CI diff runner and the local commit-msg
+   * hook) always compute it, so this only matters for a caller that has not
+   * been wired up — and such a caller should fail closed, not reopen #1993.
+   *
+   * Reproduced live on tabsii-platform#1420: a second, human+agent-authored
+   * commit landed on an upgrade branch touching a user-owned path, and the
+   * whole-branch skip let it through with `skipped: 'upgrade-branch'`. Only
+   * paths in the FIRST commit's own diff may use that reason; a later commit
+   * on the same branch gets no exemption it did not itself earn.
+   */
+  upgradeCommitFiles?: string[] | null
 }
 
 export interface OwnershipCheckResult {
@@ -277,6 +300,7 @@ export function checkCoreOwnership({
   commitMessage = '',
   warnOnly = [],
   templateShippedPaths = null,
+  upgradeCommitFiles = null,
 }: OwnershipCheckInput): OwnershipCheckResult {
   const empty = {
     blocked: [],
@@ -289,10 +313,23 @@ export function checkCoreOwnership({
   // The template owns these paths; editing them is its purpose.
   if (!isInstance) return { skipped: 'template', ...empty }
 
-  // A core upgrade is precisely when template-owned paths are meant to change.
-  if (branch.startsWith(UPGRADE_BRANCH_PREFIX)) return { skipped: 'upgrade-branch', ...empty }
+  // A core upgrade is precisely when template-owned paths are meant to
+  // change — but only for the CLI's own mechanical commit, not for the
+  // branch as a whole (#1993). A path is exempt only if it is also one the
+  // mechanical commit itself touched; everything else changed on this branch
+  // (a later human/agent commit, most commonly) is checked exactly as it
+  // would be anywhere else. `upgradeCommitFiles` unset/null means "could not
+  // determine" and exempts nothing, never everything.
+  let effectiveChangedFiles = changedFiles
+  if (branch.startsWith(UPGRADE_BRANCH_PREFIX)) {
+    const exempt = new Set(upgradeCommitFiles ?? [])
+    effectiveChangedFiles = changedFiles.filter((f) => !exempt.has(f))
+    if (effectiveChangedFiles.length === 0) return { skipped: 'upgrade-branch', ...empty }
+    // Fall through: some changed path was not part of the mechanical commit's
+    // own diff, so the guard runs on the remainder exactly as normal.
+  }
 
-  const manifestTemplateOwned = changedFiles.filter((f) => isTemplateOwned(f, manifest))
+  const manifestTemplateOwned = effectiveChangedFiles.filter((f) => isTemplateOwned(f, manifest))
 
   // Split out paths the real template tree disagrees with the manifest about,
   // when we have a real tree to ask. `planCoreUpgrade`'s classify()

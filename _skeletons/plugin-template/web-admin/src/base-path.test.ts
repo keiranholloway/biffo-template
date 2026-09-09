@@ -16,21 +16,33 @@ import { describe, expect, it } from 'vitest'
  * check, generalised so a plugin scaffolded from this skeleton inherits it
  * automatically rather than every plugin author re-discovering the bug.
  *
- * Reads the plugin name OUT of vite.config.ts itself rather than hardcoding
- * it, so this file needs no token substitution at scaffold time and stays
- * correct whatever `biffo plugin create` rewrites `base` to.
+ * The expected plugin name comes from `biffo.plugin.json`'s own `name`
+ * field — an independent ground truth scaffolded alongside vite.config.ts —
+ * NOT from parsing it back out of the config under test. An earlier version
+ * of this file did the latter and was proven tautological
+ * (biffo-template#2024): it regex-extracted the "expected" name from the same
+ * base string it then checked, so a base that was internally self-consistent
+ * but named the WRONG plugin — exactly the idea-scout#1492
+ * paste-from-a-sibling shape this file is named after — still passed every
+ * assertion. `biffo.plugin.json`'s `name` is set once, at scaffold time, by
+ * `biffo plugin create`'s token substitution — the same operation that
+ * rewrites vite.config.ts's own `example-plugin` token — so it cannot be
+ * derived from a wrong vite.config.ts and cannot be fooled by a bad paste
+ * from it.
  */
 const ROOT = join(__dirname, '..')
 
-function pluginFromConfig(config: string): string {
-  const match = config.match(/base:\s*'\/api\/v1\/plugins\/([^/]+)\/admin\/'/)
-  expect(match, "no `base: '/api/v1/plugins/<name>/admin/'` found in vite.config.ts").not.toBeNull()
-  return match![1]
+function expectedPluginName(): string {
+  const manifest = JSON.parse(readFileSync(join(ROOT, '..', 'biffo.plugin.json'), 'utf8')) as {
+    name?: string
+  }
+  expect(manifest.name, 'biffo.plugin.json has no top-level `name`').toBeTruthy()
+  return manifest.name!
 }
 
 describe('vite base path', () => {
+  const plugin = expectedPluginName()
   const config = readFileSync(join(ROOT, 'vite.config.ts'), 'utf8')
-  const plugin = pluginFromConfig(config)
 
   it('is the full API Gateway path for THIS plugin', () => {
     expect(config).toContain(`base: '/api/v1/plugins/${plugin}/admin/'`)

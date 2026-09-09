@@ -9,14 +9,18 @@ actually happens (possibly long after the snapshot was taken, and across many
 separate restores of it), and with no hook to re-derive anything. `main.py`
 carried no restore decorator at all.
 
-These tests pin three things: (1) rebuilding replaces the module singletons
+These tests pin four things: (1) rebuilding replaces the module singletons
 with fresh objects rather than mutating the old ones in place, (2) a failed
 warm-up connection (DB briefly unreachable, mid-rotation credential, ...)
-never raises out of the restore path, and (3) the hook only ever registers
-when the Lambda-injected `snapshot_restore_py` module is actually present --
-absent everywhere except a real SnapStart-enabled function version -- so
-this must be a no-op under pytest, `sam local`, and any instance that has not
-turned SnapStart on.
+never raises out of the restore path and keeps the newly-built engine, (3) a
+failed `_build_engine()` itself (#2015 -- e.g. a Secrets Manager blip on the
+credential re-fetch) never raises out of the restore path either, and leaves
+the pre-restore `engine`/`AsyncSessionLocal` in place rather than swapping in
+anything half-built, and (4) the hook only ever registers when the
+Lambda-injected `snapshot_restore_py` module is actually present -- absent
+everywhere except a real SnapStart-enabled function version -- so this must
+be a no-op under pytest, `sam local`, and any instance that has not turned
+SnapStart on.
 """
 
 from __future__ import annotations
@@ -67,6 +71,36 @@ def test_rebuild_engine_after_restore_replaces_the_module_singletons(
         database.rebuild_engine_after_restore()  # must not raise
         assert database.engine is not original_engine
         assert database.AsyncSessionLocal is not original_sessionmaker
+    finally:
+        database.engine = original_engine
+        database.AsyncSessionLocal = original_sessionmaker
+
+
+def test_rebuild_engine_after_restore_swallows_a_build_engine_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#2015: `_build_engine()` itself can raise -- it calls
+    `resolve_app_database_url()`, which for any instance with a configured
+    app/db secret ARN makes a live Secrets Manager `get_secret_value` call,
+    which can fail transiently (throttling, a network blip, IAM briefly
+    denying during a credential rotation window) -- exactly the "mid-rotation
+    credential" scenario the docstring names. That must not propagate out of
+    the SnapStart `afterRestore` hook, and unlike a warm-up-only failure, the
+    rebuild never happened at all here, so the pre-restore `engine`/
+    `AsyncSessionLocal` must be left in place rather than swapped for
+    anything half-built."""
+
+    def _boom() -> object:
+        raise RuntimeError("simulated: Secrets Manager unreachable during restore")
+
+    monkeypatch.setattr(database, "_build_engine", _boom)
+
+    original_engine = database.engine
+    original_sessionmaker = database.AsyncSessionLocal
+    try:
+        database.rebuild_engine_after_restore()  # must not raise
+        assert database.engine is original_engine
+        assert database.AsyncSessionLocal is original_sessionmaker
     finally:
         database.engine = original_engine
         database.AsyncSessionLocal = original_sessionmaker

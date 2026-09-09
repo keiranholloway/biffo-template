@@ -209,14 +209,42 @@ def rebuild_engine_after_restore() -> None:
     Registered as the SnapStart `afterRestore` hook (main.py), so every
     restored container re-derives this rather than resuming whatever import
     time happened to capture (#2003's fix level 2: automatic, not a detector).
-    Best-effort by construction — see the try/except around the call site in
-    main.py and around the connection warm-up below: a hook that raises stops
-    the restore, and neither a credential re-fetch nor a warm-up connection
-    is worth failing a restore over.
+
+    Best-effort by construction, and the two try/excepts below are what make
+    that true — `main.py` registers this function directly with
+    `snapshot_restore_py` and wraps nothing around the call itself (its only
+    try/except guards the *registration-time* `import snapshot_restore_py`,
+    which is unrelated). So every failure mode this function can hit,
+    including `_build_engine()` re-fetching a credential from Secrets
+    Manager, has to be caught in here or it propagates uncaught out of the
+    SnapStart `afterRestore` hook and fails that restore/invocation (#2015).
+    Neither a credential re-fetch nor a warm-up connection is worth failing a
+    restore over:
+
+    - If `_build_engine()` or the sessionmaker construction raises, `engine`/
+      `AsyncSessionLocal` are left untouched — still the pre-restore objects
+      — so the next request opens its own connection through them exactly as
+      it does today, same as if this hook had not run at all.
+    - If only the warm-up connection below fails, the rebuild has already
+      succeeded and is kept: `engine`/`AsyncSessionLocal` are the new
+      objects, just not pre-warmed. The next request pays the connection
+      cost itself, same as it always does under `NullPool`.
     """
     global engine, AsyncSessionLocal
-    engine = _build_engine()
-    AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        new_engine = _build_engine()
+        new_session_local = async_sessionmaker(new_engine, expire_on_commit=False)
+    except Exception:
+        # Never let a rebuild failure (Secrets Manager throttled or briefly
+        # unreachable at restore time, a mid-rotation credential, ...) fail
+        # the restore itself. `engine`/`AsyncSessionLocal` are untouched
+        # here, so the next real request falls back to today's behaviour: it
+        # opens its own connection through the pre-restore engine, same as
+        # if this hook did not exist.
+        logger.warning("SnapStart afterRestore: engine rebuild failed", exc_info=True)
+        return
+    engine = new_engine
+    AsyncSessionLocal = new_session_local
     try:
         asyncio.run(_prime_connection(engine))
     except Exception:

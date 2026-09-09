@@ -15,6 +15,12 @@ dependencies = [
   "biffo-plugin-sdk>=1.0,<2.0",
   "aws-lambda-powertools[tracer]>=3.4.0",
   "httpx>=0.28.1",
+  # ASGI apps for the `user_ingress`/`admin_ingress` surfaces (ADR-0021) —
+  # the shared plugin host imports and mounts `<module>:app` directly, so this
+  # is the only new runtime dependency the two placeholder apps need (no
+  # mangum/pyjwt: the host provides the Lambda entry and enforces
+  # `required_group` itself — see user_app.py's docstring).
+  "fastapi>=0.115.0",
 ]
 
 [dependency-groups]

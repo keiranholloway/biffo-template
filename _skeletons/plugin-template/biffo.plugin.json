@@ -80,8 +80,8 @@
     }
   ],
   "ui_components": [
-    { "type": "nav-link", "label": "Example Plugin", "path": "/admin/example-plugin" },
-    { "type": "page", "label": "Widgets", "path": "/admin/example-plugin/widgets" }
+    { "type": "nav-link", "label": "Example Plugin", "path": "/admin/plugins/example-plugin" },
+    { "type": "page", "label": "Widgets", "path": "/admin/plugins/example-plugin/widgets" }
   ],
   "seed": {
     "dir": "db/seed",
@@ -89,5 +89,17 @@
   },
   "dependencies": {
     "biffo-plugin-sdk": "^1.0"
+  },
+  "user_ingress": {
+    "required_group": "founder",
+    "app": "example_plugin.user_app:app"
+  },
+  "admin_ingress": {
+    "required_group": "admin",
+    "app": "example_plugin.admin_app:app"
+  },
+  "user_frontend": {
+    "dir": "web/dist",
+    "required_group": "founder"
   }
 }

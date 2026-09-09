@@ -163,17 +163,40 @@ beforeAll(() => {
   // comfortably clears the suite's default 10s hook timeout; give this one
   // real headroom.
   //
-  // 120s was measured generous once, but this hook does a real `npm install`
-  // against the live registry with no cache reuse between runs (a fresh
-  // `installDir` every time), so its wall time tracks host disk/CPU
-  // contention rather than anything this repo controls. On a loaded shared
-  // workstation it was measured at 145-219s across four independent runs of
-  // an otherwise-unrelated change (#2021's js-yaml/sharp override-floor
-  // bump touches neither dependency of the published CLI package, and
-  // `npm install` of the packed tarball never reads pnpm's overrides in the
-  // first place) -- so the timeout, not the install, was what was too
-  // tight. 300s keeps this a real ceiling rather than a guess matched to
-  // the one bad run that found it.
+  // 120s was raised to 300s in #2028 (commit ccaad3d2) on the theory that the
+  // slowness tracked "host disk/CPU contention, not this repo's dependency
+  // content". That attribution is FALSE (#2030) — the real cause is local to
+  // this hook's own copy step and has nothing to do with host load:
+  //
+  //   - Measured 2026-09-09 in a REUSED worktree (.worktrees/agent-2021),
+  //     this hook took 145.29s and 142.73s across two runs. `du` on that
+  //     worktree showed `_skeletons/plugin-template/web-admin` at 146M and
+  //     `_skeletons/sibling-template/apps/frontend` at 570M -- both purely
+  //     GITIGNORED, UNTRACKED `node_modules/` directories, left behind by
+  //     that same PR's own earlier lockfile refresh (`pnpm install
+  //     --ignore-workspace`, run in place in that worktree).
+  //   - The "Assemble the mirror" step above copies `_skeletons/` with
+  //     `cpSync(..., { recursive: true })`, which does NOT consult
+  //     `.gitignore` -- so it faithfully drags those stray multi-hundred-MB
+  //     `node_modules/` trees into the mirror, and from there into `npm
+  //     pack`'s input, on every single run.
+  //   - A genuinely FRESH worktree of the IDENTICAL commit has no
+  //     `node_modules/` under `_skeletons` at all (880K and 1.1M for the
+  //     same two paths) and the SAME hook completes in 10.52s and 10.92s --
+  //     comfortably under the ORIGINAL 120s ceiling. The parent commit
+  //     (fa0c8a0b) also ran in ~10s in a fresh worktree both before and
+  //     after the slow measurement above, which rules out time-varying host
+  //     load as the explanation.
+  //
+  // So: a reused worktree carrying gitignored `node_modules/` under
+  // `_skeletons` inflates this hook's wall time roughly FOURTEEN-FOLD
+  // (~10s -> ~145s), purely because the recursive copy is gitignore-blind.
+  // Every CI runner and every dispatch-supervised worktree in this estate is
+  // a fresh checkout, so they see the ~10s case, not the ~145s one. 300s is
+  // harmless slack for the reused-worktree case measured here -- it is NOT
+  // evidence of a real CI time budget, and must not be read as one, or cited
+  // as proof of host contention, when this hook (or its timeout) is next
+  // touched.
 }, 300_000)
 
 describe('the built bundle, run in place', () => {

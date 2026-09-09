@@ -1,8 +1,13 @@
 name: CI
 
 # Scaled down from biffo-template's own root .github/workflows/ci.yml for a
-# single Python package: a plugin repo (per ADR-0003) extends the SDK and
-# has no JS/TS of its own.
+# single Python package extending the SDK (per ADR-0003), plus the founder-
+# facing frontend bundle a `user_frontend` plugin ships in `web/` (ADR-0021
+# §2). It is deliberately NOT scaled down to zero JS/TS: this skeleton's own
+# `web/` is exactly that bundle, and the `frontend` job below is what proves a
+# freshly scaffolded plugin builds it with no edits — see A2:
+# biffo-template#2009. `web-admin/` (the separate `admin_ingress` surface) is
+# untouched here; its own CI wiring is tracked separately.
 #
 # It DOES have Terraform. This comment used to claim the opposite — "no
 # Terraform of its own; Terraform, if a plugin ships any, is provisioned by the
@@ -24,6 +29,9 @@ concurrency:
 
 env:
   PYTHON_VERSION: '3.13'
+  # Matches biffo-template's own root ci.yml NODE_VERSION (#2009) — the
+  # `frontend` job below is the only consumer of this in the skeleton today.
+  NODE_VERSION: '22'
 
 jobs:
   lint:
@@ -159,6 +167,58 @@ jobs:
         if: always()
         with:
           files: coverage.xml
+
+  frontend:
+    name: Frontend (web/)
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    timeout-minutes: 20
+    # Proves the `user_frontend` bundle (ADR-0021 §2, biffo.plugin.json's
+    # "dir": "web/dist") actually builds. Before this job existed, the
+    # manifest declared it and nothing in this skeleton's own CI checked it —
+    # the exact drift docs/guides/development-practices.md records for
+    # web-admin/ ("nothing checked the frontend's lint, types, tests or
+    # whether it built"), here fixed at the source rather than patched
+    # downstream in every scaffolded plugin (biffo-template#2009).
+    #
+    # `web/` is its own package (its own package.json + lockfile), not a
+    # pnpm workspace member of this repo — `--ignore-workspace` matches
+    # deploy-app.yml's own build of this same directory (grep
+    # `plugin_dir/web` there), for the same reason: without it pnpm silently
+    # installs this repo's root deps instead and skips `web/` entirely.
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - id: install
+        working-directory: web
+        run: pnpm install --ignore-workspace --frozen-lockfile
+      - name: Lint
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        working-directory: web
+        run: pnpm run lint
+      - name: Type check
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        working-directory: web
+        run: pnpm run typecheck
+      # Build BEFORE test, deliberately — web/src/base-path.test.ts's second
+      # assertion reads dist/index.html and skips itself (with a visible
+      # warning, not a silent pass) when dist/ is absent. Running the real
+      # build first is what turns that assertion from a permanent no-op into
+      # an actual check of the built asset paths, catching the exact class of
+      # bug (a `base` pasted from a sibling) that no other local gate caught
+      # for web-admin/'s equivalent (see the `frontend` job's header comment).
+      - name: Build
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        working-directory: web
+        run: pnpm run build
+      - name: Test
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        working-directory: web
+        run: pnpm run test
 
   validate-manifest:
     name: Validate biffo.plugin.json

@@ -258,6 +258,39 @@ def _ensure_event_loop() -> asyncio.AbstractEventLoop:
     return _event_loop
 
 
+def _register_snapstart_restore_hook() -> None:
+    """Register `database.rebuild_engine_after_restore` as the SnapStart
+    afterRestore hook (#2003).
+
+    `snapshot_restore_py` is injected by the Lambda Python runtime itself,
+    and only into a function version that actually has SnapStart applied
+    (`apply_on = "PublishedVersions"`, off by default —
+    modules/cloud/aws/compute/variables.tf). It does not exist under pytest,
+    `sam local`, or any instance that has not turned SnapStart on, so this
+    must degrade to a no-op rather than raise -- an ImportError here would
+    fail every one of those, not just the SnapStart-enabled case this exists
+    for.
+
+    Calling this at module import time (here, top-to-bottom in `main.py`,
+    which every invocation path imports before `lambda_handler` can run) is
+    what makes the registration itself survive the snapshot: SnapStart
+    freezes the INIT phase, so a hook registered after this module finishes
+    importing would never have run before the checkpoint and so would not be
+    part of what gets restored.
+    """
+    try:
+        import snapshot_restore_py  # pyright: ignore[reportMissingImports]
+    except ImportError:
+        return
+
+    from .database import rebuild_engine_after_restore
+
+    snapshot_restore_py.register_after_restore(rebuild_engine_after_restore)
+
+
+_register_snapstart_restore_hook()
+
+
 # Assigned here, after every app.include_router() call above, not at module
 # top as a Logger()-style module constant (#1779). Tracer()'s __init__
 # unconditionally calls aws_lambda_powertools' own _patch_xray_provider(),

@@ -877,6 +877,23 @@ jobs:
         # Every case is `timeout`-bounded because WITHOUT the fix they do not
         # exit at all -- an unguarded regression would hang CI rather than fail.
         run: sh scripts/wait-for-checks-deadline.test.sh
+      - name: Re-run on runner loss — self-test
+        if: ${{ !cancelled() }}
+        # #1997. The guarded property has TWO directions and the dangerous one is
+        # the second: missing a reclaimed runner only leaves a PR red for nothing,
+        # but mistaking a REAL failure for a runner loss re-runs a broken change
+        # until something gives up, manufacturing the appearance of flakiness on a
+        # deterministic bug. So the must-not-catch cases carry as much weight here
+        # as the must-catch one, and both are asserted against the real script.
+        #
+        # Behavioural, with `gh` stubbed on PATH -- the script's entire contract
+        # with the outside world is four `gh` calls, so stubbing that boundary
+        # exercises the real decision with no network and no Actions run. It also
+        # covers the case CI itself can never reach: a `workflow_run` workflow
+        # only ever runs the DEFAULT branch's copy, so the workflow that ships
+        # alongside this script is unverifiable on the pull request that adds it,
+        # and this self-test is the only gate that sees it before it is live.
+        run: sh scripts/rerun-on-runner-loss.test.sh
       - name: Guard self-test wiring audit
         if: ${{ !cancelled() }}
         # #1705: three scripts/*.test.sh guards -- branch-health-workflow-run-

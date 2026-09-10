@@ -1,0 +1,268 @@
+name: Dependency-audit base-branch scan
+
+# The Case 2 half of #2040's fix: an advisory published against something
+# already sitting on `dev`, unrelated to any open PR's diff.
+#
+# ## Why this exists as its own scheduled workflow rather than living only
+# ## in the per-PR `js`/`python` jobs
+#
+# The per-PR audit (js-dependency-audit.sh / py-dependency-audit.sh, run
+# inside the required `js`/`python` jobs since #2040) is now diff-aware: it
+# fails only on an advisory that is NEW to a PR's own lockfile diff, not one
+# already present on the base branch. That is correct and deliberate -- it
+# is what makes the per-PR check safe to be required again after #1880/#1882
+# made it non-blocking -- but it also means a Case 2 advisory (published
+# against `dev` itself, with no PR responsible for it) is now, BY
+# CONSTRUCTION, invisible to every open PR's own check. There has to be
+# SOMETHING that still looks at `dev` directly, on the same cadence
+# advisories are actually published, or Case 2 goes undetected forever
+# rather than merely unblocked.
+#
+# This is that caller -- the same shape as this repo's five other scheduled
+# report workflows (orphan-ratchet-report.yml, shared-sync-report.yml,
+# instance-adoption-report.yml, core-direct-paths-report.yml,
+# distribution-remote-state-report.yml): run a real check against real
+# current state, on a schedule, and turn a finding into ONE tracking issue
+# per finding rather than a report nobody reads.
+#
+# ## One issue PER ADVISORY, not one issue for the whole run
+#
+# Every other scheduled report opens exactly one issue for its whole run,
+# because there is exactly one thing to say ("an instance carries an
+# unsanctioned file", "a repo is out of sync"). A dependency scan can find
+# SEVERAL distinct advisories in the same run -- #2040's own incident was
+# two, the same evening -- and each is its own independently actionable,
+# rankable, buildable, prosecutable unit; folding them into one issue would
+# make the fleet either build all-or-nothing or hand-split a filed issue
+# back into several, which is work this workflow can do once instead.
+# scripts/dependency-advisory-issue.sh (with its own idempotence self-test,
+# scripts/dependency-advisory-issue.test.sh) is the per-advisory
+# find-or-create-by-title unit, reusing the exact "search open issues by
+# exact title, comment if found, create if not" pattern every other
+# scheduled report already uses -- see that script's own header for why it
+# is a separate, testable unit rather than inline workflow shell.
+#
+# ## What this scan covers, and what it does not (yet)
+#
+# js-dependency-audit.sh / py-dependency-audit.sh are run for real against
+# `dev`, with NO GITHUB_BASE_REF set -- exactly the "push/workflow_dispatch"
+# context those scripts already treat as "no diff to compare against, so
+# report everything currently found" (see each script's own "Pre-existing
+# vs introduced" doc comment). That gives the authoritative, multi-tree,
+# fail-closed pass/fail signal this job's own step summary and exit code
+# report, covering the workspace root AND every vendored/skeleton lockfile
+# tree those scripts discover.
+#
+# Turning a finding into a structured (ecosystem, advisory id, package,
+# severity) tuple for scripts/dependency-advisory-issue.sh, however, reads
+# this REPO'S OWN workspace-root `pnpm audit --json` / `uv run pip-audit -f
+# json` output directly -- not the hardened scripts' printed text. The two
+# scripts intentionally report in human-readable prose (the required-check
+# case has no downstream consumer that needs structure), and pip-audit's
+# per-package error line does not carry the vuln id at all (only the
+# truncated JSON dump does) -- scraping that reliably is more fragile than
+# asking twice, seconds apart, for a report workflow where an occasional
+# missed vendored-tree advisory is a much smaller cost than a brittle
+# parser. This is a real, named limitation, not a silent one: a finding
+# ONLY in a vendored/skeleton tree (not the workspace root) is caught by
+# the pass/fail signal above (so the workflow still goes red and files
+# SOMETHING) but will not get its own per-advisory issue from this version.
+# Extending the structured extraction to every discovered tree is
+# follow-up, not attempted here.
+#
+# ## Cadence
+#
+# 08:15 UTC -- after every other scheduled estate report (06:00-07:30), so
+# this does not add to the same-window API pressure those already avoid
+# stacking.
+
+on:
+  schedule:
+    - cron: '15 8 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: dependency-audit-report
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: '22'
+  PYTHON_VERSION: '3.13'
+
+jobs:
+  report:
+    name: Scan dev for dependency advisories and file/update tracking issues
+    # Deliberately NO `github.repository ==` guard, unlike this repo's five
+    # cross-repo scheduled reports (orphan-ratchet-report.yml and siblings).
+    # Those clone OTHER repos from the template and would open a duplicate
+    # tracking issue in every instance if each ran its own copy -- so they
+    # are guarded to the template only. This workflow does the opposite: it
+    # scans its OWN checkout's OWN `dev` and files issues in its OWN repo,
+    # with no cross-repo state and no BIFFO_GITHUB_TOKEN. `.github/` and
+    # `scripts/` are template-owned, so this file and its
+    # dependency-advisory-issue.sh dependency both ride an ordinary
+    # `biffo core upgrade` into every instance -- and once an instance
+    # upgrades to a core version carrying it, it is meant to run there too,
+    # scanning that instance's own app-specific lockfiles (apps/portal,
+    # services/api, ...) and filing issues in that instance's own repo. A
+    # template-only guard here would make the scan a permanent no-op in
+    # every instance, which is the opposite of the point: apps/portal's own
+    # next/vitest advisories are exactly the #2040 incident this exists to
+    # catch, and those live only in instances, never in the template.
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: dev
+          fetch-depth: 0
+
+      - name: Re-point the checkout at the current origin/dev tip
+        run: |
+          set -eu
+          git fetch origin dev --prune
+          git reset --hard origin/dev
+          behind=$(git rev-list --count HEAD..origin/dev)
+          if [ "$behind" -ne 0 ]; then
+            echo "::error title=dependency-audit-report: checkout still behind origin/dev::Reset to origin/dev but still $behind commit(s) behind." >&2
+            exit 1
+          fi
+          echo "checkout is at origin/dev tip: $(git rev-parse --short HEAD)"
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - id: install
+        run: pnpm install --frozen-lockfile
+      - name: uv sync
+        id: install_py
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: uv sync --all-groups --locked
+
+      # Authoritative pass/fail/inconclusive signal, exactly the hardened
+      # scripts every PR's `js`/`python` job already runs -- no
+      # GITHUB_BASE_REF is set here (this is a push/workflow_dispatch-shaped
+      # invocation, not a PR), so both scripts fall back to their
+      # pre-#2040/#1673 behaviour: every current finding is reported,
+      # because there is no diff to attribute it to. That is the CORRECT
+      # behaviour for a base-branch scan: it wants everything currently on
+      # `dev`, not only what changed since some other ref.
+      - name: JS dependency audit against dev (informational log + exit code)
+        id: js_audit
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: |
+          set +e
+          sh scripts/js-dependency-audit.sh 2>&1 | tee "$RUNNER_TEMP/js-audit.log"
+          rc=${PIPESTATUS[0]:-$?}
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          exit 0
+        shell: bash
+
+      - name: Python dependency audit against dev (informational log + exit code)
+        id: py_audit
+        if: ${{ !cancelled() && steps.install_py.outcome == 'success' }}
+        run: |
+          set +e
+          sh scripts/py-dependency-audit.sh 2>&1 | tee "$RUNNER_TEMP/py-audit.log"
+          rc=${PIPESTATUS[0]:-$?}
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          exit 0
+        shell: bash
+
+      # Structured (ecosystem, advisory id, package, severity) extraction --
+      # workspace root only, see this file's own header for why. Queried
+      # directly with jq rather than parsed from the scripts' prose above.
+      - name: Extract structured advisory findings (workspace root)
+        id: findings
+        if: ${{ !cancelled() }}
+        run: |
+          set -u
+          out="$RUNNER_TEMP/findings.tsv"
+          : > "$out"
+
+          if command -v jq >/dev/null 2>&1; then
+            js_json=$(timeout 30 pnpm audit --json 2>/dev/null)
+            if [ -n "$js_json" ]; then
+              printf '%s' "$js_json" \
+                | jq -r '.advisories[]? | select(.severity=="high" or .severity=="critical") | "npm\t\(.github_advisory_id // (.id|tostring))\t\(.module_name)\t\(.severity)"' \
+                >> "$out" 2>/dev/null || true
+            fi
+
+            py_json=$(timeout 30 uv run pip-audit -f json 2>/dev/null)
+            if [ -n "$py_json" ]; then
+              printf '%s' "$py_json" \
+                | jq -r '.dependencies[]? | select(.vulns | length > 0) | . as $d | .vulns[] | "PyPI\t\(.id)\t\($d.name)\thigh"' \
+                >> "$out" 2>/dev/null || true
+            fi
+          else
+            echo "::warning::dependency-audit-report: jq not available -- skipping structured extraction, relying on the audit scripts' own logs above." >&2
+          fi
+
+          sort -u "$out" -o "$out"
+          count=$(wc -l < "$out" | tr -d ' ')
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          echo "path=$out" >> "$GITHUB_OUTPUT"
+          echo "extracted ${count} distinct (ecosystem, advisory id, package) finding(s)"
+
+      - name: File or update one tracking issue per advisory
+        id: file_issues
+        if: ${{ !cancelled() && steps.findings.outputs.count != '0' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -u
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          filed=0
+          while IFS="$(printf '\t')" read -r ecosystem id package severity; do
+            [ -n "$id" ] || continue
+            out=$(sh scripts/dependency-advisory-issue.sh "$ecosystem" "$id" "$package" "$severity" "$run_url")
+            echo "$out"
+            filed=$((filed + 1))
+          done < "${{ steps.findings.outputs.path }}"
+          echo "filed=$filed" >> "$GITHUB_OUTPUT"
+
+      - name: Job step summary
+        if: ${{ !cancelled() }}
+        run: |
+          {
+            echo "### Dependency-audit base-branch scan (dev)"
+            echo
+            echo "JS audit exit: \`${{ steps.js_audit.outputs.rc || 'did not run' }}\` -- Python audit exit: \`${{ steps.py_audit.outputs.rc || 'did not run' }}\`"
+            echo "Structured findings extracted (workspace root): \`${{ steps.findings.outputs.count || '0' }}\`"
+            echo
+            echo '<details><summary>JS audit log</summary>'
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP/js-audit.log" 2>/dev/null || echo "(did not run)"
+            echo '```'
+            echo '</details>'
+            echo
+            echo '<details><summary>Python audit log</summary>'
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP/py-audit.log" 2>/dev/null || echo "(did not run)"
+            echo '```'
+            echo '</details>'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # A real advisory (exit 1 from either script) or an inconclusive audit
+      # (exit 2, a gate that could not see its input) both fail this job --
+      # same "cannot tell is never a pass" posture as every other guard in
+      # this repo. A clean 0/0 is the only passing outcome.
+      - name: Fail the run on any real finding or inconclusive audit
+        if: ${{ !cancelled() }}
+        run: |
+          js_rc="${{ steps.js_audit.outputs.rc }}"
+          py_rc="${{ steps.py_audit.outputs.rc }}"
+          if [ "${js_rc:-1}" != "0" ] || [ "${py_rc:-1}" != "0" ]; then
+            echo "::error title=dependency-audit-report: dev carries a dependency-audit finding::JS exit ${js_rc:-(did not run)}, Python exit ${py_rc:-(did not run)}. See the job step summary for the full logs, and check this run's per-advisory issue(s) above." >&2
+            exit 1
+          fi

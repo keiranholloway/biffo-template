@@ -53,7 +53,14 @@ jobs:
       run:
         working-directory: apps/frontend
     steps:
+      # `fetch-depth: 0` (biffo-template#2040) — the Dependency audit step
+      # below needs `origin/${GITHUB_BASE_REF}` to resolve locally for its
+      # pre-existing-vs-introduced comparison (biffo-template#1673's Python
+      # design, now shared by the JS script too), and the default shallow
+      # checkout does not carry it.
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 0
       - uses: pnpm/action-setup@v4
         with:
           version: 9.15.9
@@ -74,6 +81,27 @@ jobs:
       - name: Test
         if: ${{ !cancelled() }}
         run: pnpm run test
+      # Runs IN this required job again, rather than in a separate
+      # `continue-on-error` job, as of biffo-template#2040 — reverting the
+      # biffo-template#1880 split (see that repo's root `ci.yml` `js` job
+      # for the full reasoning this mirrors). #1880 moved this step out
+      # because a registry-side INCONCLUSIVE result could block real,
+      # unrelated PRs; that risk is unchanged and still accepted here. What
+      # changed: js-dependency-audit.sh now classifies findings as
+      # "pre-existing on the base branch" vs "introduced by this diff", so
+      # the routine case #1880 was reacting to — an advisory published
+      # against something already on `dev`, unrelated to any PR's diff — no
+      # longer blocks, and only a finding this diff actually introduced or
+      # upgraded into does.
+      #
+      # Path is relative: this job's working-directory is apps/frontend,
+      # which is exactly the tree to audit, and the script audits its own
+      # cwd — it is byte-identical to biffo-template's copy and to every
+      # other satellite's, distributed by that repo's shared-sync.sh, so it
+      # cannot assume a layout. Do not edit it here; edit it upstream.
+      - name: Dependency audit
+        if: ${{ !cancelled() }}
+        run: sh ../../scripts/js-dependency-audit.sh
       # Run with NO NEXT_PUBLIC_CORE_COGNITO_* in scope — this is now the
       # PERMANENT state, not a build-guard quirk. The frontend NEVER reads those
       # vars: it resolves the core's Cognito identity at runtime from
@@ -126,8 +154,8 @@ jobs:
         if: ${{ !cancelled() }}
         # This job's working-directory default is apps/frontend (top of this
         # job), but scripts/biffo.sh lives at the repo root -- same relative-
-        # path convention as the js-audit job's own
-        # `sh ../../scripts/js-dependency-audit.sh` below. A bare
+        # path convention as this job's own Dependency audit step's
+        # `sh ../../scripts/js-dependency-audit.sh` above. A bare
         # `scripts/biffo.sh` here fails unconditionally with "No such file",
         # on every run, regardless of whether there is a real
         # lambda-output/terraform-input violation (biffo-template#1983).
@@ -193,51 +221,6 @@ jobs:
       - name: E2E tests
         run: pnpm run e2e
 
-  # Split out of the `js` job deliberately (biffo-template#1880): `pnpm
-  # audit`'s registry call has been chronically, intermittently unreachable
-  # since npm/GitHub retired the legacy audit endpoints on 2026-07-15, an
-  # ongoing upstream infrastructure condition unrelated to this repo's own
-  # code. Mirrors biffo-template's own root `ci.yml` split; see that repo's
-  # `js-audit` job and #1880 for the full evidence. `js` (required) no
-  # longer runs this step, so a registry hang can never again block this
-  # required check; this job runs the exact same script informationally on
-  # every push/PR (`continue-on-error: true`) and is deliberately NOT part
-  # of DEFAULT_STATUS_CHECKS/SIBLING_STATUS_CHECKS.
-  js-audit:
-    name: JS Dependency Audit (non-blocking, #1880)
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
-    timeout-minutes: 20
-    continue-on-error: true
-    defaults:
-      run:
-        working-directory: apps/frontend
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 9.15.9
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: pnpm
-          cache-dependency-path: apps/frontend/pnpm-lock.yaml
-      - run: pnpm install --frozen-lockfile
-      - name: Dependency audit
-        if: ${{ !cancelled() }}
-        # Fails on a real high/critical advisory, but treats a broken audit
-        # registry (non-JSON response, or the chronic #1880 timeout) as
-        # INCONCLUSIVE rather than blocking (#591, #743) — and this job's own
-        # non-required status is what stops that inconclusive result from
-        # blocking the merge queue in the first place.
-        #
-        # The relative path is deliberate. This job's working-directory is
-        # apps/frontend, which is exactly the tree to audit, and the script
-        # audits its own cwd — it is byte-identical to biffo-template's copy
-        # and to every other satellite's, distributed by that repo's
-        # shared-sync.sh, so it cannot assume a layout. Do not edit it here;
-        # edit it upstream.
-        run: sh ../../scripts/js-dependency-audit.sh
-
   python:
     name: Python (lint, types, test, security)
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
@@ -246,14 +229,14 @@ jobs:
       run:
         working-directory: services/api
     steps:
-      # `fetch-depth: 0` is no longer required here (#1882): it existed
-      # solely for py-dependency-audit.sh's pre-existing-vs-introduced
-      # comparison (#1673), which needed `origin/${GITHUB_BASE_REF}` to
-      # resolve locally -- that step, and the same full-depth checkout it
-      # needs, moved to the `python-audit` job below when the audit was
-      # split out of this required job. Nothing remaining in this job reads
-      # `origin/` state, so the default shallow checkout is correct here now.
+      # `fetch-depth: 0` is required again (biffo-template#2040, reverting
+      # #1882's removal of it): the Dependency audit step below (folded back
+      # into this required job) needs `origin/${GITHUB_BASE_REF}` to resolve
+      # locally for py-dependency-audit.sh's pre-existing-vs-introduced
+      # comparison (#1673).
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 0
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
@@ -264,6 +247,19 @@ jobs:
       # committed lock just stops describing what actually ran
       # (biffo-template#1731).
       - run: uv sync --all-groups --locked
+      # Runs IN this required job again, rather than in a separate
+      # `continue-on-error` job, as of biffo-template#2040 — reverting the
+      # biffo-template#1882 split (mirroring the identical `js`-side revert
+      # above; see that job's own comment for the full reasoning). What
+      # changed: py-dependency-audit.sh has classified findings as
+      # "pre-existing on the base branch" vs "introduced by this diff"
+      # since #1673, so the routine case #1882 was reacting to no longer
+      # blocks, and only a finding this diff actually introduced or
+      # upgraded into does. cwd is services/api, which is the environment
+      # `uv sync` installed and so the one to audit.
+      - name: Dependency audit
+        if: ${{ !cancelled() }}
+        run: sh ../../scripts/py-dependency-audit.sh
       - name: Lint
         if: ${{ !cancelled() }}
         run: uv run ruff check .
@@ -366,39 +362,6 @@ jobs:
         # generated from this skeleton fails closed from birth if a future
         # *.test.sh guard is added with no run: line anywhere.
         run: sh scripts/guard-self-test-wiring.sh
-
-  # Split out of the `python` job deliberately (biffo-template#1882, mirroring
-  # #1880/#1881's identical JS-side fix): `pip-audit`'s advisory lookups are
-  # exactly as registry-dependent and chronically unreliable as `pnpm audit`'s
-  # were. `python` (required) no longer runs this step, so a registry-side
-  # advisory event can never again block that job; this job runs the exact
-  # same script informationally on every push/PR (`continue-on-error: true`)
-  # and is deliberately NOT part of DEFAULT_STATUS_CHECKS/SIBLING_STATUS_CHECKS.
-  python-audit:
-    name: Python Dependency Audit (non-blocking, #1882)
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
-    timeout-minutes: 20
-    continue-on-error: true
-    defaults:
-      run:
-        working-directory: services/api
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        with:
-          fetch-depth: 0
-      - uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-      - run: uv sync --all-groups --locked
-      - name: Dependency audit
-        if: ${{ !cancelled() }}
-        # Same treatment as the JS job's Dependency audit: fails on a real
-        # advisory, INCONCLUSIVE on an unreachable PyPI/OSV (#591, #743) —
-        # and this job's own non-required status is what stops that
-        # inconclusive result from blocking the merge queue in the first
-        # place. cwd is services/api, which is the environment `uv sync`
-        # installed and so the one to audit.
-        run: sh ../../scripts/py-dependency-audit.sh
 
   security-secrets:
     name: Secret Scan

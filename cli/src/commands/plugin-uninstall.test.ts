@@ -78,10 +78,39 @@ function makeDashboardRegistryWithWidgets(root: string): void {
     'export const INSTALLED_PLUGINS: PluginManifest[] = [\n' +
       '  // BIFFO-PLUGIN-REGISTRY:START — managed by `biffo plugin install`/`uninstall`. Do not hand-edit.\n' +
       '  {\n' +
-      '    name: "widgets",\n' +
-      '    version: "1.0.0",\n' +
-      '    description: "Widgets plugin",\n' +
-      '    requiredGroup: "founder",\n' +
+      '    slug: "widgets",\n' +
+      '    title: "Widgets",\n' +
+      '    frontendUrl: "/api/v1/plugins/widgets/ui",\n' +
+      '  },\n' +
+      '  // BIFFO-PLUGIN-REGISTRY:END\n' +
+      ']\n',
+    'utf8',
+  )
+}
+
+/**
+ * The real `biffo-platform-app` registry shape (#2047's repro) with
+ * `widgets` already installed alongside the two real pre-existing,
+ * hand-authored entries whose `frontendUrl` references an imported constant
+ * rather than a string literal.
+ */
+function makeRealPlatformAppRegistryWithWidgets(root: string): void {
+  mkdirSync(join(root, 'apps', 'frontend', 'src', 'lib'), { recursive: true })
+  writeFileSync(
+    join(root, PLUGIN_REGISTRY_RELATIVE_PATH),
+    'export type PluginManifest = {\n' +
+      '  slug: string\n' +
+      '  title: string\n' +
+      '  frontendUrl: string\n' +
+      '}\n\n' +
+      'export const INSTALLED_PLUGINS: PluginManifest[] = [\n' +
+      '  // BIFFO-PLUGIN-REGISTRY:START — managed by `biffo plugin install`/`uninstall`. Do not hand-edit.\n' +
+      "  { slug: 'ideation-engine', title: 'Ideation Engine', frontendUrl: IDEATION_ENGINE_URL },\n" +
+      "  { slug: 'new-idea-scout', title: 'New Idea Scout', frontendUrl: IDEA_SCOUT_URL },\n" +
+      '  {\n' +
+      '    slug: "widgets",\n' +
+      '    title: "Widgets",\n' +
+      '    frontendUrl: "/api/v1/plugins/widgets/ui",\n' +
       '  },\n' +
       '  // BIFFO-PLUGIN-REGISTRY:END\n' +
       ']\n',
@@ -474,11 +503,31 @@ describe('runPluginUninstall — dashboard plugin registry (biffo-template#2041)
     )
 
     const contents = readFileSync(join(projectRoot, PLUGIN_REGISTRY_RELATIVE_PATH), 'utf8')
-    expect(contents).not.toContain('name: "widgets"')
+    expect(contents).not.toContain('slug: "widgets"')
     expect(git.add).toHaveBeenCalledWith(projectRoot, [
       'services/widgets',
       PLUGIN_REGISTRY_RELATIVE_PATH,
     ])
+  })
+
+  it('MUST-CATCH: uninstalling against the REAL biffo-platform-app registry preserves its two pre-existing entries (#2047)', async () => {
+    makeRealPlatformAppRegistryWithWidgets(projectRoot)
+    const git = makeGitMock()
+
+    await runPluginUninstall(
+      'widgets',
+      { dryRun: false, force: true, keepData: false, cwd: projectRoot },
+      { git: git as never },
+    )
+
+    const contents = readFileSync(join(projectRoot, PLUGIN_REGISTRY_RELATIVE_PATH), 'utf8')
+    expect(contents).not.toContain('slug: "widgets"')
+    expect(contents).toContain(
+      "{ slug: 'ideation-engine', title: 'Ideation Engine', frontendUrl: IDEATION_ENGINE_URL }",
+    )
+    expect(contents).toContain(
+      "{ slug: 'new-idea-scout', title: 'New Idea Scout', frontendUrl: IDEA_SCOUT_URL }",
+    )
   })
 
   it('MUST-NOT-CATCH: a plugin with no user_frontend block never touches an existing registry file', async () => {

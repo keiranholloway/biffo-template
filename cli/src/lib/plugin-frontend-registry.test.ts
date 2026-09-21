@@ -3,9 +3,11 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   assertPluginRegistryReady,
+  frontendUrlForSlug,
   pluginRegistryExists,
   PLUGIN_REGISTRY_RELATIVE_PATH,
   removePluginRegistryEntry,
+  titleFromSlug,
   upsertPluginRegistryEntry,
 } from './plugin-frontend-registry.js'
 import { makeTmpDir } from '../test-utils/tmp.js'
@@ -34,10 +36,47 @@ function writeManagedRegistry(root: string, body = ''): void {
 }
 
 const WIDGETS_ENTRY = {
-  name: 'widgets',
-  version: '1.0.0',
-  description: 'Widgets plugin',
-  requiredGroup: 'founder',
+  slug: 'widgets',
+  title: 'Widgets',
+  frontendUrl: '/api/v1/plugins/widgets/ui',
+}
+
+/**
+ * The real `biffo-platform-app` `apps/frontend/src/lib/plugins.ts`
+ * (`.worktrees/lander-reconverge-71-73`, PR #73) — declared type is
+ * `{ slug: string; title: string; frontendUrl: string }`, and its two
+ * pre-existing entries reference imported URL constants rather than string
+ * literals, exactly as #2047 reproduced live (not a synthetic fixture).
+ */
+const REAL_PLUGINS_TS_PREAMBLE =
+  'export type PluginManifest = {\n' +
+  '  slug: string\n' +
+  '  title: string\n' +
+  '  frontendUrl: string\n' +
+  '}\n\n' +
+  'export const INSTALLED_PLUGINS: PluginManifest[] = [\n'
+
+const REAL_PLUGINS_TS_BODY =
+  "  { slug: 'ideation-engine', title: 'Ideation Engine', frontendUrl: IDEATION_ENGINE_URL },\n" +
+  "  { slug: 'new-idea-scout', title: 'New Idea Scout', frontendUrl: IDEA_SCOUT_URL },\n"
+
+/**
+ * Reproduces #2047's repro step 3: the real file's two existing entries
+ * wrapped in the managed-region markers (simulating the migration a sibling
+ * adopting this pattern needs to do).
+ */
+function makeRealPlatformAppRegistry(root: string): void {
+  const dir = join(root, 'apps', 'frontend', 'src', 'lib')
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(
+    join(root, PLUGIN_REGISTRY_RELATIVE_PATH),
+    REAL_PLUGINS_TS_PREAMBLE +
+      '  // BIFFO-PLUGIN-REGISTRY:START — managed by `biffo plugin install`/`uninstall`. Do not hand-edit.\n' +
+      REAL_PLUGINS_TS_BODY +
+      '  // BIFFO-PLUGIN-REGISTRY:END\n' +
+      ']\n',
+    'utf8',
+  )
 }
 
 describe('pluginRegistryExists', () => {
@@ -50,6 +89,24 @@ describe('pluginRegistryExists', () => {
     const root = makeProjectRoot()
     writeManagedRegistry(root)
     expect(pluginRegistryExists(root)).toBe(true)
+  })
+})
+
+describe('titleFromSlug', () => {
+  it('MUST-CATCH: title-cases a kebab-case slug, matching the real registry entries exactly', () => {
+    // The exact two slugs/titles from biffo-platform-app's real plugins.ts (#2047).
+    expect(titleFromSlug('ideation-engine')).toBe('Ideation Engine')
+    expect(titleFromSlug('new-idea-scout')).toBe('New Idea Scout')
+  })
+
+  it('MUST-NOT-CATCH: a single-word slug is just capitalized, no stray space', () => {
+    expect(titleFromSlug('widgets')).toBe('Widgets')
+  })
+})
+
+describe('frontendUrlForSlug', () => {
+  it('MUST-CATCH: derives the shared plugin host UI mount path (ADR-0021 §2)', () => {
+    expect(frontendUrlForSlug('widgets')).toBe('/api/v1/plugins/widgets/ui')
   })
 })
 
@@ -81,50 +138,51 @@ describe('assertPluginRegistryReady — fail-closed guard', () => {
 })
 
 describe('upsertPluginRegistryEntry', () => {
-  it('MUST-CATCH: adds a new entry into the managed region', () => {
+  it('MUST-CATCH: adds a new entry into the managed region, shaped like the real PluginManifest type', () => {
     const root = makeProjectRoot()
     writeManagedRegistry(root)
 
     upsertPluginRegistryEntry(root, WIDGETS_ENTRY)
 
     const contents = readFileSync(registryFilePath(root), 'utf8')
-    expect(contents).toContain('name: "widgets"')
-    expect(contents).toContain('version: "1.0.0"')
-    expect(contents).toContain('description: "Widgets plugin"')
-    expect(contents).toContain('requiredGroup: "founder"')
+    expect(contents).toContain('slug: "widgets"')
+    expect(contents).toContain('title: "Widgets"')
+    expect(contents).toContain('frontendUrl: "/api/v1/plugins/widgets/ui"')
+    // The old, non-conforming shape must never appear.
+    expect(contents).not.toContain('requiredGroup')
+    expect(contents).not.toContain('name: "widgets"')
     // The hand-authored parts of the file survive untouched.
     expect(contents).toContain('import type { PluginManifest } from "./plugin-types"')
     expect(contents).toContain('export const INSTALLED_PLUGINS')
   })
 
-  it('MUST-CATCH: re-running install (version bump) replaces, not duplicates, the entry', () => {
+  it('MUST-CATCH: re-running install (e.g. a version bump changing the URL) replaces, not duplicates, the entry', () => {
     const root = makeProjectRoot()
     writeManagedRegistry(root)
 
     upsertPluginRegistryEntry(root, WIDGETS_ENTRY)
-    upsertPluginRegistryEntry(root, { ...WIDGETS_ENTRY, version: '1.1.0' })
+    upsertPluginRegistryEntry(root, { ...WIDGETS_ENTRY, title: 'Widgets v2' })
 
     const contents = readFileSync(registryFilePath(root), 'utf8')
-    expect(contents.match(/name: "widgets"/g)).toHaveLength(1)
-    expect(contents).toContain('version: "1.1.0"')
-    expect(contents).not.toContain('version: "1.0.0"')
+    expect(contents.match(/slug: "widgets"/g)).toHaveLength(1)
+    expect(contents).toContain('title: "Widgets v2"')
+    expect(contents).not.toContain('title: "Widgets"\n')
   })
 
-  it('MUST-NOT-CATCH: leaves an unrelated plugin already registered untouched', () => {
+  it('MUST-NOT-CATCH: leaves an unrelated plugin already registered by this CLI untouched', () => {
     const root = makeProjectRoot()
     writeManagedRegistry(root)
     upsertPluginRegistryEntry(root, {
-      name: 'acme-crm',
-      version: '2.0.0',
-      description: 'CRM plugin',
-      requiredGroup: 'founder',
+      slug: 'acme-crm',
+      title: 'Acme CRM',
+      frontendUrl: '/api/v1/plugins/acme-crm/ui',
     })
 
     upsertPluginRegistryEntry(root, WIDGETS_ENTRY)
 
     const contents = readFileSync(registryFilePath(root), 'utf8')
-    expect(contents).toContain('name: "acme-crm"')
-    expect(contents).toContain('name: "widgets"')
+    expect(contents).toContain('slug: "acme-crm"')
+    expect(contents).toContain('slug: "widgets"')
   })
 
   it('MUST-CATCH: throws and writes nothing when the registry file is missing (fail closed)', () => {
@@ -140,11 +198,60 @@ describe('upsertPluginRegistryEntry', () => {
 
     upsertPluginRegistryEntry(root, {
       ...WIDGETS_ENTRY,
-      description: 'Say "hello" to widgets',
+      title: 'Say "hello" Widgets',
     })
 
     const contents = readFileSync(registryFilePath(root), 'utf8')
-    expect(contents).toContain('description: "Say \\"hello\\" to widgets"')
+    expect(contents).toContain('title: "Say \\"hello\\" Widgets"')
+  })
+
+  describe('#2047 — preserving entries this CLI did not write', () => {
+    it('MUST-CATCH: a create-or-update against the REAL biffo-platform-app registry preserves both pre-existing entries verbatim', () => {
+      const root = makeProjectRoot()
+      makeRealPlatformAppRegistry(root)
+
+      upsertPluginRegistryEntry(root, {
+        slug: 'verify-plugin',
+        title: titleFromSlug('verify-plugin'),
+        frontendUrl: frontendUrlForSlug('verify-plugin'),
+      })
+
+      const contents = readFileSync(registryFilePath(root), 'utf8')
+      // The two hand-authored entries — including their bare-identifier
+      // frontendUrl, which could never survive a JSON.stringify round-trip —
+      // must still be present, exactly as written.
+      expect(contents).toContain(
+        "{ slug: 'ideation-engine', title: 'Ideation Engine', frontendUrl: IDEATION_ENGINE_URL }",
+      )
+      expect(contents).toContain(
+        "{ slug: 'new-idea-scout', title: 'New Idea Scout', frontendUrl: IDEA_SCOUT_URL }",
+      )
+      // And the newly installed plugin is there too, in the conforming shape.
+      expect(contents).toContain('slug: "verify-plugin"')
+      expect(contents).toContain('frontendUrl: "/api/v1/plugins/verify-plugin/ui"')
+    })
+
+    it('MUST-CATCH: re-installing the same plugin against the real registry replaces only its own entry', () => {
+      const root = makeProjectRoot()
+      makeRealPlatformAppRegistry(root)
+      upsertPluginRegistryEntry(root, {
+        slug: 'verify-plugin',
+        title: 'Verify Plugin',
+        frontendUrl: '/api/v1/plugins/verify-plugin/ui',
+      })
+
+      upsertPluginRegistryEntry(root, {
+        slug: 'verify-plugin',
+        title: 'Verify Plugin v2',
+        frontendUrl: '/api/v1/plugins/verify-plugin/ui',
+      })
+
+      const contents = readFileSync(registryFilePath(root), 'utf8')
+      expect(contents.match(/slug: "verify-plugin"/g)).toHaveLength(1)
+      expect(contents).toContain('title: "Verify Plugin v2"')
+      expect(contents).toContain('IDEATION_ENGINE_URL')
+      expect(contents).toContain('IDEA_SCOUT_URL')
+    })
   })
 })
 
@@ -165,17 +272,16 @@ describe('removePluginRegistryEntry', () => {
     writeManagedRegistry(root)
     upsertPluginRegistryEntry(root, WIDGETS_ENTRY)
     upsertPluginRegistryEntry(root, {
-      name: 'acme-crm',
-      version: '2.0.0',
-      description: 'CRM plugin',
-      requiredGroup: 'founder',
+      slug: 'acme-crm',
+      title: 'Acme CRM',
+      frontendUrl: '/api/v1/plugins/acme-crm/ui',
     })
 
     removePluginRegistryEntry(root, 'widgets')
 
     const contents = readFileSync(registryFilePath(root), 'utf8')
-    expect(contents).not.toContain('name: "widgets"')
-    expect(contents).toContain('name: "acme-crm"')
+    expect(contents).not.toContain('slug: "widgets"')
+    expect(contents).toContain('slug: "acme-crm"')
   })
 
   it('MUST-CATCH: throws (fail closed) when the registry file is missing', () => {
@@ -189,5 +295,26 @@ describe('removePluginRegistryEntry', () => {
     const root = makeProjectRoot()
     writeManagedRegistry(root)
     expect(() => removePluginRegistryEntry(root, 'never-installed')).not.toThrow()
+  })
+
+  it('MUST-CATCH: removing against the REAL biffo-platform-app registry preserves the other pre-existing entry', () => {
+    const root = makeProjectRoot()
+    makeRealPlatformAppRegistry(root)
+    upsertPluginRegistryEntry(root, {
+      slug: 'verify-plugin',
+      title: 'Verify Plugin',
+      frontendUrl: '/api/v1/plugins/verify-plugin/ui',
+    })
+
+    removePluginRegistryEntry(root, 'verify-plugin')
+
+    const contents = readFileSync(registryFilePath(root), 'utf8')
+    expect(contents).not.toContain('verify-plugin')
+    expect(contents).toContain(
+      "{ slug: 'ideation-engine', title: 'Ideation Engine', frontendUrl: IDEATION_ENGINE_URL }",
+    )
+    expect(contents).toContain(
+      "{ slug: 'new-idea-scout', title: 'New Idea Scout', frontendUrl: IDEA_SCOUT_URL }",
+    )
   })
 })

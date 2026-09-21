@@ -14,7 +14,9 @@ import {
 } from '../lib/plugin-config-resolution.js'
 import {
   assertPluginRegistryReady,
+  frontendUrlForSlug,
   PLUGIN_REGISTRY_RELATIVE_PATH,
+  titleFromSlug,
   upsertPluginRegistryEntry,
 } from '../lib/plugin-frontend-registry.js'
 import { pluginDir } from '../lib/plugin-locations.js'
@@ -526,10 +528,9 @@ export async function runPluginInstall(
     // hand-edit, which is why it stays inside this function's try/finally.
     if (manifest.user_frontend) {
       upsertPluginRegistryEntry(options.cwd, {
-        name: pluginName,
-        version: source!.version,
-        description: manifest.description,
-        requiredGroup: manifest.user_frontend.required_group,
+        slug: pluginName,
+        title: titleFromSlug(pluginName),
+        frontendUrl: frontendUrlForSlug(pluginName),
       })
       stagePaths.push(PLUGIN_REGISTRY_RELATIVE_PATH)
       log.success(`Registered ${pluginName} in ${PLUGIN_REGISTRY_RELATIVE_PATH}`)

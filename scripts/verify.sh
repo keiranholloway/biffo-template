@@ -460,9 +460,11 @@ fi
 # and NO_CI must not fire just because a repo has not adopted the split (a
 # sibling never will; an instance not yet upgraded past #1319 has not yet).
 # But if it EXISTS and cannot be READ, that is the identical #1218 shape as
-# ci.yml itself, and ci_has() must search it too or "practices-monotonic"
-# (moved into it) would silently stop being locally mirrored the moment it
-# left ci.yml -- covered less than verify.sh claims, with nothing saying so.
+# ci.yml itself, and ci_has() must search it too -- a check that lives ONLY
+# in release-guards.yml (any of the ones this repo's own header explains
+# moved here to avoid re-running the whole ci.yml matrix on a PR edit) would
+# otherwise silently stop being locally mirrored, covered less than verify.sh
+# claims, with nothing saying so.
 RELEASE_GUARDS_YML_UNREADABLE=""
 if [ -f .github/workflows/release-guards.yml ] && [ ! -r .github/workflows/release-guards.yml ]; then
   RELEASE_GUARDS_YML_UNREADABLE=1

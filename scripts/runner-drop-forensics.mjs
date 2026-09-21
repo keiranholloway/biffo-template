@@ -14,10 +14,9 @@
  * reading of a red branch and the lazy one are indistinguishable, and #982
  * showed the estate had been counting these as broken code for months.
  *
- * `isRunnerKill` (in `practices-metrics.mjs`, imported below rather than
- * re-implemented) already answers *"did a runner die?"* from the run's own step
- * conclusions. It cannot answer *"why?"* — and "why" is what decides whether
- * anyone should be looking at the code at all.
+ * `isRunnerKill` below already answers *"did a runner die?"* from the run's own
+ * step conclusions. It cannot answer *"why?"* — and "why" is what decides
+ * whether anyone should be looking at the code at all.
  *
  * ## The join nobody had written
  *
@@ -61,7 +60,80 @@
 
 // @ts-check
 import { execFileSync } from 'node:child_process'
-import { isRunnerKill } from './practices-metrics.mjs'
+
+/**
+ * Step conclusions that mean the step **stopped without a verdict**.
+ *
+ * A dying runner produces two different signatures and #982 caught only the
+ * first, so `biffo-platform` kept two failures it had not earned:
+ *
+ * - `null` — the step was still executing when the lights went out. A deploy
+ *   frozen on "Package and deploy Lambda", six steps left `pending`.
+ * - `cancelled` — the step was stopped, and every later step reads `skipped`.
+ *   Two `biffo-platform` CI runs died 64 seconds in this way, on "Type check"
+ *   and "Lint".
+ *
+ * ## Why `cancelled` here is not an ordinary cancellation
+ *
+ * The obvious objection is that this launders someone hitting cancel, or a
+ * `cancel-in-progress` supersession. It does not, and the reason is structural:
+ * **those conclude the run `cancelled`**, which `isRunnerKill` is only ever
+ * reached for a run that concluded `failure`. A run that concluded `failure`
+ * while no step ever returned a verdict was therefore stopped by something
+ * that is not a cancellation.
+ *
+ * A step that hits `timeout-minutes` (20 since #980) is expected to be marked
+ * `failure` and so stays a real failure.
+ */
+const STOPPED_SHORT = new Set([null, undefined, 'cancelled'])
+
+/**
+ * Did this run fail because a **runner died**, rather than because a gate
+ * rejected the change? (#982)
+ *
+ * ## The hole this closes
+ *
+ * A killed or superseded run naturally concludes `cancelled`, which is not a
+ * defect. That reasoning is right and its coverage is only partial: **a runner
+ * killed mid-job reports `cancelled` only sometimes.** The rest of the time
+ * GitHub concludes the run `failure` with *no failing step* — the same
+ * physical event, a different label, and the second label was counted as if
+ * code had broken.
+ *
+ * Measured on `tabsii-com/tabsii-platform`, 2026-07-31: **all six** `dev`
+ * failures inspected had zero failing steps and 3–21 steps left incomplete. One
+ * deploy succeeded through thirteen steps and froze on "Package and deploy
+ * Lambda". Not one gate rejected a change.
+ *
+ * ## The rule, and why it errs the way it does
+ *
+ * A failed run is a runner kill when **no job reports a failing step** and **at
+ * least one failed job has a step that stopped without a verdict** — see
+ * {@link STOPPED_SHORT} for the two signatures that means, and why `cancelled`
+ * among them is not an ordinary cancellation. Both halves matter: the first
+ * says nothing rejected the change, the second says work was still outstanding
+ * when the lights went out.
+ *
+ * A failed run with no steps recorded at all is deliberately **not** classified
+ * as a kill. It stays a failure. That is the conservative direction for a
+ * counter-metric — it can still refute an experiment the author would prefer to
+ * confirm — and this module's whole purpose is to make that the default.
+ *
+ * A job that hits its `timeout-minutes` (20 since #980) marks the offending step
+ * `failure`, so a genuine hang stays a genuine failure and is not laundered
+ * through here.
+ *
+ * @param {Array<Record<string, any>>} jobs the `jobs` array of one run
+ * @returns {boolean}
+ */
+export function isRunnerKill(jobs) {
+  const failed = (jobs ?? []).filter((job) => job.conclusion === 'failure')
+  if (failed.length === 0) return false
+  const steps = failed.flatMap((job) => job.steps ?? [])
+  if (steps.length === 0) return false
+  if (steps.some((step) => step.conclusion === 'failure')) return false
+  return steps.some((step) => STOPPED_SHORT.has(step.conclusion))
+}
 
 /**
  * How far outside a job's own start/finish window an eviction may fall and

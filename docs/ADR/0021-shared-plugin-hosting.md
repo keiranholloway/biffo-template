@@ -259,8 +259,8 @@ implemented that gate, and option B cannot implement it either.** Both new
 browser navigation (an address-bar URL, an `<a href>` click, a bookmark) has
 no hook to attach a bearer token to, which is exactly why the admin shell's
 own two Gateway routes are `NONE` today. This was independently confirmed in
-production at `docs/guides/development-practices.md:239`: measured directly
-against the API Gateway origin (never through CloudFront alone — a
+production: measured directly against the API Gateway origin (never through
+CloudFront alone — a
 distribution-wide rule rewrites API `403`/`404` into portal HTML, #647),
 `/ideation/`'s admin shell is a **428-byte** empty `<div id="root">` served to
 any caller with no `Authorization` header at all, while every real API route

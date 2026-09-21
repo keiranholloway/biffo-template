@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
@@ -28,28 +28,10 @@ import { buildCommitMessage, carriedPrsSection } from './core-upgrade.js'
  *
  * The existing tests used two-PR lists (`746,750`), which is why a limit that
  * bites at ~13 was never seen. These assert a realistic worst case instead.
- *
- * ## The round-trip is the point
- *
- * Wrapping the marker is only safe if the reader follows. The parser in
- * `scripts/practices-metrics.mjs` was `([0-9,]+)`, which stops at the first
- * newline — against a wrapped marker it would still match, still return
- * numbers, and silently return only the first line of them. Under-reporting
- * that looks like working is worse than the original failure, so the guard
- * drives the writer's real output through the real parser and asserts the
- * whole list comes back.
  */
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '../../..')
 const COMMITLINT_LIMIT = 100
-
-/** The real parser, loaded from the script rather than reimplemented here. */
-async function parseCarriedPrs(text: string): Promise<number[]> {
-  const mod = await import(join(repoRoot, 'scripts/practices-metrics.mjs'))
-  const fn = mod.parseCarriedPrs ?? mod.carriedPrsFromText
-  expect(fn, 'practices-metrics.mjs no longer exports a carried-PRs parser').toBeTypeOf('function')
-  return fn(text) as number[]
-}
 
 /** Roughly what a 30-versions-behind instance carries. */
 const MANY = Array.from({ length: 120 }, (_, i) => 1000 + i)
@@ -69,19 +51,12 @@ describe('carried-prs marker', () => {
     }
   })
 
-  it('round-trips the FULL list through the real parser when wrapped', async () => {
+  it('still wraps a long list across lines, within the commit-message limit', () => {
     const message = buildCommitMessage('0.204.3', '0.228.5', MANY)
     expect(
       message.split('\n').length,
       'expected a wrapped marker for this many PRs',
     ).toBeGreaterThan(3)
-    await expect(parseCarriedPrs(message)).resolves.toEqual(MANY)
-  })
-
-  it('round-trips a short, unwrapped list too', async () => {
-    await expect(
-      parseCarriedPrs(buildCommitMessage('0.1.0', '0.2.0', [746, 750])),
-    ).resolves.toEqual([746, 750])
   })
 
   /**
@@ -105,19 +80,5 @@ describe('carried-prs marker', () => {
       failure = `${String(e.stdout ?? '')}${String(e.stderr ?? '')}`
     }
     expect(failure, `commitlint rejected the generated message:\n${failure}`).toBe('')
-  })
-
-  /**
-   * Guards the guard: if the marker constant ever diverges between the writer
-   * and the reader, every assertion above would pass against two different
-   * strings and prove nothing.
-   */
-  it('uses the same marker constant in the writer and the reader', () => {
-    const script = readFileSync(join(repoRoot, 'scripts/practices-metrics.mjs'), 'utf8')
-    const source = readFileSync(join(repoRoot, 'cli/src/commands/core-upgrade.ts'), 'utf8')
-    const of = (text: string) => /CARRIED_PRS_MARKER = '([^']+)'/.exec(text)?.[1]
-
-    expect(of(source), 'no marker constant in core-upgrade.ts').toBeTruthy()
-    expect(of(script), 'writer and reader disagree on the marker string').toBe(of(source))
   })
 })

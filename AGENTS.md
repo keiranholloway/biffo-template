@@ -275,11 +275,9 @@ For any change that reports a count, a status, or an exit code: name what a
 real failure would look like, and confirm it is distinguishable from the empty
 case.
 
-This paragraph is a pre-registered, falsifiable experiment
-(`docs/practices/experiments/H7-fail-open-authoring-gate.md`, issue #1083),
-not an assumed-effective rule. If the review at that experiment's review date
-finds it did not move the metric, this paragraph comes back out rather than
-accumulating.
+This paragraph is a pre-registered, falsifiable experiment (issue #1083), not
+an assumed-effective rule. If review finds it did not move the metric, this
+paragraph comes back out rather than accumulating.
 
 ### Fixing a bug: reproduce the actual failure, not a theory of it
 
@@ -849,8 +847,7 @@ baseline recorded for it — never on the pre-existing residue. This is the same
 posture `biffo.orphan-baseline.json` established for the core-upgrade orphan
 ratchet (`cli/src/lib/core-upgrade.ts`, `checkOrphanRatchet`): a guard that is
 red on day-one residue every morning trains people to stop reading it
-(`scripts/protection-audit.sh` makes this case at length), and `--check` feeds
-exactly that daily dashboard (`scripts/practices-daily.sh`). A path whose
+(`scripts/protection-audit.sh` makes this case at length). A path whose
 variants drop _below_ baseline is reported as improved and told to lower the
 baseline — a ratchet that never tightens stops meaning anything.
 

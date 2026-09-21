@@ -5,8 +5,13 @@ import { Command } from 'commander'
 import inquirer from 'inquirer'
 import { GitAdapter } from '../adapters/git/index.js'
 import { log } from '../lib/logger.js'
+import {
+  assertPluginRegistryReady,
+  PLUGIN_REGISTRY_RELATIVE_PATH,
+  removePluginRegistryEntry,
+} from '../lib/plugin-frontend-registry.js'
 import { FIRST_PARTY_PLUGINS_DIR, pluginDir } from '../lib/plugin-locations.js'
-import { validateManifest } from '../lib/plugin-manifest.js'
+import { validateManifest, type PluginManifest } from '../lib/plugin-manifest.js'
 import { pluginSeedImportDir } from '../lib/plugin-seed-vendor.js'
 import {
   findPluginModuleReferences,
@@ -137,11 +142,16 @@ export async function runPluginUninstall(
     throw new Error(`Plugin '${name}' is not installed at services/${name}/.`)
   }
 
-  const version = readInstalledVersion(targetDir)
+  const installedManifest = readInstalledManifest(targetDir)
+  const version = installedManifest?.version
   const modulesDir = join(options.cwd, 'modules', 'plugins', name)
   const stagePaths = [`services/${name}`]
   if (existsSync(modulesDir)) {
     stagePaths.push(`modules/plugins/${name}`)
+  }
+  const hasUserFrontend = installedManifest?.user_frontend !== undefined
+  if (hasUserFrontend) {
+    stagePaths.push(PLUGIN_REGISTRY_RELATIVE_PATH)
   }
 
   if (options.dryRun) {
@@ -162,6 +172,16 @@ export async function runPluginUninstall(
     throw new Error(
       `${options.cwd} is not a git repository — biffo plugin uninstall must be run from a Biffo project checkout.`,
     )
+  }
+
+  // Fail-closed on a `user_frontend` block whose dashboard entry cannot be
+  // removed (biffo-template#2041) — checked before anything is deleted, same
+  // posture as the Terraform-references guard right below: a refusal here
+  // must leave the checkout untouched, rather than removing services/<name>/
+  // and silently leaving a dangling registry entry pointing at a plugin that
+  // no longer exists.
+  if (hasUserFrontend) {
+    assertPluginRegistryReady(options.cwd, name)
   }
 
   if (existsSync(modulesDir)) {
@@ -207,6 +227,11 @@ export async function runPluginUninstall(
     }
   }
 
+  if (hasUserFrontend) {
+    removePluginRegistryEntry(options.cwd, name)
+    log.success(`Removed ${name} from ${PLUGIN_REGISTRY_RELATIVE_PATH}`)
+  }
+
   const label = version ? `${name}@${version}` : name
   const commitMessage = `chore(plugins): uninstall ${label}`
   await deps.git.add(options.cwd, stagePaths)
@@ -247,11 +272,11 @@ export async function runPluginUninstall(
   }
 }
 
-function readInstalledVersion(targetDir: string): string | undefined {
+function readInstalledManifest(targetDir: string): PluginManifest | undefined {
   const manifestPath = join(targetDir, 'biffo.plugin.json')
   if (!existsSync(manifestPath)) return undefined
   try {
-    return validateManifest(JSON.parse(readFileSync(manifestPath, 'utf8'))).version
+    return validateManifest(JSON.parse(readFileSync(manifestPath, 'utf8')))
   } catch {
     return undefined
   }

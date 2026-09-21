@@ -246,6 +246,17 @@ export const GUARD_CANDIDATE_CLASSIFICATION: Record<string, GuardCandidateVerdic
       'naming modules build and compares it to the allowlist glob. One of the five #1518 ' +
       'spotted and left unclassified.',
   },
+  'plugin-frontend-registry.ts': {
+    isGuard: false,
+    reason:
+      'exports assertPluginRegistryReady (#2041), but it is a RUNTIME pre-write validation — it ' +
+      "checks the installing sibling's apps/frontend/src/lib/plugins.ts has the managed region " +
+      'biffo plugin install/uninstall need before either writes into it, the same shape ' +
+      "interactive.ts's assertInteractive was classified false on: no CI-time audit of the " +
+      "repo's own state, no document/actor pair (the file it checks is the SAME file it is " +
+      'about to write, not compared against a second source of truth), and no wiring question ' +
+      '— install/uninstall already call it directly, inline, before touching the checkout.',
+  },
   'plugin-staleness.ts': {
     isGuard: true,
     reason:

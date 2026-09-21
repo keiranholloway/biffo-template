@@ -12,6 +12,13 @@ import {
   resolvePluginConfigSupply,
   type ResolvedPluginConfigValue,
 } from '../lib/plugin-config-resolution.js'
+import {
+  assertPluginRegistryReady,
+  frontendUrlForSlug,
+  PLUGIN_REGISTRY_RELATIVE_PATH,
+  titleFromSlug,
+  upsertPluginRegistryEntry,
+} from '../lib/plugin-frontend-registry.js'
 import { pluginDir } from '../lib/plugin-locations.js'
 import { validateManifest, type PluginManifest } from '../lib/plugin-manifest.js'
 import {
@@ -361,6 +368,16 @@ export async function runPluginInstall(
       throw new Error(missingRequiredConfigMessage(pluginName, configSupply.missingRequired))
     }
 
+    // Fail-closed on a `user_frontend` block with nowhere to register
+    // (biffo-template#2041) — checked before anything is copied, same
+    // posture as the two guards above: a refusal here must leave the
+    // checkout untouched. A plugin declaring no `user_frontend` never
+    // touches the dashboard registry at all, so this is skipped entirely for
+    // an ordinary (data/event/CRUD) plugin.
+    if (manifest.user_frontend) {
+      assertPluginRegistryReady(options.cwd, pluginName)
+    }
+
     // Only now — after the manifest has validated — do we touch the target repo.
     if (inTreeSource) {
       log.info(`${relTargetDir}/ is already in this checkout — installing in place.`)
@@ -500,6 +517,23 @@ export async function runPluginInstall(
         `Recorded ${configSupply.resolved.length}/${manifest.config.length} declared config ` +
           `value(s) at ${relative(options.cwd, configFilePath)}`,
       )
+    }
+
+    // Register this plugin's user-facing surface in the installing sibling's
+    // dashboard (biffo-template#2041) — create-or-update, keyed by name, so
+    // re-running install (e.g. a version bump) replaces rather than
+    // duplicates the entry. `assertPluginRegistryReady` above already
+    // guaranteed the file and its managed region exist, so this cannot throw
+    // here in the ordinary case; it can still throw on a genuinely malformed
+    // hand-edit, which is why it stays inside this function's try/finally.
+    if (manifest.user_frontend) {
+      upsertPluginRegistryEntry(options.cwd, {
+        slug: pluginName,
+        title: titleFromSlug(pluginName),
+        frontendUrl: frontendUrlForSlug(pluginName),
+      })
+      stagePaths.push(PLUGIN_REGISTRY_RELATIVE_PATH)
+      log.success(`Registered ${pluginName} in ${PLUGIN_REGISTRY_RELATIVE_PATH}`)
     }
 
     const commitMessage = `feat(plugins): install ${pluginName}@${source!.version}`

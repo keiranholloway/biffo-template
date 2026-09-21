@@ -262,6 +262,20 @@ admin shell (`admin_ingress`) already uses in production, extended to
 `user_frontend` rather than provisioning a per-plugin CloudFront origin. See
 [ADR-0021](../ADR/0021-shared-plugin-hosting.md) section 2 for the full design.
 
+**Registering with the installing sibling's dashboard (biffo-template#2041).**
+A `user_frontend` plugin also needs a tile in the founder-facing dashboard so
+there's somewhere for a person to actually click into it. `install`/`uninstall`
+create-or-update (respectively remove) this plugin's entry in the installing
+checkout's `apps/frontend/src/lib/plugins.ts` — a managed region inside that
+file, bounded by `// BIFFO-PLUGIN-REGISTRY:START` / `:END` comments, that the
+CLI owns exclusively; everything else in the file is yours to hand-author (see
+`cli/src/lib/plugin-frontend-registry.ts` for the exact contract). This is
+**fail-closed**: if the checkout has no `plugins.ts` with that managed region
+— a sibling that hasn't adopted the dashboard dynamic-route pattern yet —
+`install` refuses outright, before touching anything else in the checkout,
+rather than silently installing a plugin nobody can reach. A plugin with no
+`user_frontend` block never touches this file at all.
+
 **This supersedes ADR-0018 section 2's per-plugin frontend hosting** — a
 dedicated `aws_s3_bucket` behind the shared CloudFront distribution, wired
 through a `cdn_distribution_arn` module variable and a `frontend_bucket_*`

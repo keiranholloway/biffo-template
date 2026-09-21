@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { RegistryPluginEntry } from '../adapters/registry/index.js'
+import { PLUGIN_REGISTRY_RELATIVE_PATH } from '../lib/plugin-frontend-registry.js'
 import { runPluginInstall } from './plugin-install.js'
 import { makeTmpDir } from '../test-utils/tmp.js'
 
@@ -52,6 +53,28 @@ function makeEnvironment(root: string, env: string): void {
     join(dir, 'main.tf'),
     '# hand-authored root config — the CLI must never edit this\n' +
       'variable "enabled_plugins" {\n  type = list(string)\n}\n',
+  )
+}
+
+/**
+ * The installing sibling's dashboard plugin registry (biffo-template#2041) —
+ * mirrors the real, merged shape from biffo-platform-app#73: a managed
+ * region `biffo plugin install`/`uninstall` own, inside a hand-authored
+ * file. Only the managed region matters to the CLI; the surrounding content
+ * stands in for whatever imports/exports a real sibling adds around it.
+ */
+function makeDashboardRegistry(root: string, body = ''): void {
+  const dir = join(root, 'apps', 'frontend', 'src', 'lib')
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(
+    join(root, PLUGIN_REGISTRY_RELATIVE_PATH),
+    'import type { PluginManifest } from "./plugin-types"\n\n' +
+      'export const INSTALLED_PLUGINS: PluginManifest[] = [\n' +
+      '  // BIFFO-PLUGIN-REGISTRY:START — managed by `biffo plugin install`/`uninstall`. Do not hand-edit.\n' +
+      body +
+      '  // BIFFO-PLUGIN-REGISTRY:END\n' +
+      ']\n',
+    'utf8',
   )
 }
 
@@ -243,6 +266,7 @@ describe('runPluginInstall', () => {
       const registry = makeRegistryMock()
       const git = makeGitMock(makeClonedPluginDir(userFrontendManifest, false))
       const migrations = makeMigrationsMock()
+      makeDashboardRegistry(projectRoot)
 
       await runPluginInstall(
         'widgets@1.0',
@@ -267,6 +291,193 @@ describe('runPluginInstall', () => {
 
       expect(existsSync(join(projectRoot, 'modules', 'plugins', 'widgets'))).toBe(true)
       expect(git.commit).toHaveBeenCalledWith(projectRoot, 'feat(plugins): install widgets@1.0.0')
+    })
+  })
+
+  describe('dashboard plugin registry (biffo-template#2041)', () => {
+    const USER_FRONTEND_MANIFEST = {
+      ...VALID_MANIFEST,
+      description: 'Widgets plugin',
+      user_frontend: { dir: 'web/dist', required_group: 'founder' },
+    }
+
+    it('MUST-CATCH: writes a create entry into apps/frontend/src/lib/plugins.ts when the manifest declares user_frontend, shaped like the real PluginManifest type (#2047)', async () => {
+      makeDashboardRegistry(projectRoot)
+      const registry = makeRegistryMock()
+      const git = makeGitMock(makeClonedPluginDir(USER_FRONTEND_MANIFEST))
+      const migrations = makeMigrationsMock()
+
+      await runPluginInstall(
+        'widgets@1.0',
+        { dryRun: false, cwd: projectRoot },
+        { registry: registry as never, git: git as never, migrations: migrations as never },
+      )
+
+      const contents = readFileSync(join(projectRoot, PLUGIN_REGISTRY_RELATIVE_PATH), 'utf8')
+      // The real biffo-platform-app PluginManifest fields (slug/title/frontendUrl,
+      // #2047) — not the old, non-conforming name/version/description/requiredGroup
+      // shape that failed `tsc --strict` and could never be found by getPlugin(slug).
+      expect(contents).toContain('slug: "widgets"')
+      expect(contents).toContain('title: "Widgets"')
+      expect(contents).toContain('frontendUrl: "/api/v1/plugins/widgets/ui"')
+      expect(contents).not.toContain('requiredGroup')
+      expect(contents).not.toContain('name: "widgets"')
+      expect(git.add).toHaveBeenCalledWith(projectRoot, [
+        'services/widgets',
+        PLUGIN_REGISTRY_RELATIVE_PATH,
+      ])
+    })
+
+    it('MUST-CATCH: installing against the REAL biffo-platform-app registry preserves its two pre-existing entries (#2047)', async () => {
+      // The exact repro shape from #2047: the real plugins.ts's declared
+      // PluginManifest type is {slug,title,frontendUrl}, and its two existing
+      // entries reference imported URL constants, not string literals.
+      const dir = join(projectRoot, 'apps', 'frontend', 'src', 'lib')
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(
+        join(projectRoot, PLUGIN_REGISTRY_RELATIVE_PATH),
+        'export type PluginManifest = {\n' +
+          '  slug: string\n' +
+          '  title: string\n' +
+          '  frontendUrl: string\n' +
+          '}\n\n' +
+          'export const INSTALLED_PLUGINS: PluginManifest[] = [\n' +
+          '  // BIFFO-PLUGIN-REGISTRY:START — managed by `biffo plugin install`/`uninstall`. Do not hand-edit.\n' +
+          "  { slug: 'ideation-engine', title: 'Ideation Engine', frontendUrl: IDEATION_ENGINE_URL },\n" +
+          "  { slug: 'new-idea-scout', title: 'New Idea Scout', frontendUrl: IDEA_SCOUT_URL },\n" +
+          '  // BIFFO-PLUGIN-REGISTRY:END\n' +
+          ']\n',
+        'utf8',
+      )
+      const registry = makeRegistryMock()
+      const git = makeGitMock(makeClonedPluginDir(USER_FRONTEND_MANIFEST))
+      const migrations = makeMigrationsMock()
+
+      await runPluginInstall(
+        'widgets@1.0',
+        { dryRun: false, cwd: projectRoot },
+        { registry: registry as never, git: git as never, migrations: migrations as never },
+      )
+
+      const contents = readFileSync(join(projectRoot, PLUGIN_REGISTRY_RELATIVE_PATH), 'utf8')
+      expect(contents).toContain(
+        "{ slug: 'ideation-engine', title: 'Ideation Engine', frontendUrl: IDEATION_ENGINE_URL }",
+      )
+      expect(contents).toContain(
+        "{ slug: 'new-idea-scout', title: 'New Idea Scout', frontendUrl: IDEA_SCOUT_URL }",
+      )
+      expect(contents).toContain('slug: "widgets"')
+    })
+
+    it('MUST-NOT-CATCH: a manifest with no user_frontend block never touches the registry file, even when one exists', async () => {
+      makeDashboardRegistry(projectRoot)
+      const registry = makeRegistryMock()
+      const git = makeGitMock(makeClonedPluginDir(VALID_MANIFEST))
+      const migrations = makeMigrationsMock()
+
+      await runPluginInstall(
+        'widgets@1.0',
+        { dryRun: false, cwd: projectRoot },
+        { registry: registry as never, git: git as never, migrations: migrations as never },
+      )
+
+      const contents = readFileSync(join(projectRoot, PLUGIN_REGISTRY_RELATIVE_PATH), 'utf8')
+      expect(contents).not.toContain('slug: "widgets"')
+      expect(git.add).toHaveBeenCalledWith(projectRoot, ['services/widgets'])
+    })
+
+    it('MUST-NOT-CATCH: a manifest with no user_frontend block installs fine when no registry file exists at all', async () => {
+      // No makeDashboardRegistry() call — the checkout has not adopted the
+      // dashboard pattern, and an ordinary plugin must not care.
+      const registry = makeRegistryMock()
+      const git = makeGitMock(makeClonedPluginDir(VALID_MANIFEST))
+      const migrations = makeMigrationsMock()
+
+      await runPluginInstall(
+        'widgets@1.0',
+        { dryRun: false, cwd: projectRoot },
+        { registry: registry as never, git: git as never, migrations: migrations as never },
+      )
+
+      expect(existsSync(join(projectRoot, 'services', 'widgets'))).toBe(true)
+      expect(existsSync(join(projectRoot, PLUGIN_REGISTRY_RELATIVE_PATH))).toBe(false)
+    })
+
+    it('MUST-CATCH: fails closed, writing nothing, when user_frontend is declared but the registry file does not exist', async () => {
+      // No makeDashboardRegistry() call.
+      const registry = makeRegistryMock()
+      const git = makeGitMock(makeClonedPluginDir(USER_FRONTEND_MANIFEST))
+      const migrations = makeMigrationsMock()
+
+      await expect(
+        runPluginInstall(
+          'widgets@1.0',
+          { dryRun: false, cwd: projectRoot },
+          { registry: registry as never, git: git as never, migrations: migrations as never },
+        ),
+      ).rejects.toThrow(/apps\/frontend\/src\/lib\/plugins\.ts does not exist/)
+
+      // Fail-closed: nothing was written into the checkout at all — same
+      // posture as the retired-frontend-shape and missing-config guards.
+      expect(existsSync(join(projectRoot, 'services', 'widgets'))).toBe(false)
+      expect(git.add).not.toHaveBeenCalled()
+      expect(git.commit).not.toHaveBeenCalled()
+    })
+
+    it('MUST-CATCH: fails closed, writing nothing, when the registry file exists but has no managed region', async () => {
+      mkdirSync(join(projectRoot, 'apps', 'frontend', 'src', 'lib'), { recursive: true })
+      writeFileSync(
+        join(projectRoot, PLUGIN_REGISTRY_RELATIVE_PATH),
+        'export const INSTALLED_PLUGINS: PluginManifest[] = []\n',
+        'utf8',
+      )
+      const registry = makeRegistryMock()
+      const git = makeGitMock(makeClonedPluginDir(USER_FRONTEND_MANIFEST))
+      const migrations = makeMigrationsMock()
+
+      await expect(
+        runPluginInstall(
+          'widgets@1.0',
+          { dryRun: false, cwd: projectRoot },
+          { registry: registry as never, git: git as never, migrations: migrations as never },
+        ),
+      ).rejects.toThrow(/managed/)
+      expect(existsSync(join(projectRoot, 'services', 'widgets'))).toBe(false)
+    })
+
+    it('MUST-CATCH: re-installing (version bump) replaces rather than duplicates the entry', async () => {
+      makeDashboardRegistry(projectRoot)
+      const registry = makeRegistryMock()
+      const migrations = makeMigrationsMock()
+
+      await runPluginInstall(
+        'widgets@1.0',
+        { dryRun: false, cwd: projectRoot },
+        {
+          registry: registry as never,
+          git: makeGitMock(makeClonedPluginDir(USER_FRONTEND_MANIFEST)) as never,
+          migrations: migrations as never,
+        },
+      )
+      rmSync(join(projectRoot, 'services', 'widgets'), { recursive: true, force: true })
+
+      const bumpedManifest = { ...USER_FRONTEND_MANIFEST, version: '1.1.0' }
+      await runPluginInstall(
+        'widgets@1.0',
+        { dryRun: false, cwd: projectRoot },
+        {
+          registry: makeRegistryMock({ ...REGISTRY_ENTRY, version: '1.1.0' }) as never,
+          git: makeGitMock(makeClonedPluginDir(bumpedManifest)) as never,
+          migrations: migrations as never,
+        },
+      )
+
+      // slug/title/frontendUrl are derived only from the plugin's slug, not its
+      // version, so a version bump writes byte-identical entry fields — the
+      // thing under test is that the entry appears exactly once, not twice.
+      const contents = readFileSync(join(projectRoot, PLUGIN_REGISTRY_RELATIVE_PATH), 'utf8')
+      expect(contents.match(/slug: "widgets"/g)).toHaveLength(1)
+      expect(contents).toContain('frontendUrl: "/api/v1/plugins/widgets/ui"')
     })
   })
 

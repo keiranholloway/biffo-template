@@ -1544,15 +1544,6 @@ fi
 [ -f scripts/check-orphan-ratchet-instance.test.sh ] &&
   run_check orphan-ratchet-instance-selftest sh scripts/check-orphan-ratchet-instance.test.sh
 
-# The append-only corpus guard (#778). CI runs it in Release Guards, and it was
-# invisible to the parity test until #897 widened the harvester -- it is neither
-# `pnpm`, `uv`, `terraform` nor `sh scripts/`, so the guard whose property is
-# "every CI check is in the gate or explicitly excluded" could not see it at all.
-# Measured 0.06s here, which is cheaper than every other check in this file.
-if [ -f scripts/practices-monotonic.mjs ]; then
-  ci_has "practices-monotonic" && run_check corpus-append-only node scripts/practices-monotonic.mjs
-fi
-
 # Terraform plan artefacts, refused by CONTENT (biffo-runners#1).
 #
 # A saved plan is a zip. `strings`/`grep` over it is a false-negative machine —

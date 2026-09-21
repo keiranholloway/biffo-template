@@ -19,11 +19,10 @@
 >
 > **§2's `required_group` claim is corrected, not merely superseded.** This
 > section says `required_group` "gates the UI client-side (a non-founder is
-> bounced)". Nothing has ever implemented that gate — established at
-> `docs/guides/development-practices.md:239` — and ADR-0021 §2 explains why
-> the mechanism that replaces this one cannot implement it either. Read that
-> section, not this one, for the current, correct account of what the field
-> does.
+> bounced)". Nothing has ever implemented that gate, and ADR-0021 §2 explains
+> why the mechanism that replaces this one cannot implement it either. Read
+> that section, not this one, for the current, correct account of what the
+> field does.
 >
 > Full retirement of this ADR's remaining machinery (the per-plugin deploy
 > path in `deploy-app.yml`, `cdn_distribution_arn` wiring) is tracked in

@@ -4,10 +4,8 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { makeTmpDir } from '../test-utils/tmp.js'
-import { isInstanceRepo } from './core-version.js'
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
-const runningInInstance = isInstanceRepo(repoRoot)
 const sharedFiles = JSON.parse(readFileSync(join(repoRoot, 'shared-files.json'), 'utf8')) as {
   files: string[]
 }
@@ -32,9 +30,9 @@ const RETIRED = [
 
 /**
  * The subset AGENTS.md mandates by name. The others are invoked by tooling
- * (`verify.sh`, `.githooks/pre-push`, `practices-daily.sh`) rather than by a
- * human following the rules, so asserting they appear in AGENTS.md would fail
- * on a file that was never meant to name them.
+ * (`verify.sh`, `.githooks/pre-push`) rather than by a human following the
+ * rules, so asserting they appear in AGENTS.md would fail on a file that was
+ * never meant to name them.
  */
 const MANDATED = ['wait-for-checks', 'branch-health', 'claim']
 
@@ -164,14 +162,6 @@ describe('the callers moved with the scripts', () => {
     const verify = readFileSync(join(repoRoot, 'scripts/verify.sh'), 'utf8')
     expect(verify).toContain('sh scripts/biffo.sh pg-test-db')
     expect(verify).not.toContain('[ -f scripts/pg-test-db.sh ]')
-  })
-
-  it.skipIf(runningInInstance)('practices-daily runs hook-audit through the bridge', () => {
-    // practices-daily.sh is template-only as of biffo-fleet#372 (workstation
-    // cron tooling with no instance caller) -- an instance's checkout no
-    // longer carries it at all.
-    const daily = readFileSync(join(repoRoot, 'scripts/practices-daily.sh'), 'utf8')
-    expect(daily).toContain('sh scripts/biffo.sh hook-audit')
   })
 })
 

@@ -1097,10 +1097,8 @@ export function carriedPrsSection(carriedPrs: number[]): string[] {
   // exists to preserve provenance destroyed the commit that carries it —
   // failing hardest on exactly the upgrades with the most provenance to record.
   //
-  // The numbers are split across lines INSIDE the comment. `parseCarriedPrs`
-  // in scripts/practices-metrics.mjs tolerates whitespace between them; the two
-  // must change together, and `carried-prs-marker.test.ts` round-trips this
-  // output through that parser so a silent truncation cannot ship.
+  // The numbers are split across lines INSIDE the comment, so the closing
+  // `-->` can never itself push a line over the limit.
   const lines: string[] = [`<!-- ${CARRIED_PRS_MARKER}`]
   let current = ''
   for (const n of unique) {
@@ -1124,15 +1122,14 @@ export function carriedPrsSection(carriedPrs: number[]): string[] {
  * `--apply` can complete this commit and then fail at the push step — a
  * misconfigured remote, an SSH identity with no write access — which aborts
  * the run before the PR-opening step that used to be the marker's only home.
- * The operator then pushes and opens the PR by hand, and a hand-made PR is
- * correct in every visible respect except this one invisible thing: no PR
- * body, no marker, and `scripts/practices-metrics.mjs` can no longer join the
- * upgrade to the template PRs it carried.
+ * The operator then pushes and opens the PR by hand, and a hand-made PR would
+ * otherwise be correct in every visible respect except this one invisible
+ * thing: no PR body, no marker, and no record of which template PRs this
+ * upgrade carried.
  *
  * The commit itself is made before that push, so writing the same marker into
- * its message survives exactly the failure that loses the PR body. The
- * collector reads the marker from either place (#1011); this is the one a
- * hand-created PR still carries.
+ * its message survives exactly the failure that loses the PR body — this is
+ * the one a hand-created PR still carries (#1011).
  */
 export function buildCommitMessage(from: string, to: string, carriedPrs: number[]): string {
   const subject = `chore(core): upgrade template core ${from} -> ${to}`

@@ -87,9 +87,16 @@ _clean_json() {
 JSON
 }
 
+# Shaped like a REAL `pnpm audit --json` finding (captured live against this
+# repo's own pnpm 9.15.9, see js-dependency-audit-classification.test.sh's
+# header for the full fixture) rather than the metadata-only stub this test
+# used before #2040: classification reads `.advisories[].{severity,
+# github_advisory_id,module_name}`, which a metadata-only payload does not
+# carry, so a stub without it silently classified zero findings and this
+# test's own "must still block" assertions passed for the wrong reason.
 _fail_json() {
   cat <<JSON
-{"metadata":{"vulnerabilities":{"critical":0,"high":2,"moderate":0,"low":0},"totalDependencies":10}}
+{"metadata":{"vulnerabilities":{"critical":0,"high":2,"moderate":0,"low":0},"totalDependencies":10},"advisories":{"1":{"severity":"high","github_advisory_id":"GHSA-vendor-a-0001","module_name":"vendor-a-pkg","findings":[{"version":"1.2.3","paths":[]}]},"2":{"severity":"high","github_advisory_id":"GHSA-vendor-a-0002","module_name":"vendor-a-pkg2","findings":[{"version":"2.0.0","paths":[]}]}}}
 JSON
 }
 
@@ -166,7 +173,7 @@ _fail_json >"$STUB_DIR/output-$safe_a"
 _run
 _assert_exit "one tree fails -- blocks overall" 1
 _assert_output_contains "workspace still reported despite sibling failure" "pnpm audit (workspace: .): 0 critical, 0 high"
-_assert_output_contains "failing tree named" "2 high advisory(ies)"
+_assert_output_contains "failing tree named" "2 critical/high advisory(ies) introduced or upgraded"
 
 # 3. One vendored tree persistently returns unparseable output (simulating a
 #    registry hiccup), others clean -> INCONCLUSIVE-only, exits 2 (never 0 or

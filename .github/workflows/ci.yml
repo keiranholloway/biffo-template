@@ -71,13 +71,17 @@ jobs:
   # all; the required check name it reports ("Release Guards") is unchanged,
   # and this file no longer defines a job with that name.
   js:
-    # The name stays "...audit" even though the audit step moved out (below),
-    # deliberately: it is a required status-check context matched by literal
-    # string against DEFAULT_STATUS_CHECKS and against branch protection
-    # already written onto this repo and every existing instance/sibling.
-    # Renaming it would leave all of them waiting forever on a context
-    # nothing reports — the same trap the sibling skeleton's own `js` job
-    # comment already warns about, followed here rather than re-learned.
+    # This job's name has carried "...audit" since before #1880 moved the
+    # audit step out to a separate non-required job (2026-09-04) and through
+    # #2040 moving it back in (below) as a diff-aware, required check
+    # (2026-09-10) — it is a required status-check context matched by
+    # literal string against DEFAULT_STATUS_CHECKS and against branch
+    # protection already written onto this repo and every existing
+    # instance/sibling. Renaming it, in either direction, would leave all of
+    # them waiting forever on a context nothing reports — the same trap the
+    # sibling skeleton's own `js` job comment already warns about, followed
+    # here rather than re-learned. The name is true again now that the
+    # audit step actually runs in this job.
     name: JS (lint, types, test, audit)
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     timeout-minutes: 20
@@ -174,6 +178,43 @@ jobs:
       - name: Test
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm run test
+      # ── Dependency audit ────────────────────────────────────────────────
+      #
+      # Runs IN this required job again, rather than in a separate
+      # `continue-on-error` job, as of #2040 — reverting the #1880 split.
+      # #1880 (2026-09-04) moved this step out because `pnpm audit`'s
+      # registry call was chronically overloaded and an INCONCLUSIVE
+      # (network-flake) result blocked real, unrelated PRs on a problem
+      # nobody merging them could fix. That is still true and still a real
+      # risk this step re-accepts — see js-dependency-audit.sh's own
+      # INCONCLUSIVE handling and the PR that made this change for the
+      # trade-off record.
+      #
+      # What changed is a DIFFERENT axis: #1880's split also, as a side
+      # effect, stopped ANY per-PR advisory — including one a PR genuinely
+      # introduced — from ever blocking a merge, because the job carrying it
+      # was both `continue-on-error: true` and deliberately excluded from
+      # `dev`'s required status checks. #2040's cost accounting (two routine
+      # npm advisories against packages already on `dev`, $86.72 and 89
+      # fleet dispatches for zero PRs that could have fixed them) shows the
+      # split solved a noise problem by discarding a real gate. Since #2040,
+      # js-dependency-audit.sh itself is diff-aware (comparing the PR's
+      # lockfile against the SAME tree's lockfile on the base branch, via a
+      # second real `pnpm audit` run) and fails only on an advisory that is
+      # NEW to this diff — an advisory published overnight against something
+      # already on `dev` is pre-existing and does not block, so the routine
+      # case #1880 was actually reacting to is now immune by construction,
+      # and the step can safely go back to being required.
+      #
+      # The job's own NAME stays "JS (lint, types, test, audit)" throughout
+      # (see that name's own comment above) — it is a required status-check
+      # context matched by literal string against branch protection already
+      # written onto this repo and every existing instance/sibling, so this
+      # change makes the name true again rather than needing a rename that
+      # would break every one of those required-check lists.
+      - name: Dependency audit
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: sh scripts/js-dependency-audit.sh
       # A plugin manifest declaring event_subscriptions must ship terraform/,
       # or the subscription is inert in every deployment (#194). This walks the
       # whole tree from the git root so it also covers _skeletons/, which no
@@ -429,53 +470,6 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: sh scripts/biffo.sh check distribution-inventory
 
-  # Split out of the `js` job deliberately (#1880): `pnpm audit`'s registry
-  # call (`registry.npmjs.org/-/npm/v1/security/advisories/bulk`) has been
-  # chronically overloaded since npm/GitHub retired the legacy audit endpoints
-  # on 2026-07-15, consolidating every pnpm/npm/yarn audit client worldwide
-  # onto this one path with no published SLA. Independently reproduced and
-  # documented in #1880: intermittent multi-second hangs, unrelated to this
-  # repo's own code, CI config, or runner — an ongoing, unresolved, upstream
-  # infrastructure condition, not a transient blip #591's retry loop can be
-  # relied on to absorb. #1269/#591 already made `js-dependency-audit.sh`
-  # itself fail closed (INCONCLUSIVE blocks) rather than silently pass on a
-  # broken registry response; #1880 is the discovery that the registry itself
-  # is now unreliable often enough that "fail closed" was blocking real,
-  # unrelated PRs on a problem nobody merging them could fix.
-  #
-  # `js` (required) no longer runs this step at all, so a registry hang can
-  # never again block or cancel the lint/type/test/guard job. This job runs
-  # the exact same script, on every push/PR, so a real high/critical advisory
-  # is still surfaced quickly — it is informational rather than blocking:
-  # `continue-on-error: true` keeps a registry-side failure from turning red
-  # in a way that looks like this job's own fault, and this job's name is
-  # deliberately NOT added to `dev`'s required status checks. This is a
-  # DELIBERATE, OPEN loosening of a gate per AGENTS.md §7, not a silent one —
-  # #1880 is the tracking issue, and it names the follow-up (a scheduled,
-  # persistent scan) this PR does not itself build.
-  js-audit:
-    name: JS Dependency Audit (non-blocking, #1880)
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
-    timeout-minutes: 20
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v5
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: pnpm
-      - id: install
-        run: pnpm install --frozen-lockfile
-      - name: Dependency audit
-        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        # Fails on a real high/critical advisory, but treats a broken audit
-        # registry (non-JSON response, or the chronic #1880 timeout) as
-        # inconclusive rather than blocking (#591) — and this job's own
-        # non-required status is what stops that inconclusive result from
-        # blocking the merge queue in the first place.
-        run: sh scripts/js-dependency-audit.sh
-
   python:
     name: Python (lint, types, test, security)
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
@@ -545,6 +539,24 @@ jobs:
       - name: Product-domain dependencies
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: sh scripts/sync-domain-deps.sh
+      # ── Dependency audit ────────────────────────────────────────────────
+      #
+      # Runs IN this required job again, rather than in a separate
+      # `continue-on-error` job, as of #2040 — reverting the #1882 split
+      # (mirroring the identical `js`-side revert above; see that job's own
+      # comment for the full reasoning). #1882 moved this out because a
+      # registry-side advisory event could block real, unrelated PRs; that
+      # risk is unchanged and still accepted here (see
+      # py-dependency-audit.sh's own INCONCLUSIVE handling). What changed:
+      # py-dependency-audit.sh has classified findings as "pre-existing on
+      # the base branch" vs "introduced by this diff" since #1673, so the
+      # routine case #1882 was reacting to — an advisory published against
+      # something already on `dev`, unrelated to any PR's diff — no longer
+      # blocks, and only a finding this diff actually introduced or
+      # upgraded into does. That makes it safe to be required again.
+      - name: Dependency audit
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: sh scripts/py-dependency-audit.sh
       - name: Lint
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: uv run ruff check .
@@ -941,54 +953,6 @@ jobs:
         with:
           name: bandit-report
           path: bandit-report.json
-
-  # Split out of the `python` job deliberately (#1882, mirroring #1880/#1881's
-  # identical JS-side fix): `pip-audit`'s advisory lookups are exactly as
-  # registry-dependent and chronically unreliable as `pnpm audit`'s were --
-  # AGENTS.md's own "a dependency audit is time-dependent" section already
-  # documented that a fresh advisory landing mid-session can redden an
-  # untouched PR, and #1880's rollout proved it live: the same morning the JS
-  # fix shipped, a newly-published pip advisory (PYSEC-2026-3721) independently
-  # blocked the required Python gate on five unrelated sibling repos within the
-  # same hour, none of which touch Python code. `#591` already made
-  # `py-dependency-audit.sh` itself fail closed (INCONCLUSIVE blocks) rather
-  # than silently pass on a broken registry response; #1882 is the same
-  # discovery #1880 made for JS, now confirmed for Python too: fail-closed was
-  # blocking real, unrelated PRs on a problem nobody merging them could fix.
-  #
-  # `python` (required) no longer runs this step at all, so a registry-side
-  # advisory event can never again block that job. This job runs the exact
-  # same script, on every push/PR, so a real high/critical advisory is still
-  # surfaced quickly -- it is informational rather than blocking:
-  # `continue-on-error: true` keeps a registry-side failure from turning red
-  # in a way that looks like this job's own fault, and this job's name is
-  # deliberately NOT added to `dev`'s required status checks. This is a
-  # DELIBERATE, OPEN loosening of a gate per AGENTS.md §7, not a silent one --
-  # #1882 is the tracking issue.
-  python-audit:
-    name: Python Dependency Audit (non-blocking, #1882)
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
-    timeout-minutes: 20
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
-        with:
-          fetch-depth: 0
-      - uses: astral-sh/setup-uv@v6
-        with:
-          enable-cache: true
-      - id: install
-        run: uv sync --all-groups --locked
-      - name: Product-domain dependencies
-        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        run: sh scripts/sync-domain-deps.sh
-      - name: Dependency audit
-        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        # Fails on a real advisory, but treats a broken audit registry/network
-        # response as inconclusive rather than blocking (#591) -- and this
-        # job's own non-required status is what stops that inconclusive
-        # result from blocking the merge queue in the first place.
-        run: sh scripts/py-dependency-audit.sh
 
   security-secrets:
     name: Secret Scan

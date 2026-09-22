@@ -163,6 +163,11 @@ describe('checkPluginStaleness', () => {
       expect(result.status).toBe('behind')
       expect(result.commitsBehind).toBe(4)
       expect(git.cleanup).toHaveBeenCalledWith('/tmp/fake-clone')
+      // `source` names the repo this was actually compared against — a
+      // report opening a per-pair issue (biffo-template#1559) needs this to
+      // build "<instance>/<name> is behind <plugin-repo>" without re-parsing
+      // it back out of `detail`'s prose.
+      expect(result.source).toBe('https://github.com/acme/widgets')
     })
 
     it('reports cannot-tell, not up-to-date, when the source is unreachable', async () => {
@@ -267,6 +272,9 @@ describe('checkPluginStaleness', () => {
       // main.py (changed) + new_route.py (missing from the vendored copy) = 2.
       expect(result.filesDiffering).toBe(2)
       expect(result.commitsBehind).toBeUndefined()
+      // A local `--local` source reports the local directory as `source`,
+      // not a URL — there is no repo to name.
+      expect(result.source).toBe(localSource)
     })
 
     it('never counts the provenance file itself as drift', async () => {
@@ -315,6 +323,10 @@ describe('checkPluginStaleness', () => {
       const result = resultFor(results, 'widgets')
       expect(result.status).toBe('cannot-tell')
       expect(result.status).not.toBe('up-to-date')
+      // `source` is still reported even on a cannot-tell — the registry DID
+      // resolve a repo, only the clone failed, so a caller can still say
+      // which repo it tried and failed against rather than naming none.
+      expect(result.source).toBe('https://github.com/acme/widgets')
     })
 
     it('reports cannot-tell when there is no provenance and the plugin is not in the registry', async () => {

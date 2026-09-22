@@ -58,6 +58,19 @@ export interface PluginStalenessResult {
   /** Human-readable explanation — always present, since `cannot-tell` is
    * meaningless to a reader without a reason. */
   detail: string
+  /**
+   * The location this plugin was actually compared against — a fetchable
+   * repo URL (provenance's own origin, or the registry's fallback repo for
+   * it) on the provenance and non-local content-diff paths, or a local
+   * filesystem directory on a `--local` content-diff comparison. Set
+   * whenever a comparison target was resolved, independent of `status` —
+   * including a `cannot-tell` caused by that target being unreachable — so a
+   * caller building a per-pair report (e.g. "<instance>/<name> is behind
+   * <plugin-repo>") never has to re-parse it back out of `detail`'s prose.
+   * Left unset only when no source was ever resolved at all (no provenance,
+   * not in the registry, or an in-tree/invalid-provenance short-circuit).
+   */
+  source?: string
 }
 
 /**
@@ -243,6 +256,7 @@ async function checkViaProvenance(
       status: 'cannot-tell',
       method: 'unresolvable',
       detail: `could not reach ${repoUrl} (network or authentication failure)`,
+      source: repoUrl,
     }
   }
 
@@ -252,6 +266,7 @@ async function checkViaProvenance(
       status: 'up-to-date',
       method: 'provenance',
       detail: `matches ${repoUrl}'s default branch (${shortSha(remoteHeadSha)})`,
+      source: repoUrl,
     }
   }
 
@@ -268,6 +283,7 @@ async function checkViaProvenance(
       status: 'cannot-tell',
       method: 'unresolvable',
       detail: `could not clone ${repoUrl} to count commits behind (network or authentication failure)`,
+      source: repoUrl,
     }
   }
   try {
@@ -280,6 +296,7 @@ async function checkViaProvenance(
         detail:
           `recorded commit ${shortSha(record.sha!)} was not found in ${repoUrl}'s history ` +
           '(rebased or force-pushed?) — cannot count commits behind',
+        source: repoUrl,
       }
     }
     if (commitsBehind === 0) {
@@ -288,6 +305,7 @@ async function checkViaProvenance(
         status: 'up-to-date',
         method: 'provenance',
         detail: `matches ${repoUrl}'s default branch (${shortSha(remoteHeadSha)})`,
+        source: repoUrl,
       }
     }
     return {
@@ -296,6 +314,7 @@ async function checkViaProvenance(
       commitsBehind,
       method: 'provenance',
       detail: `${commitsBehind} commit(s) behind ${repoUrl}'s default branch`,
+      source: repoUrl,
     }
   } finally {
     git.cleanup(clone)
@@ -321,6 +340,7 @@ async function checkViaContentDiff(
         status: 'cannot-tell',
         method: 'unresolvable',
         detail: `could not clone ${sourceDir} for a content comparison (network or authentication failure)`,
+        source: sourceDir,
       }
     }
     effectiveSourceDir = cloneDir
@@ -336,6 +356,7 @@ async function checkViaContentDiff(
         method: 'content-diff',
         filesDiffering: 0,
         detail: `byte-identical to ${originDescription} (no provenance recorded, so an exact commit could not be named)`,
+        source: originDescription,
       }
     }
     return {
@@ -346,6 +367,7 @@ async function checkViaContentDiff(
       detail:
         `${filesDiffering} file(s) differ from ${originDescription} ` +
         '(no provenance recorded, so an exact commit count could not be determined)',
+      source: originDescription,
     }
   } finally {
     if (cloneDir) git.cleanup(cloneDir)

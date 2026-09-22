@@ -24,6 +24,7 @@ Covers #1924's own done-when directly:
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -194,6 +195,38 @@ class TestHostMountFailures:
         )
 
         with pytest.raises(ConformanceCheckError, match="fixture_plugin.no_such_module:app"):
+            host_mount.run(ConformanceContext(repo_root=fixture_repo))
+
+    def test_plugin_host_not_importable_is_reported_not_raised_raw(self, fixture_repo, monkeypatch):
+        """This is genuinely reachable, not belt-and-braces: the plugin
+        skeleton's own `pyproject.toml` (`_skeletons/plugin-template/`)
+        depends on `biffo-plugin-sdk>=1.0,<2.0` with no `[conformance]`
+        extra and no direct `biffo-plugin-host` dependency, and
+        `conformance-driver.ts` shells out with `uv run --no-sync` (deliberately
+        never installing anything as a side effect of a verify run -- see its
+        own docstring). So a freshly-scaffolded plugin repo that has not added
+        the `conformance` extra hits this exact ImportError the first time it
+        runs `biffo plugin verify`, and the failure must name the fix rather
+        than surface as a raw traceback.
+
+        Reproduced here by making `plugin_host.discover` itself fail to
+        import -- `None` in `sys.modules` is the standard way to force
+        Python's import system to raise ImportError for a specific module
+        name without needing the real package to be absent from the
+        environment (it is looked up before any parent package is (re)used,
+        so this is independent of whichever other test already imported the
+        real `plugin_host` in this same process)."""
+        _write_fixture_app(fixture_repo, "fixture_plugin")
+        _write_manifest(
+            fixture_repo,
+            _base_manifest(
+                user_ingress={"app": "fixture_plugin.app:app", "required_group": "founder"},
+            ),
+        )
+
+        monkeypatch.setitem(sys.modules, "plugin_host.discover", None)
+
+        with pytest.raises(ConformanceCheckError, match="biffo-plugin-host is not importable"):
             host_mount.run(ConformanceContext(repo_root=fixture_repo))
 
     def test_a_declared_route_that_never_reaches_the_forwarder_fails(

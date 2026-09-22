@@ -204,6 +204,18 @@ export const RESOLVER_SITES = [
   { file: 'src/commands/sibling-create.ts', asset: '_skeletons', packaged: true },
   { file: 'src/commands/plugin-create.ts', asset: '_skeletons', packaged: true },
   {
+    file: 'src/commands/plugin-verify.ts',
+    // `biffo plugin verify` (biffo-template#1523/#1924) resolves
+    // scripts/pg-test-db.sh via findPackagedScript(), the same
+    // already-packaged asset packaged-script-command.ts's callers use
+    // (declared above) -- computed here directly from the command's own
+    // import.meta.url rather than through that shared factory, since the
+    // resolved path is handed to runPluginVerify() as an injected
+    // findScript() rather than executed inline.
+    asset: 'scripts/pg-test-db.sh',
+    packaged: true,
+  },
+  {
     file: 'src/test-utils/shared-sync-template.ts',
     // Test-only. Locates this repo's real scripts/shared-sync.sh to COPY into a
     // throwaway fixture template, because executing it where it sits makes the

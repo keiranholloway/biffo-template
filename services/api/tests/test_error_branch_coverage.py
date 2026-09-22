@@ -745,5 +745,10 @@ class TestLegacyKeyMigrationShim:
         monkeypatch.setattr("sys.argv", ["x", "--check", "--coverage", str(cov)])
         assert ebc.main() == 1
         err = capsys.readouterr().err
-        assert "m.py:except:except ValueError" in err
-        assert "m.py:except:except OSError" not in err
+        # `Branch.key()` in this module is v2-shaped post-#2031 (that PR's
+        # own change, now merged ahead of the shim's retirement), so the
+        # newly-detected branch reports in v2 form here, not the v1 form
+        # the shim exists to translate on the CI trusted-script/baseline
+        # split described in the class docstring.
+        assert "m.py:8:except:except ValueError" in err
+        assert "m.py:4:except:except OSError" not in err

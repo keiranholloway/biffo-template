@@ -59,7 +59,18 @@ name = "biffo-plugin-sdk"
 # means a consumer pinned below `>=1.5` simply never sees `config` at all
 # (same version-gate posture as 1.4.0's own fields), so this is additive for
 # every manifest that predates it.
-version = "1.5.0"
+#
+# 1.6.0 (biffo-template#1924) adds the `biffo_plugin_sdk.conformance` package
+# and its `conformance` extra — the real-execution checks `biffo plugin
+# verify` runs (ADR-0003's plugin system, epic #1523). Additive: nothing
+# existing changes shape, and the new subpackage is reached by an explicit
+# `python -m biffo_plugin_sdk.conformance` invocation or an opt-in extra, so a
+# consumer pinned below `>=1.6` is wholly unaffected. `biffo-plugin-host`
+# depends on this package (not the other way around, in the ordinary sense —
+# see `[tool.uv.sources]` below for how the two stay resolvable together in
+# this monorepo); `conformance.checks.host_mount` imports it lazily, the same
+# pattern `sigv4`/`user-serving` already use for an optional runtime need.
+version = "1.6.0"
 description = "Biffo Plugin SDK — manifest validation, Core API client, and event system for Biffo plugins"
 readme = "README.md"
 license = "MIT"
@@ -106,6 +117,19 @@ user-serving = [
   "mangum>=0.19.0",
   "pyjwt[crypto]>=2.8.0",
 ]
+# `biffo plugin verify`'s real-execution checks (biffo-template#1523/#1924).
+# `host_mount` needs the real shared plugin-host discovery/mount code
+# (`plugin_host.discover`/`plugin_host.mount`) to exercise it against this
+# repo's own manifest and installed code — the whole point being that it
+# stubs neither side of the seam. An extra, not a hard dependency, for the
+# same reason `sigv4`/`user-serving` are: most consumers of this SDK (a
+# plugin's own runtime code) never need it, only a plugin repo's CI/local
+# `plugin verify` invocation does, and the import in `conformance/checks/
+# host_mount.py` is lazy so `import biffo_plugin_sdk` keeps working without
+# it installed.
+conformance = [
+  "biffo-plugin-host>=0.1.0,<1.0",
+]
 
 [dependency-groups]
 dev = [
@@ -114,6 +138,7 @@ dev = [
   "botocore>=1.35.0",
   "fastapi>=0.115.0",
   "pyjwt[crypto]>=2.8.0",
+  "biffo-plugin-host",
   "ruff>=0.8.0",
   "pyright>=1.1.0",
 ]
@@ -135,3 +160,15 @@ packages = ["src/biffo_plugin_sdk"]
 # the repo is.
 [tool.hatch.build.targets.sdist]
 include = ["src/biffo_plugin_sdk", "tests", "README.md", "LICENSE", "pyproject.toml"]
+
+# `biffo-plugin-host` (`services/_plugin-host/`) depends on this package, and
+# this package's `conformance` extra depends back on it — resolvable in THIS
+# monorepo only because both are `[tool.uv.workspace]` members
+# (root `pyproject.toml`) sharing one lockfile; a genuinely standalone install
+# of `biffo-plugin-sdk[conformance]` resolves `biffo-plugin-host` from PyPI
+# instead (published by M1, biffo-template#1922), where there is no cycle —
+# it is metadata-level mutual awareness, not an import-time circular import
+# (`conformance/checks/host_mount.py` imports `plugin_host` lazily, inside
+# `run()`, never at module scope).
+[tool.uv.sources]
+biffo-plugin-host = { workspace = true }

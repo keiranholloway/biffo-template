@@ -7,6 +7,7 @@ import { pluginStalenessCommand } from './plugin-staleness.js'
 import { pluginSyncMigrationsCommand } from './plugin-sync-migrations.js'
 import { pluginUninstallCommand } from './plugin-uninstall.js'
 import { pluginUpgradeCommand } from './plugin-upgrade.js'
+import { pluginVerifyCommand } from './plugin-verify.js'
 
 export const pluginCommand = new Command('plugin').description('Manage Biffo plugins')
 
@@ -18,3 +19,4 @@ pluginCommand.addCommand(pluginUpgradeCommand)
 pluginCommand.addCommand(pluginSyncMigrationsCommand)
 pluginCommand.addCommand(pluginInfoCommand)
 pluginCommand.addCommand(pluginStalenessCommand)
+pluginCommand.addCommand(pluginVerifyCommand)

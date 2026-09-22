@@ -363,7 +363,7 @@ dev = [
 
 [[package]]
 name = "biffo-plugin-sdk"
-version = "1.5.0"
+version = "1.6.0"
 source = { editable = "packages/python-sdk" }
 dependencies = [
     { name = "aws-lambda-powertools" },
@@ -372,6 +372,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+conformance = [
+    { name = "biffo-plugin-host" },
+]
 sigv4 = [
     { name = "botocore" },
 ]
@@ -383,6 +386,7 @@ user-serving = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "biffo-plugin-host" },
     { name = "botocore" },
     { name = "fastapi" },
     { name = "pyjwt", extra = ["crypto"] },
@@ -395,6 +399,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "aws-lambda-powertools", specifier = ">=3.4.0" },
+    { name = "biffo-plugin-host", marker = "extra == 'conformance'", editable = "services/_plugin-host" },
     { name = "botocore", marker = "extra == 'sigv4'", specifier = ">=1.35.0" },
     { name = "fastapi", marker = "extra == 'user-serving'", specifier = ">=0.115.0" },
     { name = "httpx", specifier = ">=0.28.1" },
@@ -402,10 +407,11 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.10.4" },
     { name = "pyjwt", extras = ["crypto"], marker = "extra == 'user-serving'", specifier = ">=2.8.0" },
 ]
-provides-extras = ["sigv4", "user-serving"]
+provides-extras = ["sigv4", "user-serving", "conformance"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "biffo-plugin-host", editable = "services/_plugin-host" },
     { name = "botocore", specifier = ">=1.35.0" },
     { name = "fastapi", specifier = ">=0.115.0" },
     { name = "pyjwt", extras = ["crypto"], specifier = ">=2.8.0" },

@@ -420,13 +420,20 @@ def _legacy_key(k: str) -> str:
     is returned unchanged (its second field is `except`/`fallback`, never a
     digit), so this is a no-op for every baseline still in v1 form.
 
-    Retire this — and the union in `main()` that calls it — in Milestone 3 of
-    #2037, once every inheriting repo's baseline has been regenerated as v2.
-    Kept only for the duration of that migration: while it is in effect, a
-    genuinely new v2 branch that collides on `path:kind:label` with an
-    already-baselined branch at a different line is absorbed as "known"
-    rather than flagged — reintroducing #2026's collision bug for exactly as
-    long as this shim lives.
+    Retire this — and the union in `main()` that calls it — once every
+    inheriting repo's baseline has been regenerated as v2. Kept only for the
+    duration of that migration: while it is in effect, a genuinely new v2
+    branch that collides on `path:kind:label` with an already-baselined
+    branch at a different line is absorbed as "known" rather than flagged —
+    reintroducing #2026's collision bug for exactly as long as this shim
+    lives.
+
+    EXPIRY: tracked by keiranholloway/biffo-template#2056 (the original
+    tracking issue, #2037, was auto-closed by the shim's own landing PR
+    before Milestones 2/3 were done — #2056 is its replacement). A repo
+    still carrying this shim after that issue closes is exposed to the
+    collision above and should be flagged by any doctor/sweep check that
+    reads this docstring — grep for "EXPIRY" in this function.
     """
     parts = k.split(":", 2)
     if len(parts) == 3 and parts[1].isdigit():

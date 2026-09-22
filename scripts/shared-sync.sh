@@ -2095,7 +2095,12 @@ stage_repo() {
       in_marker_scope "$wt" "$_rmarkers" || continue
       # A declared exception (#2051) is never overwritten, so like `seed` it
       # cannot delete anything either -- skip it here for the same reason.
-      in_skeleton_exceptions "$wt" "$_rexceptions" && continue
+      # Matched on the real repo dir ("$d"), not "$wt" -- $wt is always the
+      # fixed staging worktree path (.worktrees/shared-sync), whose basename
+      # never varies, so matching on it can never hit a per-repo exception
+      # (#2066). diff_files's read half above matches on "$d" for the same
+      # reason.
+      in_skeleton_exceptions "$d" "$_rexceptions" && continue
       [ -f "$wt/$_rt" ] || continue
       printf '%s\t%s\t%s\n' "$_rt" "$wt/$_rt" \
         "$TEMPLATE_ROOT/_skeletons/$_red_skel/$_rt" >> "$_red_pairs"
@@ -2154,8 +2159,11 @@ stage_repo() {
       in_marker_scope "$wt" "$_markers" || continue
       # The write half of the exceptions rule (#2051): a named repo's copy is
       # never overwritten and never created, matching diff_files's read half
-      # above for the same "disagreeing is worse than wrong" reason.
-      in_skeleton_exceptions "$wt" "$_exceptions" && continue
+      # above for the same "disagreeing is worse than wrong" reason. Matched
+      # on "$d" (the real repo dir), not "$wt" -- $wt's basename is always
+      # the fixed staging worktree name (.worktrees/shared-sync) and so can
+      # never match a per-repo exception (#2066).
+      in_skeleton_exceptions "$d" "$_exceptions" && continue
       if [ "$_mode" = seed ] && [ -f "$wt/$_target" ]; then continue; fi
       mkdir -p "$wt/$(dirname "$_target")"
       cp "$TEMPLATE_ROOT/_skeletons/$_skel/$_target" "$wt/$_target"

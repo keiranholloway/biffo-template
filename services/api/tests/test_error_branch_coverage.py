@@ -550,3 +550,81 @@ class TestEmptyCoverageReportFailsClosed:
         monkeypatch.setattr("sys.argv", ["x", "--check", "--coverage", str(cov)])
         assert ebc.main() == 0
         assert "1 file" in capsys.readouterr().out
+
+
+class TestLegacyKeyMigrationShim:
+    """#2037 — the trusted script (fetched from `dev`, always computes today's
+    v1 `path:kind:label` shape) and `--baseline` (read from the checkout
+    under test, which #2031 wants to write in v2 `path:line:kind:label`
+    shape) can disagree on ``Branch.key()``'s format mid-migration. Without
+    this shim every v2-shaped baseline entry reads as NEW against a
+    v1-computing trusted script and the ratchet deadlocks structurally,
+    regardless of what the PR's own diff does — reproduced live on #2031 at
+    head ``2276af1e``.
+    """
+
+    def test_legacy_key_is_identity_on_a_v1_key(self):
+        # A v1 key's second field is `except`/`fallback` — never numeric —
+        # so split(":", 2) never finds a digit there and returns the key
+        # unchanged. This is the fail-first proof that the shim does not
+        # disturb today's committed (entirely v1) baseline.
+        v1 = "packages/python-sdk/src/biffo_plugin_sdk/_cognito.py:except:except PyJWTError"
+        assert ebc._legacy_key(v1) == v1
+
+    def test_legacy_key_is_identity_on_a_bare_except_label_containing_a_colon(self):
+        # `label` legitimately contains colons (`except:` for a bare handler)
+        # — split(":", 2) must not mistake that for the v2 shape.
+        v1 = "scripts/x.py:except:except:"
+        assert ebc._legacy_key(v1) == v1
+
+    def test_legacy_key_strips_the_line_number_from_a_v2_key(self):
+        v2 = "packages/python-sdk/src/biffo_plugin_sdk/_cognito.py:99:except:except PyJWTError"
+        assert (
+            ebc._legacy_key(v2)
+            == "packages/python-sdk/src/biffo_plugin_sdk/_cognito.py:except:except PyJWTError"
+        )
+
+    def test_a_v2_baseline_entry_is_recognised_via_its_legacy_form(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        # End to end through main(): the trusted script here still computes
+        # v1 keys (Branch.key() is unchanged on `dev`), but --baseline is
+        # already in v2 form — exactly #2031's deadlock. Without the shim
+        # this reads NEW and --check fails; with it, the v1 key the script
+        # computes matches the v2 baseline entry's legacy-normalised form.
+        monkeypatch.setattr(ebc, "REPO_ROOT", tmp_path)
+        (tmp_path / "m.py").write_text("try:\n    f()\nexcept OSError:\n    g()\n")
+        cov = tmp_path / "coverage.json"
+        cov.write_text(
+            json.dumps({"files": {"m.py": {"executed_lines": [2], "missing_lines": [4]}}})
+        )
+        baseline = tmp_path / "baseline.json"
+        monkeypatch.setattr(ebc, "BASELINE", baseline)
+        baseline.write_text(json.dumps({"total": 1, "branches": ["m.py:4:except:except OSError"]}))
+        monkeypatch.setattr("sys.argv", ["x", "--check", "--coverage", str(cov)])
+        assert ebc.main() == 0
+        assert "NEW" not in capsys.readouterr().out
+
+    def test_a_genuinely_new_v1_branch_still_fails_against_a_v2_baseline(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        # Control: the shim widens membership, it does not disable the
+        # ratchet. A branch absent from the v2 baseline under both its v1
+        # and its legacy-normalised forms is still reported NEW.
+        monkeypatch.setattr(ebc, "REPO_ROOT", tmp_path)
+        (tmp_path / "m.py").write_text(
+            "try:\n    f()\nexcept OSError:\n    g()\ntry:\n    h()\nexcept ValueError:\n    g()\n"
+        )
+        cov = tmp_path / "coverage.json"
+        cov.write_text(
+            json.dumps({"files": {"m.py": {"executed_lines": [2, 6], "missing_lines": [4, 8]}}})
+        )
+        baseline = tmp_path / "baseline.json"
+        monkeypatch.setattr(ebc, "BASELINE", baseline)
+        # Only the OSError branch is accepted, in v2 shape.
+        baseline.write_text(json.dumps({"total": 1, "branches": ["m.py:4:except:except OSError"]}))
+        monkeypatch.setattr("sys.argv", ["x", "--check", "--coverage", str(cov)])
+        assert ebc.main() == 1
+        err = capsys.readouterr().err
+        assert "m.py:except:except ValueError" in err
+        assert "m.py:except:except OSError" not in err

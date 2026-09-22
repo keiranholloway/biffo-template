@@ -351,6 +351,39 @@ def load_baseline(baseline: Path) -> dict | None:
     return json.loads(baseline.read_text())
 
 
+def _legacy_key(k: str) -> str:
+    """A v2 `path:line:kind:label` key rendered in v1 `path:kind:label` form.
+
+    Migration shim for #2037: the trusted script that computes `keys` is
+    always fetched from the default branch, but `--baseline` is read from the
+    checkout under test, so a PR that changes `Branch.key()`'s shape (#2026,
+    #2031) is comparing keys the trusted script emits in the OLD format
+    against a baseline it wrote in the NEW format — every baselined branch
+    then reads NEW and the gate deadlocks structurally, not on anything wrong
+    in the PR's diff. Normalising each already-baselined key to its v1 form
+    lets a v1-computing script recognise a v2-shaped baseline entry.
+
+    `split(":", 2)` rather than a regex: `label` legitimately contains colons
+    (a bare handler's label is `except:`) while `kind` is never numeric and a
+    repo-relative `path` carries no colon, so "is the second field all
+    digits" is an unambiguous discriminator between the two shapes. A v1 key
+    is returned unchanged (its second field is `except`/`fallback`, never a
+    digit), so this is a no-op for every baseline still in v1 form.
+
+    Retire this — and the union in `main()` that calls it — in Milestone 3 of
+    #2037, once every inheriting repo's baseline has been regenerated as v2.
+    Kept only for the duration of that migration: while it is in effect, a
+    genuinely new v2 branch that collides on `path:kind:label` with an
+    already-baselined branch at a different line is absorbed as "known"
+    rather than flagged — reintroducing #2026's collision bug for exactly as
+    long as this shim lives.
+    """
+    parts = k.split(":", 2)
+    if len(parts) == 3 and parts[1].isdigit():
+        return f"{parts[0]}:{parts[2]}"
+    return k
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--write", action="store_true", help="record the current set as baseline")
@@ -481,7 +514,15 @@ def main() -> int:
         print(f"unexecuted error branches: {len(keys)}  (no baseline yet; {coverage_note})")
         return 0
 
-    known = set(baseline.get("branches", []))
+    # `keys` (above) comes from THIS script, always fetched from the trusted
+    # default branch. `recorded` comes from --baseline, read from the
+    # checkout under test — which may already be in the newer key format
+    # this script does not compute yet. Widen membership with each
+    # baselined key's legacy-normalised form so a v1-computing script still
+    # recognises a v2-shaped baseline entry (#2037 migration shim; see
+    # `_legacy_key`). `keys` itself is left untouched.
+    recorded = set(baseline.get("branches", []))
+    known = recorded | {_legacy_key(k) for k in recorded}
     new = [k for k in keys if k not in known]
 
     print(

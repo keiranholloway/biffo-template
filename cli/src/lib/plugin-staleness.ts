@@ -72,6 +72,19 @@ export interface PluginStalenessDeps {
   git: GitAdapter
 }
 
+/**
+ * Result of resolving a plugin name against the registry. `repo: null` is
+ * ambiguous on its own — it means either "fetched fine, name just isn't in
+ * it" or "couldn't fetch at all" — so `fetchFailure` carries which one this
+ * was. Collapsing the two back into a bare `string | null` is exactly the
+ * defect #2050 fixes: `resolveRegistryRepo` used to swallow a genuine fetch
+ * failure into the same empty result as a clean "not found".
+ */
+interface RegistryLookupResult {
+  repo: string | null
+  fetchFailure: string | null
+}
+
 /** Directories under `services/` that are never a vendored plugin. */
 function discoverVendoredPlugins(servicesDir: string): string[] {
   if (!existsSync(servicesDir)) return []
@@ -95,19 +108,30 @@ export async function checkPluginStaleness(
   const names = discoverVendoredPlugins(servicesDir)
 
   let registryRepoByName: Map<string, string> | null = null
-  const resolveRegistryRepo = async (name: string): Promise<string | null> => {
-    if (registryRepoByName === null) {
-      registryRepoByName = new Map()
+  let registryFetchFailure: string | null = null
+  const resolveRegistryRepo = async (name: string): Promise<RegistryLookupResult> => {
+    if (registryRepoByName === null && registryFetchFailure === null) {
       try {
         const reg = await deps.registry.fetchRegistry()
+        registryRepoByName = new Map()
         for (const entry of reg.plugins) registryRepoByName.set(entry.name, entry.repo)
-      } catch {
-        // No fallback available; leave the map empty rather than fail every
-        // plugin's check over a registry that happens to be unreachable —
-        // each plugin's own provenance may still be enough on its own.
+      } catch (err) {
+        // A genuine registry-fetch failure (network, non-2xx, invalid JSON,
+        // or a whole-envelope shape error) is a different fact from "this
+        // plugin name isn't published" and must be reported as such, not
+        // silently folded into an empty map — that swallow is what turned
+        // one bad registry entry into "every plugin is cannot-tell" in
+        // #2006's daily workflow (see biffo-plugins-registry#7). Each
+        // plugin's own provenance may still be enough on its own, so this
+        // doesn't fail every plugin's check outright — but a caller that
+        // does need the registry gets told WHY it came back empty.
+        registryFetchFailure = (err as Error).message
       }
     }
-    return registryRepoByName.get(name) ?? null
+    if (registryFetchFailure !== null) {
+      return { repo: null, fetchFailure: registryFetchFailure }
+    }
+    return { repo: registryRepoByName?.get(name) ?? null, fetchFailure: null }
   }
 
   const results: PluginStalenessResult[] = []
@@ -120,7 +144,7 @@ export async function checkPluginStaleness(
 async function checkOnePlugin(
   pluginDir: string,
   name: string,
-  resolveRegistryRepo: (name: string) => Promise<string | null>,
+  resolveRegistryRepo: (name: string) => Promise<RegistryLookupResult>,
   git: GitAdapter,
 ): Promise<PluginStalenessResult> {
   const provenance = readProvenance(pluginDir)
@@ -159,8 +183,26 @@ async function checkOnePlugin(
     return checkViaContentDiff(name, pluginDir, localOrigin, { isLocalDir: true }, git)
   }
 
-  const registryRepo = await resolveRegistryRepo(name)
-  if (!registryRepo) {
+  const lookup = await resolveRegistryRepo(name)
+  if (!lookup.repo) {
+    if (lookup.fetchFailure) {
+      // Distinct from "fetched fine, this plugin just isn't published" —
+      // the registry itself could not be read, so there was nothing to
+      // compare '${name}' against, and saying so is the whole point of
+      // #2050 (a fetch failure must not read the same as "nothing to
+      // compare against").
+      return {
+        name,
+        status: 'cannot-tell',
+        method: 'unresolvable',
+        detail: record
+          ? `provenance records origin '${record.origin}', which is neither a reachable git URL nor a local ` +
+            `directory that still exists, and the plugin registry could not be fetched to resolve ` +
+            `'${name}' by name either: ${lookup.fetchFailure}`
+          : `no provenance recorded (vendored before #1547) and the plugin registry could not be fetched ` +
+            `to resolve '${name}' by name: ${lookup.fetchFailure}`,
+      }
+    }
     return {
       name,
       status: 'cannot-tell',
@@ -168,10 +210,11 @@ async function checkOnePlugin(
       detail: record
         ? `provenance records origin '${record.origin}', which is neither a reachable git URL nor a local ` +
           `directory that still exists, and '${name}' was not found in the plugin registry either`
-        : `no provenance recorded (vendored before #1547, or an unreachable registry) and '${name}' was ` +
-          `not found in the plugin registry — nothing to compare against`,
+        : `no provenance recorded (vendored before #1547) and '${name}' was not found in the plugin ` +
+          `registry — nothing to compare against`,
     }
   }
+  const registryRepo = lookup.repo
 
   if (record?.sha) {
     // Origin wasn't fetchable (e.g. a stale local path), but the registry

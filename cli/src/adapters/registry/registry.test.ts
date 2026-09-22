@@ -79,6 +79,60 @@ describe('RegistryAdapter', () => {
       expect(registry.plugins).toHaveLength(2)
     })
 
+    it('skips a single malformed entry (legacy string ui_components, #1555) and still resolves the rest (#2050)', async () => {
+      // Real reproduction shape (#2050 issue body, verified 2026-09-22
+      // against the live registry): `ui_components` used to be `string[]`
+      // and #1555 tightened it to an array of objects. A registry entry
+      // still carrying the old shape must not take down every OTHER entry's
+      // resolution — only its own.
+      const registryWithOneBadEntry = {
+        schema_version: '1.0',
+        last_updated: '2026-09-22T00:00:00Z',
+        plugins: [
+          {
+            name: 'idea-scout',
+            version: '1.0.0',
+            minor_version: '1.0',
+            repo: 'https://github.com/keiranholloway/biffo-plugin-idea-scout',
+            status: 'active',
+            ui_components: ['nav-link', 'page'], // legacy string[] shape — malformed
+          },
+          {
+            name: 'marketing',
+            version: '2.1.0',
+            minor_version: '2.1',
+            repo: 'https://github.com/keiranholloway/biffo-plugin-marketing',
+            status: 'active',
+            ui_components: [{ type: 'nav-link', label: 'Marketing', path: '/marketing' }],
+          },
+        ],
+      }
+      global.fetch = vi.fn().mockImplementation(() => jsonResponse(registryWithOneBadEntry))
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const adapter = new RegistryAdapter('https://example.com/plugins.json')
+
+      const registry = await adapter.fetchRegistry()
+
+      // The malformed 'idea-scout' entry is dropped...
+      expect(registry.plugins.map((p) => p.name)).toEqual(['marketing'])
+      // ...but 'marketing' still resolves, which is the whole point: one bad
+      // entry must never break lookup of another plugin.
+      const marketing = await adapter.resolvePlugin('marketing', '2.1')
+      expect(marketing.status).toBe('active')
+      // And the drop is visible, not silent.
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.stringContaining("'idea-scout'"),
+      )
+      warnSpy.mockRestore()
+    })
+
+    it('still throws on a genuinely wrong envelope shape, not just a bad entry', async () => {
+      global.fetch = vi.fn().mockResolvedValue(jsonResponse({ oops: true }))
+      const adapter = new RegistryAdapter('https://example.com/plugins.json')
+      await expect(adapter.fetchRegistry()).rejects.toThrow('invalid shape')
+    })
+
     it('throws a clear error when the network request fails', async () => {
       global.fetch = vi.fn().mockRejectedValue(new Error('getaddrinfo ENOTFOUND'))
       const adapter = new RegistryAdapter('https://example.com/plugins.json')

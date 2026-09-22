@@ -19,6 +19,7 @@
  * fetches. Don't conflate the two — see PR description for more detail.
  */
 import { z } from 'zod'
+import { log } from '../../lib/logger.js'
 
 // A `ui_components` entry, matching registry-schema.json's shape — an array
 // of objects, not the `string[]` this field used to be typed as (#1555).
@@ -55,14 +56,29 @@ const RegistryPluginEntrySchema = z.object({
   status: z.enum(['active', 'disabled']),
 })
 
-const PluginRegistrySchema = z.object({
+// The envelope only — `plugins[]` is validated per-entry in fetchRegistry(),
+// not as a single z.array(RegistryPluginEntrySchema) (#2050). A registry-wide
+// z.array() call fails the ENTIRE array the instant one entry is malformed
+// (e.g. a legacy string `ui_components` left over from #1555's shape
+// tightening), which silently took down name resolution for every OTHER
+// plugin too — not just the bad one. Validating the envelope shape here
+// still catches a genuinely wrong document (missing `schema_version`, no
+// `plugins` array at all, etc.); only individual plugin entries get the
+// tolerant per-entry treatment.
+const PluginRegistryEnvelopeSchema = z.object({
   schema_version: z.string(),
   last_updated: z.string(),
-  plugins: z.array(RegistryPluginEntrySchema),
+  plugins: z.array(z.unknown()),
 })
 
 export type RegistryPluginEntry = z.infer<typeof RegistryPluginEntrySchema>
-export type PluginRegistry = z.infer<typeof PluginRegistrySchema>
+
+export interface PluginRegistry {
+  schema_version: string
+  last_updated: string
+  /** Only the entries that passed per-entry validation — see fetchRegistry(). */
+  plugins: RegistryPluginEntry[]
+}
 
 export const DEFAULT_REGISTRY_URL =
   'https://raw.githubusercontent.com/keiranholloway/biffo-plugins-registry/main/plugins.json'
@@ -100,15 +116,43 @@ export class RegistryAdapter {
       )
     }
 
-    const result = PluginRegistrySchema.safeParse(raw)
-    if (!result.success) {
-      const messages = result.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`)
+    const envelope = PluginRegistryEnvelopeSchema.safeParse(raw)
+    if (!envelope.success) {
+      const messages = envelope.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`)
       throw new Error(
         `Plugin registry at ${this.registryUrl} has an invalid shape: ${messages.join('; ')}`,
       )
     }
 
-    return result.data
+    // Per-entry, not `z.array(RegistryPluginEntrySchema)` on the whole list
+    // (#2050): one malformed plugin entry must never break lookup of every
+    // other plugin. Skip and warn on a bad entry rather than throwing for
+    // the whole registry.
+    const plugins: RegistryPluginEntry[] = []
+    for (const [index, entry] of envelope.data.plugins.entries()) {
+      const entryResult = RegistryPluginEntrySchema.safeParse(entry)
+      if (entryResult.success) {
+        plugins.push(entryResult.data)
+        continue
+      }
+      const label =
+        entry !== null &&
+        typeof entry === 'object' &&
+        'name' in entry &&
+        typeof (entry as { name: unknown }).name === 'string'
+          ? `'${(entry as { name: string }).name}'`
+          : `at index ${index}`
+      const messages = entryResult.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`)
+      log.warn(
+        `Plugin registry at ${this.registryUrl} has a malformed entry ${label} — skipped: ${messages.join('; ')}`,
+      )
+    }
+
+    return {
+      schema_version: envelope.data.schema_version,
+      last_updated: envelope.data.last_updated,
+      plugins,
+    }
   }
 
   /**

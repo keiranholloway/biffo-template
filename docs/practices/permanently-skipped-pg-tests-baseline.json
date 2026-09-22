@@ -1,10 +1,11 @@
 {
-  "total": 28,
+  "total": 33,
   "modules": [
     "services/api/tests/test_ddl_import_environment_pg.py",
     "services/api/tests/test_internal_plugin_workflows_seed_pg.py",
     "services/api/tests/test_media_generation_idempotency_pg.py",
     "services/api/tests/test_plugin_baseline_check_pg.py",
-    "services/api/tests/test_plugin_column_check_pg.py"
+    "services/api/tests/test_plugin_column_check_pg.py",
+    "services/api/tests/test_plugin_migration_transitions_pg.py"
   ]
 }

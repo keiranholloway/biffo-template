@@ -21,6 +21,29 @@ import {
 } from './sibling-create.js'
 import { makeTmpDir } from '../test-utils/tmp.js'
 
+/**
+ * Top-level job ids (`  js-audit:`, not the `name:` string inside it) in a
+ * GitHub Actions workflow — a structural read, not a substring match against
+ * the raw file (structural-assertion-guard.test.ts, #956): a rename that
+ * merely extends `js-audit` to `js-audit-v2` would still satisfy a bare
+ * `.toContain('js-audit')`, but would not appear in this list.
+ */
+function topLevelJobIds(workflow: string): string[] {
+  const ids: string[] = []
+  let inJobs = false
+  for (const line of workflow.split('\n')) {
+    if (/^jobs:\s*$/.test(line)) {
+      inJobs = true
+      continue
+    }
+    if (!inJobs) continue
+    if (/^\S/.test(line)) break
+    const m = /^ {2}([A-Za-z0-9_-]+):\s*$/.exec(line)
+    if (m) ids.push(m[1]!)
+  }
+  return ids
+}
+
 vi.mock('../lib/logger.js', () => ({
   log: { step: vi.fn(), success: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }))
@@ -279,15 +302,6 @@ describe('writeSiblingTemplate — design tokens (issue #1739 option B)', () => 
         '      - run: pnpm install --frozen-lockfile',
         '        env:',
         '          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}',
-        '  js-audit:',
-        '    runs-on: ubuntu-latest',
-        '    timeout-minutes: 20',
-        '    continue-on-error: true',
-        '    defaults:',
-        '      run:',
-        '        working-directory: apps/frontend',
-        '    steps:',
-        '      - run: pnpm install --frozen-lockfile',
         '',
       ].join('\n'),
     )
@@ -357,16 +371,17 @@ describe('writeSiblingTemplate — design tokens (issue #1739 option B)', () => 
     expect(jsJob).toContain(
       '- run: pnpm install --frozen-lockfile\n        env:\n          NODE_AUTH_TOKEN:',
     )
-    // js-audit job: same permissions/env addition, no --tokens flag (it never
-    // runs biffo-scale-guard).
-    const jsAuditJob = ciYml.split('  js-audit:')[1]!
-    expect(jsAuditJob).toContain('permissions:\n      contents: read\n      packages: read')
-    expect(jsAuditJob).toContain(
-      '- run: pnpm install --frozen-lockfile\n        env:\n          NODE_AUTH_TOKEN:',
-    )
+    // There is no separate `js-audit` job to patch any more — #2040 folded
+    // its Dependency audit step back into `js` itself and removed the job
+    // entirely, so `rewriteDesignTokens` no longer has a second job-shaped
+    // anchor to match against. Structural (parsed job ids), not a substring
+    // match against the raw file, per structural-assertion-guard.test.ts
+    // (#956): a rename that merely extended `js-audit` would still satisfy a
+    // bare `.not.toContain`.
+    expect(topLevelJobIds(ciYml)).not.toContain('js-audit')
     // e2e already had permissions + NODE_AUTH_TOKEN — must not be doubled.
-    expect(ciYml.match(/NODE_AUTH_TOKEN: \$\{\{ secrets\.GITHUB_TOKEN \}\}/g)).toHaveLength(3)
-    expect(ciYml.match(/packages: read/g)).toHaveLength(3)
+    expect(ciYml.match(/NODE_AUTH_TOKEN: \$\{\{ secrets\.GITHUB_TOKEN \}\}/g)).toHaveLength(2)
+    expect(ciYml.match(/packages: read/g)).toHaveLength(2)
   })
 
   it('tolerates a template missing the frontend files when design_tokens is set', () => {

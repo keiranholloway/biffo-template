@@ -102,29 +102,6 @@ export const PACKAGED_ROOT_ASSETS = [
       'instead of sh.',
   },
   {
-    path: 'scripts/practices-metrics.mjs',
-    kind: 'file',
-    sentinel: 'scripts/practices-metrics.mjs',
-    resolvedBy: 'scripts/runner-drop-forensics.mjs — relative import of isRunnerKill()',
-    why:
-      'Not reached through findPackagedScript() itself, but runner-drop-forensics.mjs imports ' +
-      'it by relative path ("./practices-metrics.mjs"), which Node resolves against the ' +
-      'FILE that ships next to it rather than the upward walk. Registered here so it travels ' +
-      'to the same directory in the tarball -- omitting it leaves the checkout working (the ' +
-      'sibling is right there on disk) while a real npm install throws ERR_MODULE_NOT_FOUND, ' +
-      'the exact "invisible in CI, breaks only on install" shape #259 and #315 already are.',
-  },
-  {
-    path: 'scripts/practices-corpus.mjs',
-    kind: 'file',
-    sentinel: 'scripts/practices-corpus.mjs',
-    resolvedBy: 'scripts/practices-metrics.mjs — relative import of readCorpusStrict()',
-    why:
-      'The next link in the same chain: practices-metrics.mjs imports this by relative path too. ' +
-      'Its own imports are Node built-ins only, so the closure ends here -- verified by running ' +
-      'the packaged script from a directory holding nothing but these three files plus node_modules.',
-  },
-  {
     path: 'scripts/branch-health.sh',
     kind: 'file',
     sentinel: 'scripts/branch-health.sh',
@@ -154,8 +131,8 @@ export const PACKAGED_ROOT_ASSETS = [
       'INSIDE the versioned package means a satellite runs it via `scripts/biffo.sh ' +
       'wait-for-checks`, pinned to its own .biffo-shared-version, and there is one copy rather ' +
       'than fifteen. Packaged as a single FILE rather than all of scripts/: that directory also ' +
-      'holds template-only tooling (practices-*, bootstrap, setup-oidc) an instance has no use ' +
-      'for, and UNPACKAGED_ROOT_ASSETS records that shipping a root asset can be actively ' +
+      'holds template-only tooling (bootstrap, setup-oidc) an instance has no use for, and ' +
+      'UNPACKAGED_ROOT_ASSETS records that shipping a root asset can be actively ' +
       'harmful when something resolves it by walking up.',
   },
 ]

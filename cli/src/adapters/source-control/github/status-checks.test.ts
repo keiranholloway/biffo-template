@@ -63,28 +63,21 @@ const CORE_WORKFLOWS = [CORE_CI, CORE_RELEASE_GUARDS]
  * missing-directory guard so a sibling without `infra/environments/` still
  * passes; see those steps' comments in `.github/workflows/ci.yml`.
  *
- * - `JS Dependency Audit (non-blocking, #1880)`: split out of the `js` job
- *   (which keeps its unchanged `JS (lint, types, test, audit)` name — see
- *   that job's own comment) because `pnpm audit`'s registry call has been
- *   chronically, intermittently unreachable since npm/GitHub retired the
- *   legacy audit endpoints on 2026-07-15, an ongoing upstream condition
- *   unrelated to any repo's own code (#1880). Deliberately excluded from
- *   both status-check lists so a registry hang can never again block a
- *   merge queue on a problem nobody merging can fix — it still runs on
- *   every push/PR, informationally, via `continue-on-error: true`.
- *
- * - `Python Dependency Audit (non-blocking, #1882)`: the identical split for
- *   `pip-audit`, applied for the identical reason — its registry lookups are
- *   exactly as chronically unreliable as `pnpm audit`'s were, confirmed live
- *   the same day #1880 shipped when a freshly-published pip advisory
- *   independently blocked five unrelated sibling repos' required Python gate
- *   within the same hour (#1882).
+ * `JS Dependency Audit (non-blocking, #1880)` and `Python Dependency Audit
+ * (non-blocking, #1882)` used to be entries here: separate,
+ * `continue-on-error` jobs split out of `js`/`python` so a chronically
+ * unreachable advisory registry could never block an unrelated PR. #2040
+ * (2026-09-10) removed both jobs and folded their steps back into `js` and
+ * `python` as required, non-continue-on-error steps — the underlying flake
+ * risk didn't go away, but js-dependency-audit.sh and py-dependency-audit.sh
+ * now classify a finding as "pre-existing on the base branch" (does not
+ * block) vs "introduced by this diff" (blocks), so the routine case that
+ * motivated the split — an advisory published against something already on
+ * `dev`, unrelated to any PR — is immune by construction and the audit can
+ * safely be required again. See `js`/`python`'s own comments in `ci.yml` for
+ * the full trade-off record.
  */
-const NOT_REQUIRED = new Set([
-  'Release Guards',
-  'JS Dependency Audit (non-blocking, #1880)',
-  'Python Dependency Audit (non-blocking, #1882)',
-])
+const NOT_REQUIRED = new Set(['Release Guards'])
 
 /**
  * Extract the `name:` of every top-level job in a GitHub Actions workflow.

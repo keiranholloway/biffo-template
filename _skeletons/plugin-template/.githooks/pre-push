@@ -93,10 +93,13 @@ fi
 # BIFFO_SKIP_CLAIM_GUARD -- narrow, claim-only escape hatch (#1327). Before
 # this, the only documented way past a false positive here was
 # BIFFO_SKIP_VERIFY at the top of this file, which does not target the claim
-# guard: it skips the WHOLE gate -- ruff, pyright, bandit, gitleaks,
-# rewrite-scope, this guard, everything. An agent reading "skip the claim
-# guard" reasonably reaches for the only hatch documented and gets "skip
-# everything" instead; one did, in the session #1327 was filed from. This
+# guard: it skips the WHOLE gate -- ruff, pyright, bandit, rewrite-scope,
+# this guard, everything. gitleaks is deliberately not named here: verify.sh
+# only runs it when the binary is installed locally and reports "APPLICABLE
+# BUT NOT RUN" otherwise, so it is not a member of the gate this variable
+# reliably skips (#2038). An agent reading "skip the claim guard" reasonably
+# reaches for the only hatch documented and gets "skip everything" instead;
+# one did, in the session #1327 was filed from. This
 # variable bypasses exactly the `claim --guard` call below and nothing else --
 # rewrite-scope-check, the pg-test block gate and `verify` all still run.
 branch=$(git symbolic-ref --quiet --short HEAD) || branch=""

@@ -85,9 +85,14 @@ if [ "$1" = "audit" ]; then
 fi
 exit 1
 `
+// Shaped like a REAL \`pnpm audit --json\` finding (see
+// js-dependency-audit-classification.test.sh's header for the full captured
+// shape): classification (#2040) reads \`.advisories[].{severity,
+// github_advisory_id,module_name}\`, which a metadata-only payload does not
+// carry, so this must not be trimmed back down to metadata alone.
 const PNPM_FINDING = `#!/bin/sh
 if [ "$1" = "audit" ]; then
-  echo '{"metadata":{"vulnerabilities":{"info":0,"low":0,"moderate":0,"high":3,"critical":1},"totalDependencies":412}}'
+  echo '{"metadata":{"vulnerabilities":{"info":0,"low":0,"moderate":0,"high":3,"critical":1},"totalDependencies":412},"advisories":{"1":{"severity":"critical","github_advisory_id":"GHSA-fail-closed-0001","module_name":"vuln-pkg","findings":[{"version":"1.0.0","paths":[]}]}}}'
   exit 1
 fi
 exit 1

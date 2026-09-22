@@ -1,8 +1,8 @@
 /**
- * The two load-bearing overwrite guards, raced (#1222).
+ * The load-bearing overwrite guard, raced (#1222).
  *
- * Both `applyMigrationCarry` and `writeEvidenceEntry` exist *specifically* to
- * refuse an overwrite. Both used to express that as:
+ * `applyMigrationCarry` exists *specifically* to refuse an overwrite. It used
+ * to express that as:
  *
  * ```js
  * if (existsSync(path)) throw new Error('… already exists …')
@@ -120,35 +120,5 @@ describe('applyMigrationCarry — refusing to overwrite is atomic, not advisory'
 
     expect(applyMigrationCarry(instanceDir, planFor(rel))).toEqual([rel])
     expect(readFileSync(join(instanceDir, rel), 'utf8')).toBe('# the carry that must NOT land\n')
-  })
-})
-
-describe('writeEvidenceEntry — the corpus has concurrent writers by design', () => {
-  const RIVAL = '{"summary":"the other session got here first"}\n'
-
-  it('refuses, and leaves the rival entry intact, when the file appears after the check', async () => {
-    // @ts-expect-error -- plain .mjs, runs on bare node like every other script in scripts/.
-    const { writeEvidenceEntry } = await import('../../../scripts/practices-corpus.mjs')
-    const dir = join(makeTmpDir('biffo-evidence-race'), 'evidence')
-    const abs = join(dir, '2026-08-03-same-summary.json')
-    seedRival(abs, RIVAL)
-
-    race.existsSyncLies = true
-
-    expect(() =>
-      writeEvidenceEntry({ summary: 'same summary' }, { dir, date: '2026-08-03' }),
-    ).toThrow(/already exists — choose a more specific slug or date/)
-    expect(readFileSync(abs, 'utf8')).toBe(RIVAL)
-  })
-
-  it('still writes the entry normally when nothing else is writing it', async () => {
-    // @ts-expect-error -- plain .mjs, runs on bare node like every other script in scripts/.
-    const { writeEvidenceEntry } = await import('../../../scripts/practices-corpus.mjs')
-    const dir = join(makeTmpDir('biffo-evidence-race'), 'evidence')
-    race.existsSyncLies = true // no rival file exists, so `wx` must succeed
-
-    const written = writeEvidenceEntry({ summary: 'only session' }, { dir, date: '2026-08-03' })
-    expect(written).toBe(join(dir, '2026-08-03-only-session.json'))
-    expect(JSON.parse(readFileSync(written, 'utf8')).summary).toBe('only session')
   })
 })

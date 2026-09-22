@@ -326,7 +326,68 @@ describe('checkPluginStaleness', () => {
         git: makeGitMock() as never,
       })
 
-      expect(resultFor(results, 'widgets').status).toBe('cannot-tell')
+      const result = resultFor(results, 'widgets')
+      expect(result.status).toBe('cannot-tell')
+      // A clean "fetched fine, this name just isn't published" must read
+      // differently from a genuine fetch failure (see next test) — that
+      // distinction is the whole point of #2050's second fix.
+      expect(result.detail).toContain('not found in the plugin registry')
+      expect(result.detail).not.toContain('could not be fetched')
+    })
+
+    it('reports a genuine registry-fetch failure as a failure, not the same "nothing to compare against" as an empty registry (#2050)', async () => {
+      const root = makeProjectRoot()
+      vendorPlugin(root, 'widgets')
+
+      const registry = {
+        fetchRegistry: vi
+          .fn()
+          .mockRejectedValue(
+            new Error(
+              'Plugin registry at https://example.com/plugins.json has an invalid shape: oops',
+            ),
+          ),
+      }
+
+      const results = await checkPluginStaleness(root, {
+        registry: registry as never,
+        git: makeGitMock() as never,
+      })
+
+      const result = resultFor(results, 'widgets')
+      // Still cannot-tell (there is genuinely nothing to compare against),
+      // but the reason must name the fetch failure rather than collapsing
+      // to the same wording as "the registry answered and this plugin just
+      // isn't in it" — that collapse is exactly what turned one bad
+      // registry entry into "every plugin is cannot-tell" in #2006's daily
+      // workflow (biffo-plugins-registry#7).
+      expect(result.status).toBe('cannot-tell')
+      expect(result.detail).toContain('could not be fetched')
+      expect(result.detail).toContain('invalid shape: oops')
+      expect(result.detail).not.toContain('was not found in the plugin registry')
+    })
+
+    it('makes a genuine registry-fetch failure visible for every plugin that needs it, not just the first', async () => {
+      const root = makeProjectRoot()
+      vendorPlugin(root, 'widgets')
+      vendorPlugin(root, 'gadgets')
+
+      const registry = {
+        fetchRegistry: vi.fn().mockRejectedValue(new Error('ENOTFOUND raw.githubusercontent.com')),
+      }
+
+      const results = await checkPluginStaleness(root, {
+        registry: registry as never,
+        git: makeGitMock() as never,
+      })
+
+      // The registry is only ever fetched once (lazily, cached) but the
+      // failure must still be reported for every plugin that fell through
+      // to it, not just whichever happened to trigger the fetch.
+      expect(registry.fetchRegistry).toHaveBeenCalledTimes(1)
+      for (const name of ['widgets', 'gadgets']) {
+        expect(resultFor(results, name).detail).toContain('could not be fetched')
+      }
     })
   })
 

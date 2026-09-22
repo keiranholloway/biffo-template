@@ -67,9 +67,9 @@ un-installable, and the final deletion of the ADR-0018 frontend deploy path.
 - **`user_frontend.required_group` still gates nothing on the shell.** ADR-0018 §2 says it
   gates the UI; nothing implements it, and option B **cannot** implement it either — a plain
   browser navigation cannot attach a bearer header, which is exactly why the admin shell's
-  two Gateway routes are `authorization_type = "NONE"`. This was already established at
-  `docs/guides/development-practices.md:239`: the shell is a 428-byte empty
-  `<div id="root">`, and every API route behind it `401`s. M1 must **write that down** in
+  two Gateway routes are `authorization_type = "NONE"`. This was already established: the
+  shell is a 428-byte empty `<div id="root">`, and every API route behind it `401`s. M1 must
+  **write that down** in
   the ADR rather than let the field keep implying a gate it has never had. Making the shell
   itself gated is a separate decision (it needs a redirect-to-Cognito at the edge) and is
   not in this epic.

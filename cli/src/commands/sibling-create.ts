@@ -828,12 +828,18 @@ function rewriteDesignTokens(
   //   1. Point --tokens (in the `js` job) at the real package, resolved the
   //      way that job's own working-directory (apps/frontend) sees
   //      node_modules after `pnpm install --frozen-lockfile`.
-  //   2. Add `packages: read` + NODE_AUTH_TOKEN to `js` AND `js-audit` — both
-  //      run `pnpm install --frozen-lockfile` from apps/frontend, and without
-  //      them neither can resolve a private scoped package at all (the
-  //      skeleton's `e2e` job already carries both, for the same reason).
-  //      `js` is a REQUIRED status check, so leaving it unauthenticated would
-  //      fail the new sibling's own first CI run at its very first step.
+  //   2. Add `packages: read` + NODE_AUTH_TOKEN to `js` — it runs `pnpm
+  //      install --frozen-lockfile` from apps/frontend, and without them it
+  //      cannot resolve a private scoped package at all (the skeleton's
+  //      `e2e` job already carries both, for the same reason). `js` is a
+  //      REQUIRED status check, so leaving it unauthenticated would fail the
+  //      new sibling's own first CI run at its very first step.
+  //
+  //      A separate, non-required `js-audit` job used to need the identical
+  //      treatment for the identical reason (#1880) — biffo-template#2040
+  //      (2026-09-10) folded that job's Dependency audit step back into
+  //      `js` itself and removed `js-audit` entirely, so there is no longer
+  //      a second job here to patch.
   const ciYmlPath = join(targetDir, '.github', 'workflows', 'ci.yml')
   try {
     let yml = readFileSync(ciYmlPath, 'utf8')
@@ -841,29 +847,17 @@ function rewriteDesignTokens(
       /^(\s*run: pnpm exec biffo-scale-guard)$/m,
       `$1 --tokens node_modules/${importSpecifier}`,
     )
-    // Only the `js` job has exactly this sequence with nothing between
-    // `timeout-minutes` and `defaults` — `js-audit` has `continue-on-error`
-    // in between, and `e2e` already declares its own `permissions` block, so
-    // this targets `js` alone.
+    // The `js` job is the only one with exactly this sequence with nothing
+    // between `timeout-minutes` and `defaults` — `e2e` already declares its
+    // own `permissions` block, so this targets `js` alone.
     yml = yml.replace(
       '    timeout-minutes: 20\n    defaults:\n      run:\n        working-directory: apps/frontend\n    steps:',
       '    timeout-minutes: 20\n    permissions:\n      contents: read\n      packages: read\n' +
         '    defaults:\n      run:\n        working-directory: apps/frontend\n    steps:',
     )
-    // `js-audit` (non-blocking, #1880) runs the same `pnpm install
-    // --frozen-lockfile` from the same apps/frontend — without its own
-    // `permissions` block it would fail the same way `js` would have, just
-    // without blocking anything. Its own unique anchor: `continue-on-error`
-    // immediately before `defaults`/`apps/frontend` (`python-audit` has
-    // `continue-on-error` too, but working-directory: services/api).
-    yml = yml.replace(
-      '    continue-on-error: true\n    defaults:\n      run:\n        working-directory: apps/frontend\n    steps:',
-      '    continue-on-error: true\n    permissions:\n      contents: read\n      packages: read\n' +
-        '    defaults:\n      run:\n        working-directory: apps/frontend\n    steps:',
-    )
-    // Both `js` and `js-audit` run `pnpm install --frozen-lockfile` with no
-    // NODE_AUTH_TOKEN of their own — `e2e`'s copy already has one, so the
-    // negative lookahead skips it rather than double-adding.
+    // `js` runs `pnpm install --frozen-lockfile` with no NODE_AUTH_TOKEN of
+    // its own — `e2e`'s copy already has one, so the negative lookahead
+    // skips it rather than double-adding.
     yml = yml.replace(
       /( {6}- run: pnpm install --frozen-lockfile)\n(?! {8}env:)/g,
       '$1\n        env:\n          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n',

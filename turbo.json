@@ -45,9 +45,6 @@
         "$TURBO_ROOT$/infra/environments/dev/plugins.core.tf",
         "$TURBO_ROOT$/services/api/src/api/schemas/orchestration.py",
         "$TURBO_ROOT$/services/_plugins/orchestrator/src/orchestrator/actions.py",
-        "$TURBO_ROOT$/docs/practices/evidence.jsonl",
-        "$TURBO_ROOT$/docs/practices/evidence/**",
-        "$TURBO_ROOT$/docs/guides/development-practices.md",
         "$TURBO_ROOT$/docs/guides/core-upgrade.md"
       ],
       "outputs": ["coverage/**"]

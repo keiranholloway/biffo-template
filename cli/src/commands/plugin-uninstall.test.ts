@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { PLUGIN_REGISTRY_RELATIVE_PATH } from '../lib/plugin-frontend-registry.js'
 import { runPluginUninstall } from './plugin-uninstall.js'
 import { makeTmpDir } from '../test-utils/tmp.js'
 
@@ -43,6 +44,78 @@ function makeGitMock() {
     add: vi.fn().mockResolvedValue(undefined),
     commit: vi.fn().mockResolvedValue(undefined),
   }
+}
+
+const USER_FRONTEND_MANIFEST = {
+  name: 'widgets',
+  version: '1.0.0',
+  description: 'Widgets plugin',
+  tables: [],
+  api_routes: [],
+  user_frontend: { dir: 'web/dist', required_group: 'founder' },
+}
+
+/** Installs `services/widgets/` with a manifest declaring `user_frontend`. */
+function makeProjectRootWithUserFrontend(): string {
+  const dir = makeTmpDir('biffo-project')
+  mkdirSync(join(dir, 'services', 'widgets'), { recursive: true })
+  writeFileSync(
+    join(dir, 'services', 'widgets', 'biffo.plugin.json'),
+    JSON.stringify(USER_FRONTEND_MANIFEST),
+  )
+  return dir
+}
+
+/**
+ * The installing sibling's dashboard plugin registry (biffo-template#2041),
+ * pre-populated with `widgets`'s own entry — the state a real `biffo plugin
+ * install` would have left behind.
+ */
+function makeDashboardRegistryWithWidgets(root: string): void {
+  mkdirSync(join(root, 'apps', 'frontend', 'src', 'lib'), { recursive: true })
+  writeFileSync(
+    join(root, PLUGIN_REGISTRY_RELATIVE_PATH),
+    'export const INSTALLED_PLUGINS: PluginManifest[] = [\n' +
+      '  // BIFFO-PLUGIN-REGISTRY:START — managed by `biffo plugin install`/`uninstall`. Do not hand-edit.\n' +
+      '  {\n' +
+      '    slug: "widgets",\n' +
+      '    title: "Widgets",\n' +
+      '    frontendUrl: "/api/v1/plugins/widgets/ui",\n' +
+      '  },\n' +
+      '  // BIFFO-PLUGIN-REGISTRY:END\n' +
+      ']\n',
+    'utf8',
+  )
+}
+
+/**
+ * The real `biffo-platform-app` registry shape (#2047's repro) with
+ * `widgets` already installed alongside the two real pre-existing,
+ * hand-authored entries whose `frontendUrl` references an imported constant
+ * rather than a string literal.
+ */
+function makeRealPlatformAppRegistryWithWidgets(root: string): void {
+  mkdirSync(join(root, 'apps', 'frontend', 'src', 'lib'), { recursive: true })
+  writeFileSync(
+    join(root, PLUGIN_REGISTRY_RELATIVE_PATH),
+    'export type PluginManifest = {\n' +
+      '  slug: string\n' +
+      '  title: string\n' +
+      '  frontendUrl: string\n' +
+      '}\n\n' +
+      'export const INSTALLED_PLUGINS: PluginManifest[] = [\n' +
+      '  // BIFFO-PLUGIN-REGISTRY:START — managed by `biffo plugin install`/`uninstall`. Do not hand-edit.\n' +
+      "  { slug: 'ideation-engine', title: 'Ideation Engine', frontendUrl: IDEATION_ENGINE_URL },\n" +
+      "  { slug: 'new-idea-scout', title: 'New Idea Scout', frontendUrl: IDEA_SCOUT_URL },\n" +
+      '  {\n' +
+      '    slug: "widgets",\n' +
+      '    title: "Widgets",\n' +
+      '    frontendUrl: "/api/v1/plugins/widgets/ui",\n' +
+      '  },\n' +
+      '  // BIFFO-PLUGIN-REGISTRY:END\n' +
+      ']\n',
+    'utf8',
+  )
 }
 
 describe('runPluginUninstall', () => {
@@ -401,6 +474,100 @@ describe('runPluginUninstall — module-removal guard (biffo-template#1563)', ()
     // Nothing was mutated — the refusal happened before any destructive step.
     expect(existsSync(join(projectRoot, 'services', 'widgets'))).toBe(true)
     expect(existsSync(join(projectRoot, 'modules', 'plugins', 'widgets'))).toBe(true)
+    expect(git.add).not.toHaveBeenCalled()
+    expect(git.commit).not.toHaveBeenCalled()
+  })
+})
+
+describe('runPluginUninstall — dashboard plugin registry (biffo-template#2041)', () => {
+  let projectRoot: string
+
+  beforeEach(() => {
+    projectRoot = makeProjectRootWithUserFrontend()
+    promptMock.mockReset()
+    promptMock.mockResolvedValue({ confirmed: true })
+  })
+
+  afterEach(() => {
+    rmSync(projectRoot, { recursive: true, force: true })
+  })
+
+  it('MUST-CATCH: removes the entry from apps/frontend/src/lib/plugins.ts', async () => {
+    makeDashboardRegistryWithWidgets(projectRoot)
+    const git = makeGitMock()
+
+    await runPluginUninstall(
+      'widgets',
+      { dryRun: false, force: true, keepData: false, cwd: projectRoot },
+      { git: git as never },
+    )
+
+    const contents = readFileSync(join(projectRoot, PLUGIN_REGISTRY_RELATIVE_PATH), 'utf8')
+    expect(contents).not.toContain('slug: "widgets"')
+    expect(git.add).toHaveBeenCalledWith(projectRoot, [
+      'services/widgets',
+      PLUGIN_REGISTRY_RELATIVE_PATH,
+    ])
+  })
+
+  it('MUST-CATCH: uninstalling against the REAL biffo-platform-app registry preserves its two pre-existing entries (#2047)', async () => {
+    makeRealPlatformAppRegistryWithWidgets(projectRoot)
+    const git = makeGitMock()
+
+    await runPluginUninstall(
+      'widgets',
+      { dryRun: false, force: true, keepData: false, cwd: projectRoot },
+      { git: git as never },
+    )
+
+    const contents = readFileSync(join(projectRoot, PLUGIN_REGISTRY_RELATIVE_PATH), 'utf8')
+    expect(contents).not.toContain('slug: "widgets"')
+    expect(contents).toContain(
+      "{ slug: 'ideation-engine', title: 'Ideation Engine', frontendUrl: IDEATION_ENGINE_URL }",
+    )
+    expect(contents).toContain(
+      "{ slug: 'new-idea-scout', title: 'New Idea Scout', frontendUrl: IDEA_SCOUT_URL }",
+    )
+  })
+
+  it('MUST-NOT-CATCH: a plugin with no user_frontend block never touches an existing registry file', async () => {
+    const root = makeProjectRoot()
+    try {
+      makeDashboardRegistryWithWidgets(root)
+      const before = readFileSync(join(root, PLUGIN_REGISTRY_RELATIVE_PATH), 'utf8')
+      const git = makeGitMock()
+
+      await runPluginUninstall(
+        'widgets',
+        { dryRun: false, force: true, keepData: false, cwd: root },
+        { git: git as never },
+      )
+
+      const after = readFileSync(join(root, PLUGIN_REGISTRY_RELATIVE_PATH), 'utf8')
+      expect(after).toBe(before)
+      expect(git.add).toHaveBeenCalledWith(root, ['services/widgets'])
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('MUST-CATCH: fails closed, removing nothing, when the registry file no longer exists', async () => {
+    // No makeDashboardRegistryWithWidgets() call — simulates the file having
+    // been deleted independently since install.
+    const git = makeGitMock()
+
+    await expect(
+      runPluginUninstall(
+        'widgets',
+        { dryRun: false, force: true, keepData: false, cwd: projectRoot },
+        { git: git as never },
+      ),
+    ).rejects.toThrow(/apps\/frontend\/src\/lib\/plugins\.ts does not exist/)
+
+    // Fail-closed: services/widgets/ was NOT removed either — the refusal
+    // happened before any destructive step, same posture as the Terraform
+    // hand-authored-reference guard above.
+    expect(existsSync(join(projectRoot, 'services', 'widgets'))).toBe(true)
     expect(git.add).not.toHaveBeenCalled()
     expect(git.commit).not.toHaveBeenCalled()
   })

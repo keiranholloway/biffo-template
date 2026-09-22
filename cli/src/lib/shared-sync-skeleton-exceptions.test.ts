@@ -285,3 +285,136 @@ describe('a real sync round with a declared release-guards.yml exception', () =>
     expect(res.status, out).toBe(0)
   })
 })
+
+// ---------------------------------------------------------------------------
+// Part 3: the write-path regression (#2066) -- staged for an UNRELATED reason.
+// ---------------------------------------------------------------------------
+
+/**
+ * `stage_repo()`'s write loop iterates every `filesFromSkeleton` entry once
+ * the repo has been staged for ANY reason, not only when the excepted entry
+ * itself is what triggered staging. Part 2 above cannot reach that code path:
+ * with only one `filesFromSkeleton` entry in its manifest and no other drift,
+ * `diff_files()` (the read half, which already matches on the real repo dir)
+ * correctly reports the excepted repo as `current`, so it is never selected
+ * as a staging candidate at all -- the write-path bug never runs.
+ *
+ * biffo-plugin-ideation is staged on every real round regardless, because it
+ * also carries ordinary `files`-list drift (`scripts/js-dependency-audit.sh`
+ * and friends, confirmed live against `origin/dev` in #2066's own repro).
+ * This fixture reproduces that shape with a second, unrelated `files` entry
+ * so the excepted repo is staged for a reason that has nothing to do with
+ * `release-guards.yml`, and only then checks whether the write loop still
+ * respects the exception on the file the entry actually names.
+ */
+function makeTemplateWithOtherDrift(dir: string, exceptionRepo: string): void {
+  mkdirSync(join(dir, 'scripts'), { recursive: true })
+  const manifest = {
+    version: 1,
+    files: ['scripts/other-shared-tool.sh'],
+    appliesTo: ['biffo.sibling.json'],
+    filesFromSkeleton: {
+      '.github/workflows/release-guards.yml': {
+        policy: 'sync',
+        exceptions: { [exceptionRepo]: 'fixture: repo-specific required-check step (#2051)' },
+      },
+    },
+    skeletonForMarker: { 'biffo.sibling.json': 'sibling-template' },
+    skeletonDefault: 'sibling-template',
+  }
+  writeFileSync(join(dir, 'shared-files.json'), JSON.stringify(manifest, null, 2))
+
+  const skelPath = join(dir, '_skeletons', 'sibling-template', '.github', 'workflows')
+  mkdirSync(skelPath, { recursive: true })
+  writeFileSync(join(skelPath, 'release-guards.yml'), CANONICAL_RELEASE_GUARDS)
+
+  // The unrelated `files` entry every repo (exempt or not) is drifted on, so
+  // every repo in this fixture is a staging candidate for a reason that has
+  // nothing to do with the exception under test.
+  writeFileSync(join(dir, 'scripts', 'other-shared-tool.sh'), '#!/bin/sh\n# canonical\nexit 0\n')
+
+  writeFileSync(join(dir, 'scripts', 'shared-sync.sh'), readFileSync(realSharedSync))
+  chmodSync(join(dir, 'scripts', 'shared-sync.sh'), 0o755)
+
+  const bridge = join(dir, 'scripts', 'biffo.sh')
+  writeFileSync(bridge, '#!/bin/sh\nexit 0\n')
+  chmodSync(bridge, 0o755)
+
+  execFileSync('git', ['init', '-q', '-b', 'dev', dir], { stdio: 'pipe' })
+  git(dir, 'add', '-A')
+  git(dir, 'commit', '-qm', 'chore: fixture template')
+  anchorToOrigin(dir)
+}
+
+/** A satellite carrying the unrelated `files`-list drift (an old copy of
+ * `scripts/other-shared-tool.sh`, distinct from the template's canonical one
+ * so it is reported as drifted) alongside a diverged `release-guards.yml`. */
+function makeSatelliteWithOtherDrift(estate: string, name: string): string {
+  const origin = join(estate, `${name}.git`)
+  mkdirSync(origin, { recursive: true })
+  execFileSync('git', ['init', '-q', '--bare', '-b', 'dev', origin], { stdio: 'pipe' })
+
+  const dir = join(estate, name)
+  execFileSync('git', ['clone', '-q', origin, dir], { stdio: 'pipe' })
+  writeFileSync(join(dir, 'biffo.sibling.json'), '{}\n')
+  mkdirSync(join(dir, '.github', 'workflows'), { recursive: true })
+  writeFileSync(join(dir, '.github', 'workflows', 'release-guards.yml'), DIVERGED_RELEASE_GUARDS)
+  mkdirSync(join(dir, 'scripts'), { recursive: true })
+  // Deliberately NOT the canonical content -- this is the unrelated drift
+  // that forces staging regardless of the release-guards.yml exception.
+  writeFileSync(join(dir, 'scripts', 'other-shared-tool.sh'), '#!/bin/sh\n# stale\nexit 0\n')
+  chmodSync(join(dir, 'scripts', 'other-shared-tool.sh'), 0o755)
+  writeFileSync(join(dir, 'scripts', 'verify.sh'), '#!/bin/sh\nexit 0\n')
+  chmodSync(join(dir, 'scripts', 'verify.sh'), 0o755)
+  writeSatelliteBridge(dir)
+  writeFileSync(join(dir, '.gitignore'), '.worktrees/\n')
+  git(dir, 'add', '-A')
+  git(dir, 'commit', '-qm', 'chore: fixture satellite')
+  git(dir, 'push', '-q', 'origin', 'dev')
+  return dir
+}
+
+describe('the write path when the excepted repo is staged for an unrelated reason (#2066)', () => {
+  it("still leaves the named repo's diverged release-guards.yml untouched", () => {
+    const base = makeTmpDir('shared-sync-exceptions-other-drift')
+    made.push(base)
+    const estate = join(base, 'estate')
+    mkdirSync(estate, { recursive: true })
+
+    const template = join(estate, 'biffo-template')
+    makeTemplateWithOtherDrift(template, 'sat-exempt')
+
+    const exempt = makeSatelliteWithOtherDrift(estate, 'sat-exempt')
+
+    const logFile = join(base, 'gh-calls.log')
+    writeFileSync(logFile, '')
+    const binDir = join(base, 'bin')
+    makeFakeGh(binDir, logFile)
+
+    const res = spawnSync('sh', [join(template, 'scripts', 'shared-sync.sh'), '--estate', estate], {
+      encoding: 'utf8',
+      cwd: template,
+      env: { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ''}` },
+      timeout: 120_000,
+    })
+    const out = `${res.stdout ?? ''}${res.stderr ?? ''}`
+
+    // The repo IS a ship target -- staged and pushed for the unrelated
+    // `other-shared-tool.sh` drift, proving this fixture actually reaches the
+    // write loop rather than being screened out like Part 2's fixture.
+    expect(pushedFile(exempt, 'scripts/other-shared-tool.sh'), out).toBe(
+      '#!/bin/sh\n# canonical\nexit 0\n',
+    )
+
+    // The excepted file must survive untouched even though the repo WAS
+    // staged. Before the fix, `stage_repo()`'s write loop checked the
+    // exception against `basename("$wt")` -- always the literal string
+    // `shared-sync` -- so it never matched any repo name and the excepted
+    // file was overwritten with the canonical content here too.
+    expect(pushedFile(exempt, '.github/workflows/release-guards.yml'), out).toBe(
+      DIVERGED_RELEASE_GUARDS,
+    )
+
+    expect(res.status, out).toBe(0)
+  })
+})

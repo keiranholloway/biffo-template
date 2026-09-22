@@ -357,12 +357,32 @@ CONDITIONAL=$(node -e "const m=JSON.parse(require('fs').readFileSync('$MANIFEST'
 #
 #     Emitted as THREE fields, `path=policy=markers`, with `*` for unscoped, so
 #     the shell never has to decide whether a second `=` was present.
+#
+#   - A `sync` ENTRY MAY DECLARE PER-REPO `exceptions` (#2051). `policy`/
+#     `markers` answer "which repos get this file"; `exceptions` answers "which
+#     NAMED repo keeps its own diverged copy forever, because that repo has an
+#     owner-approved reason a byte-identical copy cannot work for it." Built for
+#     `.github/workflows/release-guards.yml`: `biffo-plugin-ideation` folds a
+#     JS-dependency-audit step into that workflow because it is one of that
+#     repo's REQUIRED status checks and the fleet's token cannot add a new one
+#     via branch protection -- an ordinary `sync` round correctly saw that as
+#     drift and deleted it, undoing the owner-approved fix a second time. See
+#     `filesFromSkeletonNote`'s 2026-09-22 entry in shared-files.json for the
+#     full reasoning, in particular why this could not simply move the file to
+#     `mustBeUniform` (which never writes, and every OTHER repo here must keep
+#     getting the ordinary overwrite) or to `seed` (which would stop protecting
+#     every OTHER repo too). A NAMED repo is matched by directory basename, the
+#     same identifier `excludes` already uses -- see `in_skeleton_exceptions`.
+#     Emitted as a FOURTH field, comma-separated repo basenames or `-` for none,
+#     so an entry with no `exceptions` key parses identically to before this
+#     existed.
 FROM_SKELETON=$(node -e "
 const m=JSON.parse(require('fs').readFileSync('$MANIFEST','utf8')).filesFromSkeleton||{};
 console.log(Object.entries(m).map(([p,v])=>{
   const policy = typeof v === 'string' ? v : v.policy;
   const markers = (typeof v === 'string' || !v.markers) ? '*' : v.markers.join(',');
-  return p+'='+policy+'='+markers;
+  const exceptions = (typeof v === 'string' || !v.exceptions) ? '-' : Object.keys(v.exceptions).join(',');
+  return p+'='+policy+'='+markers+'='+exceptions;
 }).join('\n'))")
 SKELETON_FOR=$(node -e "const m=JSON.parse(require('fs').readFileSync('$MANIFEST','utf8')).skeletonForMarker||{};console.log(Object.entries(m).map(([mk,sk])=>mk+'='+sk).join('\n'))")
 SKELETON_DEFAULT=$(node -e "const m=JSON.parse(require('fs').readFileSync('$MANIFEST','utf8'));console.log(m.skeletonDefault||'')")
@@ -723,6 +743,29 @@ in_marker_scope() {
   return 1
 }
 
+# Is `$1` (a repo or worktree directory) named in a `filesFromSkeleton` `sync`
+# entry's declared `exceptions` map (#2051)? `$2` is that entry's comma-
+# separated exceptions field from $FROM_SKELETON -- `-` when the entry
+# declares none, which can never match a real directory basename, so callers
+# need no separate "none declared" branch.
+#
+# Matched by basename, the same identifier `EXCLUDES` already uses (see its
+# check a few lines below this function's own vintage) -- there is no other
+# stable, human-typable name for "this one satellite" available to a manifest
+# that never clones anything itself.
+#
+# A match makes the WHOLE entry inert for this repo: not reported as drift,
+# not created if absent, not overwritten if present. That is deliberately
+# broader than "keep the diverged content" -- it is "this repo is out of
+# scope for this path, the same as failing marker_scope", so a repo that
+# later loses its own copy is not silently handed the canonical one back.
+in_skeleton_exceptions() {
+  case ",$2," in
+    *",$(basename "$1"),"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # Fail closed on a manifest that names a source which is not there. `cp` writes
 # its complaint to a stderr this script discards, so the repo would receive
 # nothing while the run reported success -- the silent-empty-copy failure
@@ -738,7 +781,11 @@ if [ -n "$FROM_SKELETON" ]; then
       _target=${_entry%%=*}
       _rest=${_entry#*=}
       _mode=${_rest%%=*}
-      _markers=${_rest#*=}
+      _rest=${_rest#*=}
+      _markers=${_rest%%=*}
+      # _exceptions (the fourth field) is not validated here: this loop checks
+      # the manifest against the skeletons, not against any real repo, and a
+      # repo basename cannot be confirmed to exist without cloning it.
       case "$_mode" in
         sync|seed) ;;
         *) echo "filesFromSkeleton['$_target'] must be 'sync' or 'seed', got '$_mode'" >&2; exit 2 ;;
@@ -915,11 +962,19 @@ diff_files() {
       target=${entry%%=*}
       _rest=${entry#*=}
       mode=${_rest%%=*}
-      markers=${_rest#*=}
+      _rest=${_rest#*=}
+      markers=${_rest%%=*}
+      exceptions=${_rest#*=}
       # Out of scope is NOT drift (#1445). A repo this entry was never meant for
       # must not be reported missing it, or the report grows a permanent red
       # nobody can clear and people stop reading it.
       in_marker_scope "$d" "$markers" "origin/$base" || continue
+      # A repo with a declared exception (#2051) is not drift either, by the
+      # same reasoning: it has a documented, owner-approved reason its copy
+      # cannot be byte-identical, so reporting it would be exactly the
+      # permanent-red-nobody-can-clear failure the marker-scope check above
+      # already exists to avoid.
+      in_skeleton_exceptions "$d" "$exceptions" && continue
       remote=$(git -C "$d" show "origin/$base:$target" 2>/dev/null)
       if [ -z "$remote" ]; then
         out="$out $target(missing)"
@@ -2034,7 +2089,13 @@ stage_repo() {
       _rrest=${_entry#*=}
       # `seed` never overwrites an existing copy, so it cannot delete anything.
       [ "${_rrest%%=*}" = sync ] || continue
-      in_marker_scope "$wt" "${_rrest#*=}" || continue
+      _rrest=${_rrest#*=}
+      _rmarkers=${_rrest%%=*}
+      _rexceptions=${_rrest#*=}
+      in_marker_scope "$wt" "$_rmarkers" || continue
+      # A declared exception (#2051) is never overwritten, so like `seed` it
+      # cannot delete anything either -- skip it here for the same reason.
+      in_skeleton_exceptions "$wt" "$_rexceptions" && continue
       [ -f "$wt/$_rt" ] || continue
       printf '%s\t%s\t%s\n' "$_rt" "$wt/$_rt" \
         "$TEMPLATE_ROOT/_skeletons/$_red_skel/$_rt" >> "$_red_pairs"
@@ -2084,11 +2145,17 @@ stage_repo() {
       _target=${_entry%%=*}
       _rest=${_entry#*=}
       _mode=${_rest%%=*}
-      _markers=${_rest#*=}
+      _rest=${_rest#*=}
+      _markers=${_rest%%=*}
+      _exceptions=${_rest#*=}
       # The write half of the same rule. Without this the survey could correctly
       # decline to report a repo, and the ship path would still create the file
       # in it -- the two halves disagreeing is worse than either being wrong.
       in_marker_scope "$wt" "$_markers" || continue
+      # The write half of the exceptions rule (#2051): a named repo's copy is
+      # never overwritten and never created, matching diff_files's read half
+      # above for the same "disagreeing is worse than wrong" reason.
+      in_skeleton_exceptions "$wt" "$_exceptions" && continue
       if [ "$_mode" = seed ] && [ -f "$wt/$_target" ]; then continue; fi
       mkdir -p "$wt/$(dirname "$_target")"
       cp "$TEMPLATE_ROOT/_skeletons/$_skel/$_target" "$wt/$_target"

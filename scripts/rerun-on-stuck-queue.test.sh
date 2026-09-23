@@ -40,6 +40,10 @@
 # |11 | rerun itself refused (after confirmed cancel)      | exit 2            |
 # |12 | two runs in one invocation: one stuck+acted, one undetermined | worst code (1) wins, but BOTH are still processed -- the regression test for the pipe/subshell bug this script's own header warns about |
 # |13 | multi-word watched workflow name ("RLS Tests")     | MUST catch, name intact |
+# |14 | completed-run history present (#2100)              | list is server-side status= filtered, no unfiltered call, count printed |
+# |15 | run itself in status `queued`                      | MUST catch via the queued listing |
+# |16 | cancel lands on the 10th status read (#2101)       | MUST still be re-run under the production poll bound |
+# | 9 | (extended, #2101) never confirms                   | message names `gh run rerun N`, no false "next scheduled poll" promise |
 #
 # Runs every case under sh, bash and dash (where present) -- same convention
 # as rerun-on-runner-loss.test.sh, and for the same reason: this is a
@@ -95,7 +99,22 @@ case "$1" in
         # The run-listing call: re-run the SCRIPT'S OWN --jq filter against a
         # raw fixture, for real, rather than serving a pre-filtered answer.
         [ -f "$STUBDIR/runs.json" ] || exit 1
-        jq -r "$jqquery" "$STUBDIR/runs.json" || exit 1
+        # Model the real API: a `status=` query parameter filters SERVER-side.
+        # A request without one walks the whole history -- the ~111-page,
+        # ~4-minute cost of #2100 -- so it is recorded as an "unfiltered" call
+        # (which the case-14 assertion refuses) and served the full fixture.
+        query=""
+        case "$url" in *\?*) query=${url#*\?} ;; esac
+        st=""
+        case "&$query&" in *"&status="*) st=${query#*status=}; st=${st%%&*} ;; esac
+        if [ -z "$st" ]; then
+          printf 'unfiltered\n' >> "$STUBDIR/unfiltered-list-call"
+          jq -r "$jqquery" "$STUBDIR/runs.json" || exit 1
+        else
+          printf '%s\n' "$st" >> "$STUBDIR/list-calls"
+          jq --arg s "$st" '{workflow_runs: [.workflow_runs[] | select(.status == $s)]}' \
+            "$STUBDIR/runs.json" | jq -r "$jqquery" || exit 1
+        fi
         ;;
       repos/o/r/actions/runs/*/jobs)
         rest=${path#repos/o/r/actions/runs/}
@@ -104,8 +123,15 @@ case "$1" in
         ;;
       repos/o/r/actions/runs/*)
         runid=${path#repos/o/r/actions/runs/}
-        st=$(cat "$STUBDIR/status-$runid" 2>/dev/null) || exit 1
-        printf '%s\n' "$st"
+        [ -f "$STUBDIR/status-$runid" ] || exit 1
+        # One status per line is served one per call, the last line repeating
+        # forever: lets a case model a cancellation that lands N polls late.
+        n=$(cat "$STUBDIR/status-$runid.count" 2>/dev/null || echo 0)
+        n=$((n + 1))
+        printf '%s\n' "$n" > "$STUBDIR/status-$runid.count"
+        total=$(wc -l < "$STUBDIR/status-$runid")
+        [ "$n" -le "$total" ] || n=$total
+        sed -n "${n}p" "$STUBDIR/status-$runid"
         ;;
       *) exit 1 ;;
     esac
@@ -133,10 +159,14 @@ chmod +x "$TMP/bin/gh"
 # run_case <case-dir> <shell> <threshold-minutes> -> sets CASE_RC and CASE_OUT
 run_case() {
   _dir=$1; _shell=$2; _threshold=$3
+  # USE_DEFAULT_POLL=1 leaves the attempts override unset so the case runs
+  # against the script's PRODUCTION poll bound (interval still 0 for speed).
   set +e
-  CASE_OUT=$(STUBDIR="$_dir" PATH="$TMP/bin:$PATH" GITHUB_REPOSITORY=o/r \
-               RERUN_STUCK_QUEUE_POLL_ATTEMPTS=2 RERUN_STUCK_QUEUE_POLL_INTERVAL=0 \
-               "$_shell" "$SCRIPT" "$_threshold" 2>&1)
+  CASE_OUT=$(
+    if [ "${USE_DEFAULT_POLL:-0}" != 1 ]; then RERUN_STUCK_QUEUE_POLL_ATTEMPTS=2; export RERUN_STUCK_QUEUE_POLL_ATTEMPTS; fi
+    STUBDIR="$_dir" PATH="$TMP/bin:$PATH" GITHUB_REPOSITORY=o/r \
+      RERUN_STUCK_QUEUE_POLL_INTERVAL=0 \
+      "$_shell" "$SCRIPT" "$_threshold" 2>&1)
   CASE_RC=$?
   set -e
 }
@@ -148,11 +178,11 @@ if command -v dash >/dev/null 2>&1 && dash -c 'exit 0' >/dev/null 2>&1; then
   SHELLS="$SHELLS dash"; HAVE_DASH=1
 fi
 
-# assert_case <name> <dir> <threshold> <rc> <needle> <want-cancel:yes|no> <want-rerun:yes|no> [needle2]
+# assert_case <name> <dir> <threshold> <rc> <needle> <want-cancel:yes|no> <want-rerun:yes|no> [needle2] [absent]
 assert_case() {
-  _name=$1; _dir=$2; _thr=$3; _rc=$4; _needle=$5; _wantc=$6; _wantr=$7; _needle2=${8:-}
+  _name=$1; _dir=$2; _thr=$3; _rc=$4; _needle=$5; _wantc=$6; _wantr=$7; _needle2=${8:-}; _absent=${9:-}
   for _sh in $SHELLS; do
-    rm -f "$_dir/cancel-calls" "$_dir/rerun-calls"
+    rm -f "$_dir/cancel-calls" "$_dir/rerun-calls" "$_dir/list-calls" "$_dir/unfiltered-list-call" "$_dir"/status-*.count
     run_case "$_dir" "$_sh" "$_thr"
     if [ "$CASE_RC" != "$_rc" ]; then
       bad "$_name [$_sh]" "expected exit $_rc, got $CASE_RC — $CASE_OUT"
@@ -166,6 +196,11 @@ assert_case() {
       case "$CASE_OUT" in
         *"$_needle2"*) : ;;
         *) bad "$_name [$_sh]" "expected output containing [$_needle2], got [$CASE_OUT]"; return ;;
+      esac
+    fi
+    if [ -n "$_absent" ]; then
+      case "$CASE_OUT" in
+        *"$_absent"*) bad "$_name [$_sh]" "output must NOT contain [$_absent], got [$CASE_OUT]"; return ;;
       esac
     fi
     if [ "$_wantc" = yes ] && [ ! -f "$_dir/cancel-calls" ]; then
@@ -296,8 +331,12 @@ C="$TMP/9-neverconfirms"; mkdir -p "$C"
 mk_runs_json "$C/runs.json" "119,1,in_progress,CI"
 mk_jobs_one "$C/jobs-119" queued 90
 printf 'in_progress\n' > "$C/status-119"
-assert_case "a cancellation that never confirms completed is reported, not assumed" \
-  "$C" 1 1 "never confirmed completed" yes no
+# #2101: the run is now completed/cancelled once the cancel lands, which the
+# next poll's filter excludes -- so the old "leaving the re-run to the next
+# scheduled poll" promise was false. The message must instead name the manual
+# re-run and must not make the false promise.
+assert_case "a cancellation that never confirms completed is reported, not assumed, and names the manual re-run" \
+  "$C" 1 1 "never confirmed completed" yes no "gh run rerun 119" "leaving the re-run to the next scheduled poll"
 
 # ---------------------------------------------------------------------------
 # Case 10 -- the cancel call itself is refused by the API.
@@ -350,6 +389,59 @@ mk_jobs_one "$C/jobs-124" queued 90
 printf 'completed\n' > "$C/status-124"
 assert_case "a multi-word watched workflow name (RLS Tests) survives intact" \
   "$C" 1 0 "run 124 (RLS Tests) has a job queued" yes yes
+
+# ---------------------------------------------------------------------------
+# Case 14 -- #2100: the run list must be filtered SERVER-side. The fixture
+# carries a completed-run history (what makes an unfiltered --paginate walk
+# 111 pages on a real repo) plus one genuinely stuck run. Every list call must
+# carry status=; the unfiltered call must never be made; both `queued` and
+# `in_progress` must be asked for; and the denominator must be printed.
+# ---------------------------------------------------------------------------
+C="$TMP/14-serverfilter"; mkdir -p "$C"
+mk_runs_json "$C/runs.json" "201,1,completed,CI" "202,1,completed,CI" "203,1,completed,RLS Tests" \
+  "204,1,completed,Release Guards" "205,1,completed,CI" "131,1,in_progress,CI"
+mk_jobs_one "$C/jobs-131" queued 90
+printf 'completed\n' > "$C/status-131"
+assert_case "the run list is filtered server-side and the listed count is printed" \
+  "$C" 1 0 "listed 0 queued and 1 in_progress" yes yes "re-ran run 131 once"
+for _sh in $SHELLS; do
+  rm -f "$C/list-calls" "$C/unfiltered-list-call" "$C/cancel-calls" "$C/rerun-calls" "$C"/status-*.count
+  run_case "$C" "$_sh" 1
+  if [ -f "$C/unfiltered-list-call" ]; then
+    bad "server-side status filter [$_sh]" "an unfiltered actions/runs listing was made (walks the whole history)"
+  elif ! grep -qx queued "$C/list-calls" 2>/dev/null || ! grep -qx in_progress "$C/list-calls" 2>/dev/null; then
+    bad "server-side status filter [$_sh]" "expected a status=queued AND a status=in_progress listing, got [$(cat "$C/list-calls" 2>/dev/null)]"
+  else
+    ok "server-side status filter: only status=queued and status=in_progress are listed [$_sh]"
+  fi
+done
+
+# ---------------------------------------------------------------------------
+# Case 15 -- a whole RUN in status `queued` (not merely a job) is found by the
+# status=queued listing.
+# ---------------------------------------------------------------------------
+C="$TMP/15-runqueued"; mkdir -p "$C"
+mk_runs_json "$C/runs.json" "132,1,queued,CI" "206,1,completed,CI"
+mk_jobs_one "$C/jobs-132" queued 90
+printf 'completed\n' > "$C/status-132"
+assert_case "a run whose own status is queued is found by the queued listing" \
+  "$C" 1 0 "listed 1 queued and 0 in_progress" yes yes "re-ran run 132 once"
+
+# ---------------------------------------------------------------------------
+# Case 16 -- #2101: a cancellation that lands LATE. The run reports
+# in_progress for 9 reads, then completed on the 10th. The production poll
+# bound (USE_DEFAULT_POLL=1) must be long enough to ride that out and re-run;
+# the old 6-read bound gave up, and the run was left completed/cancelled and
+# filtered out of every later poll -- never re-run.
+# ---------------------------------------------------------------------------
+C="$TMP/16-latecancel"; mkdir -p "$C"
+mk_runs_json "$C/runs.json" "133,1,in_progress,CI"
+mk_jobs_one "$C/jobs-133" queued 90
+{ i=0; while [ "$i" -lt 9 ]; do printf 'in_progress\n'; i=$((i+1)); done; printf 'completed\n'; } > "$C/status-133"
+USE_DEFAULT_POLL=1
+assert_case "a cancellation confirmed late (10th read) is still re-run under the production poll bound" \
+  "$C" 1 0 "re-ran run 133 once" yes yes
+USE_DEFAULT_POLL=0
 
 if [ "$HAVE_DASH" -eq 0 ]; then
   printf '\n  NOTE: dash is not installed here, so no case was checked under it.\n'

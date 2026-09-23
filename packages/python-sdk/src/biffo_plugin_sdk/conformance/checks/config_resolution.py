@@ -207,8 +207,8 @@ def run(ctx: ConformanceContext) -> None:  # noqa: ARG001 -- self-contained fixt
         else:
             raise ConformanceCheckError(
                 f"a required:true config need ({_REQUIRED_SECRET!r}) with no value supplied "
-                "resolved successfully instead of failing closed -- #1517's fail-closed path is "
-                "not enforced"
+                "resolved successfully instead of failing closed -- the fail-closed path this "
+                "seam exists to enforce is not enforced"
             )
     print(
         f"config_resolution: required need '{_REQUIRED_SECRET}' with no value fails closed, "

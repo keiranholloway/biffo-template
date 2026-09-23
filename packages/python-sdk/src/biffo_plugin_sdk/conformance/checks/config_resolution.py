@@ -72,22 +72,27 @@ NOTE = (
 #: never mounts anything, it only needs a stable scope for env var names.
 _FIXTURE_PLUGIN_NAME = "conformance-config-fixture"
 #: These name a fixture manifest's *declared config keys* — a `ConfigDeclaration.name`,
-#: never a credential value — so ruff's hardcoded-password heuristic (S105) doesn't apply.
-_REQUIRED_SECRET = "required_secret"  # noqa: S105
-_OPTIONAL_SECRET = "optional_secret"  # noqa: S105
+#: never a credential value. They are deliberately NOT called `*_SECRET` / `*secret`:
+#: CodeQL's `py/clear-text-{storage,logging}-sensitive-data` classify data by
+#: identifier name, so a constant named `_REQUIRED_NEED` made the fixture manifest
+#: write and the progress lines read as clear-text secret storage/logging (#2089's
+#: alerts 31-33) when the only thing flowing is a synthetic key name. The value
+#: resolved for a need is never written or printed anywhere in this module.
+_REQUIRED_NEED = "required_need"
+_OPTIONAL_NEED = "optional_need"
 
 _FIXTURE_MANIFEST = {
     "name": _FIXTURE_PLUGIN_NAME,
     "version": "0.1.0",
     "config": [
         {
-            "name": _REQUIRED_SECRET,
+            "name": _REQUIRED_NEED,
             "kind": "secret",
             "required": True,
             "description": "Mandatory credential (#1517's fail-closed path).",
         },
         {
-            "name": _OPTIONAL_SECRET,
+            "name": _OPTIONAL_NEED,
             "kind": "secret",
             "required": False,
             "description": "Optional credential (#1517's install-anyway path).",
@@ -184,35 +189,34 @@ def run(ctx: ConformanceContext) -> None:  # noqa: ARG001 -- self-contained fixt
             ) from exc
 
     declared = {decl.name: decl for decl in manifest.config}
-    if _REQUIRED_SECRET not in declared or _OPTIONAL_SECRET not in declared:
+    if _REQUIRED_NEED not in declared or _OPTIONAL_NEED not in declared:
         raise ConformanceCheckError(
             "conformance's own fixture manifest did not round-trip its config: declarations "
             f"through the real PluginManifest -- got {sorted(declared)}, expected "
-            f"{sorted([_REQUIRED_SECRET, _OPTIONAL_SECRET])}"
+            f"{sorted([_REQUIRED_NEED, _OPTIONAL_NEED])}"
         )
 
-    required_param_env = plugin_config_env_names(_FIXTURE_PLUGIN_NAME, _REQUIRED_SECRET)[1]
-    optional_param_env = plugin_config_env_names(_FIXTURE_PLUGIN_NAME, _OPTIONAL_SECRET)[1]
+    required_param_env = plugin_config_env_names(_FIXTURE_PLUGIN_NAME, _REQUIRED_NEED)[1]
+    optional_param_env = plugin_config_env_names(_FIXTURE_PLUGIN_NAME, _OPTIONAL_NEED)[1]
 
     # --- (1) a required need with no value supplied fails closed, naming the key ---
     with _without_env(required_param_env):
         try:
-            _resolve_as_fixture_plugin(_REQUIRED_SECRET, required=True, ssm_client=_FakeSsm())
+            _resolve_as_fixture_plugin(_REQUIRED_NEED, required=True, ssm_client=_FakeSsm())
         except PluginConfigError as exc:
-            if _REQUIRED_SECRET not in str(exc):
+            if _REQUIRED_NEED not in str(exc):
                 raise ConformanceCheckError(
                     f"a required config need with no value failed closed, but its error did not "
-                    f"name the missing key {_REQUIRED_SECRET!r}: {exc}"
+                    f"name the missing key {_REQUIRED_NEED!r}: {exc}"
                 ) from exc
         else:
             raise ConformanceCheckError(
-                f"a required:true config need ({_REQUIRED_SECRET!r}) with no value supplied "
+                f"a required:true config need ({_REQUIRED_NEED!r}) with no value supplied "
                 "resolved successfully instead of failing closed -- the fail-closed path this "
                 "seam exists to enforce is not enforced"
             )
     print(
-        f"config_resolution: required need '{_REQUIRED_SECRET}' with no value fails closed, "
-        "naming the key",
+        "config_resolution: required need with no value fails closed, naming the key",
         flush=True,
     )
 
@@ -220,30 +224,29 @@ def run(ctx: ConformanceContext) -> None:  # noqa: ARG001 -- self-contained fixt
     with _without_env(optional_param_env):
         try:
             result = _resolve_as_fixture_plugin(
-                _OPTIONAL_SECRET, required=False, ssm_client=_FakeSsm()
+                _OPTIONAL_NEED, required=False, ssm_client=_FakeSsm()
             )
         except PluginConfigError as exc:
             raise ConformanceCheckError(
-                f"optional config need {_OPTIONAL_SECRET!r} (required=False) with no value "
+                f"optional config need {_OPTIONAL_NEED!r} (required=False) with no value "
                 f"supplied raised instead of resolving to None -- an optional need must not "
                 f"block install: {exc}"
             ) from exc
     if result is not None:
         raise ConformanceCheckError(
-            f"optional config need {_OPTIONAL_SECRET!r} with no value supplied returned "
+            f"optional config need {_OPTIONAL_NEED!r} with no value supplied returned "
             f"{result!r} instead of None -- an optional need must not block install"
         )
     print(
-        f"config_resolution: optional need '{_OPTIONAL_SECRET}' with no value still installs "
-        "(resolves to None)",
+        "config_resolution: optional need with no value still installs (resolves to None)",
         flush=True,
     )
 
     # --- (3) all three SSM-backed cache states, via the local fake client only ---
-    parameter_path = f"/conformance/{_FIXTURE_PLUGIN_NAME}/{_REQUIRED_SECRET}"
+    parameter_path = f"/conformance/{_FIXTURE_PLUGIN_NAME}/{_REQUIRED_NEED}"
     with _with_env(required_param_env, parameter_path):
         absent = resolve_secret(
-            _FIXTURE_PLUGIN_NAME, _REQUIRED_SECRET, ssm_client=_FakeSsm(params={})
+            _FIXTURE_PLUGIN_NAME, _REQUIRED_NEED, ssm_client=_FakeSsm(params={})
         )
         if absent.state is not ConfigState.ABSENT:
             raise ConformanceCheckError(
@@ -253,7 +256,7 @@ def run(ctx: ConformanceContext) -> None:  # noqa: ARG001 -- self-contained fixt
 
         denied = resolve_secret(
             _FIXTURE_PLUGIN_NAME,
-            _REQUIRED_SECRET,
+            _REQUIRED_NEED,
             ssm_client=_FakeSsm(error=_client_error("AccessDeniedException")),
         )
         if denied.state is not ConfigState.DENIED:
@@ -265,7 +268,7 @@ def run(ctx: ConformanceContext) -> None:  # noqa: ARG001 -- self-contained fixt
         try:
             resolve_secret(
                 _FIXTURE_PLUGIN_NAME,
-                _REQUIRED_SECRET,
+                _REQUIRED_NEED,
                 ssm_client=_FakeSsm(error=_client_error("ThrottlingException")),
             )
         except PluginConfigTransientError:

@@ -31,8 +31,8 @@ def _clean_fixture_env():
     fails mid-way could still leave one set for the next test in the same
     process. Belt-and-braces: clear before and after every test."""
     names = [
-        "BIFFO_PLUGIN_CONFORMANCE_CONFIG_FIXTURE_REQUIRED_SECRET_PARAMETER",
-        "BIFFO_PLUGIN_CONFORMANCE_CONFIG_FIXTURE_OPTIONAL_SECRET_PARAMETER",
+        "BIFFO_PLUGIN_CONFORMANCE_CONFIG_FIXTURE_REQUIRED_NEED_PARAMETER",
+        "BIFFO_PLUGIN_CONFORMANCE_CONFIG_FIXTURE_OPTIONAL_NEED_PARAMETER",
     ]
     for name in names:
         os.environ.pop(name, None)
@@ -55,14 +55,14 @@ class TestConfigResolutionSuccess:
         fail-first proof (see the PR body) reverts one path away from."""
         _run()
         out = capsys.readouterr().out
-        assert "required need 'required_secret' with no value fails closed" in out
-        assert "optional need 'optional_secret' with no value still installs" in out
+        assert "required need with no value fails closed" in out
+        assert "optional need with no value still installs" in out
         assert "all three SSM-backed cache states exercised" in out
 
     def test_leaves_no_env_vars_behind(self):
         _run()
-        assert "BIFFO_PLUGIN_CONFORMANCE_CONFIG_FIXTURE_REQUIRED_SECRET_PARAMETER" not in os.environ
-        assert "BIFFO_PLUGIN_CONFORMANCE_CONFIG_FIXTURE_OPTIONAL_SECRET_PARAMETER" not in os.environ
+        assert "BIFFO_PLUGIN_CONFORMANCE_CONFIG_FIXTURE_REQUIRED_NEED_PARAMETER" not in os.environ
+        assert "BIFFO_PLUGIN_CONFORMANCE_CONFIG_FIXTURE_OPTIONAL_NEED_PARAMETER" not in os.environ
 
 
 class TestConfigResolutionFailFirst:
@@ -119,7 +119,7 @@ class TestConfigResolutionFailFirst:
         real = mod.get_plugin_config
 
         def _optional_also_raises(name, *, kind, required=True, ssm_client=None):  # noqa: ANN001
-            if name == config_resolution._OPTIONAL_SECRET:
+            if name == config_resolution._OPTIONAL_NEED:
                 raise PluginConfigError(name, ConfigState.ABSENT, "no value supplied")
             return real(name, kind=kind, required=required, ssm_client=ssm_client)
 
@@ -201,3 +201,44 @@ class TestConfigResolutionOwnFixtureIntegrity:
         # the intent directly by asserting the fixture's own declared shape.
         assert config_resolution._FIXTURE_MANIFEST["config"][0]["required"] is True
         assert config_resolution._FIXTURE_MANIFEST["config"][1]["required"] is False
+
+    def test_a_fixture_manifest_the_real_schema_rejects_fails_the_check_naming_why(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        """The `except (FileNotFoundError, ValueError)` around `load_manifest`
+        (#2089's error-branch coverage gate). If the fixture drifted out of the
+        real `PluginManifest` schema, `load_manifest` raises `ValueError`; the
+        check must turn that into a `ConformanceCheckError` that says the
+        fixture -- not the plugin under verification -- is at fault, chaining
+        the original error, rather than leaking a raw `ValueError`."""
+        import biffo_plugin_sdk.conformance.checks.config_resolution as mod
+
+        broken = {
+            **mod._FIXTURE_MANIFEST,
+            "config": [{"name": "x", "kind": "not-a-real-kind", "required": True}],
+        }
+        monkeypatch.setattr(mod, "_FIXTURE_MANIFEST", broken)
+
+        with pytest.raises(
+            ConformanceCheckError, match="fixture manifest at .* failed to validate"
+        ) as excinfo:
+            _run()
+        assert isinstance(excinfo.value.__cause__, ValueError)
+        assert "Schema validation failed" in str(excinfo.value)
+
+    def test_a_fixture_manifest_that_was_never_written_fails_the_check_naming_why(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Same handler, its `FileNotFoundError` arm: the fixture file is not
+        on disk when `load_manifest` looks for it."""
+        import biffo_plugin_sdk.conformance.checks.config_resolution as mod
+
+        monkeypatch.setattr(
+            mod, "_write_fixture_manifest", lambda directory: directory / "absent.json"
+        )
+
+        with pytest.raises(
+            ConformanceCheckError, match="fixture manifest at .* failed to validate"
+        ) as excinfo:
+            _run()
+        assert isinstance(excinfo.value.__cause__, FileNotFoundError)

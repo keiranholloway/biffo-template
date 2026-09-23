@@ -1,27 +1,30 @@
 """#1523 seam 1 — migration transitions against real Postgres.
 
-**Not yet implemented.** Scoped as M3 (biffo-template#1925), sequenced after
-this milestone (M2, #1924) because both write into this same `conformance/`
-package (read-set collision, not just a logic dependency — see the plan's
-"Parallelism" section).
+**Permanently not implemented here, by design.** biffo-template#2061 asked
+whether the published `biffo-plugin-sdk` should ship a Postgres client so
+plugin repos could run the #1511 transitions themselves, or whether they
+should stay on Core's side of the ADR-0002 line. The issue's decision memo
+laid out three options — extract the generator into the SDK behind a new
+`conformance` extra (a one-way door: an accepted-ADR exception, a published
+package shipping a DB client, and the generator becoming semver-bound public
+API), keep the transitions in Core with this check reporting a permanent,
+visible gap, or park behind spike #1522 (real Core under the harness). The
+owner decided **Option B**: keep the transitions in Core exactly as they run
+today.
 
-M3's job: fresh install AND upgrade-onto-existing-installation against a real
-database, asserting the generated migration is a delta and its downgrade
-inverts only that delta — #1511's exact failing case (the generator
-re-created all six tables; the downgrade dropped five tables of data) becomes
-a permanent fixture here, fail-first against PR #1513 reverted.
-
-**Status after #1925.** The three transitions now run against real Postgres
-in Core, as `services/api/tests/test_plugin_migration_transitions_pg.py`.
-That is where the generator lives, and #1513's fail-first is demonstrated
-there. They cannot run here yet: the generator and the `plugin_table` model
-still need extracting into this package, and applying a migration from this
-package needs a DB client, which TID251 (ADR-0002) bans outside
-`services/api/`. Both are split out as biffo-template#2061.
+**Status.** The three transitions run against real Postgres in Core, as
+`services/api/tests/test_plugin_migration_transitions_pg.py`. That is where
+the generator lives, and #1513's fail-first (the generator re-created all six
+tables; the downgrade dropped five tables of data) is demonstrated there,
+guarding the #1511 bug class on every Core CI run. Plugin-repo coverage for
+this specific seam is intentionally out of scope: a plugin-specific manifest
+shape isn't caught here unless it also breaks Core's fixture, or until an
+instance actually generates the migration. That trade was made deliberately,
+not left unresolved.
 
 This module exists — with no `run` — so `--list-checks` names this seam
-rather than letting the denominator silently shrink to "1 of 1"
-(biffo-template#1924's own done-when: `1 implemented, 4 not-implemented`).
+rather than letting the denominator silently shrink (biffo-template#1924's
+own done-when: `1 implemented, 4 not-implemented`).
 """
 
 from __future__ import annotations
@@ -29,6 +32,7 @@ from __future__ import annotations
 CHECK_NAME = "migrations"
 IMPLEMENTED = False
 NOTE = (
-    "biffo-template#2061 -- migration transitions (#1511 fixture) run in Core's "
-    "pg lane today; needs the generator extracted into this SDK to run here"
+    "biffo-template#2061 (Option B, settled) -- migration transitions (#1511 "
+    "fixture) are verified in Core's real-Postgres lane; this seam stays "
+    "not-implemented here by design, not pending extraction"
 )

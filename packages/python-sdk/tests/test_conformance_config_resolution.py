@@ -323,6 +323,58 @@ class TestFailFirstRevertsOfTheSdksOwnCode:
             _run(clean_repo)
 
 
+class TestFixtureAssertionsNotReachableThroughSourceMutants:
+    """Assertions whose failure needs a second, independent lie (the check
+    asserts the same fact at two levels), pinned by patching the check's own
+    imported names."""
+
+    def test_optional_need_returning_a_value_instead_of_none(self, monkeypatch, clean_repo):
+        real = mod.get_plugin_config
+
+        def _optional_invents_a_value(name, *, kind, required=True, ssm_client=None):
+            return real(name, kind=kind, required=required, ssm_client=ssm_client) or (
+                None if required else "invented"
+            )
+
+        monkeypatch.setattr(mod, "get_plugin_config", _optional_invents_a_value)
+        with pytest.raises(ConformanceCheckError, match="returned a value instead of None"):
+            _run(clean_repo)
+
+    def test_supplied_secret_dropped(self, monkeypatch, clean_repo):
+        _mutate(
+            monkeypatch,
+            "get_plugin_config",
+            "        return resolution.value",
+            "        return None",
+        )
+        with pytest.raises(ConformanceCheckError, match="supplied secret need"):
+            _run(clean_repo)
+
+    def test_resolve_secret_misclassifying_denied_directly(self, monkeypatch, clean_repo):
+        """`resolve_secret` (called directly by the check) reporting DENIED as
+        ABSENT, while `get_plugin_config` -- which the other assertions go
+        through -- is untouched."""
+        real = mod.resolve_secret
+
+        def _denied_becomes_absent(plugin_name, config_name, *, ssm_client=None):
+            result = real(plugin_name, config_name, ssm_client=ssm_client)
+            if result.state is sdk_config.ConfigState.DENIED:
+                return sdk_config.SecretResolution(state=sdk_config.ConfigState.ABSENT)
+            return result
+
+        monkeypatch.setattr(mod, "resolve_secret", _denied_becomes_absent)
+        with pytest.raises(ConformanceCheckError, match="expected 'denied'"):
+            _run(clean_repo)
+
+    def test_a_preexisting_fixture_variable_is_restored_not_clobbered(
+        self, monkeypatch, clean_repo
+    ):
+        name = "BIFFO_PLUGIN_CONFORMANCE_CONFIG_FIXTURE_REQUIRED_NEED_PARAMETER"
+        monkeypatch.setenv(name, "/operator/set/this")
+        _run(clean_repo)
+        assert os.environ[name] == "/operator/set/this"
+
+
 class TestErrorNamingIsAsserted:
     def test_a_fail_closed_error_that_does_not_name_the_key_is_caught(
         self, monkeypatch, clean_repo
@@ -337,11 +389,18 @@ class TestErrorNamingIsAsserted:
             _run(clean_repo)
 
     def test_a_fail_closed_error_with_the_wrong_state_is_caught(self, monkeypatch, clean_repo):
-        def _wrong_state(name, *, kind, required=True, ssm_client=None):
-            # Every failure is reported as ABSENT, so a DENIED one is misreported.
-            raise sdk_config.PluginConfigError(name, sdk_config.ConfigState.ABSENT, "x")
+        real = mod.get_plugin_config
 
-        monkeypatch.setattr(mod, "get_plugin_config", _wrong_state)
+        def _every_failure_reported_absent(name, *, kind, required=True, ssm_client=None):
+            try:
+                return real(name, kind=kind, required=required, ssm_client=ssm_client)
+            except sdk_config.PluginConfigError as exc:
+                # A DENIED failure misreported as ABSENT (operator told "not configured").
+                raise sdk_config.PluginConfigError(
+                    name, sdk_config.ConfigState.ABSENT, "x"
+                ) from exc
+
+        monkeypatch.setattr(mod, "get_plugin_config", _every_failure_reported_absent)
         with pytest.raises(ConformanceCheckError, match="reported state"):
             _run(clean_repo)
 

@@ -1,244 +1,397 @@
-"""`biffo_plugin_sdk.conformance.config_resolution` (biffo-template#1523 seam 4, #2086).
+"""`biffo_plugin_sdk.conformance.config_resolution` (biffo-template#1523 seam 4, #2086, #2096).
 
-#1517 landed `PluginManifest.config: list[ConfigDeclaration]` and
-`biffo_plugin_sdk.config`'s resolution mechanism (fail closed on a missing
-`required` need; three-state SSM-backed classification; a transient failure
-raises rather than being cached). This check proves that mechanism end to
-end through its own disposable fixture manifest — see the check module's own
-docstring for why it does not read `ctx.repo_root`'s real manifest the way
-`host_mount` does.
+#1517 landed `PluginManifest.config` and `biffo_plugin_sdk.config`'s resolution
+mechanism. The check has two halves and this file pins both:
 
-Nothing here mocks `get_plugin_config`, `resolve_secret`, `ConfigDeclaration`
-or `PluginManifest` — only the SSM boundary is a stand-in (`_FakeSsm`,
-matching `biffo_plugin_sdk`'s own `tests/test_config.py` fixture), exactly as
-the module's own docstring says it must be.
+1. **The plugin under verification's OWN declarations** (`ctx.repo_root`'s
+   `biffo.plugin.json`): a `required: true` need with no value supplied fails
+   the check, naming the key -- #2086's done-when 1, and #2096's defect 2.
+2. **A disposable fixture covering both kinds** (`secret` and `setting`), so a
+   regression in the SDK's own resolution code goes red on this check no matter
+   what the plugin under verification happens to declare -- #2096's defect 1.
+
+**The fail-first mutants are derived from the real source, not hand-written
+stand-ins.** `_mutate` takes the actual source text of a function in
+`biffo_plugin_sdk.config`, replaces ONE exact fragment, and installs the result
+in place of the real function -- so a mutant is precisely "the revert a
+prosecutor would make with an editor". The replaced fragment is asserted to
+occur exactly once; if `config.py` is refactored so the fragment moves, the test
+fails loudly at that assertion rather than silently mutating nothing (a mutant
+that changes nothing would "pass" by the check staying green, which is the
+hollow-test shape this whole file exists to avoid). Every mutant runs against a
+repo that declares NO config, proving the fixture alone catches it.
 """
 
 from __future__ import annotations
 
+import inspect
+import json
 import os
+import textwrap
 from pathlib import Path
+from typing import Any
 
 import pytest
+from biffo_plugin_sdk import config as sdk_config
 from biffo_plugin_sdk.conformance import ConformanceCheckError, ConformanceContext
-from biffo_plugin_sdk.conformance.checks import config_resolution
+from biffo_plugin_sdk.conformance.checks import config_resolution as mod
 
 
 @pytest.fixture(autouse=True)
-def _clean_fixture_env():
-    """The check computes real env var names from a real (fixed) plugin/config
-    name pair, and manages them itself with save/restore — but a test that
-    fails mid-way could still leave one set for the next test in the same
-    process. Belt-and-braces: clear before and after every test."""
-    names = [
-        "BIFFO_PLUGIN_CONFORMANCE_CONFIG_FIXTURE_REQUIRED_NEED_PARAMETER",
-        "BIFFO_PLUGIN_CONFORMANCE_CONFIG_FIXTURE_OPTIONAL_NEED_PARAMETER",
-    ]
-    for name in names:
-        os.environ.pop(name, None)
-    yield
-    for name in names:
-        os.environ.pop(name, None)
+def _clean_plugin_env(monkeypatch: pytest.MonkeyPatch):
+    """No `BIFFO_PLUGIN_*` variable from the invoking shell may leak into (or
+    out of) a test: the check reads the real environment as its supply channel."""
+    for name in [n for n in os.environ if n.startswith("BIFFO_PLUGIN_")]:
+        monkeypatch.delenv(name)
 
 
-def _run() -> None:
-    # `repo_root` is unused by this check (see the module's own docstring for
-    # why) -- any Path is fine, so a nonexistent one is used deliberately to
-    # prove that.
-    config_resolution.run(ConformanceContext(repo_root=Path("/nonexistent-unused-by-this-check")))
+def _plugin_repo(tmp_path: Path, config: list[dict[str, Any]] | None, name: str = "demo-plugin"):
+    manifest: dict[str, Any] = {"name": name, "version": "0.1.0"}
+    if config is not None:
+        manifest["config"] = config
+    (tmp_path / "biffo.plugin.json").write_text(json.dumps(manifest), encoding="utf-8")
+    return tmp_path
 
 
-class TestConfigResolutionSuccess:
-    def test_passes_against_the_real_unmodified_sdk(self, capsys):
-        """The check's own fixture, run against #1517's real, unmodified
-        resolve/fail-closed code, is green — the baseline this milestone's
-        fail-first proof (see the PR body) reverts one path away from."""
-        _run()
+def _need(name: str, kind: str, required: bool) -> dict[str, Any]:
+    return {"name": name, "kind": kind, "required": required, "description": "test need"}
+
+
+def _run(repo: Path) -> None:
+    mod.run(ConformanceContext(repo_root=repo))
+
+
+@pytest.fixture
+def clean_repo(tmp_path: Path) -> Path:
+    """A plugin declaring NO config -- so any red result is the fixture's."""
+    return _plugin_repo(tmp_path, None)
+
+
+# --------------------------------------------------------------------------
+# (1) the plugin under verification's OWN declared needs (#2086 done-when 1)
+# --------------------------------------------------------------------------
+
+
+class TestOwnDeclaredNeeds:
+    def test_a_plugin_declaring_no_config_passes_and_says_so(self, clean_repo, capsys):
+        _run(clean_repo)
         out = capsys.readouterr().out
-        assert "required need with no value fails closed" in out
-        assert "optional need with no value still installs" in out
-        assert "all three SSM-backed cache states exercised" in out
+        assert "plugin 'demo-plugin' declares no config needs" in out
 
-    def test_leaves_no_env_vars_behind(self):
-        _run()
-        assert "BIFFO_PLUGIN_CONFORMANCE_CONFIG_FIXTURE_REQUIRED_NEED_PARAMETER" not in os.environ
-        assert "BIFFO_PLUGIN_CONFORMANCE_CONFIG_FIXTURE_OPTIONAL_NEED_PARAMETER" not in os.environ
+    def test_required_secret_with_no_value_fails_naming_the_key(self, tmp_path):
+        repo = _plugin_repo(tmp_path, [_need("my_key", "secret", True)])
+        with pytest.raises(ConformanceCheckError) as excinfo:
+            _run(repo)
+        message = str(excinfo.value)
+        assert "'my_key'" in message
+        assert "BIFFO_PLUGIN_DEMO_PLUGIN_MY_KEY_PARAMETER" in message  # says how to supply it
+
+    def test_required_setting_with_no_value_fails_naming_the_key(self, tmp_path):
+        repo = _plugin_repo(tmp_path, [_need("my_group", "setting", True)])
+        with pytest.raises(ConformanceCheckError) as excinfo:
+            _run(repo)
+        assert "'my_group'" in str(excinfo.value)
+        assert "BIFFO_PLUGIN_DEMO_PLUGIN_MY_GROUP" in str(excinfo.value)
+
+    def test_every_missing_required_need_is_named_not_just_the_first(self, tmp_path):
+        repo = _plugin_repo(
+            tmp_path,
+            [
+                _need("first_key", "secret", True),
+                _need("second_key", "setting", True),
+                _need("fine_key", "secret", False),
+            ],
+        )
+        with pytest.raises(ConformanceCheckError) as excinfo:
+            _run(repo)
+        message = str(excinfo.value)
+        assert "'first_key'" in message
+        assert "'second_key'" in message
+        assert "'fine_key'" not in message
+
+    def test_required_needs_with_supplied_values_pass(self, tmp_path, monkeypatch, capsys):
+        repo = _plugin_repo(
+            tmp_path,
+            [_need("my_key", "secret", True), _need("my_group", "setting", True)],
+        )
+        monkeypatch.setenv("BIFFO_PLUGIN_DEMO_PLUGIN_MY_KEY_PARAMETER", "/inst/demo/my_key")
+        monkeypatch.setenv("BIFFO_PLUGIN_DEMO_PLUGIN_MY_GROUP", "literal-group-value")
+        _run(repo)
+        out = capsys.readouterr().out
+        assert "2 config need(s)" in out
+        assert "literal-group-value" not in out  # a resolved value is never printed
+
+    def test_optional_needs_with_no_value_pass(self, tmp_path):
+        repo = _plugin_repo(
+            tmp_path, [_need("opt_key", "secret", False), _need("opt_group", "setting", False)]
+        )
+        _run(repo)
+
+    def test_a_repo_with_no_manifest_fails_rather_than_passing_vacuously(self, tmp_path):
+        with pytest.raises(ConformanceCheckError, match="no biffo.plugin.json"):
+            _run(tmp_path)
+
+    def test_a_manifest_the_real_schema_rejects_fails_naming_why(self, tmp_path):
+        """#2096's aside: an upper-case need name is rejected by the manifest
+        schema. That is a genuine defect in the plugin under verification and
+        must fail here too (as it does in `host_mount`), naming the file --
+        distinct from the FIXTURE being invalid (`TestFixtureIntegrity`)."""
+        repo = _plugin_repo(tmp_path, [_need("MY_KEY", "secret", True)])
+        with pytest.raises(ConformanceCheckError, match=r"biffo\.plugin\.json failed to validate"):
+            _run(repo)
+
+    def test_the_plugin_identity_binding_does_not_leak_out_of_the_check(self, clean_repo):
+        from biffo_plugin_sdk.signed_client import acting_as_plugin
+
+        before = acting_as_plugin.get()
+        _run(clean_repo)
+        assert acting_as_plugin.get() == before
 
 
-class TestConfigResolutionFailFirst:
-    """Fail-first proof (#2086's own done-when): reverting one of #1517's
-    fail-closed paths must turn exactly the corresponding assertion red, with
-    no other change — reproduced here by monkeypatching the SAME seam a real
-    regression would break, rather than the check's own code.
-    """
+class TestOwnNeedsCaughtEvenIfTheSdkFailsOpen:
+    """If `get_plugin_config` stopped failing closed, a plugin's unsupplied
+    required need would resolve to `None` -- the check must still fail on that
+    plugin, independently of the fixture half."""
 
-    def test_a_required_need_that_silently_resolves_instead_of_raising_is_caught(
-        self, monkeypatch: pytest.MonkeyPatch
+    def test_required_need_resolving_to_none_is_a_failure_for_the_plugins_own_need(
+        self, tmp_path, monkeypatch
     ):
-        """Simulates #1517's fail-closed path being reverted: `get_plugin_config`
-        no longer raises for a required-but-unresolvable secret, and instead
-        returns `None` (the shape a "just warn and continue" regression would
-        take). This is precisely the defect class the issue's fail-first
-        requirement asks to be provably caught, not assumed caught."""
-        import biffo_plugin_sdk.conformance.checks.config_resolution as mod
+        monkeypatch.setattr(mod, "get_plugin_config", lambda *a, **k: None)
+        repo = _plugin_repo(tmp_path, [_need("my_key", "secret", True)])
+        with pytest.raises(ConformanceCheckError) as excinfo:
+            mod._check_plugin_own_needs(mod.load_manifest(repo / "biffo.plugin.json"))
+        assert "'my_key'" in str(excinfo.value)
 
-        def _silently_permissive(name, *, kind, required=True, ssm_client=None):  # noqa: ANN001, ARG001
-            return None
 
-        monkeypatch.setattr(mod, "get_plugin_config", _silently_permissive)
+# --------------------------------------------------------------------------
+# (2) the disposable fixture, both kinds -- green against the real, unmodified SDK
+# --------------------------------------------------------------------------
 
-        with pytest.raises(
-            ConformanceCheckError, match="resolved successfully instead of failing closed"
+
+class TestFixtureBaseline:
+    def test_passes_against_the_real_unmodified_sdk(self, clean_repo, capsys):
+        _run(clean_repo)
+        out = capsys.readouterr().out
+        for line in (
+            "required secret need with no value fails closed, naming the key",
+            "required setting need with no value fails closed, naming the key",
+            "optional needs (secret and setting) with no value still install",
+            "supplied needs (secret and setting) resolve",
+            "required need under permanently-denied SSM fails closed",
+            "required need whose SSM value is empty fails closed",
+            "all three SSM-backed cache states exercised",
         ):
-            _run()
+            assert line in out, line
 
-    def test_an_error_that_does_not_name_the_missing_key_is_caught(
-        self, monkeypatch: pytest.MonkeyPatch
-    ):
-        """The done-when is explicit that the harness must fail closed NAMING
-        the missing key, not merely fail closed silently."""
-        import biffo_plugin_sdk.conformance.checks.config_resolution as mod
-        from biffo_plugin_sdk.config import ConfigState, PluginConfigError
+    def test_leaves_no_env_vars_behind(self, clean_repo):
+        _run(clean_repo)
+        assert [n for n in os.environ if n.startswith("BIFFO_PLUGIN_")] == []
 
-        def _raises_without_naming_the_key(name, *, kind, required=True, ssm_client=None):  # noqa: ANN001, ARG001
-            raise PluginConfigError("<redacted>", ConfigState.ABSENT, "no value supplied")
 
-        monkeypatch.setattr(mod, "get_plugin_config", _raises_without_naming_the_key)
+# --------------------------------------------------------------------------
+# (3) fail-first: each revert goes red on config_resolution, from real source
+# --------------------------------------------------------------------------
 
-        with pytest.raises(ConformanceCheckError, match="did not name the missing key"):
-            _run()
 
-    def test_an_optional_need_that_raises_instead_of_returning_none_is_caught(
-        self, monkeypatch: pytest.MonkeyPatch
-    ):
-        """The inverse regression: an optional need becomes wrongly mandatory
-        and blocks install when it must not."""
-        import biffo_plugin_sdk.conformance.checks.config_resolution as mod
-        from biffo_plugin_sdk.config import ConfigState, PluginConfigError
+def _mutate(monkeypatch: pytest.MonkeyPatch, func_name: str, old: str, new: str) -> None:
+    """Replace ONE fragment of the real `biffo_plugin_sdk.config.<func_name>`
+    source and install the mutant in the SDK module (and in the check's own
+    imported name, when it holds one)."""
+    real = getattr(sdk_config, func_name)
+    source = textwrap.dedent(inspect.getsource(real))
+    assert source.count(old) == 1, (
+        f"mutation target {old!r} occurs {source.count(old)}x in {func_name} -- config.py "
+        "changed shape; update this mutant so it still reverts the intended path"
+    )
+    namespace = dict(vars(sdk_config))  # real classes/enums, so isinstance/`is` still hold
+    exec(compile(source.replace(old, new), f"<mutant {func_name}>", "exec"), namespace)  # noqa: S102
+    mutant = namespace[func_name]
+    monkeypatch.setattr(sdk_config, func_name, mutant)
+    if hasattr(mod, func_name):
+        monkeypatch.setattr(mod, func_name, mutant)
 
-        real = mod.get_plugin_config
 
-        def _optional_also_raises(name, *, kind, required=True, ssm_client=None):  # noqa: ANN001
-            if name == config_resolution._OPTIONAL_NEED:
-                raise PluginConfigError(name, ConfigState.ABSENT, "no value supplied")
-            return real(name, kind=kind, required=required, ssm_client=ssm_client)
+class TestFailFirstRevertsOfTheSdksOwnCode:
+    """#2086 done-when 1 / #2096 defect 1: reverting each path goes red on THIS
+    check, against a plugin that declares nothing."""
 
-        monkeypatch.setattr(mod, "get_plugin_config", _optional_also_raises)
+    def test_secret_required_fail_closed_reverted(self, monkeypatch, clean_repo):
+        _mutate(
+            monkeypatch,
+            "get_plugin_config",
+            "            if required:\n",
+            "            if False:\n",
+        )
+        with pytest.raises(ConformanceCheckError, match="required secret need.*failing closed"):
+            _run(clean_repo)
 
-        with pytest.raises(ConformanceCheckError):
-            _run()
+    def test_setting_required_fail_closed_reverted(self, monkeypatch, clean_repo):
+        """The prosecution's mutation M5: `if value is None and required:` ->
+        `if value is None and False:` left the previous check green."""
+        _mutate(
+            monkeypatch,
+            "get_plugin_config",
+            "if value is None and required:",
+            "if value is None and False:",
+        )
+        with pytest.raises(ConformanceCheckError, match="required setting need.*failing closed"):
+            _run(clean_repo)
 
-    def test_ssm_parameter_not_found_misclassified_as_denied_is_caught(
-        self, monkeypatch: pytest.MonkeyPatch
-    ):
-        """Reverts the confirmed-absent cache state: `resolve_secret` returning
-        `DENIED` for a genuinely-absent parameter would tell an operator
-        "misconfigured IAM" for what is really "not configured"."""
-        import biffo_plugin_sdk.conformance.checks.config_resolution as mod
-        from biffo_plugin_sdk.config import ConfigState, SecretResolution
+    def test_required_need_under_denied_tolerated(self, monkeypatch, clean_repo):
+        """M4: a required need whose SSM access is DENIED must not be tolerated."""
+        _mutate(
+            monkeypatch,
+            "get_plugin_config",
+            "if resolution.state != ConfigState.RESOLVED:",
+            "if resolution.state not in (ConfigState.RESOLVED, ConfigState.DENIED):",
+        )
+        with pytest.raises(ConformanceCheckError, match="permanently-denied"):
+            _run(clean_repo)
 
-        def _always_denied(plugin_name, config_name, *, ssm_client=None):  # noqa: ANN001, ARG001
-            return SecretResolution(state=ConfigState.DENIED, detail="misclassified by the test")
+    def test_empty_ssm_value_treated_as_resolved(self, monkeypatch, clean_repo):
+        """M7: an SSM parameter holding an empty string is 'not configured'."""
+        _mutate(monkeypatch, "resolve_secret", "    if not value:", "    if False:")
+        with pytest.raises(ConformanceCheckError, match="empty"):
+            _run(clean_repo)
 
-        monkeypatch.setattr(mod, "resolve_secret", _always_denied)
+    def test_throttling_cached_as_absent(self, monkeypatch, clean_repo):
+        """marketing#25: a transient failure classified as a cacheable state."""
+        _mutate(
+            monkeypatch, "_classify_ssm_error", "    return None", "    return ConfigState.ABSENT"
+        )
+        with pytest.raises(ConformanceCheckError, match="transient"):
+            _run(clean_repo)
 
-        with pytest.raises(ConformanceCheckError, match="expected 'absent'"):
-            _run()
-
-    def test_ssm_access_denied_misclassified_as_absent_is_caught(
-        self, monkeypatch: pytest.MonkeyPatch
-    ):
-        """Reverts the permanently-denied cache state the opposite direction."""
-        import biffo_plugin_sdk.conformance.checks.config_resolution as mod
-        from biffo_plugin_sdk.config import ConfigState, SecretResolution
-
-        def _always_absent(plugin_name, config_name, *, ssm_client=None):  # noqa: ANN001, ARG001
-            return SecretResolution(state=ConfigState.ABSENT, detail="misclassified by the test")
-
-        monkeypatch.setattr(mod, "resolve_secret", _always_absent)
-
+    def test_denied_classified_as_absent(self, monkeypatch, clean_repo):
+        _mutate(
+            monkeypatch,
+            "_classify_ssm_error",
+            "return ConfigState.DENIED",
+            "return ConfigState.ABSENT",
+        )
         with pytest.raises(ConformanceCheckError, match="expected 'denied'"):
-            _run()
+            _run(clean_repo)
 
-    def test_a_transient_ssm_failure_cached_as_a_state_instead_of_raising_is_caught(
-        self, monkeypatch: pytest.MonkeyPatch
+    def test_absent_classified_as_denied(self, monkeypatch, clean_repo):
+        _mutate(
+            monkeypatch,
+            "_classify_ssm_error",
+            "return ConfigState.ABSENT",
+            "return ConfigState.DENIED",
+        )
+        with pytest.raises(ConformanceCheckError, match="expected 'absent'"):
+            _run(clean_repo)
+
+    def test_optional_secret_wrongly_made_mandatory(self, monkeypatch, clean_repo):
+        _mutate(
+            monkeypatch, "get_plugin_config", "            if required:\n", "            if True:\n"
+        )
+        with pytest.raises(ConformanceCheckError, match="optional"):
+            _run(clean_repo)
+
+    def test_optional_setting_wrongly_made_mandatory(self, monkeypatch, clean_repo):
+        _mutate(
+            monkeypatch,
+            "get_plugin_config",
+            "if value is None and required:",
+            "if value is None:",
+        )
+        with pytest.raises(ConformanceCheckError, match="optional"):
+            _run(clean_repo)
+
+    def test_supplied_setting_dropped(self, monkeypatch, clean_repo):
+        """A resolver that always raises/returns nothing must not pass as 'fail closed'."""
+        _mutate(monkeypatch, "get_plugin_config", "        return value\n", "        return None\n")
+        with pytest.raises(ConformanceCheckError, match="supplied"):
+            _run(clean_repo)
+
+    def test_transient_error_swallowed_for_an_optional_need(self, monkeypatch, clean_repo):
+        """Transient must propagate through `get_plugin_config` too, required or
+        not -- a resolver that turns it into `None` for an optional need would
+        cache 'unconfigured' for a working feature (marketing#25)."""
+        real = sdk_config.resolve_secret
+
+        def _swallowing(plugin_name, config_name, *, ssm_client=None):
+            try:
+                return real(plugin_name, config_name, ssm_client=ssm_client)
+            except sdk_config.PluginConfigTransientError:
+                return sdk_config.SecretResolution(state=sdk_config.ConfigState.ABSENT)
+
+        monkeypatch.setattr(sdk_config, "resolve_secret", _swallowing)
+        monkeypatch.setattr(mod, "resolve_secret", _swallowing)
+        with pytest.raises(ConformanceCheckError, match="transient"):
+            _run(clean_repo)
+
+
+class TestErrorNamingIsAsserted:
+    def test_a_fail_closed_error_that_does_not_name_the_key_is_caught(
+        self, monkeypatch, clean_repo
     ):
-        """marketing#25's exact regression, reproduced against this check:
-        a throttling error must never be classified into a cacheable
-        `ConfigState` — it must raise `PluginConfigTransientError` instead."""
-        import biffo_plugin_sdk.conformance.checks.config_resolution as mod
-        from biffo_plugin_sdk.config import ConfigState, SecretResolution
+        def _nameless(name, *, kind, required=True, ssm_client=None):
+            raise sdk_config.PluginConfigError(
+                "<redacted>", sdk_config.ConfigState.ABSENT, "no value supplied"
+            )
 
-        real = mod.resolve_secret
+        monkeypatch.setattr(mod, "get_plugin_config", _nameless)
+        with pytest.raises(ConformanceCheckError, match="did not name the missing key"):
+            _run(clean_repo)
 
-        def _throttle_becomes_absent(plugin_name, config_name, *, ssm_client=None):  # noqa: ANN001
-            # `resolve_secret` is also called (indirectly, via `get_plugin_config`)
-            # by steps (1)/(2) earlier in `run()`, so this identifies the ONE
-            # call it means to corrupt by what the fake SSM client would raise,
-            # not by call order/count -- robust to `run()`'s own call sequence
-            # changing.
-            error = getattr(ssm_client, "error", None)
-            response = getattr(error, "response", None) if error is not None else None
-            code = response.get("Error", {}).get("Code", "") if isinstance(response, dict) else ""
-            if code == "ThrottlingException":
-                return SecretResolution(
-                    state=ConfigState.ABSENT, detail="throttle miscached as absent"
-                )
-            return real(plugin_name, config_name, ssm_client=ssm_client)
+    def test_a_fail_closed_error_with_the_wrong_state_is_caught(self, monkeypatch, clean_repo):
+        def _wrong_state(name, *, kind, required=True, ssm_client=None):
+            # Every failure is reported as ABSENT, so a DENIED one is misreported.
+            raise sdk_config.PluginConfigError(name, sdk_config.ConfigState.ABSENT, "x")
 
-        monkeypatch.setattr(mod, "resolve_secret", _throttle_becomes_absent)
-
-        with pytest.raises(ConformanceCheckError, match="marketing#25's regression"):
-            _run()
+        monkeypatch.setattr(mod, "get_plugin_config", _wrong_state)
+        with pytest.raises(ConformanceCheckError, match="reported state"):
+            _run(clean_repo)
 
 
-class TestConfigResolutionOwnFixtureIntegrity:
-    def test_fixture_manifest_round_trips_through_the_real_schema(self):
-        """If `ConfigDeclaration`/`PluginManifest` ever stopped accepting this
-        shape, the check should say so plainly rather than crash obscurely
-        inside `load_manifest`."""
-        # Exercised implicitly by every passing run above; this test documents
-        # the intent directly by asserting the fixture's own declared shape.
-        assert config_resolution._FIXTURE_MANIFEST["config"][0]["required"] is True
-        assert config_resolution._FIXTURE_MANIFEST["config"][1]["required"] is False
+# --------------------------------------------------------------------------
+# (4) the fixture's own integrity
+# --------------------------------------------------------------------------
+
+
+class TestFixtureIntegrity:
+    def test_fixture_declares_both_kinds_required_and_optional(self):
+        declared = {(d["kind"], d["required"]) for d in mod._FIXTURE_MANIFEST["config"]}
+        assert declared == {
+            ("secret", True),
+            ("secret", False),
+            ("setting", True),
+            ("setting", False),
+        }
 
     def test_a_fixture_manifest_the_real_schema_rejects_fails_the_check_naming_why(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch, clean_repo
     ):
-        """The `except (FileNotFoundError, ValueError)` around `load_manifest`
-        (#2089's error-branch coverage gate). If the fixture drifted out of the
-        real `PluginManifest` schema, `load_manifest` raises `ValueError`; the
-        check must turn that into a `ConformanceCheckError` that says the
-        fixture -- not the plugin under verification -- is at fault, chaining
-        the original error, rather than leaking a raw `ValueError`."""
-        import biffo_plugin_sdk.conformance.checks.config_resolution as mod
-
         broken = {
             **mod._FIXTURE_MANIFEST,
             "config": [{"name": "x", "kind": "not-a-real-kind", "required": True}],
         }
         monkeypatch.setattr(mod, "_FIXTURE_MANIFEST", broken)
-
         with pytest.raises(
             ConformanceCheckError, match="fixture manifest at .* failed to validate"
         ) as excinfo:
-            _run()
+            _run(clean_repo)
         assert isinstance(excinfo.value.__cause__, ValueError)
         assert "Schema validation failed" in str(excinfo.value)
 
     def test_a_fixture_manifest_that_was_never_written_fails_the_check_naming_why(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch, clean_repo
     ):
-        """Same handler, its `FileNotFoundError` arm: the fixture file is not
-        on disk when `load_manifest` looks for it."""
-        import biffo_plugin_sdk.conformance.checks.config_resolution as mod
-
         monkeypatch.setattr(
             mod, "_write_fixture_manifest", lambda directory: directory / "absent.json"
         )
-
         with pytest.raises(
             ConformanceCheckError, match="fixture manifest at .* failed to validate"
         ) as excinfo:
-            _run()
+            _run(clean_repo)
         assert isinstance(excinfo.value.__cause__, FileNotFoundError)
+
+    def test_a_fixture_that_lost_a_declaration_in_the_round_trip_is_caught(
+        self, monkeypatch, clean_repo
+    ):
+        trimmed = {**mod._FIXTURE_MANIFEST, "config": mod._FIXTURE_MANIFEST["config"][:1]}
+        monkeypatch.setattr(mod, "_FIXTURE_MANIFEST", trimmed)
+        with pytest.raises(ConformanceCheckError, match="did not round-trip"):
+            _run(clean_repo)

@@ -88,6 +88,10 @@ pytestmark = [
             'eval "$(sh scripts/pg-test-db.sh --export)"'
         ),
     ),
+    # Creates/drops a real Postgres schema (see _Sandbox.reset_schema) against
+    # the shared pg-lane database -- same concurrency hazard
+    # test_ddl_import_environment_pg.py flags for its own DDL use.
+    pytest.mark.serial,
 ]
 
 

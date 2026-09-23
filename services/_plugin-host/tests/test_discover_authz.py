@@ -425,6 +425,229 @@ def test_build_plugin_host_isolates_one_plugins_broken_admin_app_import(tmp_path
     assert any("half-broken" in m and "half_broken.admin_app:app" in m for m in messages)
 
 
+# --- biffo-template#2095: a failed import must keep the plugin's URL space OWNED ---
+#
+# #2092's isolation turned a failed import into "no mount". That is not neutral:
+# a missing ``/<name>/admin`` mount lets ``/<name>/admin/*`` fall through to the
+# founder-gated ``/<name>`` user mount (the trap ``_normalize_bare_admin_paths``
+# documents), and a missing ``/<name>`` mount is a bare 404, indistinguishable
+# from "plugin not installed". Each test below reproduces one of #2095's three
+# defects through the real ``discover_plugins`` + real ``build_host`` +
+# a real Starlette ``TestClient``.
+
+_METHODS = ("get", "post", "put", "patch", "delete")
+
+
+def _group_authorizer(token: str, required_group: str):
+    """Token ``founder-tok`` is in group ``founder`` only; ``admin-tok`` in
+    ``admin`` only. Anything else is a 401 — so a founder token reaching an
+    admin-gated route is a 403, and reaching a founder-gated route is a pass."""
+    groups = {"founder-tok": "founder", "admin-tok": "admin"}
+    if token not in groups:
+        raise GateError(401, "nope")
+    if groups[token] != required_group:
+        raise GateError(403, "wrong group")
+    return {"sub": "u"}
+
+
+def _write_two_ingress_plugin(root, name) -> None:
+    d = root / name
+    d.mkdir()
+    (d / "biffo.plugin.json").write_text(
+        json.dumps(
+            {
+                "name": name,
+                "version": "1.0.0",
+                "user_ingress": {"app": f"{name}.app:app", "required_group": "founder"},
+                "admin_ingress": {"app": f"{name}.admin:app", "required_group": "admin"},
+            }
+        )
+    )
+
+
+def _user_app_with_admin_route() -> Starlette:
+    """A user app that (plausibly — ``_is_public_admin_asset`` treats
+    ``/admin/assets`` as a public shape) serves something under ``/admin/``."""
+
+    async def hi(request):
+        return JSONResponse({"who": "userapp"})
+
+    async def admin_hi(request):
+        return JSONResponse({"who": "userapp-admin-route-LEAK"})
+
+    return Starlette(routes=[Route("/hi", hi), Route("/admin/hi", admin_hi)])
+
+
+def _assert_503_naming_only(response, name: str, *, forbidden: str) -> None:
+    assert response.status_code == 503, (response.request.method, response.request.url)
+    assert response.headers["content-type"] == "application/json"
+    detail = response.json()["detail"]
+    assert name in detail
+    # The exception text is host-log material, never response material
+    # (same rule as ``_quarantine``'s "never leak a stack trace").
+    assert forbidden not in response.text
+
+
+def test_failed_admin_import_keeps_admin_path_owned_not_routed_to_user_app(tmp_path) -> None:
+    """Defect 1 (auth boundary). ``/<name>/admin/*`` must NOT be served by the
+    founder-gated user app when the admin app failed to import."""
+    _write_two_ingress_plugin(tmp_path, "halfbad")
+    _write_plugin(tmp_path, "goodp", ingress={"app": "goodp.app:app", "required_group": "founder"})
+    good = _user_app_with_admin_route()
+
+    def load(ref: str):
+        if ref == "halfbad.app:app":
+            return _user_app_with_admin_route()
+        if ref == "halfbad.admin:app":
+            raise ImportError("SECRET-/srv/plugins/halfbad/admin.py exploded")
+        if ref == "goodp.app:app":
+            return good
+        raise AssertionError(ref)
+
+    host = build_plugin_host(tmp_path, authorize=_group_authorizer, load=load)
+    client = TestClient(host)
+    founder = {"X-Biffo-Founder-Token": "founder-tok"}
+    admin = {"X-Biffo-Founder-Token": "admin-tok"}
+
+    # The founder token used to reach the user app's /admin/hi route (200 LEAK).
+    for headers in (founder, admin, {}):
+        for method in _METHODS:
+            for path in ("/halfbad/admin/hi", "/halfbad/admin/", "/halfbad/admin/x/y"):
+                r = getattr(client, method)(path, headers=headers)
+                _assert_503_naming_only(r, "halfbad/admin", forbidden="SECRET")
+    # The bare, no-slash form (the only unauthenticated one at the Gateway).
+    _assert_503_naming_only(
+        client.get("/halfbad/admin", headers=founder), "halfbad/admin", forbidden="SECRET"
+    )
+
+    # Only the failed ADMIN surface is down: the user app and other plugins are fine.
+    assert client.get("/halfbad/hi", headers=founder).json() == {"who": "userapp"}
+    assert client.get("/goodp/hi", headers=founder).status_code == 200
+    assert client.get("/goodp/admin/hi", headers=founder).json()["who"].endswith("LEAK")
+
+
+def test_failed_user_app_import_answers_503_for_that_plugin_only(tmp_path) -> None:
+    """Defect 2. #2092 asked for a 503 for the broken plugin's own routes; a
+    bare 404 is indistinguishable from "plugin not installed"."""
+    _write_plugin(
+        tmp_path, "badfnf", ingress={"app": "badfnf.app:app", "required_group": "founder"}
+    )
+    _write_plugin(
+        tmp_path, "healthy", ingress={"app": "healthy.app:app", "required_group": "founder"}
+    )
+    healthy = _user_app_with_admin_route()
+
+    def load(ref: str):
+        if ref == "badfnf.app:app":
+            raise FileNotFoundError("SECRET-/srv/plugins/badfnf/manifest.json")
+        if ref == "healthy.app:app":
+            return healthy
+        raise AssertionError(ref)
+
+    host = build_plugin_host(tmp_path, authorize=_group_authorizer, load=load)
+    client = TestClient(host)
+
+    for headers in ({"X-Biffo-Founder-Token": "founder-tok"}, {"X-Biffo-Founder-Token": "bad"}, {}):
+        for method in _METHODS:
+            for path in ("/badfnf/hi", "/badfnf/", "/badfnf/a/b/c"):
+                r = getattr(client, method)(path, headers=headers)
+                _assert_503_naming_only(r, "badfnf", forbidden="SECRET")
+
+    assert (
+        client.get("/healthy/hi", headers={"X-Biffo-Founder-Token": "founder-tok"}).status_code
+        == 200
+    )
+    # A path no plugin owns is still a plain 404 — 503 is for the failed plugin only.
+    assert (
+        client.get("/nosuchplugin/hi", headers={"X-Biffo-Founder-Token": "founder-tok"}).status_code
+        == 404
+    )
+
+
+def test_failed_user_app_import_keeps_a_working_admin_app(tmp_path) -> None:
+    """The user app and admin app fail independently: a broken user app must
+    not take down a working admin app mounted ahead of it."""
+    _write_two_ingress_plugin(tmp_path, "splitp")
+
+    async def ping(request):
+        return JSONResponse({"who": "admin"})
+
+    admin_app = Starlette(routes=[Route("/ping", ping)])
+
+    def load(ref: str):
+        if ref == "splitp.app:app":
+            raise ImportError("user side broken")
+        if ref == "splitp.admin:app":
+            return admin_app
+        raise AssertionError(ref)
+
+    client = TestClient(build_plugin_host(tmp_path, authorize=_group_authorizer, load=load))
+    assert client.get(
+        "/splitp/admin/ping", headers={"X-Biffo-Founder-Token": "admin-tok"}
+    ).json() == {"who": "admin"}
+    assert (
+        client.get("/splitp/ping", headers={"X-Biffo-Founder-Token": "founder-tok"}).status_code
+        == 503
+    )
+
+
+def test_system_exit_at_import_is_isolated_like_any_other_import_failure(tmp_path) -> None:
+    """Defect 3. ``sys.exit()`` at module import (some config-check patterns do
+    this) raises ``SystemExit`` — a ``BaseException`` — which an
+    ``except Exception`` isolation lets straight through and out of
+    ``build_plugin_host``, taking every plugin down."""
+    _write_two_ingress_plugin(tmp_path, "exiter")
+    _write_plugin(
+        tmp_path, "exiter2", ingress={"app": "exiter2.app:app", "required_group": "founder"}
+    )
+    _write_plugin(
+        tmp_path, "healthy", ingress={"app": "healthy.app:app", "required_group": "founder"}
+    )
+    healthy = _user_app_with_admin_route()
+
+    def load(ref: str):
+        if ref in ("exiter.app:app", "exiter.admin:app", "exiter2.app:app"):
+            raise SystemExit(3)
+        if ref == "healthy.app:app":
+            return healthy
+        raise AssertionError(ref)
+
+    # Must not raise SystemExit.
+    client = TestClient(build_plugin_host(tmp_path, authorize=_group_authorizer, load=load))
+    founder = {"X-Biffo-Founder-Token": "founder-tok"}
+    assert client.get("/exiter/hi", headers=founder).status_code == 503
+    assert client.get("/exiter/admin/hi", headers=founder).status_code == 503
+    assert client.get("/exiter2/hi", headers=founder).status_code == 503
+    assert client.get("/healthy/hi", headers=founder).status_code == 200
+
+
+def test_keyboard_interrupt_at_import_is_not_swallowed(tmp_path) -> None:
+    """Isolation catches a plugin's *own* failure modes (``Exception``,
+    ``SystemExit``) — never the operator's interrupt."""
+    _write_plugin(tmp_path, "kb", ingress={"app": "kb.app:app", "required_group": "founder"})
+
+    def load(ref: str):
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        build_plugin_host(tmp_path, authorize=_group_authorizer, load=load)
+
+
+def test_failed_plugin_websocket_is_refused_not_routed_elsewhere(tmp_path) -> None:
+    """A websocket upgrade to a failed plugin's URL space is refused too."""
+    from starlette.websockets import WebSocketDisconnect
+
+    _write_two_ingress_plugin(tmp_path, "wsbad")
+
+    def load(ref: str):
+        raise ImportError("broken")
+
+    client = TestClient(build_plugin_host(tmp_path, authorize=_group_authorizer, load=load))
+    for path in ("/wsbad/socket", "/wsbad/admin/socket"):
+        with pytest.raises(WebSocketDisconnect), client.websocket_connect(path):
+            pass
+
+
 def test_an_admin_only_plugin_is_discovered(tmp_path) -> None:
     """A plugin declaring only ``admin_ingress`` must not be discarded.
 

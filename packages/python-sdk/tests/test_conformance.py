@@ -40,24 +40,27 @@ class TestDiscoverChecks:
             "real_core",
         }
 
-    def test_exactly_one_implemented_matches_1924s_own_done_when(self):
-        """#1924's done-when: `--list-checks` prints `1 implemented, 4 not-implemented`."""
+    def test_exactly_two_implemented_matches_2086s_own_done_when(self):
+        """#1924 shipped `1 implemented, 4 not-implemented`; #2086 (config_resolution,
+        gated on #1517 which has since landed) is the second check to move, so
+        `--list-checks` now prints `2 implemented, 3 not-implemented`."""
         checks = discover_checks()
         implemented = [c.name for c in checks if c.implemented]
-        assert implemented == ["host_mount"]
+        assert implemented == ["config_resolution", "host_mount"]
         assert len(checks) == 5
 
     def test_a_not_implemented_check_has_no_run_even_if_the_module_defined_one(self):
         """`discover_checks` gates `run` on the module's own `IMPLEMENTED` flag,
         not merely on whether a `run` attribute happens to exist."""
         checks = {c.name: c for c in discover_checks()}
-        for name in ("cdn_public_routes", "config_resolution", "migrations", "real_core"):
+        for name in ("cdn_public_routes", "migrations", "real_core"):
             assert checks[name].run is None
             assert checks[name].implemented is False
 
-    def test_implemented_check_carries_a_callable_run(self):
+    def test_implemented_checks_carry_a_callable_run(self):
         checks = {c.name: c for c in discover_checks()}
         assert callable(checks["host_mount"].run)
+        assert callable(checks["config_resolution"].run)
 
     def test_sorted_by_name(self):
         names = [c.name for c in discover_checks()]
@@ -159,10 +162,13 @@ class TestListChecks:
 
     def test_prints_every_seam_with_its_state_and_the_denominator_line(self, capsys):
         """Exercises the real (non-monkeypatched) discovery, so this doubles as
-        an end-to-end check on #1924's own done-when wording."""
+        an end-to-end check on the denominator's current wording (#1924 shipped
+        `1 implemented, 4 not-implemented`; #2086 moves it to `2 implemented,
+        3 not-implemented`)."""
         assert list_checks() == 0
         out = capsys.readouterr().out
         assert "host_mount" in out
+        assert "config_resolution" in out
         assert "implemented" in out
         assert "not-implemented" in out
-        assert "1 implemented, 4 not-implemented" in out
+        assert "2 implemented, 3 not-implemented" in out

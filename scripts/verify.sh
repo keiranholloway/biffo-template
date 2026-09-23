@@ -1527,6 +1527,14 @@ fi
 [ -f scripts/rerun-on-runner-loss.test.sh ] &&
   run_check rerun-on-runner-loss sh scripts/rerun-on-runner-loss.test.sh
 
+# Same shape again (#2081): stubs `gh` on PATH, and lets the real `jq`
+# binary run the script's own filter against a raw fixture rather than a
+# hand-curated final answer. A `schedule` workflow only ever runs the
+# default branch's copy, so this self-test is the only thing that sees a
+# change to it before it is live.
+[ -f scripts/rerun-on-stuck-queue.test.sh ] &&
+  run_check rerun-on-stuck-queue sh scripts/rerun-on-stuck-queue.test.sh
+
 # Same shape again (#2076): stubs `gh` on PATH and runs the extracted
 # plugin-staleness filing step, discovery loop and tagger against fixtures,
 # so no network and no Actions run. Needs `node`, which every JS-backed check

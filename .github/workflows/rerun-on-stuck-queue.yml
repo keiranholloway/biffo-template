@@ -1,0 +1,73 @@
+# Cancel and re-run a workflow run whose job has been sitting `queued` for
+# too long, with no self-hosted runner ever picking it up (#2081).
+#
+# This is the sibling of rerun-on-runner-loss.yml (#1997), for a distinct
+# failure mode that workflow structurally cannot see: it reacts to a run
+# reaching `completed` with `conclusion == 'failure'`, and a job stuck
+# `queued` never reaches `completed` at all. On tabsii-com/tabsii-platform
+# PR #1435, the `Terraform Validate & Security` job sat `queued` for ~31
+# minutes; `gh run rerun --failed` refused ("already running" -- there was
+# nothing to re-run yet), and nothing alerted. An agent noticed by hand,
+# cancelled the stuck run, then re-ran it.
+#
+# There is no `workflow_run: completed` event to react to here -- the whole
+# point is that the run never completes on its own -- so this has to poll
+# instead. scripts/rerun-on-stuck-queue.sh holds the whole decision and its
+# own self-test; this file is only the schedule and the permission grant.
+name: Re-run on stuck queue
+
+on:
+  # Every 10 minutes: frequent enough to catch a stall well inside the ~20
+  # minute default threshold the script applies (tabsii-platform#1435's own
+  # stall ran to ~31 minutes before a human noticed), infrequent enough that
+  # the API calls (a couple of `gh api` reads when nothing is stuck, which is
+  # the common case) stay cheap. GitHub Actions schedules are best-effort and
+  # can run late under load; that only widens the detection window, it never
+  # narrows it below the threshold.
+  schedule:
+    - cron: '*/10 * * * *'
+  # For exercising the real thing by hand against real current state, and to
+  # override the threshold for a deliberate test. Needed because a `schedule`
+  # workflow ALWAYS runs the DEFAULT branch's copy, whatever branch triggered
+  # it -- see the note on the checkout step below -- so this cannot be
+  # exercised from the pull request that adds or changes it at all.
+  workflow_dispatch:
+    inputs:
+      threshold_minutes:
+        description: Minutes a job may sit queued before being treated as stuck
+        required: false
+        type: string
+        default: '20'
+
+concurrency:
+  group: rerun-on-stuck-queue
+  cancel-in-progress: false
+
+# `actions: write` is the whole point -- it is what `gh run cancel` and
+# `gh run rerun` need. `contents: read` for the checkout. Nothing else: this
+# workflow must not be able to touch code, statuses or pull requests.
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  rerun:
+    name: Cancel and re-run once if a job is stuck queued
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    timeout-minutes: 10
+    steps:
+      # A `schedule` workflow ALWAYS runs the default branch's copy of itself
+      # and of everything it checks out, whatever the repository's currently
+      # open pull requests contain. Two consequences, both wanted:
+      #   1. This has no effect at all until it is merged to the default
+      #      branch, so it cannot be verified on the pull request that adds
+      #      it. Use the `workflow_dispatch` input above against real current
+      #      state instead, once merged.
+      #   2. A pull request cannot alter the detection logic that judges it.
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - name: Cancel and re-run any run stuck queued past the threshold
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          THRESHOLD_MINUTES: ${{ github.event.inputs.threshold_minutes || '20' }}
+        run: sh scripts/rerun-on-stuck-queue.sh "$THRESHOLD_MINUTES"

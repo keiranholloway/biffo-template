@@ -1527,6 +1527,16 @@ fi
 [ -f scripts/rerun-on-runner-loss.test.sh ] &&
   run_check rerun-on-runner-loss sh scripts/rerun-on-runner-loss.test.sh
 
+# Same shape again (#2076): stubs `gh` on PATH and runs the extracted
+# plugin-staleness filing step, discovery loop and tagger against fixtures,
+# so no network and no Actions run. Needs `node`, which every JS-backed check
+# above already needs. Measured here: ~0.4s. It belongs in the local gate for
+# the same reason rerun-on-runner-loss does -- plugin-staleness-report.yml is
+# a scheduled workflow, so the pull request that changes it never runs it, and
+# this self-test is the only thing that sees the change before it is live.
+[ -f scripts/plugin-staleness-target-repo.test.sh ] &&
+  run_check plugin-staleness-target-repo sh scripts/plugin-staleness-target-repo.test.sh
+
 # The DDL module-number allocator's own race-freedom proof (#1886): races real
 # `git` processes against throwaway local bare repos (never a mock of git, and
 # never /tmp -- repo-local scratch dirs cleaned up by its own trap), so it needs

@@ -17,11 +17,13 @@
  * asserts it did.
  */
 import {
+  chmodSync,
   copyFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
   readdirSync,
+  statSync,
   writeFileSync,
 } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -195,13 +197,18 @@ export function scaffoldPlugin(
       const destPath = join(destDir, destRel)
       mkdirSync(dirname(destPath), { recursive: true })
 
+      const srcPath = join(skeletonRoot, relPath)
       if (BINARY_EXTENSIONS.test(entry.name)) {
-        copyFileSync(join(skeletonRoot, relPath), destPath)
+        copyFileSync(srcPath, destPath)
       } else {
-        writeFileSync(
-          destPath,
-          applySubstitutions(readFileSync(join(skeletonRoot, relPath), 'utf8'), names),
-        )
+        writeFileSync(destPath, applySubstitutions(readFileSync(srcPath, 'utf8'), names))
+        // writeFileSync always creates the destination at the default mode
+        // (0o666 minus umask), unlike copyFileSync above which preserves the
+        // source's mode bits. Every scripts/*.sh and .githooks/* entry in the
+        // skeleton is committed executable (100755); without this, every
+        // scaffolded plugin lost the executable bit on every non-binary file
+        // it wrote (issue #2082).
+        chmodSync(destPath, statSync(srcPath).mode)
       }
       files.push(destRel)
     }

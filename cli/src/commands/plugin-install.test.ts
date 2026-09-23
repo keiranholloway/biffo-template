@@ -481,6 +481,182 @@ describe('runPluginInstall', () => {
     })
   })
 
+  describe('--frontend-cwd: split core+dashboard topology (biffo-template#2012)', () => {
+    const USER_FRONTEND_MANIFEST = {
+      ...VALID_MANIFEST,
+      description: 'Widgets plugin',
+      user_frontend: { dir: 'web/dist', required_group: 'founder' },
+    }
+
+    let frontendRoot: string
+
+    beforeEach(() => {
+      frontendRoot = makeTmpDir('biffo-dashboard-sibling')
+    })
+
+    afterEach(() => {
+      rmSync(frontendRoot, { recursive: true, force: true })
+    })
+
+    it('single-repo topology (no --frontend-cwd): behaviour is byte-identical to before the flag existed', async () => {
+      // No frontendCwd on the options object at all — mirrors every caller
+      // written before this flag existed (undefined, not '').
+      makeDashboardRegistry(projectRoot)
+      const registry = makeRegistryMock()
+      const git = makeGitMock(makeClonedPluginDir(USER_FRONTEND_MANIFEST))
+      const migrations = makeMigrationsMock()
+
+      await runPluginInstall(
+        'widgets@1.0',
+        { dryRun: false, cwd: projectRoot },
+        { registry: registry as never, git: git as never, migrations: migrations as never },
+      )
+
+      const contents = readFileSync(join(projectRoot, PLUGIN_REGISTRY_RELATIVE_PATH), 'utf8')
+      expect(contents).toContain('slug: "widgets"')
+      // Registry entry rides in the single --cwd commit, exactly as #2041 shipped it.
+      expect(git.add).toHaveBeenCalledWith(projectRoot, [
+        'services/widgets',
+        PLUGIN_REGISTRY_RELATIVE_PATH,
+      ])
+      expect(git.commit).toHaveBeenCalledWith(projectRoot, 'feat(plugins): install widgets@1.0.0')
+      expect(git.commit).toHaveBeenCalledTimes(1)
+      expect(existsSync(join(frontendRoot, PLUGIN_REGISTRY_RELATIVE_PATH))).toBe(false)
+    })
+
+    it('split-repo topology (--frontend-cwd given): registry entry is written and committed under --frontend-cwd, never under --cwd', async () => {
+      makeDashboardRegistry(frontendRoot)
+      const registry = makeRegistryMock()
+      const git = makeGitMock(makeClonedPluginDir(USER_FRONTEND_MANIFEST))
+      const migrations = makeMigrationsMock()
+
+      await runPluginInstall(
+        'widgets@1.0',
+        { dryRun: false, cwd: projectRoot, frontendCwd: frontendRoot },
+        { registry: registry as never, git: git as never, migrations: migrations as never },
+      )
+
+      // Written under --frontend-cwd...
+      const contents = readFileSync(join(frontendRoot, PLUGIN_REGISTRY_RELATIVE_PATH), 'utf8')
+      expect(contents).toContain('slug: "widgets"')
+      expect(contents).toContain('frontendUrl: "/api/v1/plugins/widgets/ui"')
+      // ...and never under --cwd, which has no apps/frontend at all here.
+      expect(existsSync(join(projectRoot, 'apps'))).toBe(false)
+
+      // Backend scaffolding still resolves against --cwd only.
+      expect(existsSync(join(projectRoot, 'services', 'widgets'))).toBe(true)
+
+      // Two separate commits: one per checkout, each staging only its own path.
+      expect(git.add).toHaveBeenCalledWith(projectRoot, ['services/widgets'])
+      expect(git.add).toHaveBeenCalledWith(frontendRoot, [PLUGIN_REGISTRY_RELATIVE_PATH])
+      expect(git.commit).toHaveBeenCalledWith(projectRoot, 'feat(plugins): install widgets@1.0.0')
+      expect(git.commit).toHaveBeenCalledWith(
+        frontendRoot,
+        'feat(plugins): register widgets@1.0.0 in dashboard',
+      )
+      expect(git.commit).toHaveBeenCalledTimes(2)
+    })
+
+    it('--frontend-cwd is ignored entirely for a manifest with no user_frontend block', async () => {
+      // frontendRoot deliberately has no registry file at all — if this were
+      // touched in any way, readManagedEntries would throw.
+      const registry = makeRegistryMock()
+      const git = makeGitMock(makeClonedPluginDir(VALID_MANIFEST))
+      const migrations = makeMigrationsMock()
+
+      await runPluginInstall(
+        'widgets@1.0',
+        { dryRun: false, cwd: projectRoot, frontendCwd: frontendRoot },
+        { registry: registry as never, git: git as never, migrations: migrations as never },
+      )
+
+      expect(existsSync(join(projectRoot, 'services', 'widgets'))).toBe(true)
+      expect(existsSync(frontendRoot)).toBe(true) // still exists...
+      expect(existsSync(join(frontendRoot, 'apps'))).toBe(false) // ...but untouched
+      expect(git.isGitRepo).not.toHaveBeenCalledWith(frontendRoot)
+      expect(git.commit).toHaveBeenCalledTimes(1)
+    })
+
+    it('MUST-CATCH: fails closed, writing nothing anywhere, when --frontend-cwd is not a git repository', async () => {
+      makeDashboardRegistry(frontendRoot)
+      const registry = makeRegistryMock()
+      const git = makeGitMock(makeClonedPluginDir(USER_FRONTEND_MANIFEST))
+      git.isGitRepo = vi.fn(async (cwd: string) => cwd !== frontendRoot)
+      const migrations = makeMigrationsMock()
+
+      await expect(
+        runPluginInstall(
+          'widgets@1.0',
+          { dryRun: false, cwd: projectRoot, frontendCwd: frontendRoot },
+          { registry: registry as never, git: git as never, migrations: migrations as never },
+        ),
+      ).rejects.toThrow(/--frontend-cwd.*not a git repository/)
+
+      expect(existsSync(join(projectRoot, 'services', 'widgets'))).toBe(false)
+      const contents = readFileSync(join(frontendRoot, PLUGIN_REGISTRY_RELATIVE_PATH), 'utf8')
+      expect(contents).not.toContain('slug: "widgets"')
+      expect(git.add).not.toHaveBeenCalled()
+      expect(git.commit).not.toHaveBeenCalled()
+    })
+
+    it('MUST-CATCH: fails closed, writing nothing anywhere, when --frontend-cwd has no dashboard registry file', async () => {
+      // No makeDashboardRegistry(frontendRoot) call.
+      const registry = makeRegistryMock()
+      const git = makeGitMock(makeClonedPluginDir(USER_FRONTEND_MANIFEST))
+      const migrations = makeMigrationsMock()
+
+      let caught: Error | undefined
+      try {
+        await runPluginInstall(
+          'widgets@1.0',
+          { dryRun: false, cwd: projectRoot, frontendCwd: frontendRoot },
+          { registry: registry as never, git: git as never, migrations: migrations as never },
+        )
+      } catch (err) {
+        caught = err as Error
+      }
+      expect(caught).toBeDefined()
+      expect(caught!.message).toContain(PLUGIN_REGISTRY_RELATIVE_PATH)
+      expect(caught!.message).toContain('does not exist')
+      // Names the --frontend-cwd checkout, not --cwd, as where it looked.
+      expect(caught!.message).toContain(frontendRoot)
+
+      expect(existsSync(join(projectRoot, 'services', 'widgets'))).toBe(false)
+      expect(git.add).not.toHaveBeenCalled()
+      expect(git.commit).not.toHaveBeenCalled()
+    })
+
+    it('re-installing (version bump) via --frontend-cwd replaces rather than duplicates the entry in the frontend checkout', async () => {
+      makeDashboardRegistry(frontendRoot)
+      const migrations = makeMigrationsMock()
+
+      await runPluginInstall(
+        'widgets@1.0',
+        { dryRun: false, cwd: projectRoot, frontendCwd: frontendRoot },
+        {
+          registry: makeRegistryMock() as never,
+          git: makeGitMock(makeClonedPluginDir(USER_FRONTEND_MANIFEST)) as never,
+          migrations: migrations as never,
+        },
+      )
+      rmSync(join(projectRoot, 'services', 'widgets'), { recursive: true, force: true })
+
+      const bumpedManifest = { ...USER_FRONTEND_MANIFEST, version: '1.1.0' }
+      await runPluginInstall(
+        'widgets@1.0',
+        { dryRun: false, cwd: projectRoot, frontendCwd: frontendRoot },
+        {
+          registry: makeRegistryMock({ ...REGISTRY_ENTRY, version: '1.1.0' }) as never,
+          git: makeGitMock(makeClonedPluginDir(bumpedManifest)) as never,
+          migrations: migrations as never,
+        },
+      )
+
+      const contents = readFileSync(join(frontendRoot, PLUGIN_REGISTRY_RELATIVE_PATH), 'utf8')
+      expect(contents.match(/slug: "widgets"/g)).toHaveLength(1)
+    })
+  })
+
   describe('seed vendoring (biffo-template#1554)', () => {
     it('vendors seed.dir into db/imports/_plugin-<name>/ and stages it in the commit', async () => {
       const clonedDir = makeClonedPluginDir(SEEDED_MANIFEST)

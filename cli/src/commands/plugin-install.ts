@@ -53,6 +53,15 @@ export const pluginInstallCommand = new Command('install')
   .option('--dry-run', 'Resolve the plugin and print planned changes without modifying the repo')
   .option('--cwd <path>', 'Project root to install into (defaults to the current directory)')
   .option(
+    '--frontend-cwd <path>',
+    'Dashboard sibling checkout to write the user_frontend dashboard-registry entry into, ' +
+      'when the core project and its dashboard are split siblings (biffo-template#2012) — e.g. ' +
+      'biffo-platform / biffo-platform-app. Every other write (backend scaffolding, Terraform, ' +
+      'the migration, the manifest) still resolves against --cwd only. Omit it for the common ' +
+      'single-repo topology, where the registry entry is written into --cwd as before. Ignored ' +
+      'for a plugin manifest with no user_frontend block, since there is nothing to register.',
+  )
+  .option(
     '--config <name=value>',
     'Supply an instance value for one manifest `config:` declaration (biffo-template#1517) — ' +
       "repeatable. For a 'secret' declaration, value must be an SSM parameter PATH, never the " +
@@ -63,7 +72,13 @@ export const pluginInstallCommand = new Command('install')
   .action(
     async (
       target: string | undefined,
-      options: { local?: string; dryRun?: boolean; cwd?: string; config: string[] },
+      options: {
+        local?: string
+        dryRun?: boolean
+        cwd?: string
+        frontendCwd?: string
+        config: string[]
+      },
     ) => {
       const cwd = options.cwd ? resolve(options.cwd) : process.cwd()
       try {
@@ -73,6 +88,7 @@ export const pluginInstallCommand = new Command('install')
             ...(options.local ? { local: resolve(options.local) } : {}),
             dryRun: options.dryRun ?? false,
             cwd,
+            ...(options.frontendCwd ? { frontendCwd: resolve(options.frontendCwd) } : {}),
             config: parseConfigOptionValues(options.config),
           },
           {
@@ -99,6 +115,21 @@ export interface PluginInstallOptions {
   local?: string
   dryRun: boolean
   cwd: string
+  /**
+   * Absolute path to a separate dashboard sibling checkout (biffo-template#2012,
+   * decided Option A) — when set, the `user_frontend` dashboard-registry write
+   * (`apps/frontend/src/lib/plugins.ts`) resolves against this path instead of
+   * `cwd`, and is committed there as its own commit rather than riding in
+   * `cwd`'s install commit (the two are separate git repos in a split
+   * core+dashboard topology, so a shared commit is not possible). Every other
+   * write in this function (backend scaffolding, Terraform, the migration, the
+   * manifest, provenance) continues to resolve against `cwd` only, whether or
+   * not this is set. Undefined for the common single-repo topology, where the
+   * registry write happens against `cwd` exactly as it did before this option
+   * existed — that path is unchanged byte-for-byte. Has no effect at all on a
+   * manifest with no `user_frontend` block.
+   */
+  frontendCwd?: string
   /**
    * Instance-supplied values for the manifest's `config:` declarations
    * (biffo-template#1517), keyed by declaration name — from repeatable
@@ -294,6 +325,14 @@ export async function runPluginInstall(
   const targetDir = join(options.cwd, relTargetDir)
   const modulesDir = join(options.cwd, 'modules', 'plugins', pluginName)
 
+  // Where the user_frontend dashboard-registry write resolves against
+  // (biffo-template#2012). Every other write in this function keeps using
+  // options.cwd directly, never this — only the two registry-write call
+  // sites below (the readiness guard and the actual upsert) use it, so a
+  // plugin manifest that declares no user_frontend never even computes
+  // whether the two paths differ in a way that matters.
+  const registryCwd = options.frontendCwd ?? options.cwd
+
   // `--local` pointed at a directory that is already in this checkout (the
   // common case after `biffo plugin create`, and the only sane reading of
   // "install the plugin I already have in-tree"). There is nothing to copy —
@@ -311,7 +350,14 @@ export async function runPluginInstall(
   }
 
   if (options.dryRun) {
-    printDryRun(entry, source!, relTargetDir, inTreeSource, options.config ?? {})
+    printDryRun(
+      entry,
+      source!,
+      relTargetDir,
+      inTreeSource,
+      options.config ?? {},
+      options.frontendCwd,
+    )
     return
   }
 
@@ -375,7 +421,22 @@ export async function runPluginInstall(
     // touches the dashboard registry at all, so this is skipped entirely for
     // an ordinary (data/event/CRUD) plugin.
     if (manifest.user_frontend) {
-      assertPluginRegistryReady(options.cwd, pluginName)
+      // Split core+dashboard topology (biffo-template#2012): the registry
+      // write is about to land in a checkout other than options.cwd, so
+      // confirm it is a real git repo before anything is written anywhere —
+      // same fail-closed-before-mutation posture as every guard above.
+      // Skipped entirely when --frontend-cwd is omitted, since registryCwd
+      // then equals options.cwd, already confirmed a repo above.
+      if (options.frontendCwd) {
+        const frontendIsRepo = await deps.git.isGitRepo(registryCwd)
+        if (!frontendIsRepo) {
+          throw new Error(
+            `${registryCwd} (--frontend-cwd) is not a git repository — biffo plugin install ` +
+              'must write the dashboard registry into a real checkout.',
+          )
+        }
+      }
+      assertPluginRegistryReady(registryCwd, pluginName)
     }
 
     // Only now — after the manifest has validated — do we touch the target repo.
@@ -527,13 +588,28 @@ export async function runPluginInstall(
     // here in the ordinary case; it can still throw on a genuinely malformed
     // hand-edit, which is why it stays inside this function's try/finally.
     if (manifest.user_frontend) {
-      upsertPluginRegistryEntry(options.cwd, {
+      upsertPluginRegistryEntry(registryCwd, {
         slug: pluginName,
         title: titleFromSlug(pluginName),
         frontendUrl: frontendUrlForSlug(pluginName),
       })
-      stagePaths.push(PLUGIN_REGISTRY_RELATIVE_PATH)
-      log.success(`Registered ${pluginName} in ${PLUGIN_REGISTRY_RELATIVE_PATH}`)
+      if (options.frontendCwd) {
+        // Split core+dashboard topology (biffo-template#2012, Option A): the
+        // registry entry just written lives in a *different* git repo from
+        // options.cwd, so it cannot ride in the --cwd commit below — that
+        // path does not exist in options.cwd's repo at all. Commit it here,
+        // as its own commit, in its own checkout.
+        const dashboardCommitMessage = `feat(plugins): register ${pluginName}@${source!.version} in dashboard`
+        await deps.git.add(registryCwd, [PLUGIN_REGISTRY_RELATIVE_PATH])
+        await deps.git.commit(registryCwd, dashboardCommitMessage)
+        log.success(
+          `Registered ${pluginName} in ${registryCwd}/${PLUGIN_REGISTRY_RELATIVE_PATH} ` +
+            `(committed there: "${dashboardCommitMessage}")`,
+        )
+      } else {
+        stagePaths.push(PLUGIN_REGISTRY_RELATIVE_PATH)
+        log.success(`Registered ${pluginName} in ${PLUGIN_REGISTRY_RELATIVE_PATH}`)
+      }
     }
 
     const commitMessage = `feat(plugins): install ${pluginName}@${source!.version}`
@@ -543,8 +619,17 @@ export async function runPluginInstall(
 
     console.log(chalk.bold('\n  Plugin installed!\n'))
     console.log(`  ${pluginName}@${source!.version} is committed at ${relTargetDir}/`)
+    if (manifest.user_frontend && options.frontendCwd) {
+      console.log(
+        `  Its dashboard registration is committed separately at ` +
+          `${registryCwd}/${PLUGIN_REGISTRY_RELATIVE_PATH}.`,
+      )
+    }
     console.log('  Push and redeploy to apply its migration and register its routes:')
     console.log(chalk.dim(`    git push`))
+    if (manifest.user_frontend && options.frontendCwd) {
+      console.log(chalk.dim(`    (and, in ${registryCwd}) git push`))
+    }
     console.log(chalk.dim(`    biffo deploy <environment> --app-only\n`))
     printConfigWiringInstructions(pluginName, configSupply.resolved)
   } finally {
@@ -599,6 +684,7 @@ function printDryRun(
   relTargetDir: string,
   inTreeSource: boolean,
   suppliedConfig: Readonly<Record<string, string>> = {},
+  frontendCwd?: string,
 ): void {
   const name = entry ? entry.name : source!.name
   const version = entry ? entry.version : source!.version
@@ -634,6 +720,18 @@ function printDryRun(
     console.log(
       `  Would vendor seed DDL into: ${pluginSeedImportDir(name)}/ ` +
         `(baseline_tables: ${source.manifest.seed.baseline_tables.join(', ') || 'none declared'})`,
+    )
+  }
+  if (source && source.manifest.user_frontend) {
+    // biffo-template#2012: only known here when the manifest was already
+    // resolved (--local / in-tree) — a registry target's manifest isn't
+    // cloned until after the dry-run return, so this line simply doesn't
+    // print for that case, same as the tables/seed previews above.
+    console.log(
+      frontendCwd
+        ? `  Would register in dashboard at: ${frontendCwd}/${PLUGIN_REGISTRY_RELATIVE_PATH} ` +
+            '(separate --frontend-cwd checkout, committed there)'
+        : `  Would register in dashboard at: ${PLUGIN_REGISTRY_RELATIVE_PATH}`,
     )
   }
   if (source && source.manifest.config.length > 0) {

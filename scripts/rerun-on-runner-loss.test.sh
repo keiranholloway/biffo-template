@@ -54,10 +54,13 @@ cat > "$TMP/bin/gh" <<'STUB'
 case "$1" in
   api)
     case "$2" in
-      *"/jobs"*)        cat "$STUBDIR/jobs" 2>/dev/null || exit 1 ;;
-      *"/annotations"*) cat "$STUBDIR/annotations" 2>/dev/null || exit 1 ;;
-      *"/actions/runs/"*) cat "$STUBDIR/run" 2>/dev/null || exit 1 ;;
-      *) exit 1 ;;
+      *"/jobs"*)        cat "$STUBDIR/jobs" 2>/dev/null || { echo "$GH_ERR" >&2; exit 1; } ;;
+      *"/annotations"*)
+        # Count reads so a case can assert a failed read is not retried (#2099).
+        printf 'x\n' >> "$STUBDIR/ann-calls"
+        cat "$STUBDIR/annotations" 2>/dev/null || { echo "$GH_ERR" >&2; exit 1; } ;;
+      *"/actions/runs/"*) cat "$STUBDIR/run" 2>/dev/null || { echo "$GH_ERR" >&2; exit 1; } ;;
+      *) echo "$GH_ERR" >&2; exit 1 ;;
     esac ;;
   run)
     # "$2" is the subcommand -- rerun. Record the call, then honour the case's
@@ -73,11 +76,15 @@ ANN_LOST='The self-hosted runner lost communication with the server. Verify the 
 ANN_REAL='Process completed with exit code 1.
 FAILED services/api/tests/test_thing.py::test_a_real_defect'
 
+# The real error `gh api` prints when the token lacks a scope (#2099). The stub
+# writes it to stderr on every failed read, exactly where the real gh does.
+GH_ERR='gh: Resource not accessible by integration (HTTP 403)'
+
 # run_case <case-dir> <shell> -> sets CASE_RC and CASE_OUT
 run_case() {
   _dir=$1; _shell=$2
   set +e
-  CASE_OUT=$(STUBDIR="$_dir" PATH="$TMP/bin:$PATH" GITHUB_REPOSITORY=o/r \
+  CASE_OUT=$(STUBDIR="$_dir" GH_ERR="$GH_ERR" PATH="$TMP/bin:$PATH" GITHUB_REPOSITORY=o/r \
                "$_shell" "$SCRIPT" 99 2>&1)
   CASE_RC=$?
   set -e
@@ -96,7 +103,7 @@ fi
 assert_case() {
   _name=$1; _dir=$2; _want=$3; _rc=$4; _needle=$5
   for _sh in $SHELLS; do
-    rm -f "$_dir/rerun-calls"
+    rm -f "$_dir/rerun-calls" "$_dir/ann-calls"
     run_case "$_dir" "$_sh"
     if [ "$CASE_RC" != "$_rc" ]; then
       bad "$_name [$_sh]" "expected exit $_rc, got $CASE_RC — $CASE_OUT"
@@ -183,6 +190,48 @@ assert_case "an unreadable run fails loudly rather than silently declining" "$C"
 C="$TMP/nojobs"; mkdir -p "$C"
 printf '1\tfailure\n' > "$C/run"
 assert_case "an unreadable job list fails loudly" "$C" no 1 "could not list failed jobs"
+
+# ---------------------------------------------------------------------------
+# THE CAUSE OF #2097, NOT ITS SYMPTOM (#2099). In a PRIVATE repo the workflow's
+# `permissions:` block is the whole token: an explicit block sets every scope it
+# does not list to `none`, and reading a check run's annotations needs
+# `checks: read`. tabsii-platform failed 8 of 8 non-skipped runs for exactly
+# this, ~1s in, and the log said only "could not read annotations" because the
+# real 403 was thrown away. A public repo passes without the scope, so no run
+# here can catch its absence -- the workflow file itself is what is asserted.
+# ---------------------------------------------------------------------------
+WORKFLOW="$ROOT/.github/workflows/rerun-on-runner-loss.yml"
+if awk '/^permissions:/{f=1;next} f&&/^[^ #]/{exit} f' "$WORKFLOW" | grep -qx '  checks: read'; then
+  ok "the workflow grants checks: read (annotations are unreadable in a private repo without it)"
+else
+  bad "the workflow grants checks: read" "top-level permissions: in $WORKFLOW lacks 'checks: read' — the annotation read 403s in every private repo (#2099)"
+fi
+
+# The real HTTP error must reach the log, from each of the three reads. With
+# stderr discarded (`2>/dev/null`) the only output is "could not read ...", which
+# cannot tell a missing scope (403) from a missing run (404) from a rate limit.
+C="$TMP/err-run"; mkdir -p "$C"   # run read fails
+assert_case "a failed run read surfaces gh's own error" "$C" no 1 "HTTP 403"
+
+C="$TMP/err-jobs"; mkdir -p "$C"
+printf '1\tfailure\n' > "$C/run"
+assert_case "a failed job-list read surfaces gh's own error" "$C" no 1 "HTTP 403"
+
+C="$TMP/err-ann"; mkdir -p "$C"
+printf '1\tfailure\n' > "$C/run"
+printf '900001\n'      > "$C/jobs"
+assert_case "a failed annotation read surfaces gh's own error" "$C" no 1 "HTTP 403"
+
+# A deterministic failure must not be retried: the 403 above is the same on the
+# second read and the hundredth, so every retry is only delay before the same
+# loud failure. Exactly one read.
+rm -f "$C/ann-calls"; run_case "$C" sh
+_reads=$(wc -l < "$C/ann-calls" | tr -d ' ')
+if [ "$_reads" = 1 ]; then
+  ok "a failed annotation read is attempted once, not retried"
+else
+  bad "a failed annotation read is attempted once, not retried" "annotation endpoint was read $_reads times"
+fi
 
 # ---------------------------------------------------------------------------
 # A REFUSED RE-RUN IS ITS OWN OUTCOME, distinct from "declined". Exercises the

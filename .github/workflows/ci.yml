@@ -923,6 +923,32 @@ jobs:
         # alongside this script is unverifiable on the pull request that adds it,
         # and this self-test is the only gate that sees it before it is live.
         run: sh scripts/rerun-on-runner-loss.test.sh
+      - name: Re-run on stuck queue — self-test
+        if: ${{ !cancelled() }}
+        # #2081. The sibling of the self-test above, for the failure mode
+        # rerun-on-runner-loss.sh structurally cannot see: a job stuck
+        # `queued` never reaches `completed`, so that workflow's trigger
+        # never fires for it. Same two-directional risk (missing a real
+        # stall is wasteful; cancelling+re-running a run that was NOT stuck
+        # destroys in-progress work), plus a regression case specific to
+        # this script's own shape: it inspects multiple runs in one
+        # invocation via a `while read` loop, and an earlier draft piped
+        # into that loop (`cmd | while read`), which runs in a subshell
+        # under bash by default -- losing every variable set inside it,
+        # including the aggregate exit code, so a real failure on one run
+        # could have been silently overwritten by an unrelated success on
+        # another. scripts/rerun-on-stuck-queue.test.sh's mixed-run case
+        # asserts the aggregate exit code directly against this.
+        #
+        # Behavioural, with `gh` stubbed on PATH -- and where the real
+        # script hands data to the real `jq` binary, this self-test lets
+        # the real `jq` run the script's own filter against a raw fixture,
+        # rather than re-asserting a hand-curated final answer. Also covers
+        # what CI itself can never reach: a `schedule` workflow only ever
+        # runs the DEFAULT branch's copy, so the pull request that adds or
+        # changes it is unverifiable there, and this self-test is the only
+        # gate that sees it before it is live.
+        run: sh scripts/rerun-on-stuck-queue.test.sh
       - name: Guard self-test wiring audit
         if: ${{ !cancelled() }}
         # #1705: three scripts/*.test.sh guards -- branch-health-workflow-run-

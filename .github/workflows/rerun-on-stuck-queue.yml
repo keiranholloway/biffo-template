@@ -53,7 +53,22 @@ permissions:
 jobs:
   rerun:
     name: Cancel and re-run once if a job is stuck queued
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    # Pinned to ubuntu-latest UNCONDITIONALLY -- do not copy the sibling's
+    # `${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}` fallback here (#2084).
+    # On any instance with RUNNER_LABEL set to a self-hosted pool, that
+    # expression would put THIS job in the exact pool whose exhaustion is
+    # the condition it exists to detect -- so during a genuine stuck-queue
+    # incident (the only time it needs to act) it would itself queue
+    # indefinitely behind the same starved runners, unable to reach its own
+    # `run:` step. rerun-on-runner-loss.sh's sibling workflow gets away with
+    # the fallback because it fires on `workflow_run: completed`, which
+    # implies capacity had already freed up by the time it runs; this
+    # workflow's whole premise is a schedule poll that must act WHILE the
+    # pool has no capacity, which is the one moment that expression is least
+    # likely to resolve. The job only calls `gh api` / `gh run cancel` /
+    # `gh run rerun` -- it never touches self-hosted infra -- so it has no
+    # reason to compete for a self-hosted runner at all.
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       # A `schedule` workflow ALWAYS runs the default branch's copy of itself

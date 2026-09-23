@@ -5,7 +5,9 @@ Two things this milestone's own done-when depends on:
 - ``discover_checks()`` finds every module under ``conformance/checks/`` by
   globbing, not a hand-maintained registry, and a not-yet-implemented seam is
   still named rather than silently missing from the denominator
-  (``--list-checks`` must print ``1 implemented, 4 not-implemented``).
+  (``--list-checks`` must print ``2 implemented, 3 not-implemented`` as of
+  biffo-template#2087, up from #1924's original ``1 implemented,
+  4 not-implemented``).
 - ``__main__``'s ``run_checks``/``list_checks`` fail closed on an empty
   discovery (a broken install, never a vacuous pass — #1363's shape), never
   confuse a check's own bug with the thing it was checking, and aggregate
@@ -40,20 +42,21 @@ class TestDiscoverChecks:
             "real_core",
         }
 
-    def test_exactly_two_implemented_matches_2086s_own_done_when(self):
-        """#1924 shipped `1 implemented, 4 not-implemented`; #2086 (config_resolution,
-        gated on #1517 which has since landed) is the second check to move, so
-        `--list-checks` now prints `2 implemented, 3 not-implemented`."""
+    def test_exactly_three_implemented_matches_2086_and_2087s_own_done_when(self):
+        """#1924 shipped `1 implemented, 4 not-implemented`; #2087
+        (cdn_public_routes) and #2086 (config_resolution, gated on #1517 which
+        has since landed) each moved one more check, so `--list-checks` now
+        prints `3 implemented, 2 not-implemented`."""
         checks = discover_checks()
         implemented = [c.name for c in checks if c.implemented]
-        assert implemented == ["config_resolution", "host_mount"]
+        assert implemented == ["cdn_public_routes", "config_resolution", "host_mount"]
         assert len(checks) == 5
 
     def test_a_not_implemented_check_has_no_run_even_if_the_module_defined_one(self):
         """`discover_checks` gates `run` on the module's own `IMPLEMENTED` flag,
         not merely on whether a `run` attribute happens to exist."""
         checks = {c.name: c for c in discover_checks()}
-        for name in ("cdn_public_routes", "migrations", "real_core"):
+        for name in ("migrations", "real_core"):
             assert checks[name].run is None
             assert checks[name].implemented is False
 
@@ -61,6 +64,7 @@ class TestDiscoverChecks:
         checks = {c.name: c for c in discover_checks()}
         assert callable(checks["host_mount"].run)
         assert callable(checks["config_resolution"].run)
+        assert callable(checks["cdn_public_routes"].run)
 
     def test_sorted_by_name(self):
         names = [c.name for c in discover_checks()]
@@ -163,12 +167,13 @@ class TestListChecks:
     def test_prints_every_seam_with_its_state_and_the_denominator_line(self, capsys):
         """Exercises the real (non-monkeypatched) discovery, so this doubles as
         an end-to-end check on the denominator's current wording (#1924 shipped
-        `1 implemented, 4 not-implemented`; #2086 moves it to `2 implemented,
-        3 not-implemented`)."""
+        `1 implemented, 4 not-implemented`; #2087 and #2086 each moved one more
+        to `3 implemented, 2 not-implemented`)."""
         assert list_checks() == 0
         out = capsys.readouterr().out
         assert "host_mount" in out
         assert "config_resolution" in out
+        assert "cdn_public_routes" in out
         assert "implemented" in out
         assert "not-implemented" in out
-        assert "2 implemented, 3 not-implemented" in out
+        assert "3 implemented, 2 not-implemented" in out

@@ -163,6 +163,20 @@ jobs:
         # skeleton fails closed from birth if a future *.test.sh guard is
         # added here with no run: line anywhere.
         run: sh scripts/guard-self-test-wiring.sh
+      - name: Plugin verify — real-execution conformance harness
+        if: ${{ !cancelled() }}
+        # `biffo plugin verify` (biffo-template#1523/#1924/#1926) raises a
+        # real Postgres via scripts/pg-test-db.sh (GitHub-hosted runners ship
+        # docker) and runs every implemented biffo_plugin_sdk.conformance
+        # check twice against it — see cli/src/lib/plugin-verify/
+        # run-plugin-verify.ts's own doc comment: "CI's own step is `sh
+        # scripts/biffo.sh plugin verify` and contains no logic of its own."
+        # Placed in THIS job because it depends on the `uv sync
+        # --all-groups --locked` already run above (the conformance driver
+        # invokes `uv run --no-sync`, i.e. it expects a synced .venv, not a
+        # fresh one) and because biffo.plugin.json's own tables/permissions
+        # are exactly what the harness conforms against.
+        run: sh scripts/biffo.sh plugin verify
       - uses: codecov/codecov-action@v5
         if: always()
         with:

@@ -37,12 +37,18 @@ on:
         required: true
         type: string
 
-# `actions: write` is the whole point -- it is what `gh run rerun` needs.
-# `contents: read` for the checkout. Nothing else: this workflow must not be
-# able to touch code, statuses or pull requests.
+# `actions: write` is what `gh run rerun` needs. `checks: read` is what the
+# decision needs: the runner-loss annotation is only readable through the checks
+# API, and an explicit `permissions:` block sets every scope it does not list to
+# `none`. Without it the read 403s in every PRIVATE repo -- tabsii-platform failed
+# 8 of 8 runs this way (#2099) -- while a public repo, where anyone may read a
+# check run, passes and hides the gap. `contents: read` for the checkout.
+# Nothing else: this workflow must not be able to touch code, statuses or pull
+# requests.
 permissions:
   contents: read
   actions: write
+  checks: read
 
 jobs:
   rerun:

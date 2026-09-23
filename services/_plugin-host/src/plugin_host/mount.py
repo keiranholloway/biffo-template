@@ -115,6 +115,19 @@ class MountedPlugin:
     #: ``/<name>/ui`` (already resolved against ``BIFFO_PLUGINS_ROOT/<name>``,
     #: see ``app.py``), or ``None`` if not declared (ADR-0021 §2, #558 M2).
     user_frontend_dir: str | None = None
+    #: ``True`` when the plugin declared an ``app_ref`` but importing it raised
+    #: (biffo-template#2092/#2095). ``app`` is then ``None`` — there is nothing to
+    #: mount — but the plugin's ``/<name>`` URL space must stay OWNED by a 503
+    #: mount rather than simply vanish, so a failed import reads as "this plugin
+    #: is down", never as "plugin not installed" and never as a different
+    #: plugin surface answering the path.
+    app_load_failed: bool = False
+    #: Same for ``admin_app_ref``. Load-bearing for authorization, not just for
+    #: the status code: with no ``/<name>/admin`` mount, ``/<name>/admin/*`` falls
+    #: through to the FOUNDER-gated ``/<name>`` mount (the trap
+    #: :func:`_normalize_bare_admin_paths` documents), so an import failure would
+    #: silently change which gate answers an admin path.
+    admin_app_load_failed: bool = False
 
 
 def _founder_token(headers: list[tuple[bytes, bytes]]) -> str:
@@ -294,6 +307,35 @@ def _quarantine(app: Any, label: str, failures: dict[str, str]) -> Callable:
     return guarded
 
 
+def _load_failed(label: str) -> Callable:
+    """The stand-in mounted where a plugin's app failed to IMPORT.
+
+    Answers 503 to every HTTP request under its mount — every method, every path,
+    authenticated or not — and refuses websocket upgrades. It is registered exactly
+    where the real (gated) mount would have been, so the plugin's URL space stays
+    owned: without it a missing ``/<name>/admin`` mount lets ``/<name>/admin/*`` fall
+    through to the founder-gated user mount (#2095).
+
+    Deliberately not behind a group gate: it serves nothing but a fixed message, and
+    a 503 that only an authorised caller could see would be a 401 for everyone the
+    operator most needs to see the outage. The body names only the plugin — the
+    exception itself goes to the host log (see :func:`_quarantine` for why a reason
+    is never put in a response).
+    """
+
+    async def unavailable(scope: dict, receive: Callable, send: Callable) -> None:
+        if scope["type"] == "http":
+            await _send_json(
+                send,
+                503,
+                {"detail": f"Plugin '{label}' failed to load. See the plugin host logs."},
+            )
+        elif scope["type"] == "websocket":
+            await send({"type": "websocket.close", "code": 1013})
+
+    return unavailable
+
+
 def build_host(
     plugins: list[MountedPlugin],
     *,
@@ -325,7 +367,11 @@ def build_host(
         # Admin app mount (if declared) — must come before user-facing mount so
         # /ideation/admin/* matches before /ideation/* (Starlette routes are
         # checked in order, and a Mount matches if the path starts with its prefix)
-        if p.admin_app is not None and p.admin_required_group is not None:
+        if p.admin_app_load_failed:
+            # Keep /<name>/admin owned (#2095): see MountedPlugin.admin_app_load_failed.
+            routes.append(Mount(f"/{p.name}/admin", app=_load_failed(f"{p.name}/admin")))
+            bare_admin_paths.add(f"/{p.name}/admin")
+        elif p.admin_app is not None and p.admin_required_group is not None:
             admin_label = f"{p.name}/admin"
             routes.append(
                 Mount(
@@ -393,6 +439,10 @@ def build_host(
         # (#1837) — it is not a second, unconditional gate.
         # An admin-only plugin has no user-facing app; its admin mount above is
         # the whole of its surface.
+        if p.app_load_failed:
+            # Keep /<name> owned by a 503 rather than absent (#2092/#2095).
+            routes.append(Mount(f"/{p.name}", app=_load_failed(p.name)))
+            continue
         if p.app is None or p.required_group is None:
             continue
         user_app = group_gate(p.app, p.required_group, p.name, authorize)

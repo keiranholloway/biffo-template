@@ -58,7 +58,7 @@ EXIT_RERUN_FAILED=2
 say() { printf '%s\n' "$*"; }
 
 run_json=$(gh api "repos/$REPO/actions/runs/$RUN_ID" \
-             --jq '[(.run_attempt|tostring), .conclusion] | @tsv' 2>/dev/null) || {
+             --jq '[(.run_attempt|tostring), .conclusion] | @tsv') || {
   say "could not read run $RUN_ID in $REPO — cannot tell whether the runner died, so nothing was re-run."
   exit "$EXIT_UNDETERMINED"
 }
@@ -85,7 +85,7 @@ fi
 # jobs can be listed and their annotations fetched without a second lookup to
 # map between the two.
 jobs=$(gh api "repos/$REPO/actions/runs/$RUN_ID/jobs?per_page=100" \
-         --jq '.jobs[]?|select(.conclusion=="failure")|.id' 2>/dev/null) || {
+         --jq '.jobs[]?|select(.conclusion=="failure")|.id') || {
   say "could not list failed jobs for run $RUN_ID — cannot tell whether the runner died, so nothing was re-run."
   exit "$EXIT_UNDETERMINED"
 }
@@ -95,9 +95,18 @@ if [ -z "$jobs" ]; then
   exit 0
 fi
 
+# ONE READ, NO RETRY, AND THE REAL ERROR IN THE LOG (#2097, #2099). #2097 read a
+# failed annotation read as transient lag and added a bounded retry (100s of
+# sleep). The evidence did not support that: tabsii-platform failed 8 of 8
+# non-skipped runs over 13 days, each ~1s in, while the annotation was readable
+# by hand -- a deterministic missing `checks: read` scope, hidden because every
+# read below used to send stderr to /dev/null. A retry only delays that same
+# loud failure by minutes, so there is none. If annotations ever do lag, the
+# stderr now printed says so (a 404, not a 403) and a retry can be justified
+# by that evidence rather than by a guess.
 lost=""
 for job in $jobs; do
-  ann=$(gh api "repos/$REPO/check-runs/$job/annotations" --jq '.[]?.message' 2>/dev/null) || {
+  ann=$(gh api "repos/$REPO/check-runs/$job/annotations" --jq '.[]?.message') || {
     say "could not read annotations for job $job — cannot tell whether the runner died, so nothing was re-run."
     exit "$EXIT_UNDETERMINED"
   }

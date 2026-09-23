@@ -58,6 +58,20 @@ class RouteDefinition(BaseModel):
         "(ADR-0001)."
     )
     description: str = ""
+    cdn_contract_key: str | None = Field(
+        default=None,
+        description="Identifies, by its 'key' field, the row in "
+        "modules/cloud/aws/cdn/path-contract.json this route corresponds "
+        "to -- i.e. the CDN edge treats this path specially per that row's "
+        "origin/origin_path_prefix/token_required fields (biffo-template"
+        "#1923). Optional and additive: a route with no CDN-contract "
+        "counterpart leaves this unset. This is NOT an auth flag -- it says "
+        "nothing about whether the route skips Core API tenant auth "
+        "(ADR-0001, `require_tenant_context()`). `biffo plugin verify`'s "
+        "cdn_public_routes check asserts this cross-reference resolves "
+        "against a real path-contract.json row; it does not change, and "
+        "must not be read as changing, what the route is authorized to do.",
+    )
 
     @model_validator(mode="after")
     def _validate_method_and_path(self) -> RouteDefinition:

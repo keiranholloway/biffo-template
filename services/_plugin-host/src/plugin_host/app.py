@@ -12,6 +12,7 @@ authorizer instead).
 
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Callable
 from pathlib import Path
@@ -21,6 +22,8 @@ from .authz import cognito_authorizer
 from .discover import discover_plugins, load_app
 from .forward import FORWARDED_USER_HEADER
 from .mount import Authorizer, MountedPlugin, build_host
+
+_LOGGER = logging.getLogger(__name__)
 
 #: Where the packaged plugins live in the Lambda image (set by the host's Terraform).
 SERVICES_ROOT = os.environ.get("BIFFO_PLUGINS_ROOT", "/var/task/plugins")
@@ -62,6 +65,57 @@ def core_sender(base_url: str = "") -> Callable[..., Any] | None:
     return send
 
 
+def _load_isolated(
+    load: Callable[[str], object], app_ref: str | None, *, plugin_name: str, field: str
+) -> tuple[object | None, bool]:
+    """``(app, failed)``: ``load(app_ref)``, or ``(None, True)`` (logged at ERROR)
+    if importing it raised.
+
+    A single plugin's broken import must not crash ``build_plugin_host`` and take
+    every other installed plugin's app down with it (biffo-template#2092) —
+    reproduced live on biffo-platform dev when one plugin's manifest-adjacent module
+    raised ``FileNotFoundError`` at import and every plugin behind the shared host
+    500'd. The same reasoning ``mount.py``'s ``_SpaStaticFiles`` guard and
+    ``discover.py``'s module docstring state for a malformed manifest.
+
+    ``failed`` is reported separately from ``app is None`` because the two mean
+    different things to the router (#2095): a plugin that never declared this ref has
+    nothing to mount and nothing to protect, whereas one that declared it and failed
+    must keep its URL space owned by a 503 mount — omitting the mount would let
+    ``/<name>/admin/*`` fall through to the founder-gated user app, and would turn
+    "plugin is down" into a bare 404 ("plugin not installed"). ``build_host`` reads
+    the flag; see :func:`plugin_host.mount._load_failed`.
+
+    Caught as ``(Exception, SystemExit)``: a module import can fail in essentially any
+    way a plugin author's code can raise — ``ModuleNotFoundError``,
+    ``FileNotFoundError``, ``AttributeError`` (a bad ``:attr``), a ``SyntaxError``, or
+    an arbitrary exception executed at import time — and some config-check patterns
+    call ``sys.exit()``, which raises ``SystemExit`` (a ``BaseException``) straight
+    through a bare ``except Exception``. ``KeyboardInterrupt`` and the like are
+    deliberately NOT caught: those are the operator's, not the plugin's.
+
+    This is the *import*-stage containment; ``mount.py``'s ``_quarantine``/``failures``
+    covers the later stage — a plugin that mounted but whose ASGI *lifespan* startup
+    then fails.
+    """
+    if app_ref is None:
+        return None, False
+    try:
+        return load(app_ref), False
+    except (Exception, SystemExit) as exc:  # noqa: BLE001 — a plugin's import can raise anything
+        _LOGGER.error(
+            "Plugin %r declares %s %r but importing it raised %s; serving 503 at its "
+            "%s mount so every other plugin still starts: %s",
+            plugin_name,
+            field,
+            app_ref,
+            type(exc).__name__,
+            field,
+            exc,
+        )
+        return None, True
+
+
 def build_plugin_host(
     services_root: str = SERVICES_ROOT,
     *,
@@ -71,26 +125,39 @@ def build_plugin_host(
 ) -> Any:
     """Discover installed user-facing plugins, load each one's ASGI app, and build
     the gated host. ``authorize`` defaults to the real Cognito authorizer; ``load``
-    is injectable so the composition is testable without importing real plugins."""
-    plugins = [
-        MountedPlugin(
-            name=p.name,
-            app=load(p.app_ref) if p.app_ref else None,
-            required_group=p.required_group,
-            admin_app=load(p.admin_app_ref) if p.admin_app_ref else None,
-            admin_required_group=p.admin_required_group,
-            api_routes=p.api_routes,
-            # Resolved here, not in discover.py: discover.py only knows the
-            # manifest-relative dir (ADR-0021 §2's "who serves" — the host
-            # derives BIFFO_PLUGINS_ROOT/<name>/<user_frontend.dir> itself).
-            user_frontend_dir=(
-                str(Path(services_root) / p.name / p.user_frontend_dir)
-                if p.user_frontend_dir is not None
-                else None
-            ),
+    is injectable so the composition is testable without importing real plugins.
+
+    Each plugin's ``app``/``admin_app`` is loaded in its own isolation boundary
+    (:func:`_load_isolated`) — one plugin's broken import must not prevent
+    ``build_plugin_host`` from returning a host for everyone else, and the failed
+    plugin's URL space stays owned by a 503 mount (#2095), not absent.
+    """
+    plugins = []
+    for p in discover_plugins(services_root):
+        app, app_failed = _load_isolated(load, p.app_ref, plugin_name=p.name, field="app_ref")
+        admin_app, admin_failed = _load_isolated(
+            load, p.admin_app_ref, plugin_name=p.name, field="admin_app_ref"
         )
-        for p in discover_plugins(services_root)
-    ]
+        plugins.append(
+            MountedPlugin(
+                name=p.name,
+                app=app,
+                required_group=p.required_group,
+                admin_app=admin_app,
+                admin_required_group=p.admin_required_group,
+                api_routes=p.api_routes,
+                # Resolved here, not in discover.py: discover.py only knows the
+                # manifest-relative dir (ADR-0021 §2's "who serves" — the host
+                # derives BIFFO_PLUGINS_ROOT/<name>/<user_frontend.dir> itself).
+                user_frontend_dir=(
+                    str(Path(services_root) / p.name / p.user_frontend_dir)
+                    if p.user_frontend_dir is not None
+                    else None
+                ),
+                app_load_failed=app_failed,
+                admin_app_load_failed=admin_failed,
+            )
+        )
     return build_host(
         plugins,
         authorize=authorize or cognito_authorizer(),

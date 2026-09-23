@@ -697,6 +697,23 @@ class TestRouteDef:
         assert route.table == "widgets"
         assert route.operation == "list"
         assert route.description == ""
+        assert route.cdn_contract_key is None
+
+    def test_cdn_contract_key_defaults_to_none_additive(self):
+        """biffo-template#2087: existing manifests with no CDN-contract route
+        must be unaffected -- omitting the field leaves it None."""
+        route = RouteDef(method="GET", path="/widgets", table="widgets", operation="list")
+        assert route.cdn_contract_key is None
+
+    def test_cdn_contract_key_accepts_a_declared_key(self):
+        route = RouteDef(
+            method="GET",
+            path="/widgets",
+            table="widgets",
+            operation="list",
+            cdn_contract_key="click",
+        )
+        assert route.cdn_contract_key == "click"
 
     def test_operation_method_mismatch_rejected(self):
         """'create' must use POST, not GET — a mismatched method/operation

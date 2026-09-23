@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
-from plugin_host.mount import GateError, MountedPlugin, build_host, current_plugin
+from plugin_host.mount import (
+    GateError,
+    MountedPlugin,
+    _is_public_admin_asset,
+    build_host,
+    current_plugin,
+    group_gate,
+)
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse
 from starlette.routing import Route
@@ -501,3 +508,36 @@ def test_plugin_without_admin_app_has_no_admin_route():
     # Admin route does not exist (404, not auth failure)
     r = client.get("/ideation/admin/ping", headers={"X-Biffo-Founder-Token": "alice|founder"})
     assert r.status_code == 404
+
+
+def test_a_request_to_exactly_the_mount_root_is_treated_as_the_public_shell_root():
+    """`_route_path`'s exact-match fallback (``path == root_path -> ""``).
+
+    Starlette's own ``Mount`` never yields this shape, but Mangum's
+    ``api_gateway_base_path`` does for a request whose raw path is exactly the
+    configured base path. ``TestClient(root_path=...)`` reproduces it through a
+    real HTTP request against ``group_gate``'s actual ASGI callable. The
+    route-relative path is ``""``, which ``_is_public_admin_asset`` exempts, so
+    the request reaches the app with NO token — and, crucially, does not crash
+    on the ``path[len(root_path)]`` index that follows the fallback."""
+    seen: list[str] = []
+
+    async def app(scope, receive, send):
+        seen.append(scope["path"])
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"shell"})
+
+    gated = group_gate(
+        app,
+        "founder",
+        "ideation",
+        _authorizer,
+        is_public_path=_is_public_admin_asset,
+    )
+    client = TestClient(gated, root_path="/ideation")
+
+    r = client.get("/ideation")  # no token
+
+    assert r.status_code == 200  # exempted as the public shell root, not 401
+    assert r.text == "shell"
+    assert seen == ["/ideation"]

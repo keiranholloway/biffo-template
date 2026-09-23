@@ -1,5 +1,13 @@
 import { execSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
@@ -27,6 +35,13 @@ function write(relPath: string, contents: string): void {
   writeFileSync(abs, contents)
 }
 
+/** Like `write`, but also marks the fixture file executable (0o755), mirroring
+ * how the real skeleton commits `scripts/*.sh` and `.githooks/*` (100755). */
+function writeExecutable(relPath: string, contents: string): void {
+  write(relPath, contents)
+  chmodSync(join(root, relPath), 0o755)
+}
+
 /**
  * A miniature stand-in for `_skeletons/plugin-template/`, carrying the same
  * shape the real one does: an `example_plugin` package, an `example-plugin`
@@ -45,6 +60,11 @@ function makeSkeleton(): string {
   write('skeleton/registry-schema.json', '{}\n')
   write('skeleton/node_modules/dep/index.js', 'module.exports = 1\n')
   write('skeleton/__pycache__/x.pyc', 'junk')
+  // Mirrors the real skeleton's scripts/*.sh and .githooks/* — committed
+  // executable (100755) — so a test can assert the scaffolder preserves that
+  // bit rather than only asserting it on the real skeleton (issue #2082).
+  writeExecutable('skeleton/scripts/run.sh', '#!/usr/bin/env bash\necho hi\n')
+  writeExecutable('skeleton/.githooks/pre-commit', '#!/usr/bin/env sh\nexit 0\n')
   // Mirrors the real skeleton's uv.lock shape (one [[package]] block naming
   // the example plugin itself — see the real uv.lock's `name =
   // "biffo-plugin-example"` entry) so a test can assert the substitution
@@ -93,6 +113,37 @@ describe('scaffoldPlugin', () => {
     expect(JSON.parse(readFileSync(join(dest, 'biffo.plugin.json'), 'utf8'))).toEqual({
       name: 'acme-crm',
     })
+  })
+
+  // Issue #2082: scaffoldPlugin's non-binary branch used writeFileSync, which
+  // always creates the destination at the default mode (0o666 minus umask) —
+  // unlike copyFileSync (used for BINARY_EXTENSIONS), which preserves the
+  // source's mode bits. Every scripts/*.sh and .githooks/* entry in the
+  // skeleton is committed executable (100755), so every scaffolded plugin —
+  // in-tree or standalone — silently lost the executable bit on every
+  // non-binary file it wrote, including its own git hooks and CI scripts.
+  it('preserves the executable bit on scaffolded non-binary files (issue #2082)', () => {
+    const dest = join(root, 'out')
+    const result = scaffoldPlugin(makeSkeleton(), dest, deriveNames('acme-crm'))
+
+    expect(result.files).toContain('scripts/run.sh')
+    expect(result.files).toContain('.githooks/pre-commit')
+
+    const scriptMode = statSync(join(dest, 'scripts/run.sh')).mode & 0o777
+    const hookMode = statSync(join(dest, '.githooks/pre-commit')).mode & 0o777
+    expect(
+      scriptMode & 0o111,
+      `scripts/run.sh scaffolded as mode ${scriptMode.toString(8)}`,
+    ).not.toBe(0)
+    expect(
+      hookMode & 0o111,
+      `.githooks/pre-commit scaffolded as mode ${hookMode.toString(8)}`,
+    ).not.toBe(0)
+
+    // A non-executable source file must stay non-executable — this isn't
+    // "chmod everything +x", it's "preserve whatever the source already had".
+    const pyprojectMode = statSync(join(dest, 'pyproject.toml')).mode & 0o777
+    expect(pyprojectMode & 0o111).toBe(0)
   })
 
   it('namespaces the example table so two scaffolded plugins cannot collide', () => {
@@ -325,6 +376,31 @@ describe('the real _skeletons/plugin-template', () => {
       }
     }
   })
+
+  // Issue #2082, against the REAL skeleton rather than only the makeSkeleton()
+  // fixture above: every scripts/*.sh, scripts/*.test.sh and .githooks/* entry
+  // in the real skeleton is committed executable (100755, confirmed via
+  // `git ls-files -s`). A scaffold that silently drops the bit on any of them
+  // ships a plugin whose own git hooks and CI scripts don't run.
+  it.runIf(realSkeleton)(
+    'preserves the executable bit on every real scripts/*.sh and .githooks/* file (issue #2082)',
+    () => {
+      const dest = join(root, 'real-modes')
+      const result = scaffoldPlugin(realSkeleton!, dest, deriveNames('acme-crm'))
+
+      const executableCandidates = result.files.filter(
+        (f) => (f.startsWith('scripts/') && f.endsWith('.sh')) || f.startsWith('.githooks/'),
+      )
+      expect(executableCandidates.length).toBeGreaterThan(0)
+      for (const rel of executableCandidates) {
+        const mode = statSync(join(dest, rel)).mode & 0o777
+        expect(
+          mode & 0o111,
+          `${rel} scaffolded as mode ${mode.toString(8)}, expected executable`,
+        ).not.toBe(0)
+      }
+    },
+  )
 
   // Guards #647/#1492: the shared plugin host HARD-FAILS a deploy if a plugin
   // declares `admin_ingress` without a built `web-admin/dist`. A file-existence

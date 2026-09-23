@@ -6,12 +6,24 @@ requires-python = ">=3.13"
 dependencies = [
   # biffo-plugin-sdk has a real release path via biffo-template's
   # .github/workflows/publish-sdk.yml: it publishes to PyPI (via Trusted
-  # Publishing) when an `sdk-v*` tag is pushed. That first publish has
-  # already happened — this skeleton's own uv.lock resolves biffo-plugin-sdk
-  # 1.4.0 from https://pypi.org/simple (see uv.lock's own `biffo-plugin-sdk`
-  # entry) — so `uv sync` in a freshly-copied plugin repo resolves this pin
-  # normally, with no `[tool.uv.sources]` override needed (biffo-template#1769
-  # side finding).
+  # Publishing) when an `sdk-v*` tag is pushed. `uv sync` in a freshly-copied
+  # plugin repo resolves this pin normally, with no `[tool.uv.sources]`
+  # override needed (biffo-template#1769 side finding) — but the version it
+  # resolves is whatever this skeleton's OWN committed uv.lock pins, not
+  # whatever is newest on PyPI: `uv sync --all-groups --locked` (what CI and
+  # every scaffolded plugin run) refuses to re-resolve.
+  #
+  # This is a live drift risk, not a one-off fact to keep restating: every
+  # future `sdk-v*` publish that a plugin needs (e.g. because it ships a new
+  # `biffo_plugin_sdk.conformance` check) requires a matching
+  # `uv lock --upgrade-package biffo-plugin-sdk` bump HERE, by hand. Nothing
+  # in root CI catches a missed bump — biffo-template's own workspace
+  # resolves `biffo_plugin_sdk` locally from `packages/python-sdk/` (see that
+  # package's source directly, not the published wheel), so root CI is
+  # structurally blind to whatever this lock actually pins vs. what's on
+  # PyPI (biffo-template#2064). Confirm what's really pinned with
+  # `grep -A2 'name = "biffo-plugin-sdk"' uv.lock` rather than trusting a
+  # comment here to still be current.
   "biffo-plugin-sdk>=1.0,<2.0",
   "aws-lambda-powertools[tracer]>=3.4.0",
   "httpx>=0.28.1",
@@ -32,6 +44,27 @@ dev = [
   "pyright>=1.1.0",
   "jsonschema>=4.23.0",
   "pip-audit>=2.7.3",
+  # `biffo_plugin_sdk.conformance`'s `host_mount` check (biffo-template#1924)
+  # imports the REAL shared host (`plugin_host.discover`/`plugin_host.mount`)
+  # rather than a stand-in, so it must actually be installed somewhere `uv
+  # sync` reaches — dev-group because it is a conformance-time need only, not
+  # a runtime one (the real Lambda mounts a plugin from the host's own
+  # deployment, not from this repo's dependencies). Published to PyPI by
+  # biffo-template#1922 (M1) as its own independent 0.x line (see
+  # services/_plugin-host/pyproject.toml's own header comment) specifically
+  # so a standalone plugin repo could pull it in — but nothing ever added it
+  # here, so `plugin verify`'s only currently-implemented check
+  # (`host_mount`) has been unable to run in any freshly scaffolded plugin
+  # repo, always failing closed with "biffo-plugin-host is not importable in
+  # this environment" (found live while re-verifying biffo-template#2064 on
+  # #2062: fixing the biffo-plugin-sdk lock pin alone got past the
+  # ModuleNotFoundError but surfaced this as the next, separate blocker on
+  # the same acceptance criterion). `~=0.1.0` rather than SDK's `>=1.0,<2.0`
+  # pattern because this package is still pre-1.0 — only 0.1.0 exists on
+  # PyPI, and 0.x minor bumps are not guaranteed backwards-compatible, so
+  # pin to the patch series rather than assuming SDK's post-1.0 conventions
+  # apply here too.
+  "biffo-plugin-host~=0.1.0",
 ]
 
 [build-system]

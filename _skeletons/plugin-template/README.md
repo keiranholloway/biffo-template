@@ -191,9 +191,13 @@ dependencies = [
 This is a **PyPI-style version pin**: the SDK is published via
 biffo-template's
 [`.github/workflows/publish-sdk.yml`](https://github.com/keiranholloway/biffo-template/blob/main/.github/workflows/publish-sdk.yml)
-(Trusted Publishing) on a pushed `sdk-v*` tag, and the first release has
-already happened — this skeleton's own `uv.lock` resolves `biffo-plugin-sdk`
-1.4.0 from `https://pypi.org/simple` (see its `biffo-plugin-sdk` entry).
+(Trusted Publishing) on a pushed `sdk-v*` tag. `uv sync --all-groups --locked`
+(what CI and every scaffolded plugin run) resolves `biffo-plugin-sdk` from
+`https://pypi.org/simple` at whatever version this skeleton's own `uv.lock`
+has pinned — check `uv.lock`'s own `biffo-plugin-sdk` entry rather than
+trusting a version number here, since it drifts every time a new `sdk-v*`
+tag ships a feature a plugin needs and nobody re-runs
+`uv lock --upgrade-package biffo-plugin-sdk` to match (biffo-template#2064).
 `>=1.0,<2.0` matches the `"biffo-plugin-sdk": "^1.0"` that
 `biffo.plugin.json` declares, and the SDK carries its own independent
 semver — it is **not** tied to the template's core version, so a major

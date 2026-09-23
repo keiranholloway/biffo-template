@@ -172,6 +172,96 @@ describe('runPluginInstall — end-to-end', () => {
     expect(existsSync(join(projectRoot, 'services', 'invoicing'))).toBe(false)
   })
 
+  it('--frontend-cwd: writes and commits the dashboard-registry entry in a real second checkout, never in --cwd', async () => {
+    // A separate "dashboard sibling" repo — the split core+dashboard
+    // topology --frontend-cwd exists for (biffo-template#2012), e.g.
+    // biffo-platform (--cwd) / biffo-platform-app (--frontend-cwd).
+    const frontendRoot = makeTmpDir('biffo-dashboard-sibling')
+    await initGitRepo(frontendRoot)
+    const registryRelDir = join('apps', 'frontend', 'src', 'lib')
+    mkdirSync(join(frontendRoot, registryRelDir), { recursive: true })
+    writeFileSync(
+      join(frontendRoot, registryRelDir, 'plugins.ts'),
+      'export const INSTALLED_PLUGINS = [\n' +
+        '  // BIFFO-PLUGIN-REGISTRY:START — managed by `biffo plugin install`/`uninstall`. Do not hand-edit.\n' +
+        '  // BIFFO-PLUGIN-REGISTRY:END\n' +
+        ']\n',
+    )
+    await commitAll(frontendRoot, 'chore: initial dashboard sibling commit')
+
+    server.use(
+      http.get(REGISTRY_URL, () =>
+        HttpResponse.json({
+          schema_version: '1.0',
+          last_updated: '2026-06-30T00:00:00Z',
+          plugins: [
+            {
+              name: 'widgets',
+              version: '1.3.0',
+              minor_version: '1.3',
+              repo: `file://${pluginSourceRepo}`,
+              description: 'Widgets plugin',
+              status: 'active',
+            },
+          ],
+        }),
+      ),
+    )
+    // Give this plugin a user_frontend block — otherwise --frontend-cwd has
+    // nothing to do. Overwrite the manifest committed in beforeEach.
+    writeFileSync(
+      join(pluginSourceRepo, 'biffo.plugin.json'),
+      JSON.stringify({
+        name: 'widgets',
+        version: '1.3.0',
+        description: 'Widgets plugin',
+        tables: [],
+        api_routes: [],
+        user_frontend: { dir: 'web/dist', required_group: 'founder' },
+      }),
+    )
+    await commitAll(pluginSourceRepo, 'add user_frontend')
+
+    try {
+      await runPluginInstall(
+        'widgets@1.3',
+        { dryRun: false, cwd: projectRoot, frontendCwd: frontendRoot },
+        {
+          registry: new RegistryAdapter(REGISTRY_URL),
+          git: new GitAdapter(),
+          migrations: new FakePluginMigrationsAdapter() as never,
+        },
+      )
+
+      // The registry entry landed under --frontend-cwd...
+      const registryContents = readFileSync(
+        join(frontendRoot, registryRelDir, 'plugins.ts'),
+        'utf8',
+      )
+      expect(registryContents).toContain('slug: "widgets"')
+      expect(registryContents).toContain('frontendUrl: "/api/v1/plugins/widgets/ui"')
+
+      // ...and --cwd never gained an apps/ directory at all.
+      expect(existsSync(join(projectRoot, 'apps'))).toBe(false)
+
+      // Backend scaffolding still landed under --cwd, as always.
+      expect(existsSync(join(projectRoot, 'services', 'widgets'))).toBe(true)
+
+      // Two real, separate commits — one per checkout.
+      const cwdLog = await execa('git', ['log', '-1', '--pretty=%s'], { cwd: projectRoot })
+      expect(cwdLog.stdout).toBe('feat(plugins): install widgets@1.3.0')
+      const cwdStatus = await execa('git', ['status', '--porcelain'], { cwd: projectRoot })
+      expect(cwdStatus.stdout.trim()).toBe('')
+
+      const frontendLog = await execa('git', ['log', '-1', '--pretty=%s'], { cwd: frontendRoot })
+      expect(frontendLog.stdout).toBe('feat(plugins): register widgets@1.3.0 in dashboard')
+      const frontendStatus = await execa('git', ['status', '--porcelain'], { cwd: frontendRoot })
+      expect(frontendStatus.stdout.trim()).toBe('')
+    } finally {
+      removeTmpDir(frontendRoot)
+    }
+  })
+
   it('supports --dry-run against the real registry with no filesystem or git side effects', async () => {
     await runPluginInstall(
       'widgets@1.3',

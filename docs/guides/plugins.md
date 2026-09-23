@@ -225,6 +225,11 @@ A plugin that declares no tables passes, and that is not a warning: an all-front
 | `biffo plugin upgrade --local <path>` | Refresh an installed plugin from a local checkout — no registry needed         |
 | `biffo plugin uninstall <name>`       | Remove `services/<name>/` (and any `modules/plugins/<name>/`) and commit       |
 
+Any `install` above also accepts `--frontend-cwd <path>` — redirects a
+`user_frontend` plugin's dashboard-registry write to a separate sibling
+checkout, for a split core+dashboard topology. See "User-facing frontend"
+below for the full contract; omitted, behaviour is unchanged.
+
 ## Terraform wiring (automatic)
 
 If a plugin ships a `terraform/` module, `install` copies it to `modules/plugins/<name>/` **and** wires it into every `infra/environments/*/` root config (issue #201), by generating two CLI-owned files there:
@@ -275,6 +280,33 @@ CLI owns exclusively; everything else in the file is yours to hand-author (see
 `install` refuses outright, before touching anything else in the checkout,
 rather than silently installing a plugin nobody can reach. A plugin with no
 `user_frontend` block never touches this file at all.
+
+**Split core+dashboard topologies: `--frontend-cwd` (biffo-template#2012).**
+`--cwd` names one project checkout — fine when the core project and its
+dashboard are the same repo, but some deployments split them into siblings
+(e.g. `biffo-platform` for the core project, `biffo-platform-app` for its
+dashboard). Without a second target flag, `install` could only ever write
+`plugins.ts` into whichever checkout `--cwd` pointed at, so installing a
+`user_frontend` plugin into a split topology meant hand-editing the dashboard
+sibling's registry yourself, with nothing telling you to.
+
+```bash
+biffo plugin install acme-crm@1.0 --cwd ~/code/biffo-platform --frontend-cwd ~/code/biffo-platform-app
+```
+
+Pass `--frontend-cwd <path>` and the dashboard-registry write (only that
+write — backend scaffolding, the Terraform module, the migration, the
+manifest, provenance all still resolve against `--cwd` exclusively) redirects
+to that path instead, and is committed there as its own commit — a split
+topology means two separate git repos, so the entry cannot ride in `--cwd`'s
+install commit the way it does in the single-repo case. `install` still fails
+closed the same way: if `--frontend-cwd` doesn't resolve to a real git repo,
+or doesn't hold a `plugins.ts` with the managed region, nothing is written
+anywhere, in either checkout. You push and deploy both checkouts yourself, as
+always — `install` prints a reminder for each.
+
+Omit `--frontend-cwd` and behaviour is unchanged: the registry write resolves
+against `--cwd`, exactly as it always has.
 
 **This supersedes ADR-0018 section 2's per-plugin frontend hosting** — a
 dedicated `aws_s3_bucket` behind the shared CloudFront distribution, wired

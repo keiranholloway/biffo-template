@@ -42,27 +42,28 @@ class TestDiscoverChecks:
             "real_core",
         }
 
-    def test_exactly_two_implemented_matches_2087s_own_done_when(self):
-        """biffo-template#2087's done-when: `--list-checks`'s implemented
-        count increments -- was `1 implemented, 4 not-implemented` (#1924),
-        is now `2 implemented, 3 not-implemented` (cdn_public_routes joins
-        host_mount)."""
+    def test_exactly_three_implemented_matches_2086_and_2087s_own_done_when(self):
+        """#1924 shipped `1 implemented, 4 not-implemented`; #2087
+        (cdn_public_routes) and #2086 (config_resolution, gated on #1517 which
+        has since landed) each moved one more check, so `--list-checks` now
+        prints `3 implemented, 2 not-implemented`."""
         checks = discover_checks()
         implemented = [c.name for c in checks if c.implemented]
-        assert implemented == ["cdn_public_routes", "host_mount"]
+        assert implemented == ["cdn_public_routes", "config_resolution", "host_mount"]
         assert len(checks) == 5
 
     def test_a_not_implemented_check_has_no_run_even_if_the_module_defined_one(self):
         """`discover_checks` gates `run` on the module's own `IMPLEMENTED` flag,
         not merely on whether a `run` attribute happens to exist."""
         checks = {c.name: c for c in discover_checks()}
-        for name in ("config_resolution", "migrations", "real_core"):
+        for name in ("migrations", "real_core"):
             assert checks[name].run is None
             assert checks[name].implemented is False
 
-    def test_implemented_check_carries_a_callable_run(self):
+    def test_implemented_checks_carry_a_callable_run(self):
         checks = {c.name: c for c in discover_checks()}
         assert callable(checks["host_mount"].run)
+        assert callable(checks["config_resolution"].run)
         assert callable(checks["cdn_public_routes"].run)
 
     def test_sorted_by_name(self):
@@ -165,11 +166,14 @@ class TestListChecks:
 
     def test_prints_every_seam_with_its_state_and_the_denominator_line(self, capsys):
         """Exercises the real (non-monkeypatched) discovery, so this doubles as
-        an end-to-end check on #1924/#2087's own done-when wording."""
+        an end-to-end check on the denominator's current wording (#1924 shipped
+        `1 implemented, 4 not-implemented`; #2087 and #2086 each moved one more
+        to `3 implemented, 2 not-implemented`)."""
         assert list_checks() == 0
         out = capsys.readouterr().out
         assert "host_mount" in out
+        assert "config_resolution" in out
         assert "cdn_public_routes" in out
         assert "implemented" in out
         assert "not-implemented" in out
-        assert "2 implemented, 3 not-implemented" in out
+        assert "3 implemented, 2 not-implemented" in out

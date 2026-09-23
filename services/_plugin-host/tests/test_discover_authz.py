@@ -304,6 +304,127 @@ def test_build_plugin_host_resolves_and_serves_user_frontend(tmp_path) -> None:
     assert "root" in r.text
 
 
+def test_build_plugin_host_isolates_one_plugins_broken_app_import(tmp_path, caplog) -> None:
+    """One plugin's ``load(app_ref)`` raising must not raise out of
+    ``build_plugin_host`` and must not affect any other plugin sharing the host
+    (biffo-template#2092).
+
+    Reproduced live on biffo-platform dev 2026-09-23: the vendored ideation
+    plugin's manifest.py raised ``FileNotFoundError`` at import. Before this
+    fix, ``build_plugin_host``'s list comprehension called ``load()`` for every
+    plugin inline with no per-plugin isolation, so that one exception
+    propagated all the way out — ``app.py``'s ``handler()`` never got to assign
+    ``_handler``, and every plugin behind the shared host 500'd on every
+    request, not just the broken one.
+    """
+    _write_plugin(
+        tmp_path, "broken", ingress={"app": "broken.app:app", "required_group": "founder"}
+    )
+    _write_plugin(
+        tmp_path, "healthy", ingress={"app": "healthy.app:app", "required_group": "founder"}
+    )
+
+    async def ping(request):
+        return JSONResponse({"ok": True})
+
+    healthy_app = Starlette(routes=[Route("/ping", ping)])
+
+    def flaky_load(ref: str):
+        if ref == "broken.app:app":
+            raise FileNotFoundError("manifest.py assumed a path that doesn't exist")
+        if ref == "healthy.app:app":
+            return healthy_app
+        raise AssertionError(f"unexpected app ref {ref!r}")
+
+    def fake_authorize(token, required_group):
+        if token != "ok":
+            raise GateError(401, "nope")
+        return {"sub": "u"}
+
+    # Must not raise, despite "broken"'s load() raising.
+    with caplog.at_level("ERROR"):
+        host = build_plugin_host(tmp_path, authorize=fake_authorize, load=flaky_load)
+    client = TestClient(host)
+
+    # The healthy plugin's routes work exactly as if "broken" didn't exist...
+    r = client.get("/healthy/ping", headers={"X-Biffo-Founder-Token": "ok"})
+    assert r.status_code == 200
+    assert r.json() == {"ok": True}
+    # ...while the broken plugin was simply never mounted (no route at all —
+    # a 404, not a 500 from a half-built host, and not silently gated as if it
+    # existed).
+    r = client.get("/broken/ping", headers={"X-Biffo-Founder-Token": "ok"})
+    assert r.status_code == 404
+
+    # The failure is logged loudly (plugin name, app_ref, exception) rather
+    # than swallowed without a trace.
+    messages = [rec.message for rec in caplog.records if rec.name == "plugin_host.app"]
+    assert any("broken" in m and "broken.app:app" in m for m in messages)
+
+
+def test_build_plugin_host_isolates_one_plugins_broken_admin_app_import(tmp_path, caplog) -> None:
+    """The same isolation for ``load(admin_app_ref)`` — a distinct call site
+    from the user-facing ``app_ref`` load (biffo-template#2092). A plugin whose
+    admin app fails to import keeps its user-facing app working, and a second,
+    wholly separate plugin is unaffected either way.
+    """
+    root = tmp_path / "half-broken"
+    root.mkdir()
+    (root / "biffo.plugin.json").write_text(
+        json.dumps(
+            {
+                "name": "half-broken",
+                "version": "1.0.0",
+                "user_ingress": {"app": "half_broken.app:app", "required_group": "founder"},
+                "admin_ingress": {
+                    "app": "half_broken.admin_app:app",
+                    "required_group": "admin",
+                },
+            }
+        )
+    )
+    _write_plugin(
+        tmp_path, "healthy", ingress={"app": "healthy.app:app", "required_group": "founder"}
+    )
+
+    async def ping(request):
+        return JSONResponse({"ok": True})
+
+    user_app = Starlette(routes=[Route("/ping", ping)])
+    healthy_app = Starlette(routes=[Route("/ping", ping)])
+
+    def flaky_load(ref: str):
+        if ref == "half_broken.app:app":
+            return user_app
+        if ref == "half_broken.admin_app:app":
+            raise ModuleNotFoundError("no module named 'half_broken.admin_app'")
+        if ref == "healthy.app:app":
+            return healthy_app
+        raise AssertionError(f"unexpected app ref {ref!r}")
+
+    def fake_authorize(token, required_group):
+        if token != "ok":
+            raise GateError(401, "nope")
+        return {"sub": "u"}
+
+    with caplog.at_level("ERROR"):
+        host = build_plugin_host(tmp_path, authorize=fake_authorize, load=flaky_load)
+    client = TestClient(host)
+
+    # half-broken's user-facing app still works...
+    r = client.get("/half-broken/ping", headers={"X-Biffo-Founder-Token": "ok"})
+    assert r.status_code == 200
+    # ...its admin mount was never built (404, not 500)...
+    r = client.get("/half-broken/admin/ping", headers={"X-Biffo-Founder-Token": "ok"})
+    assert r.status_code == 404
+    # ...and an entirely separate plugin is unaffected.
+    r = client.get("/healthy/ping", headers={"X-Biffo-Founder-Token": "ok"})
+    assert r.status_code == 200
+
+    messages = [rec.message for rec in caplog.records if rec.name == "plugin_host.app"]
+    assert any("half-broken" in m and "half_broken.admin_app:app" in m for m in messages)
+
+
 def test_an_admin_only_plugin_is_discovered(tmp_path) -> None:
     """A plugin declaring only ``admin_ingress`` must not be discarded.
 

@@ -350,11 +350,10 @@ def test_build_plugin_host_isolates_one_plugins_broken_app_import(tmp_path, capl
     r = client.get("/healthy/ping", headers={"X-Biffo-Founder-Token": "ok"})
     assert r.status_code == 200
     assert r.json() == {"ok": True}
-    # ...while the broken plugin was simply never mounted (no route at all —
-    # a 404, not a 500 from a half-built host, and not silently gated as if it
-    # existed).
+    # ...while the broken plugin's URL space stays owned by a 503 mount (#2095) —
+    # not a 500 from a half-built host, and not a 404 that reads as "not installed".
     r = client.get("/broken/ping", headers={"X-Biffo-Founder-Token": "ok"})
-    assert r.status_code == 404
+    assert r.status_code == 503
 
     # The failure is logged loudly (plugin name, app_ref, exception) rather
     # than swallowed without a trace.
@@ -414,9 +413,9 @@ def test_build_plugin_host_isolates_one_plugins_broken_admin_app_import(tmp_path
     # half-broken's user-facing app still works...
     r = client.get("/half-broken/ping", headers={"X-Biffo-Founder-Token": "ok"})
     assert r.status_code == 200
-    # ...its admin mount was never built (404, not 500)...
+    # ...its admin mount answers 503 (not 500, not a fall-through to the user app)...
     r = client.get("/half-broken/admin/ping", headers={"X-Biffo-Founder-Token": "ok"})
-    assert r.status_code == 404
+    assert r.status_code == 503
     # ...and an entirely separate plugin is unaffected.
     r = client.get("/healthy/ping", headers={"X-Biffo-Founder-Token": "ok"})
     assert r.status_code == 200

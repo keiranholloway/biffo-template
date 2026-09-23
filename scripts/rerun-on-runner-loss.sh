@@ -95,10 +95,38 @@ if [ -z "$jobs" ]; then
   exit 0
 fi
 
+# THE ANNOTATION IS NOT READABLE THE MOMENT THE JOB DIES (#2097). Observed live:
+# the read failed ~2 minutes after the runner was lost and succeeded by hand
+# later, so a single-shot read exited UNDETERMINED, nothing was re-run, and the
+# PR stayed red -- the exact outcome this workflow exists to remove. So the read
+# is retried with bounded backoff before it is allowed to count as "could not
+# tell". Every attempt failing is still UNDETERMINED (fail closed, unchanged).
+#
+# Budget: ANNOTATION_ATTEMPTS reads, sleeping DELAY, 2*DELAY, ... between them
+# (defaults 5 reads, 10s base: 10+20+30+40 = 100s of sleep) per job -- well
+# inside the workflow's 10-minute timeout for the usual one or two failed jobs.
+# Both are env-injectable so the self-test runs with a zero delay.
+ANNOTATION_ATTEMPTS="${RERUN_ANNOTATION_ATTEMPTS:-5}"
+ANNOTATION_DELAY="${RERUN_ANNOTATION_DELAY:-10}"
+
+# read_annotations <job> -> sets $ann; returns 1 only when every attempt failed.
+read_annotations() {
+  _try=1
+  while :; do
+    if ann=$(gh api "repos/$REPO/check-runs/$1/annotations" --jq '.[]?.message' 2>/dev/null); then
+      return 0
+    fi
+    [ "$_try" -lt "$ANNOTATION_ATTEMPTS" ] || return 1
+    say "job $1: annotations not readable yet (attempt $_try of $ANNOTATION_ATTEMPTS) — retrying in $((_try * ANNOTATION_DELAY))s."
+    sleep "$((_try * ANNOTATION_DELAY))"
+    _try=$((_try + 1))
+  done
+}
+
 lost=""
 for job in $jobs; do
-  ann=$(gh api "repos/$REPO/check-runs/$job/annotations" --jq '.[]?.message' 2>/dev/null) || {
-    say "could not read annotations for job $job — cannot tell whether the runner died, so nothing was re-run."
+  read_annotations "$job" || {
+    say "could not read annotations for job $job after $ANNOTATION_ATTEMPTS attempts — cannot tell whether the runner died, so nothing was re-run."
     exit "$EXIT_UNDETERMINED"
   }
   if printf '%s\n' "$ann" | grep -qF "$MARKER"; then

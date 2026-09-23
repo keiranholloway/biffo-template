@@ -56,13 +56,8 @@ case "$1" in
     case "$2" in
       *"/jobs"*)        cat "$STUBDIR/jobs" 2>/dev/null || { echo "$GH_ERR" >&2; exit 1; } ;;
       *"/annotations"*)
-        # Optional: fail the first N reads of this endpoint (file `ann-fail-first`),
-        # counting calls in `ann-calls`, to model an annotation that is not yet
-        # readable shortly after the job died (#2097).
+        # Count reads so a case can assert a failed read is not retried (#2099).
         printf 'x\n' >> "$STUBDIR/ann-calls"
-        _n=$(wc -l < "$STUBDIR/ann-calls")
-        _f=$(cat "$STUBDIR/ann-fail-first" 2>/dev/null || echo 0)
-        if [ "$_n" -le "$_f" ]; then echo "$GH_ERR" >&2; exit 1; fi
         cat "$STUBDIR/annotations" 2>/dev/null || { echo "$GH_ERR" >&2; exit 1; } ;;
       *"/actions/runs/"*) cat "$STUBDIR/run" 2>/dev/null || { echo "$GH_ERR" >&2; exit 1; } ;;
       *) echo "$GH_ERR" >&2; exit 1 ;;
@@ -89,7 +84,7 @@ GH_ERR='gh: Resource not accessible by integration (HTTP 403)'
 run_case() {
   _dir=$1; _shell=$2
   set +e
-  CASE_OUT=$(STUBDIR="$_dir" GH_ERR="$GH_ERR" RERUN_ANNOTATION_DELAY=0 PATH="$TMP/bin:$PATH" GITHUB_REPOSITORY=o/r \
+  CASE_OUT=$(STUBDIR="$_dir" GH_ERR="$GH_ERR" PATH="$TMP/bin:$PATH" GITHUB_REPOSITORY=o/r \
                "$_shell" "$SCRIPT" 99 2>&1)
   CASE_RC=$?
   set -e
@@ -195,38 +190,6 @@ assert_case "an unreadable run fails loudly rather than silently declining" "$C"
 C="$TMP/nojobs"; mkdir -p "$C"
 printf '1\tfailure\n' > "$C/run"
 assert_case "an unreadable job list fails loudly" "$C" no 1 "could not list failed jobs"
-
-# ---------------------------------------------------------------------------
-# TRANSIENT UNREADABLE ANNOTATION (#2097). Observed live: the annotation was
-# unreadable ~2 minutes after the job died and readable by hand later, so the
-# one-shot read declined to re-run and the PR stayed red. Reads that fail at
-# first and then succeed with the runner-lost marker MUST re-run. The delay is
-# injected as 0 by run_case so this stays fast.
-# ---------------------------------------------------------------------------
-C="$TMP/lateann"; mkdir -p "$C"
-printf '1\tfailure\n' > "$C/run"
-printf '900001\n'      > "$C/jobs"
-printf '%s\n' "$ANN_LOST" > "$C/annotations"
-printf '2\n'           > "$C/ann-fail-first"
-assert_case "an annotation unreadable at first but readable later is re-run" "$C" yes 0 "re-ran the failed jobs"
-
-# The late-readable annotation must not turn into a re-run when it says the
-# failure was real: retrying the READ must not bias the DECISION.
-C="$TMP/lateann-real"; mkdir -p "$C"
-printf '1\tfailure\n' > "$C/run"
-printf '900001\n'      > "$C/jobs"
-printf '%s\n' "$ANN_REAL" > "$C/annotations"
-printf '2\n'           > "$C/ann-fail-first"
-assert_case "a late-readable real failure is still left red" "$C" no 0 "must stay red"
-
-# Fail closed still holds: every attempt failing is UNDETERMINED, never a
-# re-run, and never a silent decline.
-C="$TMP/annfail"; mkdir -p "$C"
-printf '1\tfailure\n' > "$C/run"
-printf '900001\n'      > "$C/jobs"
-printf '%s\n' "$ANN_LOST" > "$C/annotations"
-printf '999\n'         > "$C/ann-fail-first"
-assert_case "annotations unreadable on every attempt fails loudly" "$C" no 1 "could not read annotations"
 
 # ---------------------------------------------------------------------------
 # THE CAUSE OF #2097, NOT ITS SYMPTOM (#2099). In a PRIVATE repo the workflow's

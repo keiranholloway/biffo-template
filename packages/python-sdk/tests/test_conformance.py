@@ -5,7 +5,9 @@ Two things this milestone's own done-when depends on:
 - ``discover_checks()`` finds every module under ``conformance/checks/`` by
   globbing, not a hand-maintained registry, and a not-yet-implemented seam is
   still named rather than silently missing from the denominator
-  (``--list-checks`` must print ``1 implemented, 4 not-implemented``).
+  (``--list-checks`` must print ``2 implemented, 3 not-implemented`` as of
+  biffo-template#2087, up from #1924's original ``1 implemented,
+  4 not-implemented``).
 - ``__main__``'s ``run_checks``/``list_checks`` fail closed on an empty
   discovery (a broken install, never a vacuous pass — #1363's shape), never
   confuse a check's own bug with the thing it was checking, and aggregate
@@ -40,24 +42,28 @@ class TestDiscoverChecks:
             "real_core",
         }
 
-    def test_exactly_one_implemented_matches_1924s_own_done_when(self):
-        """#1924's done-when: `--list-checks` prints `1 implemented, 4 not-implemented`."""
+    def test_exactly_two_implemented_matches_2087s_own_done_when(self):
+        """biffo-template#2087's done-when: `--list-checks`'s implemented
+        count increments -- was `1 implemented, 4 not-implemented` (#1924),
+        is now `2 implemented, 3 not-implemented` (cdn_public_routes joins
+        host_mount)."""
         checks = discover_checks()
         implemented = [c.name for c in checks if c.implemented]
-        assert implemented == ["host_mount"]
+        assert implemented == ["cdn_public_routes", "host_mount"]
         assert len(checks) == 5
 
     def test_a_not_implemented_check_has_no_run_even_if_the_module_defined_one(self):
         """`discover_checks` gates `run` on the module's own `IMPLEMENTED` flag,
         not merely on whether a `run` attribute happens to exist."""
         checks = {c.name: c for c in discover_checks()}
-        for name in ("cdn_public_routes", "config_resolution", "migrations", "real_core"):
+        for name in ("config_resolution", "migrations", "real_core"):
             assert checks[name].run is None
             assert checks[name].implemented is False
 
     def test_implemented_check_carries_a_callable_run(self):
         checks = {c.name: c for c in discover_checks()}
         assert callable(checks["host_mount"].run)
+        assert callable(checks["cdn_public_routes"].run)
 
     def test_sorted_by_name(self):
         names = [c.name for c in discover_checks()]
@@ -159,10 +165,11 @@ class TestListChecks:
 
     def test_prints_every_seam_with_its_state_and_the_denominator_line(self, capsys):
         """Exercises the real (non-monkeypatched) discovery, so this doubles as
-        an end-to-end check on #1924's own done-when wording."""
+        an end-to-end check on #1924/#2087's own done-when wording."""
         assert list_checks() == 0
         out = capsys.readouterr().out
         assert "host_mount" in out
+        assert "cdn_public_routes" in out
         assert "implemented" in out
         assert "not-implemented" in out
-        assert "1 implemented, 4 not-implemented" in out
+        assert "2 implemented, 3 not-implemented" in out

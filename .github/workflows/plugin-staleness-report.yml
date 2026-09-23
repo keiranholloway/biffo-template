@@ -169,14 +169,25 @@ jobs:
           # only kind of repo that can vendor a plugin under services/ in the
           # first place. A plugin or sibling repo correctly has none and is
           # correctly excluded here, not counted as a miss.
+          #
+          # Each line is the FULL `owner/name` slug, not the bare directory
+          # name (#2076). The owner is what says which repo a finding's issue
+          # has to be filed into, and it was previously dropped here --
+          # `$candidates.filtered` carries it, the clone throws it away
+          # (`$ESTATE/$name`), and every downstream step then had no way back
+          # to it, so all three live findings were filed into biffo-template
+          # where nobody can act on them. Iterating the candidate slugs rather
+          # than globbing the clone directories keeps the owner attached; the
+          # population is identical, because every directory under $ESTATE was
+          # cloned from exactly this list.
           : > "$RUNNER_TEMP/instances.txt"
-          for dir in "$ESTATE"/*/; do
-            [ -d "$dir" ] || continue
-            name=$(basename "$dir")
-            if [ -f "${dir%/}/biffo.core.json" ]; then
-              printf '%s\n' "$name" >> "$RUNNER_TEMP/instances.txt"
+          while IFS= read -r slug; do
+            [ -n "$slug" ] || continue
+            name="${slug##*/}"
+            if [ -f "$ESTATE/$name/biffo.core.json" ]; then
+              printf '%s\n' "$slug" >> "$RUNNER_TEMP/instances.txt"
             fi
-          done
+          done < "$candidates.filtered"
           instance_count=$(wc -l < "$RUNNER_TEMP/instances.txt" | tr -d ' ')
 
           if [ "$instance_count" -eq 0 ]; then
@@ -249,9 +260,13 @@ jobs:
           cannot_tell_count=0
           checked_names=""
 
-          while IFS= read -r name; do
-            [ -n "$name" ] || continue
-            echo "== ${name} ==" >> "$log"
+          while IFS= read -r slug; do
+            [ -n "$slug" ] || continue
+            # `instances.txt` carries `owner/name` (#2076); the clone on disk
+            # is keyed by the bare name, and the owner is what the filing step
+            # needs to reach the repo that must do the work.
+            name="${slug##*/}"
+            echo "== ${slug} ==" >> "$log"
             checked_names="${checked_names}${checked_names:+, }${name}"
 
             out=$("$theirs_dir/cli/node_modules/.bin/tsx" "$runner" "$theirs_dir" "${estate}/${name}" 2>>"$log")
@@ -265,12 +280,18 @@ jobs:
             fi
 
             # One JSON line per (instance, plugin) result, tagged with the
-            # instance name the CLI itself has no reason to know about.
+            # instance name and its full `owner/name` slug -- neither of which
+            # the CLI itself has any reason to know about. `instanceRepo` is
+            # the addressable half: it is what the filing step files into
+            # (#2076), and it is carried in the findings record rather than
+            # re-derived later so the target repo travels WITH the finding
+            # instead of being recovered from a sibling directory that may or
+            # may not still be there.
             printf '%s\n' "$out" | node -e '
               const data = JSON.parse(require("fs").readFileSync(0, "utf8"))
-              const instance = process.argv[1]
-              for (const r of data) console.log(JSON.stringify({ instance, ...r }))
-            ' "$name" >> "$findings"
+              const [instance, instanceRepo] = process.argv.slice(1)
+              for (const r of data) console.log(JSON.stringify({ instance, instanceRepo, ...r }))
+            ' "$name" "$slug" >> "$findings"
 
             plugin_count=$(printf '%s\n' "$out" | node -e 'console.log(JSON.parse(require("fs").readFileSync(0,"utf8")).length)')
             echo "  ${plugin_count} vendored plugin(s)" >> "$log"
@@ -352,6 +373,59 @@ jobs:
 
           exit 0
 
+      # ---- cross-org write identity for the filing step below (#2076) ----
+      #
+      # Every issue this workflow files belongs in the repo that must do the
+      # work, which is NEVER this one: the remedy in each body is `cd
+      # <instance> && npx @biffo/cli plugin upgrade ...`. `github.token` is
+      # scoped to the repository the job runs in, so `--repo <other>` with it
+      # is a 403 -- adding `--repo` without changing the identity would have
+      # turned a wrongly-filed issue into no issue at all.
+      #
+      # A PAT cannot cover this either, and that is why the estate has an App:
+      # the two PATs in use are each single-account (`keiran-biffo-fleet` 404s
+      # on tabsii-com, `keiran-tabsii` has no write on keiranholloway), so no
+      # single PAT reaches every instance discovery finds. The `biffo-fleet`
+      # App is installed in BOTH accounts and mints a separate installation
+      # token per account; the two minted here are exactly the two accounts
+      # the discovery step enumerates, so the set of repos that can be filed
+      # into is the same set that can be surveyed, by construction. A finding
+      # for any other owner is refused below rather than filed somewhere else.
+      - name: Refuse to file without a cross-repo write identity
+        id: identity_precheck
+        if: always() && steps.check.outputs.findings != ''
+        env:
+          APP_ID: ${{ secrets.BIFFO_APP_ID }}
+          APP_KEY: ${{ secrets.BIFFO_APP_PRIVATE_KEY }}
+        run: |
+          set -u
+          missing=''
+          [ -n "${APP_ID:-}" ] || missing='BIFFO_APP_ID'
+          [ -n "${APP_KEY:-}" ] || missing="${missing:+${missing} and }BIFFO_APP_PRIVATE_KEY"
+          if [ -n "$missing" ]; then
+            echo "::error title=plugin-staleness: no cross-repo write identity::${missing} is not set. Issues have to be filed into the instance repo that must do the upgrade, and the default GITHUB_TOKEN cannot write to another repo -- refusing to fall back to filing them here, which is the defect #2076 fixed. Set both secrets from the biffo-fleet App (app id 5029978)." >&2
+            exit 1
+          fi
+          echo "cross-repo write identity is configured (App id ${APP_ID})"
+
+      - name: Mint a write token for keiranholloway
+        id: token_keiranholloway
+        if: always() && steps.identity_precheck.outcome == 'success'
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.BIFFO_APP_ID }}
+          private-key: ${{ secrets.BIFFO_APP_PRIVATE_KEY }}
+          owner: keiranholloway
+
+      - name: Mint a write token for tabsii-com
+        id: token_tabsii_com
+        if: always() && steps.identity_precheck.outcome == 'success'
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.BIFFO_APP_ID }}
+          private-key: ${{ secrets.BIFFO_APP_PRIVATE_KEY }}
+          owner: tabsii-com
+
       - name: Open or update one issue per stale (instance, plugin) pair
         # Runs whenever the check step ran at all, whether or not it (or an
         # earlier step) failed -- a cannot-tell finding on one pair must not
@@ -363,7 +437,11 @@ jobs:
         # `behind` deliberately does not fail the check step above at all.
         if: always() && steps.check.outputs.findings != ''
         env:
-          GH_TOKEN: ${{ github.token }}
+          # No default GH_TOKEN. Every `gh` call below names both its repo and
+          # its token explicitly, so there is no ambient identity for one to
+          # fall back onto and quietly file into this repo again (#2076).
+          TOKEN_KEIRANHOLLOWAY: ${{ steps.token_keiranholloway.outputs.token }}
+          TOKEN_TABSII_COM: ${{ steps.token_tabsii_com.outputs.token }}
         run: |
           set -u
           findings="${{ steps.check.outputs.findings }}"
@@ -372,6 +450,8 @@ jobs:
 
           opened=0
           updated=0
+          moved=0
+          failed=0
 
           while IFS= read -r line; do
             [ -n "$line" ] || continue
@@ -379,9 +459,39 @@ jobs:
             [ "$status" = 'behind' ] || continue
 
             instance=$(printf '%s' "$line" | node -e 'console.log(JSON.parse(require("fs").readFileSync(0,"utf8")).instance)')
+            instance_repo=$(printf '%s' "$line" | node -e 'const r=JSON.parse(require("fs").readFileSync(0,"utf8")); console.log(r.instanceRepo ?? "")')
             plugin=$(printf '%s' "$line" | node -e 'console.log(JSON.parse(require("fs").readFileSync(0,"utf8")).name)')
             detail=$(printf '%s' "$line" | node -e 'console.log(JSON.parse(require("fs").readFileSync(0,"utf8")).detail)')
             source=$(printf '%s' "$line" | node -e 'const r=JSON.parse(require("fs").readFileSync(0,"utf8")); console.log(r.source ?? "")')
+            # Where this finding's issue goes, and which identity can write
+            # there. Both are refused rather than defaulted: an unrecognised
+            # owner, or a finding with no `instanceRepo` at all, previously
+            # meant "file it here", which is precisely how three issues ended
+            # up in a repo where the remedy in their own body cannot be run.
+            # A skip here is loud and reddens the run; it does not quietly
+            # shrink the set of instances that get told they are stale.
+            case "$instance_repo" in
+              */*) target_owner="${instance_repo%%/*}" ;;
+              *)
+                echo "::error title=plugin-staleness: finding has no target repo::${instance}/${plugin} came through with instanceRepo='${instance_repo}', so there is nowhere to file it. Not filing it here -- this repo is never where a plugin upgrade happens." >&2
+                failed=$((failed + 1))
+                continue
+                ;;
+            esac
+            case "$target_owner" in
+              keiranholloway) target_token="$TOKEN_KEIRANHOLLOWAY" ;;
+              tabsii-com) target_token="$TOKEN_TABSII_COM" ;;
+              *)
+                echo "::error title=plugin-staleness: no write identity for ${target_owner}::${instance_repo} is stale but the biffo-fleet App has no installation token minted for '${target_owner}' in this job. Add a mint step for that account rather than letting this fall back to filing in ${GITHUB_REPOSITORY}." >&2
+                failed=$((failed + 1))
+                continue
+                ;;
+            esac
+            if [ -z "${target_token:-}" ]; then
+              echo "::error title=plugin-staleness: empty write token for ${target_owner}::The App token step for '${target_owner}' produced nothing, so ${instance_repo} cannot be written to. Refusing to file elsewhere." >&2
+              failed=$((failed + 1))
+              continue
+            fi
 
             # `source` is a fetchable repo URL on every path this workflow
             # actually reaches in practice: `checkOnePlugin` only takes the
@@ -425,20 +535,92 @@ jobs:
               "" \
               "${remedy}" \
               "" \
+              "Detected by \`plugin-staleness-report.yml\` in ${GITHUB_REPOSITORY}; filed here because this is where the upgrade has to happen." \
               "Run: ${run_url}" \
               "" \
               "This issue is not auto-closed on the next clean run, per AGENTS.md section 4 -- " \
               "confirm the refresh PR actually merged before closing it.")
 
-            existing=$(gh issue list --state open --limit 100 --json number,title \
-              --jq "map(select(.title == \"${title}\")) | .[0].number // empty")
+            # Dedup against the TARGET repo, not this one. If this still
+            # scanned $GITHUB_REPOSITORY it would find nothing every run and
+            # open a fresh duplicate in the instance each time.
+            # `if ! var=$(...)` rather than a trailing `$?` check: this step
+            # runs under GitHub's default `bash -e`, so a bare failing
+            # assignment kills the step outright and the rc check below it
+            # would be unreachable. An `if` condition is exempt from errexit,
+            # which is what lets one unreachable repo be reported and skipped
+            # instead of silently ending the run mid-backlog.
+            if ! existing=$(GH_TOKEN="$target_token" gh issue list --repo "$instance_repo" \
+                --state open --limit 100 --json number,title \
+                --jq "map(select(.title == \"${title}\")) | .[0].number // empty"); then
+              echo "::error title=plugin-staleness: cannot read ${instance_repo}'s issues::gh issue list failed, so the dedup check could not run. Refusing to file blind -- a create without a working dedup opens a duplicate on every scheduled run." >&2
+              failed=$((failed + 1))
+              continue
+            fi
+
             if [ -n "$existing" ]; then
-              gh issue comment "$existing" --body "$body"
-              updated=$((updated + 1))
+              if GH_TOKEN="$target_token" gh issue comment "$existing" --repo "$instance_repo" --body "$body"; then
+                updated=$((updated + 1))
+                filed_url="${GITHUB_SERVER_URL}/${instance_repo}/issues/${existing}"
+              else
+                echo "::error title=plugin-staleness: could not update ${instance_repo}#${existing}::gh issue comment failed." >&2
+                failed=$((failed + 1))
+                continue
+              fi
             else
-              gh issue create --title "$title" --body "$body"
+              if ! filed_url=$(GH_TOKEN="$target_token" gh issue create --repo "$instance_repo" --title "$title" --body "$body") \
+                  || [ -z "$filed_url" ]; then
+                echo "::error title=plugin-staleness: could not file into ${instance_repo}::gh issue create failed or returned no URL. NOT falling back to filing in ${GITHUB_REPOSITORY} -- an issue nobody can act on is worse than a red run that says so." >&2
+                failed=$((failed + 1))
+                continue
+              fi
               opened=$((opened + 1))
+            fi
+
+            # Move, do not fork (#2076, and biffo-fleet#2111 for the same
+            # principle applied to lane:fleet-mechanics). Before this fix
+            # every one of these was filed here, so the same title may still
+            # be sitting open in THIS repo -- a second record of one piece of
+            # work, in the one repo where it cannot be done. Closing it and
+            # pointing at the real one is what makes the producer itself
+            # carry out the migration, rather than a sweep job or a person.
+            # Self-limiting by construction: once the backlog of
+            # wrongly-filed originals is gone this matches nothing and costs
+            # one list call per finding.
+            if ! stale_here=$(GH_TOKEN="$TOKEN_KEIRANHOLLOWAY" gh issue list --repo "$GITHUB_REPOSITORY" \
+                --state open --limit 100 --json number,title \
+                --jq "map(select(.title == \"${title}\")) | .[0].number // empty"); then
+              echo "::warning title=plugin-staleness: could not check for a superseded original::Filed ${filed_url}, but could not list ${GITHUB_REPOSITORY}'s issues to retire any pre-#2076 copy of it." >&2
+              stale_here=''
+            fi
+            if [ -n "$stale_here" ]; then
+              # Built with printf, not an inline multi-line string: this is a
+              # YAML block scalar, so a wrapped string literal carries the
+              # block's own indentation into the body and markdown renders
+              # twelve leading spaces as a code block.
+              move_note=$(printf '%s\n' \
+                "Moved to ${filed_url}." \
+                "" \
+                "This was filed here before #2076, by the workflow that DETECTS the drift rather than the repo that can fix it -- the remedy in the body above is \`cd ${instance}\`, which nobody can run in \`${GITHUB_REPOSITORY}\`. It now lives in \`${instance_repo}\`, where the upgrade actually happens." \
+                "" \
+                "Closing this copy so one piece of work has one record.")
+              if GH_TOKEN="$TOKEN_KEIRANHOLLOWAY" gh issue close "$stale_here" --repo "$GITHUB_REPOSITORY" \
+                  --reason "not planned" --comment "$move_note"; then
+                moved=$((moved + 1))
+                echo "moved ${GITHUB_REPOSITORY}#${stale_here} -> ${filed_url}"
+              else
+                echo "::warning title=plugin-staleness: could not close the superseded original::${GITHUB_REPOSITORY}#${stale_here} is now a duplicate of ${filed_url} and needs closing by hand." >&2
+              fi
             fi
           done < "$findings"
 
-          echo "opened ${opened} new issue(s), updated ${updated} existing issue(s)"
+          echo "opened ${opened} new issue(s), updated ${updated} existing issue(s), moved ${moved} wrongly-filed original(s), ${failed} finding(s) could not be filed"
+
+          # Fail closed. A finding this step could not place is a stale
+          # instance that was never told, and the whole point of #2076 is
+          # that a filing failure must not resolve into "file it somewhere
+          # harmless" -- it has to be visible.
+          if [ "$failed" -gt 0 ]; then
+            echo "::error title=plugin-staleness: ${failed} finding(s) not filed::See the errors above for which (instance, plugin) pairs could not be reported to their own repo." >&2
+            exit 1
+          fi

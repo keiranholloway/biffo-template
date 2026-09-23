@@ -400,6 +400,23 @@ jobs:
       - name: Pipe-trap guard
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: sh scripts/biffo.sh check pipe-trap
+      # plugin-staleness-report.yml files one issue per stale (instance,
+      # plugin) pair, and the remedy in each body is `cd <instance> && npx
+      # @biffo/cli plugin upgrade ...` — so the issue belongs in the instance,
+      # never in the repo that detected the drift. Until #2076 it had no
+      # `--repo` at all, so `gh` defaulted to this repo and all three live
+      # findings (#2068/#2069/#2070) sat here, where their own remedy cannot
+      # be run, labelled `lane:in-repo` because `categorise` reads the filing
+      # location as the work location. The guard EXECUTES the filing step
+      # against a stubbed `gh` rather than grepping it, because a grep for
+      # `--repo` also passes for `--repo "$GITHUB_REPOSITORY"`, which is the
+      # defect restated. Wired here rather than left to
+      # guard-self-test-wiring.sh's sweep because that runs in the python job,
+      # and this guard needs the real `node` the step itself uses to parse
+      # findings.
+      - name: Plugin-staleness target-repo guard
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: sh scripts/plugin-staleness-target-repo.test.sh
       # A `// codeql[query-id]` comment does not suppress anything in this
       # repo's CodeQL setup — no paths-ignore/query-filter reads it, so alert
       # #21 stayed open directly under one for a while before anyone noticed

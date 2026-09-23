@@ -12,15 +12,20 @@ visible gap, or park behind spike #1522 (real Core under the harness). The
 owner decided **Option B**: keep the transitions in Core exactly as they run
 today.
 
-**Status.** The three transitions run against real Postgres in Core, as
-`services/api/tests/test_plugin_migration_transitions_pg.py`. That is where
-the generator lives, and #1513's fail-first (the generator re-created all six
-tables; the downgrade dropped five tables of data) is demonstrated there,
-guarding the #1511 bug class on every Core CI run. Plugin-repo coverage for
-this specific seam is intentionally out of scope: a plugin-specific manifest
-shape isn't caught here unless it also breaks Core's fixture, or until an
-instance actually generates the migration. That trade was made deliberately,
-not left unresolved.
+**Status.** The three transitions are defined against real Postgres in Core,
+as `services/api/tests/test_plugin_migration_transitions_pg.py`. That is
+where the generator lives, and #1513's fail-first (the generator re-created
+all six tables; the downgrade dropped five tables of data) is demonstrated
+there -- but only for real, on a real Postgres run, once a given instance's
+Core has synced past #1925/#1513 *and* that instance has a wired
+real-Postgres CI lane (as `biffo-platform`'s `rls-tests.yml` runs its other
+`test_*_pg.py` files). In biffo-template's own CI this test structurally
+cannot run at all -- it has no Postgres lane (biffo-template#1648) and every
+case skips loudly by design, so a green suite here proves nothing about the
+code it names. Plugin-repo coverage for this specific seam is intentionally
+out of scope: a plugin-specific manifest shape isn't caught here unless it
+also breaks Core's fixture, or until an instance actually generates the
+migration. That trade was made deliberately, not left unresolved.
 
 This module exists — with no `run` — so `--list-checks` names this seam
 rather than letting the denominator silently shrink (biffo-template#1924's
@@ -33,6 +38,8 @@ CHECK_NAME = "migrations"
 IMPLEMENTED = False
 NOTE = (
     "biffo-template#2061 (Option B, settled) -- migration transitions (#1511 "
-    "fixture) are verified in Core's real-Postgres lane; this seam stays "
-    "not-implemented here by design, not pending extraction"
+    "fixture) run for real only once an instance's Core has synced past "
+    "#1925/#1513 and that instance has a wired real-Postgres CI lane; never "
+    "in biffo-template's own CI (#1648). This seam stays not-implemented "
+    "here by design, not pending extraction"
 )

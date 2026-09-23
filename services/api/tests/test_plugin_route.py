@@ -13,6 +13,23 @@ class TestRouteDefinition:
         assert route.table == "widgets"
         assert route.operation == "list"
         assert route.description == ""
+        assert route.cdn_contract_key is None
+
+    def test_cdn_contract_key_defaults_to_none_additive(self):
+        """biffo-template#2087: existing manifests with no CDN-contract route
+        must be unaffected -- omitting the field leaves it None."""
+        route = RouteDefinition(method="GET", path="/widgets", table="widgets", operation="list")
+        assert route.cdn_contract_key is None
+
+    def test_cdn_contract_key_accepts_a_declared_key(self):
+        route = RouteDefinition(
+            method="GET",
+            path="/widgets",
+            table="widgets",
+            operation="list",
+            cdn_contract_key="click",
+        )
+        assert route.cdn_contract_key == "click"
 
     def test_read_route_requires_id_path_param(self):
         with pytest.raises(ValidationError):

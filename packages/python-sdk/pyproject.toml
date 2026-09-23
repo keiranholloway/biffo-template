@@ -70,7 +70,18 @@ name = "biffo-plugin-sdk"
 # see `[tool.uv.sources]` below for how the two stay resolvable together in
 # this monorepo); `conformance.checks.host_mount` imports it lazily, the same
 # pattern `sigv4`/`user-serving` already use for an optional runtime need.
-version = "1.6.0"
+#
+# 1.7.0 (biffo-template#2087) adds `RouteDef.cdn_contract_key: str | None`
+# (default `None`) — identifies, by its `key` field, the row in
+# `modules/cloud/aws/cdn/path-contract.json` a manifest route corresponds to.
+# Additive and optional, same posture as 1.4.0/1.5.0's own new fields: a
+# manifest that predates this version simply never sets it, and a consumer
+# pinned below `>=1.7` never sees it at all. Also implements the `#1523` seam
+# 5 conformance check (`conformance.checks.cdn_public_routes`, previously a
+# named gap with no `run`) — reached only via the existing opt-in
+# `conformance` extra, so this half is unobservable to a consumer that
+# doesn't already opt into it.
+version = "1.7.0"
 description = "Biffo Plugin SDK — manifest validation, Core API client, and event system for Biffo plugins"
 readme = "README.md"
 license = "MIT"

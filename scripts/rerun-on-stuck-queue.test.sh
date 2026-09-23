@@ -43,6 +43,9 @@
 # |14 | completed-run history present (#2100)              | list is server-side status= filtered, no unfiltered call, count printed |
 # |15 | run itself in status `queued`                      | MUST catch via the queued listing |
 # |16 | cancel lands on the 10th status read (#2101)       | MUST still be re-run under the production poll bound |
+# |17 | in_progress listing fails, queued read fine         | loud, exit 1, no action |
+# |18 | run listing is not JSON                            | loud, exit 1, no action |
+# |19 | run listing is JSON but not run objects            | loud, exit 1, no action |
 # | 9 | (extended, #2101) never confirms                   | message names `gh run rerun N`, no false "next scheduled poll" promise |
 #
 # Runs every case under sh, bash and dash (where present) -- same convention
@@ -107,6 +110,9 @@ case "$1" in
         case "$url" in *\?*) query=${url#*\?} ;; esac
         st=""
         case "&$query&" in *"&status="*) st=${query#*status=}; st=${st%%&*} ;; esac
+        # Fault injection for the script's could-not-tell paths.
+        [ ! -f "$STUBDIR/fail-list-$st" ] || exit 1
+        if [ -f "$STUBDIR/garbage-list" ]; then cat "$STUBDIR/garbage-list"; exit 0; fi
         if [ -z "$st" ]; then
           printf 'unfiltered\n' >> "$STUBDIR/unfiltered-list-call"
           jq -r "$jqquery" "$STUBDIR/runs.json" || exit 1
@@ -442,6 +448,35 @@ USE_DEFAULT_POLL=1
 assert_case "a cancellation confirmed late (10th read) is still re-run under the production poll bound" \
   "$C" 1 0 "re-ran run 133 once" yes yes
 USE_DEFAULT_POLL=0
+
+# ---------------------------------------------------------------------------
+# Cases 17-19 -- the run listing's could-not-tell paths (each a handler the
+# #2100 rewrite added). Any of them must be loud (exit 1) and must never act.
+# 17: the SECOND listing (in_progress) fails after the first (queued) read
+#     fine -- a half-read denominator must not pass as "nothing stuck".
+# 18: the listing is not JSON at all.
+# 19: the listing parses as JSON but is not run objects (a bare scalar), so
+#     the candidate filter itself errors.
+# ---------------------------------------------------------------------------
+C="$TMP/17-secondlistfail"; mkdir -p "$C"
+mk_runs_json "$C/runs.json" "141,1,queued,CI"
+mk_jobs_one "$C/jobs-141" queued 90
+printf 'completed\n' > "$C/status-141"
+: > "$C/fail-list-in_progress"
+assert_case "a failing in_progress listing fails loudly even though queued read fine" \
+  "$C" 1 1 "could not list active runs (status=in_progress)" no no
+
+C="$TMP/18-garbage"; mkdir -p "$C"
+mk_runs_json "$C/runs.json" "142,1,queued,CI"
+printf 'not json {\n' > "$C/garbage-list"
+assert_case "an unparseable run listing fails loudly" \
+  "$C" 1 1 "could not parse the queued run listing" no no
+
+C="$TMP/19-scalar"; mkdir -p "$C"
+mk_runs_json "$C/runs.json" "143,1,queued,CI"
+printf '7\n' > "$C/garbage-list"
+assert_case "a run listing that is not run objects fails loudly" \
+  "$C" 1 1 "could not evaluate the listed runs" no no
 
 if [ "$HAVE_DASH" -eq 0 ]; then
   printf '\n  NOTE: dash is not installed here, so no case was checked under it.\n'

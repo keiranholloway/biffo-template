@@ -69,6 +69,37 @@
 # exactly the guessed-branch shape AGENTS.md warns against; it is left to a
 # future, separately-evidenced change.
 #
+# ## Cost: the run list is filtered SERVER-side (#2100)
+#
+# Candidates are listed with `status=queued` and `status=in_progress` as two
+# separate `actions/runs` queries, so the API returns only currently-active
+# runs and `--paginate` walks only those pages. The first version listed the
+# whole run history unfiltered and dropped completed runs in jq: on this repo
+# that was 11061 runs / ~111 pages / ~4 minutes per poll against a 10-minute
+# job timeout and a 1000/hr token budget (~670 calls/hr at a 10-minute cron).
+# Cost now scales with runs that are ACTIVE, not with history: two reads when
+# nothing is stuck. The number of runs each listing returned is printed
+# ("listed N queued and M in_progress run(s)") so the denominator is visible
+# rather than assumed.
+#
+# ## Once-only, and what happens to a cancel that lands late (#2101)
+#
+# The re-run guard is `run_attempt == 1`: a run is cancelled and re-run at
+# most once. There is NO state carried between polls, and that matters: once
+# a cancellation lands the run is `completed`/`cancelled`, which the NEXT
+# poll's candidate filter excludes, and rerun-on-runner-loss.yml only reacts
+# to `conclusion == 'failure'`. So a cancel this script issues but does not
+# see land is NEVER picked up again by anything. Two consequences:
+#   - the confirm-completed poll window is long (24 x 5s = 2 minutes by
+#     default, not the 30s it first was), because giving up early strands the
+#     run cancelled with no re-run;
+#   - if it still does not confirm, the script does not promise a later poll
+#     will finish the job (none will). It exits 1 and prints the exact
+#     `gh run rerun <id>` a human must run, so the workflow goes red.
+# The worst case per stuck run is therefore ~2 minutes of polling; the
+# workflow's 10-minute timeout covers several stuck runs in one poll, which
+# is far more than a normal stall produces.
+#
 # ## POSIX sh; validate with BOTH `dash -n` and `bash -n`.
 #
 # Usage:  sh scripts/rerun-on-stuck-queue.sh [threshold-minutes]
@@ -86,16 +117,21 @@ case "$THRESHOLD_MINUTES" in
 esac
 THRESHOLD_SECONDS=$((THRESHOLD_MINUTES * 60))
 
-# Bounded poll for the cancellation to land (see the loop below). Overridable
-# only so the self-test can exercise the "never confirms" path in well under
-# a second instead of the real ~30s; production always gets the defaults.
-POLL_ATTEMPTS="${RERUN_STUCK_QUEUE_POLL_ATTEMPTS:-6}"
+# Bounded poll for the cancellation to land (see the loop below): 24 x 5s =
+# ~2 minutes by default -- long, because an unconfirmed cancel is never
+# retried by a later poll (see the header, #2101). Overridable only so the
+# self-test can exercise the "never confirms" path in well under a second;
+# production always gets the defaults.
+POLL_ATTEMPTS="${RERUN_STUCK_QUEUE_POLL_ATTEMPTS:-24}"
 POLL_INTERVAL="${RERUN_STUCK_QUEUE_POLL_INTERVAL:-5}"
 
 # Same list, same reasoning as rerun-on-runner-loss.yml's `workflows:` --
 # see the header above for why this is also the self-hosted-scoping boundary.
 # Single-quoted so none of it needs shell escaping.
-JQ_LIST_RUNS='.workflow_runs[] | select(.status != "completed") | select(.run_attempt == 1) | select(.name == "CI" or .name == "RLS Tests" or .name == "Release Guards") | [(.id|tostring), .name] | @tsv'
+# Applied to the stream of raw run objects the two status-filtered listings
+# return. The `status != "completed"` clause is belt-and-braces: the server
+# already filters, and this only matters if it ever stopped honouring it.
+JQ_LIST_RUNS='select(.status != "completed") | select(.run_attempt == 1) | select(.name == "CI" or .name == "RLS Tests" or .name == "Release Guards") | [(.id|tostring), .name] | @tsv'
 JQ_MAX_QUEUED_AGE='[.jobs[]? | select(.status == "queued") | (now - (.created_at | fromdateiso8601))] | max // empty'
 
 # EXIT CODES, same convention as rerun-on-runner-loss.sh:
@@ -116,15 +152,46 @@ note_worst() {
   return 0
 }
 
-# --paginate: an instance running self-hosted CI at scale could plausibly
-# have more than one page (100) of active runs across its watched
-# workflows; without it, runs beyond page 1 would be silently invisible to
-# this script rather than merely slow to reach, which is the same
-# shrink-the-denominator failure the header discusses for per-job labels.
-runs=$(gh api --paginate "repos/$REPO/actions/runs?per_page=100" --jq "$JQ_LIST_RUNS" 2>/dev/null) || {
-  say "could not list active runs for $REPO — cannot tell whether any job is stuck, so nothing was inspected."
+# One listing per active status, filtered SERVER-side (#2100). `--paginate`
+# is kept but is now cheap: it walks only the pages of currently-active runs,
+# not the whole run history, and it is what stops a pile-up of >100 queued
+# runs hiding the OLDEST (i.e. most likely stuck) ones on a later page. The
+# raw run objects are emitted (`.workflow_runs[]`) and counted locally so the
+# number listed can be printed as the visible denominator.
+list_active() {
+  gh api --paginate "repos/$REPO/actions/runs?status=$1&per_page=100" --jq '.workflow_runs[]' 2>/dev/null
+}
+
+queued_raw=$(list_active queued) || {
+  say "could not list active runs (status=queued) for $REPO — cannot tell whether any job is stuck, so nothing was inspected."
   exit "$EXIT_UNDETERMINED"
 }
+in_progress_raw=$(list_active in_progress) || {
+  say "could not list active runs (status=in_progress) for $REPO — cannot tell whether any job is stuck, so nothing was inspected."
+  exit "$EXIT_UNDETERMINED"
+}
+
+count_runs() {
+  printf '%s\n' "$1" | jq -s 'length'
+}
+queued_listed=$(count_runs "$queued_raw") || {
+  say "could not parse the queued run listing for $REPO — nothing was inspected."
+  exit "$EXIT_UNDETERMINED"
+}
+in_progress_listed=$(count_runs "$in_progress_raw") || {
+  say "could not parse the in_progress run listing for $REPO — nothing was inspected."
+  exit "$EXIT_UNDETERMINED"
+}
+say "listed $queued_listed queued and $in_progress_listed in_progress run(s) for $REPO (server-side status filter)."
+
+# jq's own status is checked (not hidden behind a pipe into awk, whose exit
+# status would mask a jq failure as an empty, "nothing stuck" list).
+candidates=$(printf '%s\n%s\n' "$queued_raw" "$in_progress_raw" | jq -r "$JQ_LIST_RUNS") || {
+  say "could not evaluate the listed runs for $REPO — nothing was inspected."
+  exit "$EXIT_UNDETERMINED"
+}
+# A run can move queued -> in_progress between the two listings; keep it once.
+runs=$(printf '%s\n' "$candidates" | awk 'NF && !seen[$0]++')
 
 if [ -z "$runs" ]; then
   say "no active first-attempt run of a watched workflow (CI, RLS Tests, Release Guards) — nothing to inspect."
@@ -204,7 +271,11 @@ while IFS="$(printf '\t')" read -r run_id workflow_name; do
   done
 
   if [ "$confirmed" -ne 1 ]; then
-    say "cancellation of run $run_id was accepted but never confirmed completed — leaving the re-run to the next scheduled poll."
+    # NOT "leaving it to the next poll": once the cancellation lands this run
+    # is completed/cancelled, which the next poll's filter excludes, and
+    # rerun-on-runner-loss only reacts to conclusion == failure. Nothing
+    # re-runs it. Say so, name the command, and fail the job so it is seen.
+    say "cancellation of run $run_id was accepted but never confirmed completed after $POLL_ATTEMPTS status read(s) — it is cancelled or cancelling and has NOT been re-run. No later poll will pick it up (a completed/cancelled run is filtered out); a human must re-run it: gh run rerun $run_id --repo $REPO"
     note_worst "$EXIT_UNDETERMINED"
     continue
   fi

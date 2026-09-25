@@ -752,3 +752,133 @@ class TestLegacyKeyMigrationShim:
         # split described in the class docstring.
         assert "m.py:8:except:except ValueError" in err
         assert "m.py:4:except:except OSError" not in err
+
+
+class TestV1BaselineUnderV2Script:
+    """#2102 — the mirror of #2037's shim.
+
+    `shared-sync` overwrites a satellite's `scripts/error_branch_coverage.py`
+    with the v2 script (`Branch.key()` = `path:line:kind:label`) but never
+    touches the satellite's own baseline, which is per-repo and still holds v1
+    keys (`path:kind:label`). Every baselined branch then read NEW and the
+    sync PR's required check failed (NEW count == baseline count).
+
+    The script now accepts a v1 baseline entry as covering a v2 branch whose
+    v1 form matches it, announces that on every run, and leaves a v2 baseline
+    with exactly its collision-proof (#2026) behaviour.
+    """
+
+    _SRC = "try:\n    f()\nexcept OSError:\n    g()\ntry:\n    h()\nexcept ValueError:\n    g()\n"
+
+    def _run(self, tmp_path, monkeypatch, capsys, branches, executed=(2, 6), missing=(4, 8)):
+        monkeypatch.setattr(ebc, "REPO_ROOT", tmp_path)
+        (tmp_path / "m.py").write_text(self._SRC)
+        cov = tmp_path / "coverage.json"
+        cov.write_text(
+            json.dumps(
+                {
+                    "files": {
+                        "m.py": {
+                            "executed_lines": list(executed),
+                            "missing_lines": list(missing),
+                        }
+                    }
+                }
+            )
+        )
+        baseline = tmp_path / "baseline.json"
+        monkeypatch.setattr(ebc, "BASELINE", baseline)
+        baseline.write_text(json.dumps({"total": len(branches), "branches": branches}))
+        monkeypatch.setattr("sys.argv", ["x", "--check", "--coverage", str(cov)])
+        code = ebc.main()
+        out, err = capsys.readouterr()
+        return code, out, err
+
+    def test_a_v1_baseline_is_accepted_by_the_v2_script(self, tmp_path, monkeypatch, capsys):
+        code, out, err = self._run(
+            tmp_path,
+            monkeypatch,
+            capsys,
+            ["m.py:except:except OSError", "m.py:except:except ValueError"],
+        )
+        assert code == 0, err
+        assert "NEW" not in out
+        # Self-announcing, not silent: names the remedy.
+        assert "--write" in err
+        assert "v1" in err
+
+    def test_a_branch_absent_from_a_v1_baseline_is_still_new(self, tmp_path, monkeypatch, capsys):
+        # Only OSError is accepted; the ValueError branch has a label the
+        # baseline never held, so the shim must not absorb it.
+        code, out, err = self._run(tmp_path, monkeypatch, capsys, ["m.py:except:except OSError"])
+        assert code == 1
+        new_lines = [ln for ln in out.splitlines() if ln.strip().startswith("NEW")]
+        assert len(new_lines) == 1 and "except ValueError" in new_lines[0]
+        assert "m.py:8:except:except ValueError" in err
+        assert "m.py:4:except:except OSError" not in err
+
+    def test_a_v2_baseline_keeps_full_collision_proof_behaviour(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        # #2026's shape: line 4's `except OSError` is baselined in v2 form. A
+        # v1-form entry for a DIFFERENT position must not be conjured from
+        # it: the branch at line 8 shares no v1 entry, and a same-labelled
+        # branch at another line is still NEW under a pure-v2 baseline.
+        code, out, err = self._run(
+            tmp_path,
+            monkeypatch,
+            capsys,
+            ["m.py:4:except:except OSError", "m.py:99:except:except ValueError"],
+        )
+        assert code == 1, "same-labelled branch at a new line was absorbed by a v2 baseline"
+        new_lines = [ln for ln in out.splitlines() if ln.strip().startswith("NEW")]
+        assert len(new_lines) == 1 and ":8" in new_lines[0]
+        # A pure-v2 baseline is not announced as legacy.
+        assert "v1" not in err.replace("v1-computing", "")
+
+    def test_a_pure_v2_baseline_that_matches_passes_silently(self, tmp_path, monkeypatch, capsys):
+        code, out, err = self._run(
+            tmp_path,
+            monkeypatch,
+            capsys,
+            ["m.py:4:except:except OSError", "m.py:8:except:except ValueError"],
+        )
+        assert code == 0
+        assert "NEW" not in out
+        assert "--write" not in err
+
+    def test_v1_entries_do_not_leak_into_a_mixed_baselines_v2_entries(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        # Mixed: OSError accepted via a v1 entry, ValueError only via a v2
+        # entry at the WRONG line. The v2 entry keeps its strict semantics.
+        code, out, err = self._run(
+            tmp_path,
+            monkeypatch,
+            capsys,
+            ["m.py:except:except OSError", "m.py:99:except:except ValueError"],
+        )
+        assert code == 1
+        assert "m.py:8:except:except ValueError" in err
+        assert "m.py:4:except:except OSError" not in err
+
+    def test_write_migrates_a_v1_baseline_to_v2_keys(self, tmp_path, monkeypatch, capsys):
+        self._run(
+            tmp_path,
+            monkeypatch,
+            capsys,
+            ["m.py:except:except OSError", "m.py:except:except ValueError"],
+        )
+        cov = tmp_path / "coverage.json"
+        monkeypatch.setattr("sys.argv", ["x", "--write", "--coverage", str(cov)])
+        assert ebc.main() == 0
+        written = json.loads((tmp_path / "baseline.json").read_text())
+        assert written == {
+            "total": 2,
+            "branches": ["m.py:4:except:except OSError", "m.py:8:except:except ValueError"],
+        }
+        # ...and the migrated baseline is then a clean, silent v2 check.
+        capsys.readouterr()
+        monkeypatch.setattr("sys.argv", ["x", "--check", "--coverage", str(cov)])
+        assert ebc.main() == 0
+        assert "--write" not in capsys.readouterr().err

@@ -441,6 +441,51 @@ def _legacy_key(k: str) -> str:
     return k
 
 
+def _is_v2_key(k: str) -> bool:
+    """True when `k` is a v2 `path:line:kind:label` key (second field all digits)."""
+    return _legacy_key(k) != k
+
+
+def _known(keys: list[str], recorded: set[str]) -> tuple[set[str], bool]:
+    """Which of this script's v2 `keys` the baseline already accepts.
+
+    Returns `(known, used_v1)`. `used_v1` is True when the baseline holds ANY
+    entry still in v1 form — the caller announces that, so accepting a v1
+    baseline is never silent.
+
+    Three routes to "known", each a deliberate, separate rule:
+
+    - the exact key, always (a v2 baseline's full collision-proof match, #2026);
+    - the key's v1 form, ONLY against baseline entries that are themselves v1
+      (#2102). This is the mirror of #2037's shim, which lets a v1-computing
+      script accept a v2 baseline. `shared-sync` ships this v2 script into
+      satellites whose own baseline is still v1, and it cannot regenerate that
+      baseline (it needs a coverage run inside the satellite), so without this
+      every baselined branch read NEW and the sync PR failed. Restricting it to
+      v1 entries means a v2 baseline never gains the looser match: a genuinely
+      new same-labeled branch in a v2 baseline is still NEW;
+    - `_legacy_key` of a recorded v2 entry, for #2037's opposite direction
+      (unchanged here; it is a no-op for a script that computes v2 keys).
+
+    While a v1 baseline is accepted, every branch sharing a `path:kind:label`
+    with one v1 entry is absorbed by it — #2026's collision bug, for exactly as
+    long as that baseline stays v1. That is why the acceptance is announced.
+
+    Retire the v1 route (`v1_entries` and the notice in `main()`) once every
+    inheriting repo's baseline has been regenerated as v2 (`--write`).
+
+    EXPIRY: same as `_legacy_key` above — tracked by
+    keiranholloway/biffo-template#2056 (retire once every inheriting repo's
+    baseline is v2). #2102 added the v1-baseline half of this shim; a repo
+    still carrying it after #2056 closes is exposed to the collision above.
+    Grep for "EXPIRY" in this function.
+    """
+    v1_entries = {r for r in recorded if not _is_v2_key(r)}
+    known = set(recorded) | {_legacy_key(r) for r in recorded}
+    known |= {k for k in keys if _legacy_key(k) in v1_entries}
+    return known, bool(v1_entries)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--write", action="store_true", help="record the current set as baseline")
@@ -579,8 +624,20 @@ def main() -> int:
     # recognises a v2-shaped baseline entry (#2037 migration shim; see
     # `_legacy_key`). `keys` itself is left untouched.
     recorded = set(baseline.get("branches", []))
-    known = recorded | {_legacy_key(k) for k in recorded}
+    known, used_v1 = _known(keys, recorded)
     new = [k for k in keys if k not in known]
+    if used_v1:
+        # #2102: accepted, but never silently — a v1 entry cannot tell two
+        # same-labeled branches in one file apart, so the ratchet is weaker
+        # until the baseline is regenerated.
+        print(
+            "::warning::error-branch coverage: baseline holds v1 keys "
+            "(path:kind:label) — accepted for now, but same-labeled branches "
+            "in one file are indistinguishable until it is migrated. "
+            "Run: python scripts/error_branch_coverage.py --write "
+            "(after a coverage run) and commit the baseline.",
+            file=sys.stderr,
+        )
 
     print(
         f"unexecuted error branches: {len(keys)}  "

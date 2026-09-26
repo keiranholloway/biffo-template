@@ -97,7 +97,10 @@ function makeGitMock(clonedDir: string) {
 }
 
 function makeMigrationsMock(generatedPaths: string[] = []) {
-  return { generate: vi.fn().mockResolvedValue(generatedPaths) }
+  return {
+    generate: vi.fn().mockResolvedValue(generatedPaths),
+    refreshLock: vi.fn().mockResolvedValue(undefined),
+  }
 }
 
 // biffo-template#1554 — a plugin declaring a baseline-row seed.
@@ -233,7 +236,7 @@ describe('runPluginInstall', () => {
     )
 
     await expect(run).rejects.toThrow(
-      /uv exploded[\s\S]*uncommitted\): services\/widgets[\s\S]*sync-migrations widgets/,
+      /uv exploded[\s\S]*written, not committed, in [^\n]*: services\/widgets[\s\S]*sync-migrations widgets/,
     )
     expect(git.commit).not.toHaveBeenCalled()
   })

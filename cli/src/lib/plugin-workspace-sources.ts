@@ -19,13 +19,20 @@
  * provides, and adds a `workspace = true` source to the vendored plugin's
  * `pyproject.toml` for each dependency that matches one.
  *
- * TOML is read/written with narrow regexes rather than a parser dependency: the
- * shapes here (a string array, a `[project]` name, an `[tool.uv.sources]` table)
- * are simple and stable, and appending a section preserves the file's comments —
- * which a round-trip through most TOML libraries would drop.
+ * What the plugin DECLARES and what it already SOURCES are read with a real TOML
+ * parser (`smol-toml`), never with line regexes: a regex reader only sees the
+ * spellings its author thought of, and every valid one it missed (a comment after
+ * a table header, a quoted or indented key) silently skipped a dependency group —
+ * the exact `uv` failure this module exists to prevent (biffo-template#2106).
+ * The EDIT stays textual — inserting lines preserves the file's comments, which a
+ * round-trip through a TOML serialiser would drop — but it is located from parsed
+ * table headers and verified by re-parsing the result before anything is written,
+ * so it cannot emit a duplicate table or key: it either produces TOML that parses
+ * with every added source present, or throws and writes nothing.
  */
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { parse as parseToml } from 'smol-toml'
 import { log } from './logger.js'
 
 /**
@@ -81,50 +88,126 @@ export function readProjectName(text: string): string | null {
   return null
 }
 
-/** Base package names of a `[project] dependencies = [...]` array (extras and
- * version specifiers stripped): `biffo-plugin-sdk[user-serving]>=1.1` → `biffo-plugin-sdk`. */
-export function readDependencyNames(text: string): string[] {
-  return readTomlStringArray(text, 'dependencies')
-    .map((dep) => /^\s*([A-Za-z0-9._-]+)/.exec(dep)?.[1] ?? '')
-    .filter(Boolean)
+/** The base name of a PEP 508 requirement string: `biffo-plugin-sdk[user-serving]>=1.1` → `biffo-plugin-sdk`. */
+function requirementName(requirement: string): string | null {
+  return /^\s*([A-Za-z0-9._-]+)/.exec(requirement)?.[1] ?? null
+}
+
+function isTable(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/** Every requirement string in a `{ group = [ "req", { include-group = "x" }, ... ] }` table; non-strings are skipped. */
+function requirementsIn(groups: unknown): string[] {
+  if (!isTable(groups)) return []
+  return Object.values(groups)
+    .filter(Array.isArray)
+    .flat()
+    .filter((entry): entry is string => typeof entry === 'string')
 }
 
 /**
- * The text of the `[<name>]` TOML table (header excluded, up to the next table header), or null when it is absent.
- * Matched at line start, like the array readers above: a dependency array's lines start with a quote, never `[`.
+ * Base package names the pyproject declares anywhere uv applies its "a workspace member needs a `tool.uv.sources` entry" rule:
+ * `[project] dependencies`, `[project.optional-dependencies]` and `[dependency-groups]` (PEP 735: `dev`, `test`, …). The plugin
+ * skeleton declares `biffo-plugin-host` in its `dev` group (biffo-template#2106), so reading `dependencies` alone sourced
+ * `biffo-plugin-sdk` and left the very next `uv run` failing on the host.
  */
-function readTomlTable(text: string, name: string): string | null {
-  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const header = new RegExp(`^\\[${escaped}\\]\\s*$`, 'm').exec(text)
-  if (!header) return null
-  const start = header.index + header[0].length
-  const next = /^\[/m.exec(text.slice(start))
-  return next ? text.slice(start, start + next.index) : text.slice(start)
+export function readDeclaredDependencyNames(doc: Record<string, unknown>): string[] {
+  const project = isTable(doc.project) ? doc.project : {}
+  const requirements = [
+    ...(Array.isArray(project.dependencies) ? project.dependencies : []).filter(
+      (dep): dep is string => typeof dep === 'string',
+    ),
+    ...requirementsIn(project['optional-dependencies']),
+    ...requirementsIn(doc['dependency-groups']),
+  ]
+  return requirements.map(requirementName).filter((name): name is string => name !== null)
+}
+
+/** The keys of `[tool.uv.sources]`, however they were spelled — bare, quoted, in a table or inline. */
+function existingSourceNames(doc: Record<string, unknown>): Set<string> {
+  const tool = isTable(doc.tool) ? doc.tool : {}
+  const uv = isTable(tool.uv) ? tool.uv : {}
+  return new Set(isTable(uv.sources) ? Object.keys(uv.sources) : [])
+}
+
+/** Whether the parsed document has any `tool.uv.sources` value at all (a header, an inline table or dotted keys). */
+function hasSourcesTable(doc: Record<string, unknown>): boolean {
+  const tool = isTable(doc.tool) ? doc.tool : {}
+  const uv = isTable(tool.uv) ? tool.uv : {}
+  return uv.sources !== undefined
 }
 
 /**
- * Base package names declared in `[dependency-groups]` (PEP 735: `dev`, `test`, …) and `[project.optional-dependencies]`.
+ * Where `[tool.uv.sources]` is written as a `[header]` line: the index just past that line (its trailing comment and newline
+ * included), or null when the table is not written as a header of its own (inline, or built from dotted keys).
  *
- * uv applies the "is a workspace member, needs a `tool.uv.sources` entry" rule to these exactly as it does to `[project]
- * dependencies`, and the plugin skeleton declares `biffo-plugin-host` in its `dev` group (biffo-template#2106): reading only
- * `dependencies` sourced `biffo-plugin-sdk` and left the very next `uv run` failing on the host.
+ * Headers are found by a scan that skips comments and strings (including `"""` / `'''` multi-line ones) and nested arrays
+ * and inline tables, so header-shaped text inside a value is never mistaken for one; a header's key path is then read by the
+ * TOML parser itself, so quoted segments and spaces (`[ tool . "uv".sources ]`) match however they were written.
  */
-export function readGroupedDependencyNames(text: string): string[] {
-  const names: string[] = []
-  for (const table of ['dependency-groups', 'project.optional-dependencies']) {
-    const section = readTomlTable(text, table)
-    if (section === null) continue
-    for (const key of new Set(
-      [...section.matchAll(/^([A-Za-z0-9_.-]+)\s*=\s*\[/gm)].map((m) => m[1]!),
-    )) {
-      const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-      for (const dep of readTomlStringArray(section, escaped)) {
-        const name = /^\s*([A-Za-z0-9._-]+)/.exec(dep)?.[1]
-        if (name) names.push(name)
+function sourcesHeaderLineEnd(text: string): number | null {
+  let depth = 0
+  let atLineStart = true
+  let i = 0
+  while (i < text.length) {
+    const c = text[i]!
+    if (c === '\n') {
+      atLineStart = true
+      i++
+    } else if (c === ' ' || c === '\t' || c === '\r') {
+      i++
+    } else if (c === '#') {
+      const nl = text.indexOf('\n', i)
+      i = nl === -1 ? text.length : nl
+    } else if (c === '"' || c === "'") {
+      atLineStart = false
+      const triple = text.startsWith(c.repeat(3), i)
+      const quote = triple ? c.repeat(3) : c
+      i += quote.length
+      // A basic string honours `\` escapes; a literal string (') does not.
+      while (i < text.length && !text.startsWith(quote, i)) {
+        if (c === '"' && text[i] === '\\') i++
+        if (!triple && text[i] === '\n') break
+        i++
       }
+      // A triple-quoted string may end with up to two extra quote characters.
+      i += quote.length
+    } else if (atLineStart && depth === 0 && c === '[') {
+      const isArrayOfTables = text[i + 1] === '['
+      const close = isArrayOfTables ? ']]' : ']'
+      let j = i + close.length
+      while (j < text.length && !text.startsWith(close, j)) {
+        if (text[j] === '"' || text[j] === "'") {
+          const end = text.indexOf(text[j]!, j + 1)
+          j = end === -1 ? text.length : end
+        }
+        j++
+      }
+      const header = text.slice(i, j + close.length)
+      const nl = text.indexOf('\n', j)
+      const lineEnd = nl === -1 ? text.length : nl + 1
+      if (!isArrayOfTables && isSourcesHeader(header)) return lineEnd
+      i = lineEnd
+      atLineStart = true
+    } else {
+      atLineStart = false
+      if (c === '[' || c === '{') depth++
+      else if (c === ']' || c === '}') depth--
+      i++
     }
   }
-  return names
+  return null
+}
+
+/** Whether a `[ ... ]` header line names the `tool.uv.sources` table. */
+function isSourcesHeader(header: string): boolean {
+  let node: unknown = parseToml(`${header}\n`)
+  for (const segment of ['tool', 'uv', 'sources']) {
+    if (!isTable(node) || Object.keys(node).length !== 1 || !(segment in node)) return false
+    node = node[segment]
+  }
+  return isTable(node) && Object.keys(node).length === 0
 }
 
 /**
@@ -168,13 +251,6 @@ export function workspaceMemberNames(instanceRoot: string): Set<string> {
   return names
 }
 
-/** Names that already have a `<name> = { workspace = ... }` line in the text. */
-function existingWorkspaceSources(text: string): Set<string> {
-  return new Set(
-    [...text.matchAll(/^\s*([A-Za-z0-9._-]+)\s*=\s*\{[^}]*\bworkspace\b/gm)].map((m) => m[1]!),
-  )
-}
-
 /**
  * Add `<dep> = { workspace = true }` to the plugin `pyproject.toml` for every
  * dependency that the instance's workspace provides as a member and that is not
@@ -210,19 +286,29 @@ export function ensureWorkspaceSources(
 ): string[] {
   if (!existsSync(pluginPyprojectPath) || memberNames.size === 0) return []
   const text = readFileSync(pluginPyprojectPath, 'utf8')
+  const doc = parsePyproject(text, pluginPyprojectPath)
 
-  const already = existingWorkspaceSources(text)
-  const declared = new Set([...readDependencyNames(text), ...readGroupedDependencyNames(text)])
+  // Any existing source for a name — workspace or not, however spelled — is the plugin's own decision; never write a second.
+  const already = existingSourceNames(doc)
+  const declared = new Set(readDeclaredDependencyNames(doc))
   const toAdd = [...declared].filter((n) => memberNames.has(n) && !already.has(n))
   if (toAdd.length === 0) return []
 
-  const lines = toAdd.map((n) => `${n} = { workspace = true }`)
-  const header = /^\[tool\.uv\.sources\]\s*$/m.exec(text)
+  const lines = toAdd.map(
+    (n) => `${/^[A-Za-z0-9_-]+$/.test(n) ? n : JSON.stringify(n)} = { workspace = true }`,
+  )
   let updated: string
-  if (header) {
-    // Insert right after the existing section header.
-    const insertAt = header.index + header[0].length
-    updated = `${text.slice(0, insertAt)}\n${lines.join('\n')}${text.slice(insertAt)}`
+  if (hasSourcesTable(doc)) {
+    const insertAt = sourcesHeaderLineEnd(text)
+    if (insertAt === null) {
+      throw new Error(
+        `${pluginPyprojectPath} defines tool.uv.sources as an inline table or dotted keys, which biffo cannot extend in ` +
+          `place without risking a duplicate. Add \`{ workspace = true }\` sources for ${toAdd.join(', ')} by hand ` +
+          '(the instance provides them as uv workspace members), then re-run.',
+      )
+    }
+    const sep = text.slice(0, insertAt).endsWith('\n') ? '' : '\n'
+    updated = `${text.slice(0, insertAt)}${sep}${lines.join('\n')}\n${text.slice(insertAt)}`
   } else {
     const sep = text.endsWith('\n') ? '' : '\n'
     updated =
@@ -232,9 +318,38 @@ export function ensureWorkspaceSources(
       '[tool.uv.sources]\n' +
       `${lines.join('\n')}\n`
   }
+
+  // The edit above is textual, so prove it: the result must parse and carry every source it was meant to add. Anything else —
+  // an inline `tool = { uv = … }`, a construct the header scan misjudged — throws with nothing written.
+  let written = new Set<string>()
+  try {
+    written = existingSourceNames(parseToml(updated))
+  } catch {
+    // The edit produced invalid TOML (e.g. `tool` was an inline table the appended header redefines); `written` stays empty.
+  }
+  const missing = toAdd.filter((n) => !written.has(n))
+  if (missing.length > 0) {
+    throw new Error(
+      `${pluginPyprojectPath}: could not add a workspace source for ${missing.join(', ')} to tool.uv.sources without ` +
+        'producing invalid TOML. Add them by hand (the instance provides them as uv workspace members), then re-run.',
+    )
+  }
   // Read-modify-write, not an overwrite guard — see the block comment above.
   writeFileSync(pluginPyprojectPath, updated)
   return toAdd
+}
+
+function parsePyproject(text: string, path: string): Record<string, unknown> {
+  try {
+    return parseToml(text)
+  } catch (err) {
+    throw new Error(
+      `${path} is not valid TOML: ${err instanceof Error ? err.message : String(err)}`,
+      {
+        cause: err,
+      },
+    )
+  }
 }
 
 /**
@@ -248,9 +363,13 @@ export function ensureWorkspaceSources(
  * without calling `ensureWorkspaceSources` at all until it was pointed out
  * in review.
  */
-export function applyWorkspaceSources(targetDir: string, cwd: string, relTargetDir: string): void {
+export function applyWorkspaceSources(
+  targetDir: string,
+  cwd: string,
+  relTargetDir: string,
+): string[] {
   const pluginPyproject = join(targetDir, 'pyproject.toml')
-  if (!existsSync(pluginPyproject)) return
+  if (!existsSync(pluginPyproject)) return []
   const sourced = ensureWorkspaceSources(pluginPyproject, workspaceMemberNames(cwd))
   if (sourced.length > 0) {
     log.info(
@@ -258,4 +377,5 @@ export function applyWorkspaceSources(targetDir: string, cwd: string, relTargetD
         '(the instance provides it as a workspace member).',
     )
   }
+  return sourced
 }

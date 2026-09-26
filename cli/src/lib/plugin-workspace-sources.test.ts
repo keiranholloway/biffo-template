@@ -8,8 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import {
   ensureWorkspaceSources,
-  readDependencyNames,
-  readGroupedDependencyNames,
+  readDeclaredDependencyNames,
   readProjectName,
   readTomlStringArray,
   workspaceMemberNames,
@@ -71,11 +70,37 @@ describe('readProjectName', () => {
   })
 })
 
-describe('readDependencyNames', () => {
+describe('readDeclaredDependencyNames', () => {
+  const names = (text: string) => readDeclaredDependencyNames(parseToml(text)).sort()
+
   it('strips extras and version specifiers', () => {
-    const text =
-      'dependencies = [\n  "biffo-plugin-sdk[user-serving,sigv4]>=1.1,<2.0",\n  "fastapi>=0.1",\n]\n'
-    expect(readDependencyNames(text)).toEqual(['biffo-plugin-sdk', 'fastapi'])
+    expect(
+      names(
+        '[project]\ndependencies = ["biffo-plugin-sdk[user-serving]>=1.1,<2.0", "fastapi>=0.1", "httpx"]\n',
+      ),
+    ).toEqual(['biffo-plugin-sdk', 'fastapi', 'httpx'])
+  })
+
+  it('reads [project] dependencies, every optional extra and every dependency group', () => {
+    expect(
+      names(
+        '[project]\ndependencies = [\n  "only-project>=1",\n]\n\n' +
+          '[project.optional-dependencies]\nserving = [\n  "extra-one[x]>=2",\n]\n\n' +
+          '[dependency-groups]\ndev = [\n  "pytest>=8",\n  {include-group = "docs"},\n' +
+          "  # the host's [importable] check, not a runtime dep\n" +
+          '  "biffo-plugin-host~=0.1.0",\n]\ndocs = ["sphinx"]\n\n[tool.other]\nx = ["not-a-dep"]\n',
+      ),
+    ).toEqual(['biffo-plugin-host', 'extra-one', 'only-project', 'pytest', 'sphinx'])
+  })
+
+  it('reads a top-level inline dependency-groups table', () => {
+    expect(names('dependency-groups = { dev = ["biffo-plugin-host"] }\n')).toEqual([
+      'biffo-plugin-host',
+    ])
+  })
+
+  it('is empty when there are no dependencies at all', () => {
+    expect(names('[project]\nname = "x"\n')).toEqual([])
   })
 })
 
@@ -146,22 +171,6 @@ describe('ensureWorkspaceSources', () => {
 // biffo-template#2106: uv applies "workspace member needs a tool.uv.sources entry" to dependency GROUPS too. The skeleton declares
 // biffo-plugin-host in its `dev` group, and reading only `[project] dependencies` left the next `uv run` failing on it.
 describe('dependency groups and optional dependencies (#2106)', () => {
-  it('reads every group and extra, with comments, extras and version pins, and not [project] dependencies', () => {
-    const text =
-      '[project]\ndependencies = [\n  "only-project>=1",\n]\n\n' +
-      '[project.optional-dependencies]\nserving = [\n  "extra-one[x]>=2",\n]\n\n' +
-      '[dependency-groups]\ndev = [\n  "pytest>=8",\n' +
-      "  # the host's [importable] check, not a runtime dep\n" +
-      '  "biffo-plugin-host~=0.1.0",\n]\ndocs = ["sphinx"]\n\n[tool.other]\nx = ["not-a-dep"]\n'
-    expect(readGroupedDependencyNames(text).sort()).toEqual(
-      ['biffo-plugin-host', 'extra-one', 'pytest', 'sphinx'].sort(),
-    )
-  })
-
-  it('is empty when neither table exists', () => {
-    expect(readGroupedDependencyNames('[project]\nname = "x"\n')).toEqual([])
-  })
-
   it('sources a workspace member that is only declared in a dependency group', () => {
     write('pyproject.toml', '[tool.uv.workspace]\nmembers = ["services/*"]\n')
     write('services/_plugin-host/pyproject.toml', '[project]\nname = "biffo-plugin-host"\n')
@@ -225,7 +234,10 @@ describe('valid TOML spellings (#2106 prosecution finding 2)', () => {
       'include-group entry beside a string',
       '[dependency-groups]\ndev = [{include-group = "lint"}, "biffo-plugin-host"]\nlint = ["ruff"]\n',
     ],
-    ['inline table', 'dependency-groups = { dev = ["biffo-plugin-host~=0.1.0"] }\n'],
+    [
+      'comments inside and after the array',
+      '[dependency-groups]\ndev = [ # tools\n  "pytest", # test runner\n  "biffo-plugin-host~=0.1.0", # [importable] check\n]\n',
+    ],
     [
       'optional-dependencies, comment after header',
       '[project.optional-dependencies] # extras\nserve = ["biffo-plugin-host>=0.1"]\n',
@@ -307,6 +319,18 @@ describe('valid TOML spellings (#2106 prosecution finding 2)', () => {
     const pp = write('services/acme/pyproject.toml', text)
     expect(() => ensureWorkspaceSources(pp, MEMBERS)).toThrow(
       /tool\.uv\.sources.*biffo-plugin-host/s,
+    )
+    expect(readFileSync(pp, 'utf8')).toBe(text)
+  })
+
+  it('refuses, writing nothing, when appending the table would make the file invalid (an inline `tool`)', () => {
+    const text =
+      'tool = { uv = { python-preference = "system" } }\n' +
+      HEAD +
+      '[dependency-groups]\ndev = ["biffo-plugin-host"]\n'
+    const pp = write('services/acme/pyproject.toml', text)
+    expect(() => ensureWorkspaceSources(pp, MEMBERS)).toThrow(
+      /could not add a workspace source for biffo-plugin-host/,
     )
     expect(readFileSync(pp, 'utf8')).toBe(text)
   })

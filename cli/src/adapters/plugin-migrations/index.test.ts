@@ -85,4 +85,32 @@ describe('PluginMigrationsAdapter', () => {
       /No installed plugin manifest found for: nonexistent/,
     )
   })
+
+  describe('refreshLock', () => {
+    it('runs `uv lock` in the project root', async () => {
+      execaMock.mockResolvedValue({ stdout: '' } as never)
+
+      await adapter.refreshLock(cwd)
+
+      expect(execaMock).toHaveBeenCalledWith('uv', ['lock'], expect.objectContaining({ cwd }))
+    })
+
+    it('throws an actionable error, naming the manual recovery, when uv is not on PATH', async () => {
+      execaMock.mockRejectedValue(Object.assign(new Error('spawn uv ENOENT'), { code: 'ENOENT' }))
+
+      await expect(adapter.refreshLock(cwd)).rejects.toThrow(
+        /needs `uv`.*run `uv lock` and commit uv\.lock/s,
+      )
+    })
+
+    it('includes uv’s stderr when the lock cannot be resolved', async () => {
+      execaMock.mockRejectedValue(
+        Object.assign(new Error('exit 1'), { stderr: ' no solution found ' }),
+      )
+
+      await expect(adapter.refreshLock(cwd)).rejects.toThrow(
+        'Failed to refresh uv.lock (`uv lock`): no solution found',
+      )
+    })
+  })
 })

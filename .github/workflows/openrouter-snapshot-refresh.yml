@@ -57,6 +57,11 @@ jobs:
         with:
           ref: dev
           fetch-depth: 0
+          # Do not leave the job's read-only GITHUB_TOKEN in .git/config as an
+          # http extraheader: it takes precedence over the App token embedded
+          # in the push URL below, so the push would authenticate as the wrong
+          # identity and 401/403 (#2115).
+          persist-credentials: false
 
       - name: Decide whether the snapshot is due
         id: due
@@ -69,7 +74,8 @@ jobs:
             echo "due=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          fetched=$(sed -n "s/^export const OPENROUTER_MODEL_SNAPSHOT_FETCHED_AT = '\(.*\)'$/\1/p" cli/src/lib/openrouter-model-snapshot.ts)
+          # Either quote style, so a formatter change cannot blind this to the date.
+          fetched=$(sed -n "s/^export const OPENROUTER_MODEL_SNAPSHOT_FETCHED_AT = ['\"]\([^'\"]*\)['\"]\$/\1/p" cli/src/lib/openrouter-model-snapshot.ts)
           # Fail closed: an unreadable timestamp is a reason to refresh (and to
           # fail loudly if the refresh cannot fix it), never a reason to skip.
           if [ -z "$fetched" ] || ! then_s=$(date -u -d "$fetched" +%s 2>/dev/null); then
@@ -105,8 +111,14 @@ jobs:
         if: steps.due.outputs.due == 'true'
         run: |
           set -eu
-          pnpm install --frozen-lockfile --filter @biffo/cli...
+          # Whole workspace, not `--filter @biffo/cli...`: prettier and its config
+          # plugin live at the root, which a filtered install skips.
+          pnpm install --frozen-lockfile
           pnpm --filter @biffo/cli refresh:openrouter-models
+          # The generator already writes prettier-style output (and a test holds
+          # it to that); this is the backstop so `format:check` cannot be the
+          # thing that keeps the bot's PR red.
+          pnpm exec prettier --write cli/src/lib/openrouter-model-snapshot.ts
           git diff --stat -- cli/src/lib/openrouter-model-snapshot.ts
 
       - name: Open (or update) the refresh PR and arm auto-merge

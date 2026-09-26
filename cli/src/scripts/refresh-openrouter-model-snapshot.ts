@@ -10,7 +10,7 @@
  * `.github/workflows/openrouter-snapshot-refresh.yml` (weekly, refreshing once
  * the snapshot is over 21 days old, opening an auto-merge PR — #2115), and can
  * still be run by hand: `pnpm --filter @biffo/cli refresh:openrouter-models`,
- * then commit the result.
+ * then commit the result (the generator preserves the hand-written docstring and writes prettier-style output).
  *
  * `MODEL_SNAPSHOT_MAX_AGE_DAYS` in `plugin-tool-supply-audit.ts` fails the
  * guard IN THE TEMPLATE once the committed snapshot is older than that
@@ -19,7 +19,7 @@
  * an instance the same age only warns (#2115): the snapshot is the pinned
  * CLI's, not the instance's to refresh.
  */
-import { writeFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -60,34 +60,56 @@ export async function fetchOpenRouterModelIds(fetchImpl: typeof fetch = fetch): 
   return [...new Set(ids)].sort()
 }
 
-function renderSnapshotModule(ids: readonly string[], fetchedAt: string): string {
-  const header = `/**
- * A committed, periodically-refreshed snapshot of OpenRouter's model
- * catalogue — the id half of #822's "validate model ids against the
- * provider's live model list".
- *
- * See this file's own git history / the module docstring this generator
- * writes below for the reasoning; edit the DOCSTRING by hand if it needs to
- * change, but never hand-edit the id array — regenerate it with
- * \`refresh-openrouter-model-snapshot.ts\` so the committed list stays an
- * honest copy of what the provider actually reported.
- *
- * Fetched from the live, unauthenticated OpenRouter \`/models\` endpoint —
- * \`curl ${OPENROUTER_MODELS_URL}\`, \`data[].id\`, deduplicated and sorted.
- */
+/** Single-quoted string literal, the way the repo's prettier config
+ * (`singleQuote: true`) writes it. Escapes only what a JS single-quoted string
+ * must; ids are `provider/slug[:variant]` so in practice nothing is escaped. */
+function quote(value: string): string {
+  return `'${value.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`
+}
 
-/** ISO-8601 UTC timestamp of the live fetch this snapshot was built from. */
-export const OPENROUTER_MODEL_SNAPSHOT_FETCHED_AT = ${JSON.stringify(fetchedAt)}
+function mustReplace(text: string, pattern: RegExp, replacement: string, what: string): string {
+  if (!pattern.test(text)) {
+    throw new Error(
+      `cannot find ${what} in the existing snapshot module — refusing to write. ` +
+        'The generator updates the committed file in place so its hand-written docstring survives; ' +
+        'if the file was restructured, update this script to match.',
+    )
+  }
+  return text.replace(pattern, () => replacement)
+}
 
-/** Every \`data[].id\` OpenRouter's \`/models\` endpoint reported at fetch time —
- * ${ids.length} ids, sorted, deduplicated. A handful of entries are
- * \`~\`-prefixed floating aliases (\`~openai/gpt-latest\`); those are real,
- * resolvable ids in OpenRouter's own catalogue, not a parsing artifact, and
- * are kept verbatim. */
-export const OPENROUTER_MODEL_IDS: readonly string[] = [
-`
-  const body = ids.map((id) => `  ${JSON.stringify(id)},`).join('\n')
-  return `${header}${body}\n]\n`
+/** Updates the committed module IN PLACE: only the fetched-at constant, the id
+ * count in the array's docstring, and the array body change. Everything else —
+ * notably the hand-written "Why a snapshot, not a live call" docstring — is
+ * kept byte-for-byte, and the output is written in the repo's prettier style
+ * (single quotes, no semicolons, trailing commas), so it is a fixed point of
+ * `pnpm run format:check` and the scheduled-refresh PR can go green unattended
+ * (#2115). Throws, without writing, if the file no longer has the expected
+ * shape — a fail-closed refusal rather than a silent regenerate-from-scratch. */
+export function renderSnapshotModule(
+  existing: string,
+  ids: readonly string[],
+  fetchedAt: string,
+): string {
+  let text = mustReplace(
+    existing,
+    /(export const OPENROUTER_MODEL_SNAPSHOT_FETCHED_AT = )(?:'[^'\n]*'|"[^"\n]*")/,
+    `export const OPENROUTER_MODEL_SNAPSHOT_FETCHED_AT = ${quote(fetchedAt)}`,
+    'the OPENROUTER_MODEL_SNAPSHOT_FETCHED_AT constant',
+  )
+  text = mustReplace(
+    text,
+    /\d+ ids, sorted, deduplicated/,
+    `${ids.length} ids, sorted, deduplicated`,
+    'the "<N> ids, sorted, deduplicated" docstring line',
+  )
+  const body = ids.map((id) => `  ${quote(id)},`).join('\n')
+  return mustReplace(
+    text,
+    /(export const OPENROUTER_MODEL_IDS: readonly string\[\] = \[\n)[\s\S]*?\n\]\n?$/,
+    `export const OPENROUTER_MODEL_IDS: readonly string[] = [\n${body}\n]\n`,
+    'the OPENROUTER_MODEL_IDS array',
+  )
 }
 
 export async function refreshOpenRouterModelSnapshot(
@@ -96,7 +118,8 @@ export async function refreshOpenRouterModelSnapshot(
 ): Promise<{ count: number; fetchedAt: string }> {
   const ids = await fetchOpenRouterModelIds(fetchImpl)
   const fetchedAt = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')
-  writeFileSync(outPath, renderSnapshotModule(ids, fetchedAt), 'utf8')
+  const existing = readFileSync(outPath, 'utf8')
+  writeFileSync(outPath, renderSnapshotModule(existing, ids, fetchedAt), 'utf8')
   return { count: ids.length, fetchedAt }
 }
 

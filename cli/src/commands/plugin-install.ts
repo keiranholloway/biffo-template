@@ -27,6 +27,7 @@ import {
   reconcileProvenance,
   resolveLocalProvenance,
   resolveRegistryProvenance,
+  PLUGIN_PROVENANCE_FILENAME,
   writePluginProvenance,
 } from '../lib/plugin-provenance.js'
 import { pluginSeedImportDir, vendorPluginSeed } from '../lib/plugin-seed-vendor.js'
@@ -383,6 +384,10 @@ export async function runPluginInstall(
 
   const { manifest } = source!
 
+  // What this run has changed so far, kept only so a failure can say exactly what it left (#2106). Nothing here is undone on
+  // failure — install has never rolled back — so the honest thing is to name it. Empty until the first write.
+  const left = newInstallLeftovers(options.cwd, registryCwd)
+
   try {
     log.success(
       `Manifest valid — ${manifest.tables.length} table(s), ${manifest.api_routes.length} route(s)`,
@@ -443,6 +448,8 @@ export async function runPluginInstall(
     if (inTreeSource) {
       log.info(`${relTargetDir}/ is already in this checkout — installing in place.`)
     } else {
+      // Recorded before the copy: a copy that dies half-way has still created the directory.
+      left.core.written.push(relTargetDir)
       mkdirSync(targetDir, { recursive: true })
       await copyPluginSource(source!.sourceDir, targetDir)
       log.success(`Installed plugin source at ${relTargetDir}/`)
@@ -461,6 +468,8 @@ export async function runPluginInstall(
       : entry
         ? resolveRegistryProvenance(entry.repo, await deps.git.resolveDefaultBranchSha(entry.repo))
         : await resolveLocalProvenance(source!.sourceDir, source!.origin)
+    // An in-tree install did not copy the plugin — the directory is already the operator's, and only the file written here is new.
+    if (inTreeSource) left.core.written.push(`${relTargetDir}/${PLUGIN_PROVENANCE_FILENAME}`)
     writePluginProvenance(targetDir, reconcileProvenance(previousProvenance, nextProvenance))
 
     // Wire the vendored plugin's deps to the instance's uv workspace. If the
@@ -469,22 +478,28 @@ export async function runPluginInstall(
     // `uv run` to hit it — unless its pyproject sources that dep from the
     // workspace. The standalone repo resolves it from PyPI; only the vendored
     // copy needs this. (#biffo-plugin-install user-facing series.)
-    applyWorkspaceSources(targetDir, options.cwd, relTargetDir)
+    const sourced = applyWorkspaceSources(targetDir, options.cwd, relTargetDir)
+    if (inTreeSource && sourced.length > 0) left.core.written.push(`${relTargetDir}/pyproject.toml`)
 
     const stagePaths = [relTargetDir]
+    // Stage a path AND record it as written: everything but the plugin directory itself (staged as a whole, recorded above).
+    const track = (...paths: string[]) => {
+      stagePaths.push(...paths)
+      left.core.written.push(...paths)
+    }
 
     const tfSourceDir = join(targetDir, 'terraform')
     if (existsSync(tfSourceDir)) {
       mkdirSync(modulesDir, { recursive: true })
       cpSync(tfSourceDir, modulesDir, { recursive: true })
-      stagePaths.push(`modules/plugins/${pluginName}`)
+      track(`modules/plugins/${pluginName}`)
       log.success(`Copied Terraform module to modules/plugins/${pluginName}/`)
 
       // Wire it into every environment root config (#201). Regenerated in full
       // from modules/plugins/, so re-running install can't duplicate a module
       // block or an enabled_plugins entry.
       const wiring = syncPluginTerraform(options.cwd)
-      stagePaths.push(...wiring.changedPaths)
+      track(...wiring.changedPaths)
       if (wiring.environments.length > 0) {
         log.success(
           `Wired module "plugin_${pluginName}" and enabled_plugins into ` +
@@ -530,9 +545,11 @@ export async function runPluginInstall(
       // `install` will fail with "already installed" now that targetDir
       // exists) followed by `git add`/`git commit` yourself.
       log.info(`Generating migration for ${relTargetDir}/'s ${manifest.tables.length} table(s)...`)
+      left.phase = 'migration'
       const generatedPaths = await deps.migrations.generate(options.cwd, [pluginName])
+      left.phase = 'other'
       for (const absPath of generatedPaths) {
-        stagePaths.push(relative(options.cwd, absPath))
+        track(relative(options.cwd, absPath))
       }
       if (generatedPaths.length > 0) {
         log.success(`Generated migration: ${relative(options.cwd, generatedPaths[0]!)}`)
@@ -545,7 +562,7 @@ export async function runPluginInstall(
     // (biffo-template#1554) — a no-op when the manifest declares no `seed`.
     const seedResult = vendorPluginSeed(targetDir, manifest, options.cwd)
     if (seedResult.vendored) {
-      stagePaths.push(seedResult.stagedPath!)
+      track(seedResult.stagedPath!)
     }
 
     // Record where each declared config need's value comes from (biffo-template#1517)
@@ -573,11 +590,20 @@ export async function runPluginInstall(
         ) + '\n',
         'utf8',
       )
-      stagePaths.push(relative(options.cwd, configFilePath))
+      track(relative(options.cwd, configFilePath))
       log.success(
         `Recorded ${configSupply.resolved.length}/${manifest.config.length} declared config ` +
           `value(s) at ${relative(options.cwd, configFilePath)}`,
       )
+    }
+
+    // The install added a member to the instance's uv workspace, so the committed uv.lock is stale whether or not the plugin has
+    // tables (only a table-bearing plugin runs `uv` above, and only as a side effect). Re-lock explicitly, AFTER every file that
+    // feeds the lock is written and BEFORE anything is committed, then stage the result (biffo-template#2106; #2108 tracks the
+    // other commands that commit a stale lock).
+    if (existsSync(join(options.cwd, 'uv.lock'))) {
+      await deps.migrations.refreshLock(options.cwd)
+      stagePaths.push('uv.lock')
     }
 
     // Register this plugin's user-facing surface in the installing sibling's
@@ -600,20 +626,29 @@ export async function runPluginInstall(
         // path does not exist in options.cwd's repo at all. Commit it here,
         // as its own commit, in its own checkout.
         const dashboardCommitMessage = `feat(plugins): register ${pluginName}@${source!.version} in dashboard`
+        left.dashboard.written.push(PLUGIN_REGISTRY_RELATIVE_PATH)
+        left.dashboard.stage = 'partial'
         await deps.git.add(registryCwd, [PLUGIN_REGISTRY_RELATIVE_PATH])
+        left.dashboard.stage = 'staged'
+        left.dashboard.staged = [PLUGIN_REGISTRY_RELATIVE_PATH]
         await deps.git.commit(registryCwd, dashboardCommitMessage)
+        left.dashboard.stage = 'committed'
+        left.dashboard.committed = dashboardCommitMessage
         log.success(
           `Registered ${pluginName} in ${registryCwd}/${PLUGIN_REGISTRY_RELATIVE_PATH} ` +
             `(committed there: "${dashboardCommitMessage}")`,
         )
       } else {
-        stagePaths.push(PLUGIN_REGISTRY_RELATIVE_PATH)
+        track(PLUGIN_REGISTRY_RELATIVE_PATH)
         log.success(`Registered ${pluginName} in ${PLUGIN_REGISTRY_RELATIVE_PATH}`)
       }
     }
 
     const commitMessage = `feat(plugins): install ${pluginName}@${source!.version}`
+    left.core.stage = 'partial'
     await deps.git.add(options.cwd, stagePaths)
+    left.core.stage = 'staged'
+    left.core.staged = stagePaths
     await deps.git.commit(options.cwd, commitMessage)
     log.success(`Committed: ${commitMessage}`)
 
@@ -632,9 +667,84 @@ export async function runPluginInstall(
     }
     console.log(chalk.dim(`    biffo deploy <environment> --app-only\n`))
     printConfigWiringInstructions(pluginName, configSupply.resolved)
+  } catch (err) {
+    throw withLeftovers(err, left, pluginName)
   } finally {
     source!.cleanup()
   }
+}
+
+type StageState = 'none' | 'partial' | 'staged' | 'committed'
+
+interface RepoLeftovers {
+  cwd: string
+  /** Paths written into the working tree and not (yet) committed. */
+  written: string[]
+  /** The paths `git add` was asked to stage, once that call has returned. */
+  staged: string[]
+  stage: StageState
+  /** The commit already made in this repo, if any — never undone by a later failure. */
+  committed: string | null
+}
+
+interface InstallLeftovers {
+  core: RepoLeftovers
+  /** The dashboard checkout (`--frontend-cwd`), or the same repo as `core` when there is none. */
+  dashboard: RepoLeftovers
+  phase: 'migration' | 'other'
+}
+
+function newInstallLeftovers(cwd: string, registryCwd: string): InstallLeftovers {
+  const repo = (dir: string): RepoLeftovers => ({
+    cwd: dir,
+    written: [],
+    staged: [],
+    stage: 'none',
+    committed: null,
+  })
+  return { core: repo(cwd), dashboard: repo(registryCwd), phase: 'other' }
+}
+
+/**
+ * Wraps a failure with an account of what the install had already changed, so the operator never has to diff to find out.
+ * "A failed install says exactly what it left" is a done-when of biffo-template#2106, and it must hold on EVERY failure path — the
+ * migration step, the lock refresh, `git add`, either commit — not just the one that was reproduced. A failure before the first
+ * write (a guard) has nothing to report and is passed through untouched.
+ */
+function withLeftovers(err: unknown, left: InstallLeftovers, pluginName: string): unknown {
+  const repos = left.dashboard.cwd === left.core.cwd ? [left.core] : [left.core, left.dashboard]
+  const lines: string[] = []
+  for (const repo of repos) {
+    if (repo.stage === 'partial') {
+      lines.push(
+        `  - \`git add\` failed part-way in ${repo.cwd}: any of ${[...repo.written, ...repo.staged].join(', ')} may be partially staged`,
+      )
+    } else if (repo.stage === 'staged') {
+      lines.push(`  - staged (git add), not committed, in ${repo.cwd}: ${repo.staged.join(', ')}`)
+    } else if (repo.stage !== 'committed' && repo.written.length > 0) {
+      lines.push(`  - written, not committed, in ${repo.cwd}: ${repo.written.join(', ')}`)
+    }
+    if (repo.committed !== null) {
+      lines.push(`  - already committed in ${repo.cwd}: "${repo.committed}" (not undone)`)
+    }
+  }
+  if (lines.length === 0) return err
+
+  const committedElsewhere = repos.some((r) => r.committed !== null)
+  const advice =
+    left.phase === 'migration'
+      ? `Fix the error above, then \`biffo plugin sync-migrations ${pluginName}\` and commit, or discard those paths with git.`
+      : left.core.stage === 'staged'
+        ? `Fix what the commit reported and run \`git commit\` in ${left.core.cwd}, or unstage and discard those paths with git.`
+        : 'Fix the error above and commit those paths yourself, or discard them with git.'
+  const undo = committedElsewhere
+    ? ' A commit already made is not undone: `git reset --soft HEAD~1` in that checkout if you abandon the install.'
+    : ''
+  const message = err instanceof Error ? err.message : String(err)
+  return new Error(
+    `${message}\n\nbiffo plugin install stopped part-way and rolled nothing back. What it left:\n${lines.join('\n')}\n${advice}${undo}`,
+    { cause: err },
+  )
 }
 
 /**

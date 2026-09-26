@@ -43,27 +43,50 @@ export class PluginMigrationsAdapter {
       args.push('--plugin', name)
     }
 
-    let result
-    try {
-      result = await execa('uv', args, { cwd: join(cwd, 'services', 'api') })
-    } catch (err) {
-      const cause = err as NodeJS.ErrnoException & { stderr?: string }
-      if (cause.code === 'ENOENT') {
-        throw new Error(
-          'biffo plugin install/upgrade/sync-migrations needs `uv` (Python) on PATH to ' +
-            'generate a real migration file — see https://docs.astral.sh/uv/ to install it. ' +
-            'Once installed, re-run this command (or `biffo plugin sync-migrations <name>` ' +
-            'if services/<name>/ is already copied in).',
-        )
-      }
-      throw new Error(
-        `Failed to generate plugin migration: ${cause.stderr?.trim() || (err as Error).message}`,
-      )
-    }
+    const result = await runUv(args, join(cwd, 'services', 'api'), {
+      missing:
+        'biffo plugin install/upgrade/sync-migrations needs `uv` (Python) on PATH to ' +
+        'generate a real migration file — see https://docs.astral.sh/uv/ to install it. ' +
+        'Once installed, re-run this command (or `biffo plugin sync-migrations <name>` ' +
+        'if services/<name>/ is already copied in).',
+      failed: 'Failed to generate plugin migration',
+    })
 
     return result.stdout
       .split('\n')
       .map((line) => line.trim())
       .filter(Boolean)
+  }
+
+  /**
+   * Brings the instance's root `uv.lock` in step with its workspace (`uv lock`).
+   *
+   * `plugin install` adds a member to the uv workspace, so the committed lock is stale the moment the plugin lands — whether or
+   * not the plugin has tables (only a table-bearing plugin runs `uv run` for a migration, which is a side effect that happens to
+   * re-lock). Locking explicitly, then staging the result, is what makes `uv lock --check` pass on the install commit
+   * (biffo-template#2106); leaving it to whichever `uv run` came last is how the no-tables install shipped a stale lock.
+   */
+  async refreshLock(cwd: string): Promise<void> {
+    await runUv(['lock'], cwd, {
+      missing:
+        'biffo plugin install needs `uv` (Python) on PATH to refresh uv.lock for the workspace member it adds — ' +
+        'see https://docs.astral.sh/uv/ to install it, then run `uv lock` and commit uv.lock yourself.',
+      failed: 'Failed to refresh uv.lock (`uv lock`)',
+    })
+  }
+}
+
+/** Runs `uv <args>` in `cwd`, turning a missing binary and a non-zero exit into actionable errors. */
+async function runUv(
+  args: string[],
+  cwd: string,
+  messages: { missing: string; failed: string },
+): Promise<{ stdout: string }> {
+  try {
+    return await execa('uv', args, { cwd })
+  } catch (err) {
+    const cause = err as NodeJS.ErrnoException & { stderr?: string }
+    if (cause.code === 'ENOENT') throw new Error(messages.missing)
+    throw new Error(`${messages.failed}: ${cause.stderr?.trim() || (err as Error).message}`)
   }
 }

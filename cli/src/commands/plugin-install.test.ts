@@ -97,7 +97,10 @@ function makeGitMock(clonedDir: string) {
 }
 
 function makeMigrationsMock(generatedPaths: string[] = []) {
-  return { generate: vi.fn().mockResolvedValue(generatedPaths) }
+  return {
+    generate: vi.fn().mockResolvedValue(generatedPaths),
+    refreshLock: vi.fn().mockResolvedValue(undefined),
+  }
 }
 
 // biffo-template#1554 — a plugin declaring a baseline-row seed.
@@ -186,6 +189,56 @@ describe('runPluginInstall', () => {
 
     expect(git.add).toHaveBeenCalledWith(projectRoot, ['services/widgets'])
     expect(git.commit).toHaveBeenCalledWith(projectRoot, 'feat(plugins): install widgets@1.0.0')
+  })
+
+  // biffo-template#2106: the migration step's `uv run` rewrites the instance's uv.lock; it must ride in the install commit.
+  it('stages the uv.lock the migration step rewrote, so the commit passes `uv lock --check` (#2106)', async () => {
+    writeFileSync(join(projectRoot, 'uv.lock'), 'version = 1\n')
+    const git = makeGitMock(makeClonedPluginDir())
+
+    await runPluginInstall(
+      'widgets@1.0',
+      { dryRun: false, cwd: projectRoot },
+      {
+        registry: makeRegistryMock() as never,
+        git: git as never,
+        migrations: makeMigrationsMock() as never,
+      },
+    )
+
+    expect(git.add).toHaveBeenCalledWith(projectRoot, ['services/widgets', 'uv.lock'])
+  })
+
+  it('does not stage a uv.lock the instance does not have (#2106)', async () => {
+    const git = makeGitMock(makeClonedPluginDir())
+
+    await runPluginInstall(
+      'widgets@1.0',
+      { dryRun: false, cwd: projectRoot },
+      {
+        registry: makeRegistryMock() as never,
+        git: git as never,
+        migrations: makeMigrationsMock() as never,
+      },
+    )
+
+    expect(git.add).toHaveBeenCalledWith(projectRoot, ['services/widgets'])
+  })
+
+  it('says exactly what it left uncommitted when migration generation fails (#2106)', async () => {
+    const git = makeGitMock(makeClonedPluginDir())
+    const migrations = { generate: vi.fn().mockRejectedValue(new Error('uv exploded')) }
+
+    const run = runPluginInstall(
+      'widgets@1.0',
+      { dryRun: false, cwd: projectRoot },
+      { registry: makeRegistryMock() as never, git: git as never, migrations: migrations as never },
+    )
+
+    await expect(run).rejects.toThrow(
+      /uv exploded[\s\S]*written, not committed, in [^\n]*: services\/widgets[\s\S]*sync-migrations widgets/,
+    )
+    expect(git.commit).not.toHaveBeenCalled()
   })
 
   it('copies a Terraform module when the plugin repo ships one, without touching main.tf', async () => {
@@ -1411,5 +1464,195 @@ describe('runPluginInstall', () => {
       expect(git.commit).not.toHaveBeenCalled()
       rmSync(local, { recursive: true, force: true })
     })
+  })
+})
+
+// biffo-template#2106, prosecution of #2107: findings 1 and 3.
+//
+// 1. The install commit omitted uv.lock whenever the plugin declared no tables, because `migrations.generate` (the only step that
+//    runs `uv`) was the only thing that staged it — while the workspace member the install adds makes the lock stale regardless.
+// 3. "A failed install says exactly what it left" held only for a migration-generation failure. A failing final `git commit`,
+//    `git add`, lock refresh, or dashboard commit each left state on disk and said nothing about it.
+describe('install: lock refresh and failure reporting (#2106)', () => {
+  const NO_TABLES = { ...VALID_MANIFEST, tables: [], api_routes: [] }
+  const USER_FRONTEND_MANIFEST = {
+    ...VALID_MANIFEST,
+    user_frontend: { dir: 'web/dist', required_group: 'founder' },
+  }
+  let projectRoot: string
+  let frontendRoot: string
+
+  beforeEach(() => {
+    projectRoot = makeProjectRoot()
+    frontendRoot = makeTmpDir('biffo-dashboard-sibling')
+  })
+  afterEach(() => {
+    rmSync(projectRoot, { recursive: true, force: true })
+    rmSync(frontendRoot, { recursive: true, force: true })
+  })
+
+  function migrationsMock(generated: string[] = []) {
+    return {
+      generate: vi.fn().mockResolvedValue(generated),
+      refreshLock: vi.fn().mockResolvedValue(undefined),
+    }
+  }
+
+  async function install(
+    git: ReturnType<typeof makeGitMock>,
+    migrations: ReturnType<typeof migrationsMock>,
+    opts: { frontendCwd?: string; local?: string } = {},
+  ) {
+    return runPluginInstall(
+      opts.local ? undefined : 'widgets@1.0',
+      { dryRun: false, cwd: projectRoot, ...opts },
+      { registry: makeRegistryMock() as never, git: git as never, migrations: migrations as never },
+    )
+  }
+
+  // Finding 1.
+  it('a plugin with NO tables still refreshes and stages uv.lock (the member it adds makes the lock stale)', async () => {
+    writeFileSync(join(projectRoot, 'uv.lock'), 'version = 1\n')
+    const git = makeGitMock(makeClonedPluginDir(NO_TABLES))
+    const migrations = migrationsMock()
+
+    await install(git, migrations)
+
+    expect(migrations.generate).not.toHaveBeenCalled()
+    expect(migrations.refreshLock).toHaveBeenCalledWith(projectRoot)
+    expect(git.add).toHaveBeenCalledWith(projectRoot, ['services/widgets', 'uv.lock'])
+    // The lock is refreshed BEFORE it is staged; staging first would commit yesterday's lock.
+    expect(migrations.refreshLock.mock.invocationCallOrder[0]!).toBeLessThan(
+      git.add.mock.invocationCallOrder[0]!,
+    )
+  })
+
+  it('a plugin WITH tables refreshes the lock after generating, and stages it', async () => {
+    writeFileSync(join(projectRoot, 'uv.lock'), 'version = 1\n')
+    const git = makeGitMock(makeClonedPluginDir())
+    const migrations = migrationsMock()
+
+    await install(git, migrations)
+
+    expect(migrations.refreshLock).toHaveBeenCalledWith(projectRoot)
+    expect(migrations.generate.mock.invocationCallOrder[0]!).toBeLessThan(
+      migrations.refreshLock.mock.invocationCallOrder[0]!,
+    )
+    expect(git.add).toHaveBeenCalledWith(projectRoot, ['services/widgets', 'uv.lock'])
+  })
+
+  it('an instance with no uv.lock is neither refreshed nor staged', async () => {
+    const git = makeGitMock(makeClonedPluginDir(NO_TABLES))
+    const migrations = migrationsMock()
+
+    await install(git, migrations)
+
+    expect(migrations.refreshLock).not.toHaveBeenCalled()
+    expect(git.add).toHaveBeenCalledWith(projectRoot, ['services/widgets'])
+  })
+
+  // Finding 3.
+  it('a failing final commit names what is staged in the core repo, and that nothing was committed', async () => {
+    const git = makeGitMock(makeClonedPluginDir(NO_TABLES))
+    git.commit.mockRejectedValue(new Error('Command failed with exit code 1: git commit'))
+
+    const run = install(git, migrationsMock())
+
+    await expect(run).rejects.toThrow(/Command failed with exit code 1: git commit/)
+    await expect(run).rejects.toThrow(
+      new RegExp(`staged \\(git add\\), not committed, in ${projectRoot}: services/widgets`),
+    )
+  })
+
+  it('a failing final commit ALSO names the dashboard commit that was already made in the app repo', async () => {
+    makeDashboardRegistry(frontendRoot)
+    const git = makeGitMock(makeClonedPluginDir(USER_FRONTEND_MANIFEST))
+    git.commit.mockImplementation(async (cwd: string) => {
+      if (cwd === projectRoot) throw new Error('hook exit 1')
+    })
+
+    const run = install(git, migrationsMock(), { frontendCwd: frontendRoot })
+
+    await expect(run).rejects.toThrow(/hook exit 1/)
+    await expect(run).rejects.toThrow(
+      new RegExp(
+        `already committed in ${frontendRoot}: "feat\\(plugins\\): register widgets@1.0.0 in dashboard"`,
+      ),
+    )
+    await expect(run).rejects.toThrow(/staged \(git add\), not committed, in .*services\/widgets/)
+  })
+
+  it('a failing dashboard commit names the registry file staged in the app repo and the uncommitted core paths', async () => {
+    makeDashboardRegistry(frontendRoot)
+    const git = makeGitMock(makeClonedPluginDir(USER_FRONTEND_MANIFEST))
+    git.commit.mockImplementation(async (cwd: string) => {
+      if (cwd === frontendRoot) throw new Error('app hook failed')
+    })
+
+    const run = install(git, migrationsMock(), { frontendCwd: frontendRoot })
+
+    await expect(run).rejects.toThrow(/app hook failed/)
+    await expect(run).rejects.toThrow(
+      new RegExp(
+        `staged \\(git add\\), not committed, in ${frontendRoot}: ${PLUGIN_REGISTRY_RELATIVE_PATH}`,
+      ),
+    )
+    await expect(run).rejects.toThrow(
+      new RegExp(`written, not committed, in ${projectRoot}: .*services/widgets`),
+    )
+    // Nothing in the core repo was staged or committed yet.
+    expect(git.add).not.toHaveBeenCalledWith(projectRoot, expect.anything())
+  })
+
+  it('a failing `git add` says paths may be partially staged', async () => {
+    const git = makeGitMock(makeClonedPluginDir(NO_TABLES))
+    git.add.mockRejectedValue(new Error('index.lock exists'))
+
+    const run = install(git, migrationsMock())
+
+    await expect(run).rejects.toThrow(/index\.lock exists/)
+    await expect(run).rejects.toThrow(/`git add` failed[^\n]*partially staged/)
+    expect(git.commit).not.toHaveBeenCalled()
+  })
+
+  it('a failing lock refresh says what it left and does not commit', async () => {
+    writeFileSync(join(projectRoot, 'uv.lock'), 'version = 1\n')
+    const git = makeGitMock(makeClonedPluginDir(NO_TABLES))
+    const migrations = migrationsMock()
+    migrations.refreshLock.mockRejectedValue(new Error('uv lock failed'))
+
+    const run = install(git, migrations)
+
+    await expect(run).rejects.toThrow(/uv lock failed/)
+    await expect(run).rejects.toThrow(
+      new RegExp(`written, not committed, in ${projectRoot}: services/widgets`),
+    )
+    expect(git.add).not.toHaveBeenCalled()
+    expect(git.commit).not.toHaveBeenCalled()
+  })
+
+  it('an IN-TREE install lists only what it wrote — the provenance file — not the whole plugin directory', async () => {
+    const inTree = join(projectRoot, 'services', 'widgets')
+    mkdirSync(inTree, { recursive: true })
+    writeFileSync(join(inTree, 'biffo.plugin.json'), JSON.stringify(VALID_MANIFEST))
+    const git = makeGitMock('')
+    const migrations = migrationsMock()
+    migrations.generate.mockRejectedValue(new Error('uv exploded'))
+
+    const run = install(git, migrations, { local: inTree })
+
+    await expect(run).rejects.toThrow(/uv exploded/)
+    const message = await run.catch((e: Error) => e.message)
+    const writtenLine = message.split('\n').find((l) => l.includes('written, not committed'))!
+    expect(writtenLine).toContain('services/widgets/.biffo-plugin-provenance.json')
+    expect(writtenLine).not.toMatch(/services\/widgets(,|$)/)
+  })
+
+  it('an install that fails BEFORE it writes anything reports nothing left behind', async () => {
+    const git = makeGitMock(makeClonedPluginDir({ ...NO_TABLES, name: 'other' }))
+
+    const message = await install(git, migrationsMock()).catch((e: Error) => e.message)
+
+    expect(message).not.toMatch(/stopped part-way/)
   })
 })

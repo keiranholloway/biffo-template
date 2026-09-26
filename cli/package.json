@@ -63,6 +63,7 @@
     "execa": "^9.5.2",
     "inquirer": "^12.3.0",
     "ora": "^8.1.1",
+    "smol-toml": "^1.9.0",
     "zod": "^3.24.1"
   },
   "devDependencies": {

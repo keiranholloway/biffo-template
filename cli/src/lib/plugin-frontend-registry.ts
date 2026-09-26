@@ -167,7 +167,12 @@ function malformedRegistryError(cwd: string, pluginSlug: string): Error {
 interface ManagedRegion {
   /** Everything up to and including the start marker. */
   before: string
-  /** Everything from the end marker onward. */
+  /**
+   * Everything from the START of the end marker's own line onward — its
+   * indentation included (#2116). The rewritten body is only ever the text
+   * between the two markers' lines, so the END marker's indent lives on the
+   * untouched side of the seam and no write path can drop it.
+   */
   after: string
 }
 
@@ -177,9 +182,15 @@ function findManagedRegion(source: string): { region: ManagedRegion; body: strin
   const bodyStart = startIdx + REGISTRY_START_MARKER.length
   const endIdx = source.indexOf(REGISTRY_END_MARKER, bodyStart)
   if (endIdx === -1) return null
+  // Pull the seam back over the END marker's leading indent — but only when
+  // that indent is pure spaces/tabs after a newline. A marker sharing its
+  // line with other text has no indent of its own to protect.
+  const lineStart = source.lastIndexOf('\n', endIdx - 1) + 1
+  const seam =
+    lineStart >= bodyStart && /^[ \t]*$/.test(source.slice(lineStart, endIdx)) ? lineStart : endIdx
   return {
-    region: { before: source.slice(0, bodyStart), after: source.slice(endIdx) },
-    body: source.slice(bodyStart, endIdx),
+    region: { before: source.slice(0, bodyStart), after: source.slice(seam) },
+    body: source.slice(bodyStart, seam),
   }
 }
 

@@ -318,3 +318,94 @@ describe('removePluginRegistryEntry', () => {
     )
   })
 })
+
+/**
+ * #2116 — the END marker's own line indent is part of the file the sibling
+ * owns, and every write path (upsert and remove, empty and non-empty result)
+ * must hand it back unchanged. `apps/` is prettier/eslint-checked, so a
+ * de-indented marker is a formatting diff on every install and uninstall.
+ */
+describe('managed region marker indentation (#2116)', () => {
+  const END_LINE = '  // BIFFO-PLUGIN-REGISTRY:END\n'
+
+  it('MUST-CATCH: removing the last entry keeps the END marker indented (issue repro)', () => {
+    const root = makeProjectRoot()
+    mkdirSync(join(root, 'apps', 'frontend', 'src', 'lib'), { recursive: true })
+    writeFileSync(
+      registryFilePath(root),
+      'export const INSTALLED_PLUGINS = [\n' +
+        '  // BIFFO-PLUGIN-REGISTRY:START — managed by `biffo plugin install`/`uninstall`. Do not hand-edit.\n' +
+        '  { slug: "a", title: "A", frontendUrl: "/a" },\n' +
+        END_LINE +
+        ']\n',
+      'utf8',
+    )
+
+    removePluginRegistryEntry(root, 'a')
+
+    expect(readFileSync(registryFilePath(root), 'utf8')).toBe(
+      'export const INSTALLED_PLUGINS = [\n' +
+        '  // BIFFO-PLUGIN-REGISTRY:START — managed by `biffo plugin install`/`uninstall`. Do not hand-edit.\n' +
+        END_LINE +
+        ']\n',
+    )
+  })
+
+  it('MUST-CATCH: upsert into a non-empty region keeps the END marker indented', () => {
+    const root = makeProjectRoot()
+    writeManagedRegistry(root)
+    upsertPluginRegistryEntry(root, WIDGETS_ENTRY)
+    upsertPluginRegistryEntry(root, { ...WIDGETS_ENTRY, slug: 'other', title: 'Other' })
+
+    const contents = readFileSync(registryFilePath(root), 'utf8')
+    expect(contents).toContain('\n' + END_LINE + ']\n')
+    expect(contents).not.toMatch(/\n\/\/ BIFFO-PLUGIN-REGISTRY:END/)
+  })
+
+  it('MUST-CATCH: upsert then remove leaves an empty-region file byte-identical to the pre-install state', () => {
+    const root = makeProjectRoot()
+    writeManagedRegistry(root)
+    const before = readFileSync(registryFilePath(root), 'utf8')
+
+    upsertPluginRegistryEntry(root, WIDGETS_ENTRY)
+    removePluginRegistryEntry(root, 'widgets')
+
+    expect(readFileSync(registryFilePath(root), 'utf8')).toBe(before)
+  })
+
+  it('MUST-CATCH: upsert then remove leaves the REAL registry (hand-authored entries) byte-identical', () => {
+    const root = makeProjectRoot()
+    makeRealPlatformAppRegistry(root)
+    const before = readFileSync(registryFilePath(root), 'utf8')
+
+    upsertPluginRegistryEntry(root, WIDGETS_ENTRY)
+    removePluginRegistryEntry(root, 'widgets')
+
+    expect(readFileSync(registryFilePath(root), 'utf8')).toBe(before)
+  })
+
+  it.each([
+    ['four spaces', '    '],
+    ['a tab', '\t'],
+    ['no indent', ''],
+  ])(
+    'MUST-NOT-CATCH: a sibling whose END marker is indented with %s keeps exactly that',
+    (_n, indent) => {
+      const root = makeProjectRoot()
+      mkdirSync(join(root, 'apps', 'frontend', 'src', 'lib'), { recursive: true })
+      const original =
+        'export const INSTALLED_PLUGINS = [\n' +
+        '  // BIFFO-PLUGIN-REGISTRY:START — managed by `biffo plugin install`/`uninstall`. Do not hand-edit.\n' +
+        `${indent}// BIFFO-PLUGIN-REGISTRY:END\n` +
+        ']\n'
+      writeFileSync(registryFilePath(root), original, 'utf8')
+
+      upsertPluginRegistryEntry(root, WIDGETS_ENTRY)
+      expect(readFileSync(registryFilePath(root), 'utf8')).toContain(
+        `\n${indent}// BIFFO-PLUGIN-REGISTRY:END\n]\n`,
+      )
+      removePluginRegistryEntry(root, 'widgets')
+      expect(readFileSync(registryFilePath(root), 'utf8')).toBe(original)
+    },
+  )
+})

@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest'
 import { coreCommand } from './core.js'
 import { dataCommand } from './data.js'
 import { deployCommand } from './deploy.js'
+import { devCommand } from './dev.js'
 import { destroyCommand } from './destroy.js'
 import { initCommand } from './init.js'
 import { pluginCommand } from './plugin.js'
@@ -60,6 +61,7 @@ function walkForCreatePaths(command: Command, prefix: string[] = []): string[] {
 const ROOT_COMMANDS: Command[] = [
   initCommand,
   deployCommand,
+  devCommand,
   destroyCommand,
   teardownCommand,
   waitForChecksCommand,

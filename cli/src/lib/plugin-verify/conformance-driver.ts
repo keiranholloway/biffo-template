@@ -1,4 +1,4 @@
-import type { CommandRunner } from './command-runner.js'
+import type { CommandRunner } from '../plugin-compose/command-runner.js'
 
 /**
  * The single Python entry point every conformance check is discovered and run

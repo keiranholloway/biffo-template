@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { CommandResult, CommandRunner } from './command-runner.js'
+import type { CommandResult, CommandRunner } from '../plugin-compose/command-runner.js'
 import { listChecks, runChecksOnce } from './conformance-driver.js'
 
 /**

@@ -1,7 +1,7 @@
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Command } from 'commander'
-import { RealCommandRunner } from '../lib/plugin-verify/command-runner.js'
+import { RealCommandRunner } from '../lib/plugin-compose/command-runner.js'
 import { runPluginVerify } from '../lib/plugin-verify/run-plugin-verify.js'
 import { findPackagedScript } from '../lib/packaged-scripts.js'
 

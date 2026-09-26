@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { CommandResult, CommandRunner } from './command-runner.js'
+import type { CommandResult, CommandRunner } from '../plugin-compose/command-runner.js'
 import { type PluginVerifyDeps, runPluginVerify } from './run-plugin-verify.js'
 
 vi.mock('../logger.js', () => ({

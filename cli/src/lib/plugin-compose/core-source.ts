@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { getLatestCoreVersion } from '../core-version.js'
 import type { CommandRunner } from './command-runner.js'
 
 /**
@@ -53,4 +54,18 @@ export function resolveCoreRoot(input: CoreSourceInput): string {
     }
   }
   return cache
+}
+
+/**
+ * `resolveCoreRoot` with the CLI's own core version as the fallback tag — the one
+ * spelling both `biffo dev up` and `biffo plugin verify` use, so the two cannot
+ * resolve different Cores for the same plugin.
+ */
+export function resolveCoreRootForCli(explicit: string | undefined, runner: CommandRunner): string {
+  return resolveCoreRoot({
+    ...(explicit ? { explicit } : {}),
+    env: process.env,
+    coreTag: `core-v${getLatestCoreVersion()}`,
+    runner,
+  })
 }

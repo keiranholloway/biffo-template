@@ -2,10 +2,9 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Command } from 'commander'
 import { findPackagedScript } from '../lib/packaged-scripts.js'
-import { getLatestCoreVersion } from '../lib/core-version.js'
 import { RealCommandRunner } from '../lib/plugin-compose/command-runner.js'
 import { realComposeDeps } from '../lib/plugin-compose/compose-stack.js'
-import { resolveCoreRoot } from '../lib/plugin-compose/core-source.js'
+import { resolveCoreRootForCli } from '../lib/plugin-compose/core-source.js'
 import { pickConfigFile, runDevUp } from '../lib/plugin-compose/dev-up.js'
 import { installInterruptSignal } from '../lib/plugin-compose/interrupt.js'
 import { log } from '../lib/logger.js'
@@ -37,12 +36,7 @@ const devUpCommand = new Command('up')
       const runner = new RealCommandRunner()
       let coreRoot: string
       try {
-        coreRoot = resolveCoreRoot({
-          ...(options.coreRoot ? { explicit: options.coreRoot } : {}),
-          env: process.env,
-          coreTag: `core-v${getLatestCoreVersion()}`,
-          runner,
-        })
+        coreRoot = resolveCoreRootForCli(options.coreRoot, runner)
       } catch (err) {
         log.error(`dev up: ${(err as Error).message}`)
         process.exit(1)

@@ -80,3 +80,11 @@ describe('resolveCoreRoot', () => {
     )
   })
 })
+
+describe('resolveCoreRootForCli', () => {
+  it('uses the same resolution as `dev up`: an explicit path that is not a Core checkout is refused', async () => {
+    const { resolveCoreRootForCli } = await import('./core-source.js')
+    const runner: CommandRunner = { run: () => ({ status: 0, stdout: '' }) }
+    expect(() => resolveCoreRootForCli(tmp(), runner)).toThrow(/not a biffo-template checkout/)
+  })
+})

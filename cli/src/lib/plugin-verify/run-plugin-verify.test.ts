@@ -61,27 +61,39 @@ describe('runPluginVerify', () => {
 
   it('--list-checks bypasses Postgres entirely and returns its exit code', async () => {
     const runner = new ScriptedRunner({ listChecks: { status: 0, stdout: '' } })
-    const code = await runPluginVerify({ cwd: '/repo', listChecks: true }, deps(runner))
+    const code = await runPluginVerify(
+      { cwd: '/repo', listChecks: true, realCore: false },
+      deps(runner),
+    )
     expect(code).toBe(0)
     expect(runner.calls).toEqual(['list-checks'])
   })
 
   it('propagates a non-zero --list-checks exit code', async () => {
     const runner = new ScriptedRunner({ listChecks: { status: 1, stdout: '' } })
-    const code = await runPluginVerify({ cwd: '/repo', listChecks: true }, deps(runner))
+    const code = await runPluginVerify(
+      { cwd: '/repo', listChecks: true, realCore: false },
+      deps(runner),
+    )
     expect(code).toBe(1)
   })
 
   it('returns 2 when the packaged pg-test-db.sh script cannot be found', async () => {
     const runner = new ScriptedRunner({})
-    const code = await runPluginVerify({ cwd: '/repo', listChecks: false }, deps(runner, null))
+    const code = await runPluginVerify(
+      { cwd: '/repo', listChecks: false, realCore: false },
+      deps(runner, null),
+    )
     expect(code).toBe(2)
     expect(runner.calls).toEqual([])
   })
 
   it('surfaces pg-test-db.sh failure without running any checks', async () => {
     const runner = new ScriptedRunner({ pgTestDb: { status: 3, stdout: '' } })
-    const code = await runPluginVerify({ cwd: '/repo', listChecks: false }, deps(runner))
+    const code = await runPluginVerify(
+      { cwd: '/repo', listChecks: false, realCore: false },
+      deps(runner),
+    )
     expect(code).toBe(3)
     expect(runner.calls).toEqual(['pg-test-db'])
   })
@@ -93,7 +105,10 @@ describe('runPluginVerify', () => {
         { status: 0, stdout: '' },
       ],
     })
-    const code = await runPluginVerify({ cwd: '/repo', listChecks: false }, deps(runner))
+    const code = await runPluginVerify(
+      { cwd: '/repo', listChecks: false, realCore: false },
+      deps(runner),
+    )
     expect(code).toBe(1)
     expect(runner.calls).toEqual(['pg-test-db', 'conformance-run'])
   })
@@ -105,7 +120,10 @@ describe('runPluginVerify', () => {
         { status: 1, stdout: '' },
       ],
     })
-    const code = await runPluginVerify({ cwd: '/repo', listChecks: false }, deps(runner))
+    const code = await runPluginVerify(
+      { cwd: '/repo', listChecks: false, realCore: false },
+      deps(runner),
+    )
     expect(code).toBe(1)
     expect(runner.calls).toEqual(['pg-test-db', 'conformance-run', 'conformance-run'])
   })
@@ -117,7 +135,10 @@ describe('runPluginVerify', () => {
         { status: 0, stdout: '' },
       ],
     })
-    const code = await runPluginVerify({ cwd: '/repo', listChecks: false }, deps(runner))
+    const code = await runPluginVerify(
+      { cwd: '/repo', listChecks: false, realCore: false },
+      deps(runner),
+    )
     expect(code).toBe(0)
     expect(runner.calls).toEqual(['pg-test-db', 'conformance-run', 'conformance-run'])
   })

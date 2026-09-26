@@ -172,12 +172,17 @@ describe('GitAdapter', () => {
 
     it('commits with the given message', async () => {
       execaMock.mockResolvedValue({} as never)
-      await adapter.commit('/repo', 'feat(plugins): install widgets@1.0.0')
+      await adapter.commit('/repo', 'feat(plugins): install widgets@1.0.0', ['services/widgets'])
       expect(execaMock).toHaveBeenCalledWith(
         'git',
-        ['commit', '-m', 'feat(plugins): install widgets@1.0.0'],
+        ['commit', '-m', 'feat(plugins): install widgets@1.0.0', '--', 'services/widgets'],
         expect.objectContaining({ cwd: '/repo' }),
       )
+    })
+
+    it('refuses an empty pathspec instead of degrading to a bare commit (#2113)', async () => {
+      await expect(adapter.commit('/repo', 'msg', [])).rejects.toThrow(/at least one path/)
+      expect(execaMock).not.toHaveBeenCalled()
     })
   })
 })

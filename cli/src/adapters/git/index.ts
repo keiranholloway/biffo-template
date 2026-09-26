@@ -136,8 +136,29 @@ export class GitAdapter {
     await execa('git', ['add', ...paths], { cwd })
   }
 
-  async commit(cwd: string, message: string): Promise<void> {
-    await execa('git', ['commit', '-m', message], { cwd })
+  /**
+   * Commits `paths` and nothing else (#2113).
+   *
+   * `paths` is required, and a bare `git commit -m` is unrepresentable here:
+   * without a pathspec git commits the *whole index*, so anything the operator
+   * had already staged for unrelated work (in `--cwd`, or in someone else's
+   * `--frontend-cwd` checkout) was swept into the plugin commit. With a
+   * pathspec git commits only those paths' working-tree state — their changes
+   * were staged by the preceding `add`, so they are all included — and leaves
+   * every other staged file staged, untouched, for the operator.
+   *
+   * Pass exactly what the same command handed to `add`. Throws on an empty
+   * list rather than degrading to a bare commit (`git commit -- ` with no
+   * paths is a bare commit).
+   */
+  async commit(cwd: string, message: string, paths: readonly string[]): Promise<void> {
+    if (paths.length === 0) {
+      throw new Error(
+        'GitAdapter.commit requires at least one path: a commit with no pathspec would sweep ' +
+          'in whatever else is staged.',
+      )
+    }
+    await execa('git', ['commit', '-m', message, '--', ...paths], { cwd })
   }
 
   /** The current branch name (e.g. "dev"). */
@@ -146,9 +167,18 @@ export class GitAdapter {
     return stdout.trim()
   }
 
-  /** True if the working tree or index has uncommitted changes. */
-  async hasUncommittedChanges(cwd: string): Promise<boolean> {
-    const { stdout } = await execa('git', ['status', '--porcelain'], { cwd })
+  /**
+   * True if the working tree or index has uncommitted changes — restricted to
+   * `paths` when given (#2113: a pathspec commit only commits those, so "is
+   * there anything for *me* to commit" must not be answered by an unrelated
+   * staged file).
+   */
+  async hasUncommittedChanges(cwd: string, paths?: readonly string[]): Promise<boolean> {
+    const { stdout } = await execa(
+      'git',
+      ['status', '--porcelain', ...(paths && paths.length > 0 ? ['--', ...paths] : [])],
+      { cwd },
+    )
     return stdout.trim().length > 0
   }
 

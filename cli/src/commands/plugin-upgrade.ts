@@ -359,7 +359,7 @@ export async function runPluginUpgrade(
       : `${entry.name} to ${entry.version}`
     const commitMessage = `feat(plugins): upgrade ${label}`
     await deps.git.add(options.cwd, stagePaths)
-    await deps.git.commit(options.cwd, commitMessage)
+    await deps.git.commit(options.cwd, commitMessage, stagePaths)
     log.success(`Committed: ${commitMessage}`)
 
     // A lock failure must not read as an unqualified success (#1539's same
@@ -621,13 +621,13 @@ async function runLocalPluginRefresh(
     // this path deliberately does not have. A dependency change that
     // regenerated uv.lock (above) always leaves something staged, so this
     // short-circuit cannot fire on a refresh that genuinely needs a lock.
-    if (!(await deps.git.hasUncommittedChanges(options.cwd))) {
+    if (!(await deps.git.hasUncommittedChanges(options.cwd, stagePaths))) {
       log.warn(`services/${source.name}/ already matches ${source.origin} — nothing to commit.`)
       return
     }
 
     const commitMessage = `chore(plugins): refresh ${source.name} from local checkout`
-    await deps.git.commit(options.cwd, commitMessage)
+    await deps.git.commit(options.cwd, commitMessage, stagePaths)
     log.success(`Committed: ${commitMessage}`)
 
     // A lock failure must not read as an unqualified success (#1539's same

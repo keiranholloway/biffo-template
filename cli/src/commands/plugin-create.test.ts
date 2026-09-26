@@ -198,7 +198,11 @@ describe.runIf(SKELETON)('runPluginCreate', () => {
     await runPluginCreate('acme-crm', options(), { git: git as never })
 
     expect(git.add).toHaveBeenCalledWith(projectRoot, ['services/acme-crm'])
-    expect(git.commit).toHaveBeenCalledWith(projectRoot, 'feat(plugins): scaffold acme-crm plugin')
+    expect(git.commit).toHaveBeenCalledWith(
+      projectRoot,
+      'feat(plugins): scaffold acme-crm plugin',
+      ['services/acme-crm'],
+    )
   })
 
   it('leaves the scaffold uncommitted under --no-commit', async () => {
@@ -296,7 +300,7 @@ describe.runIf(SKELETON)('runPluginCreate', () => {
       const dir = join(projectRoot, 'biffo-plugin-acme-crm')
       expect(git.init).toHaveBeenCalledWith(dir)
       expect(git.add).toHaveBeenCalledWith(dir, ['.'])
-      expect(git.commit).toHaveBeenCalledWith(dir, expect.stringContaining('acme-crm'))
+      expect(git.commit).toHaveBeenCalledWith(dir, expect.stringContaining('acme-crm'), ['.'])
       expect(git.add).not.toHaveBeenCalledWith(projectRoot, expect.anything())
     })
 

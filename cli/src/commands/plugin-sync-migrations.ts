@@ -103,7 +103,7 @@ export async function runPluginSyncMigrations(
     await deps.git.add(options.cwd, relativePaths)
     const label = name ?? `${String(generated.length)} plugin(s)`
     const commitMessage = `chore(plugins): sync migration(s) for ${label}`
-    await deps.git.commit(options.cwd, commitMessage)
+    await deps.git.commit(options.cwd, commitMessage, relativePaths)
     log.success(`Committed: ${commitMessage}`)
   } else {
     log.warn('--no-commit: generated file(s) are on disk but not staged/committed.')

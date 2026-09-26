@@ -214,7 +214,11 @@ describe('runPluginUninstall', () => {
     expect(promptMock).not.toHaveBeenCalled()
     expect(existsSync(join(projectRoot, 'services', 'widgets'))).toBe(false)
     expect(git.add).toHaveBeenCalledWith(projectRoot, ['services/widgets'])
-    expect(git.commit).toHaveBeenCalledWith(projectRoot, 'chore(plugins): uninstall widgets@1.0.0')
+    expect(git.commit).toHaveBeenCalledWith(
+      projectRoot,
+      'chore(plugins): uninstall widgets@1.0.0',
+      ['services/widgets'],
+    )
   })
 
   it('also removes modules/plugins/<name>/ if it exists', async () => {

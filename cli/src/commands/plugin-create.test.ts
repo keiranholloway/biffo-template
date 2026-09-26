@@ -143,6 +143,36 @@ describe.runIf(SKELETON)('runPluginCreate', () => {
     expect(existsSync(join(dir, 'terraform', 'main.tf'))).toBe(true)
   })
 
+  // biffo-template#2106: in an instance whose uv workspace has the plugin host as a member, the instance's own commit hook builds
+  // the new member with uv, which refuses it unless its pyproject sources the workspace-provided dependency. The scaffold must
+  // carry that source BEFORE the commit, or `create` leaves everything staged and no commit.
+  it('sources workspace-provided dependencies before it commits the scaffold (#2106)', async () => {
+    writeFileSync(
+      join(projectRoot, 'pyproject.toml'),
+      '[tool.uv.workspace]\nmembers = ["services/*"]\n',
+    )
+    mkdirSync(join(projectRoot, 'services', '_plugin-host'), { recursive: true })
+    writeFileSync(
+      join(projectRoot, 'services', '_plugin-host', 'pyproject.toml'),
+      '[project]\nname = "biffo-plugin-host"\n',
+    )
+    const git = makeGitMock()
+    let atAdd = ''
+    git.add.mockImplementation(async () => {
+      atAdd = readFileSync(join(projectRoot, 'services', 'acme-crm', 'pyproject.toml'), 'utf8')
+    })
+
+    await runPluginCreate('acme-crm', options(), { git: git as never })
+
+    expect(atAdd).toContain('biffo-plugin-host = { workspace = true }')
+  })
+
+  it('adds no source when the checkout has no uv workspace providing the dependency (#2106)', async () => {
+    await runPluginCreate('acme-crm', options(), { git: makeGitMock() as never })
+    const text = readFileSync(join(projectRoot, 'services', 'acme-crm', 'pyproject.toml'), 'utf8')
+    expect(text).not.toContain('{ workspace = true }')
+  })
+
   it('scaffolds into the template-owned services/_plugins/ under --first-party', async () => {
     await runPluginCreate('acme-crm', options({ firstParty: true }), {
       git: makeGitMock() as never,

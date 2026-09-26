@@ -90,6 +90,44 @@ export function readDependencyNames(text: string): string[] {
 }
 
 /**
+ * The text of the `[<name>]` TOML table (header excluded, up to the next table header), or null when it is absent.
+ * Matched at line start, like the array readers above: a dependency array's lines start with a quote, never `[`.
+ */
+function readTomlTable(text: string, name: string): string | null {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const header = new RegExp(`^\\[${escaped}\\]\\s*$`, 'm').exec(text)
+  if (!header) return null
+  const start = header.index + header[0].length
+  const next = /^\[/m.exec(text.slice(start))
+  return next ? text.slice(start, start + next.index) : text.slice(start)
+}
+
+/**
+ * Base package names declared in `[dependency-groups]` (PEP 735: `dev`, `test`, …) and `[project.optional-dependencies]`.
+ *
+ * uv applies the "is a workspace member, needs a `tool.uv.sources` entry" rule to these exactly as it does to `[project]
+ * dependencies`, and the plugin skeleton declares `biffo-plugin-host` in its `dev` group (biffo-template#2106): reading only
+ * `dependencies` sourced `biffo-plugin-sdk` and left the very next `uv run` failing on the host.
+ */
+export function readGroupedDependencyNames(text: string): string[] {
+  const names: string[] = []
+  for (const table of ['dependency-groups', 'project.optional-dependencies']) {
+    const section = readTomlTable(text, table)
+    if (section === null) continue
+    for (const key of new Set(
+      [...section.matchAll(/^([A-Za-z0-9_.-]+)\s*=\s*\[/gm)].map((m) => m[1]!),
+    )) {
+      const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      for (const dep of readTomlStringArray(section, escaped)) {
+        const name = /^\s*([A-Za-z0-9._-]+)/.exec(dep)?.[1]
+        if (name) names.push(name)
+      }
+    }
+  }
+  return names
+}
+
+/**
  * The set of package names the instance's uv workspace provides as members —
  * resolving the `[tool.uv.workspace] members` globs (literal paths and a trailing
  * `/*`) to directories and reading each one's `[project] name`.
@@ -174,7 +212,8 @@ export function ensureWorkspaceSources(
   const text = readFileSync(pluginPyprojectPath, 'utf8')
 
   const already = existingWorkspaceSources(text)
-  const toAdd = readDependencyNames(text).filter((n) => memberNames.has(n) && !already.has(n))
+  const declared = new Set([...readDependencyNames(text), ...readGroupedDependencyNames(text)])
+  const toAdd = [...declared].filter((n) => memberNames.has(n) && !already.has(n))
   if (toAdd.length === 0) return []
 
   const lines = toAdd.map((n) => `${n} = { workspace = true }`)

@@ -1,12 +1,14 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { makeTmpDir } from '../test-utils/tmp.js'
+import { findSkeletonRoot } from './plugin-scaffold.js'
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import {
   ensureWorkspaceSources,
   readDependencyNames,
+  readGroupedDependencyNames,
   readProjectName,
   readTomlStringArray,
   workspaceMemberNames,
@@ -138,4 +140,62 @@ describe('ensureWorkspaceSources', () => {
     const pp2 = write('q/pyproject.toml', '[project]\nname = "q"\ndependencies = ["httpx"]\n')
     expect(ensureWorkspaceSources(pp2, members)).toEqual([]) // httpx is not a member
   })
+})
+
+// biffo-template#2106: uv applies "workspace member needs a tool.uv.sources entry" to dependency GROUPS too. The skeleton declares
+// biffo-plugin-host in its `dev` group, and reading only `[project] dependencies` left the next `uv run` failing on it.
+describe('dependency groups and optional dependencies (#2106)', () => {
+  it('reads every group and extra, with comments, extras and version pins, and not [project] dependencies', () => {
+    const text =
+      '[project]\ndependencies = [\n  "only-project>=1",\n]\n\n' +
+      '[project.optional-dependencies]\nserving = [\n  "extra-one[x]>=2",\n]\n\n' +
+      '[dependency-groups]\ndev = [\n  "pytest>=8",\n' +
+      "  # the host's [importable] check, not a runtime dep\n" +
+      '  "biffo-plugin-host~=0.1.0",\n]\ndocs = ["sphinx"]\n\n[tool.other]\nx = ["not-a-dep"]\n'
+    expect(readGroupedDependencyNames(text).sort()).toEqual(
+      ['biffo-plugin-host', 'extra-one', 'pytest', 'sphinx'].sort(),
+    )
+  })
+
+  it('is empty when neither table exists', () => {
+    expect(readGroupedDependencyNames('[project]\nname = "x"\n')).toEqual([])
+  })
+
+  it('sources a workspace member that is only declared in a dependency group', () => {
+    write('pyproject.toml', '[tool.uv.workspace]\nmembers = ["services/*"]\n')
+    write('services/_plugin-host/pyproject.toml', '[project]\nname = "biffo-plugin-host"\n')
+    const plugin = write(
+      'services/acme/pyproject.toml',
+      '[project]\nname = "acme"\ndependencies = ["fastapi"]\n\n[dependency-groups]\ndev = [\n  "biffo-plugin-host~=0.1.0",\n]\n',
+    )
+    expect(ensureWorkspaceSources(plugin, workspaceMemberNames(root))).toEqual([
+      'biffo-plugin-host',
+    ])
+    expect(readFileSync(plugin, 'utf8')).toContain('biffo-plugin-host = { workspace = true }')
+    // idempotent
+    expect(ensureWorkspaceSources(plugin, workspaceMemberNames(root))).toEqual([])
+  })
+
+  // The class, not the case: run it over the pyproject `plugin create` really scaffolds, against the members the platform instance
+  // really has. Any workspace-provided dependency the skeleton declares anywhere must come out sourced.
+  const skeleton = findSkeletonRoot(new URL('.', import.meta.url).pathname, 'plugin-template')
+  it.runIf(skeleton)(
+    'sources every workspace-provided dependency the real skeleton pyproject declares',
+    () => {
+      write(
+        'pyproject.toml',
+        '[tool.uv.workspace]\nmembers = ["services/*", "packages/python-sdk"]\n',
+      )
+      write('services/_plugin-host/pyproject.toml', '[project]\nname = "biffo-plugin-host"\n')
+      write('packages/python-sdk/pyproject.toml', '[project]\nname = "biffo-plugin-sdk"\n')
+      const plugin = write(
+        'services/acme/pyproject.toml',
+        readFileSync(join(skeleton!, 'pyproject.toml'), 'utf8'),
+      )
+      const added = ensureWorkspaceSources(plugin, workspaceMemberNames(root))
+      expect(added.sort()).toEqual(['biffo-plugin-host', 'biffo-plugin-sdk'])
+      const text = readFileSync(plugin, 'utf8')
+      for (const n of added) expect(text).toContain(`${n} = { workspace = true }`)
+    },
+  )
 })

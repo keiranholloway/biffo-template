@@ -22,6 +22,7 @@ import { getLatestCoreVersion, INSTANCE_CORE_FILE } from '../lib/core-version.js
 import { log } from '../lib/logger.js'
 import { pluginDir, type PluginChannel } from '../lib/plugin-locations.js'
 import { validateManifest } from '../lib/plugin-manifest.js'
+import { applyWorkspaceSources } from '../lib/plugin-workspace-sources.js'
 import { deriveNames, findSkeletonRoot, scaffoldPlugin } from '../lib/plugin-scaffold.js'
 import { restorePackagedDotfiles } from '../lib/skeleton-dotfiles.js'
 
@@ -274,6 +275,11 @@ export async function runPluginCreate(
   log.success(
     `Manifest valid — ${manifest.tables.length} table(s), ${manifest.api_routes.length} route(s)`,
   )
+
+  // In an instance whose uv workspace provides a dependency of the skeleton (biffo-plugin-sdk, biffo-plugin-host) as a member, uv
+  // refuses to build the new member unless its pyproject sources that dependency from the workspace. The instance's own commit
+  // hook (`uv run ruff` via lint-staged) builds it, so without this the scaffold commit below fails (biffo-template#2106).
+  applyWorkspaceSources(destDir, options.cwd, relDir)
 
   if (options.commit) {
     if (!(await deps.git.isGitRepo(options.cwd))) {

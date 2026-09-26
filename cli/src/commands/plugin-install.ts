@@ -530,10 +530,26 @@ export async function runPluginInstall(
       // `install` will fail with "already installed" now that targetDir
       // exists) followed by `git add`/`git commit` yourself.
       log.info(`Generating migration for ${relTargetDir}/'s ${manifest.tables.length} table(s)...`)
-      const generatedPaths = await deps.migrations.generate(options.cwd, [pluginName])
+      let generatedPaths: string[]
+      try {
+        generatedPaths = await deps.migrations.generate(options.cwd, [pluginName])
+      } catch (err) {
+        // Nothing above is rolled back, so say what the install left behind rather than leave the operator to diff (#2106).
+        const left = stagePaths.join(', ')
+        throw new Error(
+          `${err instanceof Error ? err.message : String(err)}\n\n` +
+            `The install stopped here. It had already written (uncommitted): ${left}. ` +
+            `Fix the error above, then \`biffo plugin sync-migrations ${pluginName}\` and commit, ` +
+            `or discard those paths with git.`,
+          { cause: err },
+        )
+      }
       for (const absPath of generatedPaths) {
         stagePaths.push(relative(options.cwd, absPath))
       }
+      // `uv run` above re-resolves and rewrites the instance's uv.lock when the plugin adds a workspace member. Leaving it out of
+      // the commit ships a lockfile that `uv lock --check` / `uv sync --locked` reject (biffo-template#2106).
+      if (existsSync(join(options.cwd, 'uv.lock'))) stagePaths.push('uv.lock')
       if (generatedPaths.length > 0) {
         log.success(`Generated migration: ${relative(options.cwd, generatedPaths[0]!)}`)
       }

@@ -188,6 +188,56 @@ describe('runPluginInstall', () => {
     expect(git.commit).toHaveBeenCalledWith(projectRoot, 'feat(plugins): install widgets@1.0.0')
   })
 
+  // biffo-template#2106: the migration step's `uv run` rewrites the instance's uv.lock; it must ride in the install commit.
+  it('stages the uv.lock the migration step rewrote, so the commit passes `uv lock --check` (#2106)', async () => {
+    writeFileSync(join(projectRoot, 'uv.lock'), 'version = 1\n')
+    const git = makeGitMock(makeClonedPluginDir())
+
+    await runPluginInstall(
+      'widgets@1.0',
+      { dryRun: false, cwd: projectRoot },
+      {
+        registry: makeRegistryMock() as never,
+        git: git as never,
+        migrations: makeMigrationsMock() as never,
+      },
+    )
+
+    expect(git.add).toHaveBeenCalledWith(projectRoot, ['services/widgets', 'uv.lock'])
+  })
+
+  it('does not stage a uv.lock the instance does not have (#2106)', async () => {
+    const git = makeGitMock(makeClonedPluginDir())
+
+    await runPluginInstall(
+      'widgets@1.0',
+      { dryRun: false, cwd: projectRoot },
+      {
+        registry: makeRegistryMock() as never,
+        git: git as never,
+        migrations: makeMigrationsMock() as never,
+      },
+    )
+
+    expect(git.add).toHaveBeenCalledWith(projectRoot, ['services/widgets'])
+  })
+
+  it('says exactly what it left uncommitted when migration generation fails (#2106)', async () => {
+    const git = makeGitMock(makeClonedPluginDir())
+    const migrations = { generate: vi.fn().mockRejectedValue(new Error('uv exploded')) }
+
+    const run = runPluginInstall(
+      'widgets@1.0',
+      { dryRun: false, cwd: projectRoot },
+      { registry: makeRegistryMock() as never, git: git as never, migrations: migrations as never },
+    )
+
+    await expect(run).rejects.toThrow(
+      /uv exploded[\s\S]*uncommitted\): services\/widgets[\s\S]*sync-migrations widgets/,
+    )
+    expect(git.commit).not.toHaveBeenCalled()
+  })
+
   it('copies a Terraform module when the plugin repo ships one, without touching main.tf', async () => {
     const registry = makeRegistryMock()
     const git = makeGitMock(makeClonedPluginDir(VALID_MANIFEST, true))

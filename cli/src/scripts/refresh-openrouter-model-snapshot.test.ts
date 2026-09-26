@@ -16,13 +16,13 @@
  * workflow shell — not a restated copy of either — so the pieces cannot drift.
  */
 import { execFileSync } from 'node:child_process'
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import * as prettier from 'prettier'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 
+import { makeTmpDir } from '../test-utils/tmp.js'
 import { refreshOpenRouterModelSnapshot } from './refresh-openrouter-model-snapshot.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -43,12 +43,11 @@ describe('refreshOpenRouterModelSnapshot output', () => {
   let dir: string
   let out: string
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'or-refresh-'))
+    dir = makeTmpDir('or-refresh')
     mkdirSync(join(dir, 'cli', 'src', 'lib'), { recursive: true })
     out = join(dir, 'cli', 'src', 'lib', 'openrouter-model-snapshot.ts')
     copyFileSync(realSnapshot, out)
   })
-  afterEach(() => rmSync(dir, { recursive: true, force: true }))
 
   it('is already prettier-formatted under the repo config (format:check fixed point)', async () => {
     await refreshOpenRouterModelSnapshot(out, fakeFetch(IDS))

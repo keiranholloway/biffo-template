@@ -31,8 +31,11 @@ import {
   REGISTRY_END_MARKER,
   REGISTRY_START_MARKER,
   frontendUrlForSlug,
+  titleFromSlug,
   upsertPluginRegistryEntry,
 } from './plugin-frontend-registry.js'
+import { PLUGIN_NAME_PATTERN } from './plugin-scaffold.js'
+import { PluginManifestSchema } from './plugin-manifest.js'
 import { makeTmpDir } from '../test-utils/tmp.js'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
@@ -73,15 +76,17 @@ describe.skipIf(!hasUv || !existsSync(skeleton))(
       })
     }, 60_000)
 
-    function writePlugins(extra = ''): string {
+    function writePlugins(extra = '', slugs: string[] = ['a5-throwaway']): string {
       const path = join(checkout, PLUGIN_REGISTRY_RELATIVE_PATH)
       mkdirSync(dirname(path), { recursive: true })
       writeFileSync(path, PLUGINS_TS, 'utf8')
-      upsertPluginRegistryEntry(checkout, {
-        slug: 'a5-throwaway',
-        title: 'A5 Throwaway',
-        frontendUrl: frontendUrlForSlug('a5-throwaway'),
-      })
+      for (const slug of slugs) {
+        upsertPluginRegistryEntry(checkout, {
+          slug,
+          title: titleFromSlug(slug),
+          frontendUrl: frontendUrlForSlug(slug),
+        })
+      }
       if (extra) writeFileSync(path, readFileSync(path, 'utf8') + extra, 'utf8')
       return path
     }
@@ -112,6 +117,26 @@ describe.skipIf(!hasUv || !existsSync(skeleton))(
       writePlugins()
       const { status, output } = runGuard()
       expect(status, output).toBe(0)
+    }, 300_000)
+
+    // The guard once spelled the slug as `[a-z0-9]+(-[a-z0-9]+)*`, narrower than
+    // the grammar the installer accepts, so `widgets-` and `a--b` reddened the
+    // app's CI after a clean install. Every boundary of the installer's own
+    // grammar goes through the real writer and the real guard in ONE run.
+    it('stays green for the boundary slugs the installer grammar admits', () => {
+      const slugs = ['a', 'x9', 'idea-scout', 'widgets-', 'a--b', 'a-1-b', 'z-']
+      for (const slug of slugs) {
+        expect(PLUGIN_NAME_PATTERN.test(slug), `scaffold grammar rejects ${slug}`).toBe(true)
+        const parsed = PluginManifestSchema.safeParse({ name: slug, version: '1.0.0' })
+        const nameIssues = parsed.success
+          ? []
+          : parsed.error.issues.filter((i) => i.path[0] === 'name')
+        expect(nameIssues, `manifest grammar rejects ${slug}`).toEqual([])
+      }
+      writePlugins('', slugs)
+      const { status, output } = runGuard()
+      expect(status, output).toBe(0)
+      for (const slug of slugs) expect(output).not.toContain(`'/api/v1/plugins/${slug}/ui'`)
     }, 300_000)
 
     it('is the exemption that turns it green: without it the same file fails (fail-first)', () => {

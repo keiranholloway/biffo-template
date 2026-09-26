@@ -215,14 +215,22 @@ PLUGIN_REGISTRY_FILE = "apps/frontend/src/lib/plugins.ts"
 #: red on the first install, in every split dashboard.
 #:
 #: Like `EXTERNAL_BASE_IDENTIFIERS` this is an explicit ALLOWLIST, and it is
-#: scoped on two axes at once — the FILE (only `PLUGIN_REGISTRY_FILE`) and the
-#: SHAPE (exactly `/api/v1/plugins/<kebab-slug>/ui`, nothing before, after or
+#: scoped on two axes at once -- the FILE (only `PLUGIN_REGISTRY_FILE`) and the
+#: SHAPE (exactly `/api/v1/plugins/<one segment>/ui`, nothing before, after or
 #: between). Any other `/api/v1/plugins/...` path, the same path from any other
 #: file, or any other `/api/v1/...` path in the registry still has to match a
-#: route this BFF registers. biffo-template pins this constant against the
-#: writer (`frontendUrlForSlug`) by running THIS test over a `plugins.ts` the
-#: writer produced, so the two cannot drift apart unnoticed.
-PLUGIN_HOST_UI_PATH = re.compile(r"^/api/v1/plugins/[a-z0-9]+(?:-[a-z0-9]+)*/ui$")
+#: route this BFF registers.
+#:
+#: The shape is STRUCTURAL and deliberately defines no slug grammar of its own.
+#: An earlier draft spelled the slug as kebab-case (`[a-z0-9]+(-[a-z0-9]+)*`),
+#: which was narrower than what the installer accepts (its manifest grammar is
+#: `^[a-z][a-z0-9-]*$`, admitting `widgets-` and `a--b`), so those installs went
+#: red again. Two hand-kept grammars will always drift; one segment of anything
+#: that cannot be a path separator, a template hole (`{`), a query/fragment
+#: delimiter or a dot-segment cannot. The slug is whatever the installer wrote.
+#: biffo-template pins the writer (`frontendUrlForSlug`) against this constant by
+#: running THIS test over a `plugins.ts` the writer produced, for boundary slugs.
+PLUGIN_HOST_UI_PATH = re.compile(r"^/api/v1/plugins/[^/{}?#.\s]+/ui$")
 
 
 def is_plugin_host_ui_path(file: Path, normalized: str | None) -> bool:
@@ -1113,6 +1121,13 @@ class TestPluginHostRouteFamily:
         assert is_plugin_host_ui_path(self.REGISTRY, "/api/v1/plugins/a5-throwaway/ui")
         assert is_plugin_host_ui_path(self.REGISTRY, "/api/v1/plugins/widgets/ui")
 
+    def test_every_slug_the_installer_accepts_is_exempt(self) -> None:
+        # Manifest grammar is ^[a-z][a-z0-9-]*$ -- trailing and doubled hyphens
+        # are legal, and so are the hand-authored shapes the registry reader
+        # tolerates (underscore, uppercase). The guard defines no slug grammar.
+        for slug in ("widgets-", "a--b", "a", "x9", "idea-scout", "a_b", "Widgets"):
+            assert is_plugin_host_ui_path(self.REGISTRY, f"/api/v1/plugins/{slug}/ui"), slug
+
     def test_same_path_in_any_other_file_is_not_exempt(self) -> None:
         other = FRONTEND_SRC / "lib" / "other.ts"
         assert not is_plugin_host_ui_path(other, "/api/v1/plugins/widgets/ui")
@@ -1123,10 +1138,12 @@ class TestPluginHostRouteFamily:
             "/api/v1/plugins/widgets/ui/extra",
             "/api/v1/plugins/widgets/api",
             "/api/v1/plugins/{param}/ui",
-            "/api/v1/plugins/Widgets/ui",
             "/api/v1/plugins/a/b/ui",
             "/api/v1/plugins//ui",
-            "/api/v1/plugins/-x/ui",
+            "/api/v1/plugins/../ui",
+            "/api/v1/plugins/./ui",
+            "/api/v1/plugins/a?x=1/ui",
+            "/api/v1/plugins/a#x/ui",
             "/api/v1/courses",
             "/api/v1/whoami",
             "/x/api/v1/plugins/widgets/ui",

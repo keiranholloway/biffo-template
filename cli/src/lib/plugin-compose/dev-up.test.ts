@@ -202,3 +202,17 @@ describe('helpers', () => {
     )
   })
 })
+
+describe('runCompositionCheck (what plugin verify calls)', () => {
+  it("is dev up --check under the caller's label, and tears down", async () => {
+    const { runCompositionCheck } = await import('./dev-up.js')
+    const ctx = stackWith(realRouter())
+    stackToken = () => ctx.stack.adminToken
+    const { lines, h } = hooks()
+    expect(
+      await runCompositionCheck({ ...base, label: 'plugin verify (real_core)' }, ctx.deps, h.write),
+    ).toBe(0)
+    expect(lines[0]).toBe('plugin verify (real_core): 8/8 probes matched')
+    expect(ctx.closed()).toBe(true)
+  })
+})

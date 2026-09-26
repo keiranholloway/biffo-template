@@ -1,20 +1,25 @@
 """#1523 seam 3 — real Core under the harness.
 
-**Not yet implemented, and deliberately not scheduled.** Gated on spike #1522
-(Core under uvicorn against harness Postgres with a dev-mode token minter),
-which is `OPEN`, carries zero comments and `fleet:hold` as of the plan this
-milestone implements (`docs/implementation/0007-plugin-verify-conformance/
-README.md`, "Blocked items"). Filing a done-condition for this seam before the
-spike reports would mean inventing the very thing the spike exists to
-establish.
+**Composition-owned: run by the CLI, not by this package.** Spike #1522 established
+that Core boots under plain uvicorn against harness Postgres with a dev-minted token,
+and `biffo dev up` (#1525) is that composition. `biffo plugin verify` runs the SAME
+composition (`cli/src/lib/plugin-compose/compose-stack.ts`, via `runCompositionCheck`
+— #2105) after the conformance passes, so a plugin that does not start under real
+Core is red in the same lane. It lives in the CLI because starting Core and the
+shared host is process composition, which the CLI already owns; a Python copy of it
+would be the second implementation #2105 exists to prevent.
 
-This module exists — with no `run` — so `--list-checks` names this seam
-rather than letting the denominator silently shrink (biffo-template#1924's own
-done-when: `1 implemented, 4 not-implemented`).
+This module has no `run`, deliberately: `conformance run` has nothing to execute
+here. It exists so `--list-checks` names this seam rather than letting the
+denominator silently shrink, and `IMPLEMENTED` stays `False` because that flag
+means "`conformance run` executes it".
 """
 
 from __future__ import annotations
 
 CHECK_NAME = "real_core"
 IMPLEMENTED = False
-NOTE = "blocked on spike #1522 (Core-in-a-box feasibility) -- not yet planned"
+NOTE = (
+    "composition-owned: run by `biffo plugin verify` via plugin-compose/compose-stack "
+    "(#2105), not by `conformance run`"
+)

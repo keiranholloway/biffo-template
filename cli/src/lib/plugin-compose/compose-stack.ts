@@ -17,10 +17,12 @@ import { BOOTSTRAP_PY, CORE_APP_PY, HOST_APP_PY } from './python-assets.js'
 /**
  * THE composition (biffo-template#1525): Postgres + Core + the shared plugin host
  * + the plugin under development, on one machine, off real AWS. `biffo dev up` is
- * its interactive form; `biffo plugin verify` reuses the same Postgres raising,
- * command runner and uv invocation (`raise-postgres.ts`, `command-runner.ts`) and
- * is where the `real_core` seam (#1523 item 3) will consume `composeStack` rather
- * than growing a second copy. What the spike (#1522) proved runs here, unchanged:
+ * its interactive form; `biffo plugin verify`'s `real_core` seam
+ * (#1523 item 3, #2105) consumes `composeStack` through `runCompositionCheck`
+ * (`dev-up.ts`) — the same function as `dev up --check` — and additionally shares
+ * the Postgres raising and command runner (`raise-postgres.ts`, `command-runner.ts`).
+ * There is no second copy: a change here that breaks Core start-up is red in
+ * `plugin verify` (`plugin-verify/real-core-seam.test.ts`). What the spike (#1522) proved runs here, unchanged:
  * Core boots under plain uvicorn against real Postgres, and a dev-minted RS256
  * token is accepted by Core AND the host's real Cognito authorizer through the
  * baked-JWKS path both already have.

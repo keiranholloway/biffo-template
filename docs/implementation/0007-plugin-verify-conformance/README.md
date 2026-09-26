@@ -22,8 +22,8 @@ rather than filing milestones nobody can close.
 1. In a plugin repo, `sh scripts/biffo.sh plugin verify` exits 0 and prints its
    **denominator** before its verdict — e.g.
    `verify: 2 ingress(es) mounted [user_ingress→marketing.app:app,
-   admin_ingress→marketing.admin_app:app]; 6 table(s) applied; 14 declared route(s)
-   resolved: <list>`. A green with no printed scope is a failure of this feature
+admin_ingress→marketing.admin_app:app]; 6 table(s) applied; 14 declared route(s)
+resolved: <list>`. A green with no printed scope is a failure of this feature
    (#1363's shape).
 2. The same command runs **twice in a row against the same database** and is green both
    times; a check that is not re-runnable fails the second pass and fails the job.
@@ -35,22 +35,22 @@ rather than filing milestones nobody can close.
 5. `.github/workflows/` in all three existing plugin repos invokes the same one command,
    and a `*.test.sh`/guard-with-no-caller check fails closed if it ever stops being
    invoked (#1413).
-6. Every check the harness *declares* but has not implemented is printed as
+6. Every check the harness _declares_ but has not implemented is printed as
    `not-implemented`, so the denominator can never silently shrink to "1 of 1".
 
 ## Current state — researched against `dev` at `d453d94f` (2026-09-06)
 
 ### What already exists, and must not be rebuilt
 
-| Thing | Where | Bearing on this plan |
-|---|---|---|
-| A real-Postgres **local** lane | `scripts/pg-test-db.sh`, `pg_test_run`/`pg_test_modules` in `scripts/verify.sh`, `scripts/pgtest-diff-check.sh` in the pre-push hook | The composition's Postgres half is **already built and already distributed** — `scripts/pg-test-db.sh` is in `cli/package.json`'s `files`, so `sh scripts/biffo.sh pg-test-db` works in any repo today. The harness raises Postgres with this, it does not write a new one. |
-| The `*_pg.py` discovery convention | `services/api/tests/test_*_pg.py`, `test_permanently_skipped_pg_tests.py` | The estate already has a working "discover, don't register" convention for real-DB tests. The harness copies it rather than inventing a check registry. |
-| The migration **delta** fix | `ebb4443a` / PR #1513, closing #1511 | #1511 is **fixed**. The milestone below builds the *fixture that keeps it fixed*, not the fix. |
-| Real host discovery + import | `services/_plugin-host/src/plugin_host/discover.py` (`load_app`, line 277: `getattr(import_module(module_name), attr)`) and `mount.py` | The mechanism to resolve `module:attr` for real **exists**. Nothing anywhere exercises it against a plugin on disk. |
-| One validated manifest parser | `biffo_plugin_sdk.plugin.PluginManifest`, `extra="forbid"`; `discover.py`'s `_load_manifest_tolerant` (#1517/PR #1561) | Part of #1517 landed. See "what has not landed" below for the part that has not. |
-| A zero-caller guard precedent | the `Guard self-test wiring` step in `_skeletons/plugin-template/.github/workflows/ci.yml` (#1710), and `scripts/guard-self-test-wiring.sh` | #1523's "grep-for-callers check" has a working shape to copy. It explicitly fails on an empty discovery ("an empty discovery is not a vacuous pass"). |
-| The two CloudFront Functions and their unit tests | `modules/cloud/aws/cdn/rewrite.js`, `click-rewrite.js`, `main.tf`; `cli/src/lib/cdn-rewrite-function.test.ts`, `cdn-click-rewrite-function.test.ts` | #1503 is **merged**. The functions are individually tested. What is missing is a single document both the Terraform behaviours and the assertions read. |
+| Thing                                             | Where                                                                                                                                               | Bearing on this plan                                                                                                                                                                                                                                                        |
+| ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A real-Postgres **local** lane                    | `scripts/pg-test-db.sh`, `pg_test_run`/`pg_test_modules` in `scripts/verify.sh`, `scripts/pgtest-diff-check.sh` in the pre-push hook                | The composition's Postgres half is **already built and already distributed** — `scripts/pg-test-db.sh` is in `cli/package.json`'s `files`, so `sh scripts/biffo.sh pg-test-db` works in any repo today. The harness raises Postgres with this, it does not write a new one. |
+| The `*_pg.py` discovery convention                | `services/api/tests/test_*_pg.py`, `test_permanently_skipped_pg_tests.py`                                                                           | The estate already has a working "discover, don't register" convention for real-DB tests. The harness copies it rather than inventing a check registry.                                                                                                                     |
+| The migration **delta** fix                       | `ebb4443a` / PR #1513, closing #1511                                                                                                                | #1511 is **fixed**. The milestone below builds the _fixture that keeps it fixed_, not the fix.                                                                                                                                                                              |
+| Real host discovery + import                      | `services/_plugin-host/src/plugin_host/discover.py` (`load_app`, line 277: `getattr(import_module(module_name), attr)`) and `mount.py`              | The mechanism to resolve `module:attr` for real **exists**. Nothing anywhere exercises it against a plugin on disk.                                                                                                                                                         |
+| One validated manifest parser                     | `biffo_plugin_sdk.plugin.PluginManifest`, `extra="forbid"`; `discover.py`'s `_load_manifest_tolerant` (#1517/PR #1561)                              | Part of #1517 landed. See "what has not landed" below for the part that has not.                                                                                                                                                                                            |
+| A zero-caller guard precedent                     | the `Guard self-test wiring` step in `_skeletons/plugin-template/.github/workflows/ci.yml` (#1710), and `scripts/guard-self-test-wiring.sh`         | #1523's "grep-for-callers check" has a working shape to copy. It explicitly fails on an empty discovery ("an empty discovery is not a vacuous pass").                                                                                                                       |
+| The two CloudFront Functions and their unit tests | `modules/cloud/aws/cdn/rewrite.js`, `click-rewrite.js`, `main.tf`; `cli/src/lib/cdn-rewrite-function.test.ts`, `cdn-click-rewrite-function.test.ts` | #1503 is **merged**. The functions are individually tested. What is missing is a single document both the Terraform behaviours and the assertions read.                                                                                                                     |
 
 ### What does not exist
 
@@ -59,7 +59,7 @@ rather than filing milestones nobody can close.
   `staleness`). There is no `verify`, and no `cli/src/lib/plugin-verify/`.
 - **No real-Postgres lane in CI, anywhere in the template.** `.github/workflows/ci.yml`
   has no service container and no `_pg` reference; the `*_pg.py` modules collect and
-  *skip*. The real-DB discipline is local-only, enforced at push time. This is itself an
+  _skip_. The real-DB discipline is local-only, enforced at push time. This is itself an
   instance of the class the epic is about, and M3 below closes it for the plugin surface.
 - **No Postgres, no host, no Core in the plugin skeleton's CI.** Its jobs are `lint`,
   `typecheck`, `test`, `validate-manifest`, `terraform`, `security-secrets`,
@@ -81,11 +81,16 @@ rather than filing milestones nobody can close.
 
 ### Blocked items — confirmed, not assumed
 
-**#1523 item 3 (real Core) is gated on spike #1522, which has not been run.**
+**Update (#2105): item 3 has since landed.** Spike #1522 reported, `biffo dev up` (#1525)
+became the composition, and `biffo plugin verify` runs it as the `real_core` seam by
+calling `plugin-compose/compose-stack` through `runCompositionCheck` — one composition,
+no second implementation. The paragraph below is the plan-time record and is kept as such.
+
+**#1523 item 3 (real Core) was gated on spike #1522, which had not been run at plan time.**
 [#1522](https://github.com/keiranholloway/biffo-template/issues/1522) is `OPEN`, has
 **zero comments**, and carries `fleet:hold`. Its deliverable is a feasibility report, and
-#1521 states the real-Core decision explicitly as *"Gated on the spike confirming Core
-boots under uvicorn against harness Postgres with a dev-mode token minter."* No milestone
+#1521 states the real-Core decision explicitly as _"Gated on the spike confirming Core
+boots under uvicorn against harness Postgres with a dev-mode token minter."_ No milestone
 for item 3 is filed here. Writing one would mean inventing the done-condition the spike
 exists to establish.
 
@@ -102,7 +107,7 @@ the declared-needs mechanism itself does not exist. #1517 is still `OPEN`, label
 resolve.
 
 **A third gap, found during research and not previously recorded.** #1523 item 5 says the
-harness *"asserts every manifest-declared public route"*. `RouteDef`
+harness _"asserts every manifest-declared public route"_. `RouteDef`
 (`plugin.py:241`) has **no public/unauthenticated flag** — its fields are
 `method, path, table, operation, description`, and every declared route is synthesised
 CRUD behind the gate. The `/c/<token>` tracked-link path #1503 fixed is hard-wired into
@@ -116,9 +121,9 @@ Phase 0's manifest work, not here. This is filed as a named gap, not a milestone
 #1523's title says "skeleton-distributed". Research says do it the other way round, and
 this is the one place the plan departs from the issue as written.
 
-`shared-files.json`'s own header states the policy: *"SINCE 2026-08-03 THIS LIST IS
+`shared-files.json`'s own header states the policy: _"SINCE 2026-08-03 THIS LIST IS
 SHRINKING, NOT GROWING (#1109) … Every guard that moves into the CLI leaves this list, and
-roughly ten estate guards exist only to police the copies that remain."* Distributing a
+roughly ten estate guards exist only to police the copies that remain."_ Distributing a
 large conformance workflow into three plugin repos would add the eleventh policeman and
 guarantee three divergent copies — the condition #1523 exists to end.
 
@@ -140,15 +145,15 @@ its example plugin — but it distributes an invocation, not an implementation.
 
 Longest-prefix over `core-manifest.json`:
 
-| Path | Owner |
-|---|---|
-| `packages/python-sdk/**` | `templateOwned` (`packages/`) |
-| `services/_plugin-host/**` | `templateOwned` (`services/_plugin-host/`) |
-| `_skeletons/plugin-template/**` | `templateOwned` (`_skeletons/`) |
-| `modules/cloud/aws/cdn/**` | `templateOwned` (`modules/`) |
-| `.github/workflows/**` | `templateOwned` (`.github/`) |
-| `scripts/**` | `templateOwned` (`scripts/`) |
-| `cli/**` | **not in the manifest** — instances do not carry `cli/` at all (see `scripts/biffo.sh`'s header); it is template-only, published as `@biffo/cli` |
+| Path                            | Owner                                                                                                                                            |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `packages/python-sdk/**`        | `templateOwned` (`packages/`)                                                                                                                    |
+| `services/_plugin-host/**`      | `templateOwned` (`services/_plugin-host/`)                                                                                                       |
+| `_skeletons/plugin-template/**` | `templateOwned` (`_skeletons/`)                                                                                                                  |
+| `modules/cloud/aws/cdn/**`      | `templateOwned` (`modules/`)                                                                                                                     |
+| `.github/workflows/**`          | `templateOwned` (`.github/`)                                                                                                                     |
+| `scripts/**`                    | `templateOwned` (`scripts/`)                                                                                                                     |
+| `cli/**`                        | **not in the manifest** — instances do not carry `cli/` at all (see `scripts/biffo.sh`'s header); it is template-only, published as `@biffo/cli` |
 
 Every implementation milestone therefore lands in **`keiranholloway/biffo-template`**.
 The adoption milestones land in the three plugin repos, which own their own
@@ -159,29 +164,29 @@ in this plan has a plausible home in a second product repo.
 
 Nine issues: 1 epic + 5 in `biffo-template` + 3 cross-repo adoption issues.
 
-| # | Repo | Milestone | Read-set | Depends on |
-|---|---|---|---|---|
-| M1 | biffo-template | Publish `biffo-plugin-host` to PyPI | `services/_plugin-host/`, `.github/workflows/publish-plugin-host.yml` | — |
-| M2 | biffo-template | `biffo plugin verify` spine + the real host-mount check | `cli/src/commands/plugin*.ts`, `cli/src/lib/plugin-verify/`, `packages/python-sdk/src/biffo_plugin_sdk/conformance/` | M1 |
-| M3 | biffo-template | Migration transitions against real Postgres; #1511 as a permanent fixture | `services/api/src/api/migrations/`, `services/api/scripts/`, `services/api/tests/`, `packages/python-sdk/src/biffo_plugin_sdk/conformance/` | M2 |
-| M4 | biffo-template | The CDN path contract as one generated document | `modules/cloud/aws/cdn/`, `cli/src/lib/cdn-*` | — |
-| M5 | biffo-template | Skeleton adoption: an ingress on the example plugin, and the one CI line | `_skeletons/plugin-template/` | M2 |
-| M6 | biffo-plugin-marketing | Adopt the lane, retire the divergent layout | that repo | M5 |
-| M7 | biffo-plugin-ideation | Adopt the lane, retire the divergent layout | that repo | M5 |
-| M8 | biffo-plugin-idea-scout | Adopt the lane, retire the divergent layout | that repo | M5 |
+| #   | Repo                    | Milestone                                                                 | Read-set                                                                                                                                    | Depends on |
+| --- | ----------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| M1  | biffo-template          | Publish `biffo-plugin-host` to PyPI                                       | `services/_plugin-host/`, `.github/workflows/publish-plugin-host.yml`                                                                       | —          |
+| M2  | biffo-template          | `biffo plugin verify` spine + the real host-mount check                   | `cli/src/commands/plugin*.ts`, `cli/src/lib/plugin-verify/`, `packages/python-sdk/src/biffo_plugin_sdk/conformance/`                        | M1         |
+| M3  | biffo-template          | Migration transitions against real Postgres; #1511 as a permanent fixture | `services/api/src/api/migrations/`, `services/api/scripts/`, `services/api/tests/`, `packages/python-sdk/src/biffo_plugin_sdk/conformance/` | M2         |
+| M4  | biffo-template          | The CDN path contract as one generated document                           | `modules/cloud/aws/cdn/`, `cli/src/lib/cdn-*`                                                                                               | —          |
+| M5  | biffo-template          | Skeleton adoption: an ingress on the example plugin, and the one CI line  | `_skeletons/plugin-template/`                                                                                                               | M2         |
+| M6  | biffo-plugin-marketing  | Adopt the lane, retire the divergent layout                               | that repo                                                                                                                                   | M5         |
+| M7  | biffo-plugin-ideation   | Adopt the lane, retire the divergent layout                               | that repo                                                                                                                                   | M5         |
+| M8  | biffo-plugin-idea-scout | Adopt the lane, retire the divergent layout                               | that repo                                                                                                                                   | M5         |
 
 **Parallelism.** M1 and M4 are read-disjoint from everything and from each other, and can
 start immediately and concurrently. M2 → M3 is **sequential by read-set, not just by
 logic**: both write into `packages/python-sdk/src/biffo_plugin_sdk/conformance/`, so
 `readset-check` will refuse them concurrently — this is stated rather than glossed. M4
-co-tenants `cli/src/lib/` with M2, so run it *before* M2 or after it, not alongside.
+co-tenants `cli/src/lib/` with M2, so run it _before_ M2 or after it, not alongside.
 M3 ∥ M5 is safe. M6/M7/M8 are safe with each other.
 
 ---
 
 ### M1 — Publish `biffo-plugin-host` to PyPI
 
-**Why first.** Item 2 asks for "the *actual* `services/_plugin-host` discovery/mount code".
+**Why first.** Item 2 asks for "the _actual_ `services/_plugin-host` discovery/mount code".
 A plugin repo cannot install that code today (PyPI 404), so without this every plugin-side
 host assertion is a re-implementation — the mock the harness is replacing.
 
@@ -279,7 +284,7 @@ guard and authority read the same artifact.**
 
 **Scope.** A literal contract file in `modules/cloud/aws/cdn/` — public path pattern →
 rewritten origin path → origin → whether a token is required. `main.tf` generates its
-CloudFront Function code and its `ordered_cache_behavior` path patterns *from* it
+CloudFront Function code and its `ordered_cache_behavior` path patterns _from_ it
 (`templatefile`, not `file`), and the existing `cli/src/lib/cdn-rewrite-function.test.ts`
 and `cdn-click-rewrite-function.test.ts` execute the generated handler against the same
 document. A guard fails closed if a behaviour exists in `main.tf` with no contract row, or
@@ -291,7 +296,7 @@ expectations and still pass; `terraform plan` on `modules/cloud/aws/cdn` is a **
 against the current deployed shape (this milestone changes where the values come from, not
 what they are).
 
-**Named gap, deliberately not in scope:** asserting *manifest-declared* public routes
+**Named gap, deliberately not in scope:** asserting _manifest-declared_ public routes
 against this contract. `RouteDef` has no public flag (see "Blocked items"). Recorded as a
 follow-up on the epic; it belongs with Phase 0's manifest schema work.
 
@@ -352,10 +357,10 @@ change at any point: M4 is explicitly a `terraform plan` no-op.
 
 ## Deferred, with the gate named
 
-| #1523 item | Gate | Filed? |
-|---|---|---|
-| 3 — real Core in the harness | Spike #1522 (OPEN, zero comments, `fleet:hold`) must report first | **No.** Plan it when the spike reports. |
-| 4 — config resolution end-to-end | Phase 0 / #1517 must land a `config:` block on `PluginManifest`; today there is none | **No.** Plan it when #1517 lands. |
-| 5 — manifest-declared public routes | `RouteDef` needs a public/unauthenticated flag; belongs with Phase 0's manifest work | **No.** Recorded as a named gap on M4. |
+| #1523 item                          | Gate                                                                                 | Filed?                                  |
+| ----------------------------------- | ------------------------------------------------------------------------------------ | --------------------------------------- |
+| 3 — real Core in the harness        | Spike #1522 (OPEN, zero comments, `fleet:hold`) must report first                    | **No.** Plan it when the spike reports. |
+| 4 — config resolution end-to-end    | Phase 0 / #1517 must land a `config:` block on `PluginManifest`; today there is none | **No.** Plan it when #1517 lands.       |
+| 5 — manifest-declared public routes | `RouteDef` needs a public/unauthenticated flag; belongs with Phase 0's manifest work | **No.** Recorded as a named gap on M4.  |
 
 #1523 stays open until all five land; this plan closes three of them.

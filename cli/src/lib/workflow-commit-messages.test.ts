@@ -26,6 +26,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { makeTmpDir } from '../test-utils/tmp.js'
+import { isInstanceRepo } from './core-version.js'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
 
@@ -70,69 +71,74 @@ export function extractGitCommits(file: string, text: string): WorkflowCommit[] 
   return out
 }
 
-/** Commit `messages` in a scratch repo wired to this repo's real commit-msg hook. */
-export function commitUnderArmedHook(messages: string[]): { code: number; output: string } {
-  const dir = makeTmpDir('biffo-wf-commit')
-  const git = (...args: string[]) => execFileSync('git', args, { cwd: dir, stdio: 'pipe' })
-  git('init', '-q', '-b', 'dev')
-  git('config', 'user.email', 'bot@example.com')
-  git('config', 'user.name', 'biffo-fleet[bot]')
-  // What `pnpm install`'s prepare script does on the runner: point git at the hooks.
-  git('config', 'core.hooksPath', join(repoRoot, '.githooks'))
-  writeFileSync(join(dir, 'package.json'), '{}\n')
-  writeFileSync(
-    join(dir, 'commitlint.config.js'),
-    readFileSync(join(repoRoot, 'commitlint.config.js')),
-  )
-  symlinkSync(join(repoRoot, 'node_modules'), join(dir, 'node_modules'))
-  try {
-    execFileSync('git', ['commit', '--allow-empty', ...messages.flatMap((m) => ['-m', m])], {
-      cwd: dir,
-      stdio: 'pipe',
+// Template-only: an instance has no _skeletons/ and its workflows are the
+// template's, already checked here.
+describe.skipIf(isInstanceRepo(repoRoot))(
+  'workflow git commits under the armed commit-msg hook',
+  () => {
+    /** Commit `messages` in a scratch repo wired to this repo's real commit-msg hook. */
+    function commitUnderArmedHook(messages: string[]): { code: number; output: string } {
+      const dir = makeTmpDir('biffo-wf-commit')
+      const git = (...args: string[]) => execFileSync('git', args, { cwd: dir, stdio: 'pipe' })
+      git('init', '-q', '-b', 'dev')
+      git('config', 'user.email', 'bot@example.com')
+      git('config', 'user.name', 'biffo-fleet[bot]')
+      // What `pnpm install`'s prepare script does on the runner: point git at the hooks.
+      git('config', 'core.hooksPath', join(repoRoot, '.githooks'))
+      writeFileSync(join(dir, 'package.json'), '{}\n')
+      writeFileSync(
+        join(dir, 'commitlint.config.js'),
+        readFileSync(join(repoRoot, 'commitlint.config.js')),
+      )
+      symlinkSync(join(repoRoot, 'node_modules'), join(dir, 'node_modules'))
+      try {
+        execFileSync('git', ['commit', '--allow-empty', ...messages.flatMap((m) => ['-m', m])], {
+          cwd: dir,
+          stdio: 'pipe',
+        })
+        return { code: 0, output: '' }
+      } catch (err) {
+        const e = err as { status?: number; stderr?: Buffer; stdout?: Buffer }
+        return { code: e.status ?? 1, output: `${String(e.stderr ?? '')}${String(e.stdout ?? '')}` }
+      }
+    }
+
+    const commits = shippedWorkflowFiles(repoRoot).flatMap((f) =>
+      extractGitCommits(f, readFileSync(f, 'utf8')),
+    )
+
+    it('finds the commits the workflows actually make (guards against an empty denominator)', () => {
+      const files = commits.map((c) => c.file.replace(`${repoRoot}/`, ''))
+      expect(files).toContain('.github/workflows/openrouter-snapshot-refresh.yml')
+      expect(files).toContain('_skeletons/plugin-template/.github/workflows/publish-registry.yml')
     })
-    return { code: 0, output: '' }
-  } catch (err) {
-    const e = err as { status?: number; stderr?: Buffer; stdout?: Buffer }
-    return { code: e.status ?? 1, output: `${String(e.stderr ?? '')}${String(e.stdout ?? '')}` }
-  }
-}
 
-describe('workflow git commits under the armed commit-msg hook', () => {
-  const commits = shippedWorkflowFiles(repoRoot).flatMap((f) =>
-    extractGitCommits(f, readFileSync(f, 'utf8')),
-  )
+    for (const c of commits) {
+      it(`${c.file.replace(`${repoRoot}/`, '')}: message has a parsable -m and passes commitlint`, () => {
+        expect(c.messages.length, 'git commit with no extractable -m message').toBeGreaterThan(0)
+        const r = commitUnderArmedHook(c.messages)
+        expect(r.output).toBe('')
+        expect(r.code).toBe(0)
+      })
+    }
 
-  it('finds the commits the workflows actually make (guards against an empty denominator)', () => {
-    const files = commits.map((c) => c.file.replace(`${repoRoot}/`, ''))
-    expect(files).toContain('.github/workflows/openrouter-snapshot-refresh.yml')
-    expect(files).toContain('_skeletons/plugin-template/.github/workflows/publish-registry.yml')
-  })
-
-  for (const c of commits) {
-    it(`${c.file.replace(`${repoRoot}/`, '')}: message has a parsable -m and passes commitlint`, () => {
-      expect(c.messages.length, 'git commit with no extractable -m message').toBeGreaterThan(0)
-      const r = commitUnderArmedHook(c.messages)
-      expect(r.output).toBe('')
-      expect(r.code).toBe(0)
+    it('the harness goes red on the original defect (110-column body line)', () => {
+      const r = commitUnderArmedHook([
+        'chore(cli): refresh OpenRouter model snapshot',
+        'Scheduled by openrouter-snapshot-refresh.yml so the 45-day age gate never fires on the calendar alone (#2115).',
+      ])
+      expect(r.code).not.toBe(0)
+      expect(r.output).toContain('must not be longer than 100 characters')
     })
-  }
 
-  it('the harness goes red on the original defect (110-column body line)', () => {
-    const r = commitUnderArmedHook([
-      'chore(cli): refresh OpenRouter model snapshot',
-      'Scheduled by openrouter-snapshot-refresh.yml so the 45-day age gate never fires on the calendar alone (#2115).',
-    ])
-    expect(r.code).not.toBe(0)
-    expect(r.output).toContain('must not be longer than 100 characters')
-  })
-
-  it('extractor joins continuations and skips comments and commit-tree', () => {
-    const text = [
-      '  # git commit -m "comment"',
-      '  git commit-tree x -m "tree"',
-      '  git commit -m "a: ${v}" \\',
-      "    -m 'second'",
-    ].join('\n')
-    expect(extractGitCommits('f', text)).toEqual([{ file: 'f', messages: ['a: x', 'second'] }])
-  })
-})
+    it('extractor joins continuations and skips comments and commit-tree', () => {
+      const text = [
+        '  # git commit -m "comment"',
+        '  git commit-tree x -m "tree"',
+        '  git commit -m "a: ${v}" \\',
+        "    -m 'second'",
+      ].join('\n')
+      expect(extractGitCommits('f', text)).toEqual([{ file: 'f', messages: ['a: x', 'second'] }])
+    })
+  },
+)

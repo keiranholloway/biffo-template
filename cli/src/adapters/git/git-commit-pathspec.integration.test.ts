@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { GitAdapter } from './index.js'
@@ -99,5 +99,71 @@ describe('GitAdapter.commit commits only the given paths (#2113)', () => {
     git('add', 'unrelated.txt')
     await expect(adapter.hasUncommittedChanges(repo)).resolves.toBe(true)
     await expect(adapter.hasUncommittedChanges(repo, ['services/widgets'])).resolves.toBe(false)
+  })
+  /**
+   * The estate's `.githooks/pre-commit` runs lint-staged (prettier / eslint --fix
+   * / ruff format): it rewrites the staged files and re-stages them. This is a
+   * faithful stand-in — same observable behaviour, no toolchain needed.
+   */
+  const installFormattingHook = (): void => {
+    const hook = join(repo, '.git', 'hooks', 'pre-commit')
+    writeFileSync(
+      hook,
+      [
+        '#!/bin/sh',
+        'for f in $(git diff --cached --name-only --diff-filter=ACM | grep "\\.json$"); do',
+        `  node -e "const fs=require('fs');const f=process.argv[1];fs.writeFileSync(f,JSON.stringify(JSON.parse(fs.readFileSync(f,'utf8')),null,2)+'\\n')" "$f"`,
+        '  git add -- "$f"',
+        'done',
+        '',
+      ].join('\n'),
+    )
+    chmodSync(hook, 0o755)
+  }
+
+  it('leaves a clean tree when a pre-commit hook reformats the committed files (#2113 review)', async () => {
+    installFormattingHook()
+    writeFileSync(join(repo, 'unrelated.json'), '{"a":1}\n')
+    git('add', 'unrelated.json')
+
+    mkdirSync(join(repo, 'modules'), { recursive: true })
+    writeFileSync(join(repo, 'modules', 'plugin.json'), '{"name":"widgets","v":1}\n')
+    await adapter.add(repo, ['modules/plugin.json'])
+    await adapter.commit(repo, 'feat(plugins): install widgets', ['modules/plugin.json'])
+
+    // The hook's formatting is what got committed...
+    expect(git('show', 'HEAD:modules/plugin.json')).toBe('{\n  "name": "widgets",\n  "v": 1\n}')
+    expect(committedFiles()).toEqual(['modules/plugin.json'])
+    // ...and the operator's checkout is clean apart from their own staged file: no `MM`,
+    // no staged revert of the formatting, and the unformatted unrelated file was not
+    // touched by the hook or swept in.
+    expect(git('status', '--porcelain')).toBe('A  unrelated.json')
+    expect(git('diff', '--cached', '--name-only')).toBe('unrelated.json')
+    expect(readFileSync(join(repo, 'unrelated.json'), 'utf8')).toBe('{"a":1}\n')
+  })
+
+  it('leaves a clean tree after a hook-modified commit when nothing else is staged', async () => {
+    installFormattingHook()
+    writeFileSync(join(repo, 'n.json'), '{"k":[1,2]}\n')
+    await adapter.add(repo, ['n.json'])
+    await adapter.commit(repo, 'feat: n', ['n.json'])
+    expect(git('status', '--porcelain')).toBe('')
+  })
+
+  it('treats paths literally: a glob-character path does not widen the commit (#2113 review)', async () => {
+    writeFileSync(join(repo, 'a.txt'), 'unrelated\n')
+    git('add', 'a.txt')
+    writeFileSync(join(repo, '[a].txt'), 'mine\n')
+    await adapter.add(repo, ['[a].txt'])
+    await adapter.commit(repo, 'feat: bracket', ['[a].txt'])
+
+    expect(committedFiles()).toEqual(['[a].txt'])
+    expect(git('status', '--porcelain')).toBe('A  a.txt')
+  })
+
+  it('hasUncommittedChanges treats paths literally', async () => {
+    writeFileSync(join(repo, 'a.txt'), 'unrelated\n')
+    git('add', 'a.txt')
+    await expect(adapter.hasUncommittedChanges(repo, ['[a].txt'])).resolves.toBe(false)
   })
 })

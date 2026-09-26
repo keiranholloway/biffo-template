@@ -133,6 +133,9 @@ describe('py-dependency-audit.sh discovery (#1270)', () => {
     writeFileSync(join(repo, 'uv.lock'), '# lock')
     mkdirSync(join(repo, 'services', 'idea-scout'), { recursive: true })
     writeFileSync(join(repo, 'services', 'idea-scout', 'uv.lock'), '# lock')
+    // A real uv project always has a pyproject.toml beside its uv.lock, and the
+    // audit stages both to export the tree's OWN lock (#2120).
+    writeFileSync(join(repo, 'services', 'idea-scout', 'pyproject.toml'), '[project]\n')
 
     const { code, output } = run(PY_SCRIPT, repo, bin)
 

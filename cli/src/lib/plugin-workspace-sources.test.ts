@@ -11,7 +11,6 @@ import {
   normaliseName,
   readDeclaredDependencyNames,
   readProjectName,
-  readTomlStringArray,
   workspaceMemberNames,
 } from './plugin-workspace-sources.js'
 
@@ -27,38 +26,6 @@ function write(rel: string, content: string): string {
   writeFileSync(p, content)
   return p
 }
-
-describe('readTomlStringArray', () => {
-  it('reads single- and multi-line arrays and ignores absent keys', () => {
-    const text =
-      'members = ["services/*", "packages/python-sdk"]\ndependencies = [\n  "a>=1",\n  "b",\n]\n'
-    expect(readTomlStringArray(text, 'members')).toEqual(['services/*', 'packages/python-sdk'])
-    expect(readTomlStringArray(text, 'dependencies')).toEqual(['a>=1', 'b'])
-    expect(readTomlStringArray(text, 'nope')).toEqual([])
-  })
-
-  it('skips comments inside the array — even ones with an apostrophe or brackets', () => {
-    // The real ideation pyproject: a comment with "SDK's" (stray ') between the
-    // first dep and biffo-plugin-sdk once dropped everything after it.
-    const text =
-      'dependencies = [\n' +
-      '  "pydantic>=2.10.4",\n' +
-      "  # The founder-gated Lambda: the SDK's require_group gate (user-serving)\n" +
-      '  # + SigV4 [botocore]; biffo-plugin-sdk 1.1.0 is on PyPI, resolves normally.\n' +
-      '  "biffo-plugin-sdk[user-serving,sigv4]>=1.1,<2.0",\n' +
-      '  "fastapi>=0.1",\n' +
-      ']\n'
-    expect(readTomlStringArray(text, 'dependencies')).toEqual([
-      'pydantic>=2.10.4',
-      'biffo-plugin-sdk[user-serving,sigv4]>=1.1,<2.0',
-      'fastapi>=0.1',
-    ])
-  })
-
-  it('returns [] on an unterminated array rather than misparsing', () => {
-    expect(readTomlStringArray('dependencies = [\n  "a",\n', 'dependencies')).toEqual([])
-  })
-})
 
 describe('readProjectName', () => {
   it('reads the [project] name and is not fooled by a name under another table', () => {

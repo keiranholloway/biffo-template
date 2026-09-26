@@ -1240,3 +1240,127 @@ describe('lockfile refresh on dependency change (biffo-template#1569)', () => {
     })
   })
 })
+
+/**
+ * biffo-template#2127 — the re-lock trigger must read the dependency surface
+ * with a TOML parser, not line regexes. Every spelling below is valid TOML that
+ * the regex reader could not see, so a dependency edit there never re-locked
+ * `uv.lock` and the refresh failed later in the instance's own CI on
+ * `uv sync --locked` (the same class as biffo-template#2106, one call site over).
+ */
+describe('lockfile refresh sees every valid TOML spelling of a dependency (biffo-template#2127)', () => {
+  let projectRoot: string
+
+  beforeEach(() => {
+    projectRoot = makeProjectRoot()
+    promptMock.mockReset()
+    promptMock.mockResolvedValue({ confirmed: true })
+    writeFileSync(join(projectRoot, 'uv.lock'), 'version = 1\n')
+  })
+
+  afterEach(() => {
+    rmSync(projectRoot, { recursive: true, force: true })
+  })
+
+  const HEAD = '[project]\nname = "widgets"\ndependencies = ["httpx>=0.28.1"]\n\n'
+
+  // [label, group section built from a dev-group body]. `body` is the array literal.
+  const SPELLINGS: Array<[string, (body: string) => string]> = [
+    [
+      'comment after the [dependency-groups] header',
+      (b) => `[dependency-groups] # dev tools\ndev = ${b}\n`,
+    ],
+    [
+      'spaces inside the [ dependency-groups ] header',
+      (b) => `[ dependency-groups ]\ndev = ${b}\n`,
+    ],
+    ['single-quoted group key', (b) => `[dependency-groups]\n'dev' = ${b}\n`],
+    ['double-quoted group key', (b) => `[dependency-groups]\n"dev" = ${b}\n`],
+    ['indented group key', (b) => `[dependency-groups]\n  dev = ${b}\n`],
+    ['inline dependency-groups table', (b) => `dependency-groups = { dev = ${b} }\n`],
+    [
+      'commented [project.optional-dependencies] header',
+      (b) => `[project.optional-dependencies] # extras\nextra = ${b}\n`,
+    ],
+    [
+      'quoted optional-dependencies key',
+      (b) => `[project.optional-dependencies]\n'extra' = ${b}\n`,
+    ],
+  ]
+
+  it.each(SPELLINGS)('re-locks when a dependency is added under a %s', async (_label, build) => {
+    // The inline spelling is a top-level key, so it must precede any table header.
+    const compose = (body: string) => {
+      const section = build(body)
+      return section.startsWith('dependency-groups =')
+        ? `${section}${HEAD.trimEnd()}\n`
+        : `${HEAD}${section}`
+    }
+    // Inline form: the key must come before [project] to stay top-level.
+    const oldText = compose('["pytest>=8.3.4"]')
+    const newText = compose('["pytest>=8.3.4", "pyyaml>=6.0"]')
+    writeFileSync(join(projectRoot, 'services', 'widgets', 'pyproject.toml'), oldText)
+    const localDir = makeLocalPluginDir(NEW_MANIFEST, { pyproject: newText })
+    const runCommand = vi.fn().mockResolvedValue({ ok: true })
+
+    await runPluginUpgrade(
+      undefined,
+      { local: localDir, dryRun: false, force: true, cwd: projectRoot },
+      {
+        registry: makeRegistryMock() as never,
+        git: makeGitMock(makeClonedPluginDir()) as never,
+        migrations: makeMigrationsMock() as never,
+        runCommand,
+      },
+    )
+
+    expect(runCommand).toHaveBeenCalledWith(['uv', 'lock'], projectRoot)
+  })
+
+  it('does not re-lock when only a comment inside a quoted-key group changes', async () => {
+    const oldText = `${HEAD}[dependency-groups]\n'dev' = ["pytest>=8.3.4"]\n`
+    const newText = `${HEAD}[dependency-groups] # tools\n'dev' = [\n  "pytest>=8.3.4", # test runner\n]\n`
+    writeFileSync(join(projectRoot, 'services', 'widgets', 'pyproject.toml'), oldText)
+    const localDir = makeLocalPluginDir(NEW_MANIFEST, { pyproject: newText })
+    const runCommand = vi.fn().mockResolvedValue({ ok: true })
+
+    await runPluginUpgrade(
+      undefined,
+      { local: localDir, dryRun: false, force: true, cwd: projectRoot },
+      {
+        registry: makeRegistryMock() as never,
+        git: makeGitMock(makeClonedPluginDir()) as never,
+        migrations: makeMigrationsMock() as never,
+        runCommand,
+      },
+    )
+
+    expect(runCommand).not.toHaveBeenCalled()
+  })
+
+  it('re-locks (fails toward the lock) when the installed pyproject.toml is unparseable', async () => {
+    // Cannot tell what changed, so it must not report "no change". Same dependency
+    // text either side under a regex reader — only a parser knows the old one is broken.
+    writeFileSync(
+      join(projectRoot, 'services', 'widgets', 'pyproject.toml'),
+      '[project\nname = "widgets"\n',
+    )
+    const localDir = makeLocalPluginDir(NEW_MANIFEST, {
+      pyproject: '[project]\nname = "widgets"\n',
+    })
+    const runCommand = vi.fn().mockResolvedValue({ ok: true })
+
+    await runPluginUpgrade(
+      undefined,
+      { local: localDir, dryRun: false, force: true, cwd: projectRoot },
+      {
+        registry: makeRegistryMock() as never,
+        git: makeGitMock(makeClonedPluginDir()) as never,
+        migrations: makeMigrationsMock() as never,
+        runCommand,
+      },
+    )
+
+    expect(runCommand).toHaveBeenCalledWith(['uv', 'lock'], projectRoot)
+  })
+})

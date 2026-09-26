@@ -31,7 +31,8 @@ import {
   findRetiredFrontendShape,
   retiredFrontendShapeError,
 } from '../lib/plugin-terraform-wiring.js'
-import { applyWorkspaceSources, readTomlStringArray } from '../lib/plugin-workspace-sources.js'
+import { parse as parseToml } from 'smol-toml'
+import { applyWorkspaceSources, readDeclaredRequirements } from '../lib/plugin-workspace-sources.js'
 import {
   cloneAndValidatePlugin,
   parsePluginTarget,
@@ -742,9 +743,11 @@ function refuseIfModuleStillReferenced(cwd: string, modulesDir: string, name: st
  * rewrites the `[tool.uv.sources]` section, which would make every refresh
  * of a workspace-sourced plugin look like a dependency change under a naive
  * text diff even when the actual dependency list is untouched.
- * `dependencySurface` extracts, comment- and whitespace-blind (reusing
- * `readTomlStringArray`'s bracket-aware scanner from
- * `lib/plugin-workspace-sources.ts`):
+ * `dependencySurface` extracts, from the parsed TOML document (`smol-toml` via
+ * `readDeclaredRequirements` in `lib/plugin-workspace-sources.ts`, never line
+ * regexes — a regex reader silently missed every valid spelling its author had
+ * not thought of, e.g. a commented `[dependency-groups]` header or a quoted
+ * key, biffo-template#2127):
  *
  * - `[project] dependencies` (full version-spec strings, so a bump like
  *   `httpx>=0.28.1` -> `httpx>=0.29.0` counts as a change, not just an
@@ -844,38 +847,27 @@ function readPyprojectIfPresent(targetDir: string): string | null {
 }
 
 /** True when the two `pyproject.toml` texts' dependency surfaces differ — see
- * `relockIfDependenciesChanged`'s docstring for what "surface" means and why. */
+ * `relockIfDependenciesChanged`'s docstring for what "surface" means and why.
+ * A manifest that does not parse has no readable surface: that is "cannot tell",
+ * never "unchanged", so it reports a change and the lockfile is refreshed. */
 function dependenciesChanged(before: string | null, after: string | null): boolean {
   if (before === after) return false // includes both null
-  const beforeItems = before ? dependencySurface(before) : []
-  const afterItems = after ? dependencySurface(after) : []
+  const beforeItems = before === null ? [] : dependencySurface(before)
+  const afterItems = after === null ? [] : dependencySurface(after)
+  if (beforeItems === null || afterItems === null) return true
   return JSON.stringify(beforeItems) !== JSON.stringify(afterItems)
 }
 
-/** The sorted, comment-blind dependency strings a pyproject.toml declares —
- * `[project] dependencies` plus every array under `[dependency-groups]` and
- * `[project.optional-dependencies]`. */
-function dependencySurface(text: string): string[] {
-  const items = [...readTomlStringArray(text, 'dependencies')]
-  for (const header of ['dependency-groups', 'project.optional-dependencies']) {
-    const body = tomlTableBody(text, header)
-    if (!body) continue
-    for (const m of body.matchAll(/^([A-Za-z0-9_.-]+)\s*=\s*\[/gm)) {
-      items.push(...readTomlStringArray(body, m[1]!))
-    }
+/** The sorted dependency strings a pyproject.toml declares — `[project] dependencies`
+ * plus every array under `[dependency-groups]` and `[project.optional-dependencies]` —
+ * read from the parsed document (the same reader the workspace-source wiring uses), or
+ * null when the text is not valid TOML. */
+function dependencySurface(text: string): string[] | null {
+  try {
+    return readDeclaredRequirements(parseToml(text)).sort()
+  } catch {
+    return null
   }
-  return items.sort()
-}
-
-/** The text of a TOML table between `[header]` and the next top-level `[...]`
- * header (or EOF), or null if `header` is absent. */
-function tomlTableBody(text: string, header: string): string | null {
-  const escaped = header.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const headerMatch = new RegExp(`^\\[${escaped}\\]\\s*$`, 'm').exec(text)
-  if (!headerMatch) return null
-  const rest = text.slice(headerMatch.index + headerMatch[0].length)
-  const nextHeader = /^\[/m.exec(rest)
-  return nextHeader ? rest.slice(0, nextHeader.index) : rest
 }
 
 function readInstalledVersion(targetDir: string): string | undefined {

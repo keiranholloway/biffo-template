@@ -409,3 +409,108 @@ describe('managed region marker indentation (#2116)', () => {
     },
   )
 })
+
+/**
+ * #2130 — a managed write must keep the file's own line-ending convention.
+ * `writeManagedEntries` used to build the region with bare `\n`, so a CRLF
+ * `plugins.ts` came out with LF inside the region and CRLF outside it.
+ *
+ * Every expectation below is written in LF and converted with `withEol`, so
+ * each case states the same file shape in both conventions and the assertion
+ * is an exact byte comparison — not just "contains no bare LF".
+ */
+describe('line-ending preservation (#2130)', () => {
+  const START_LINE =
+    '  // BIFFO-PLUGIN-REGISTRY:START — managed by `biffo plugin install`/`uninstall`. Do not hand-edit.\n'
+  const END_LINE = '  // BIFFO-PLUGIN-REGISTRY:END\n'
+  const HEAD = 'export const INSTALLED_PLUGINS = [\n' + START_LINE
+  const TAIL = END_LINE + ']\n'
+
+  const hand = (slug: string): string =>
+    `  { slug: "${slug}", title: "${slug}", frontendUrl: "/${slug}" },\n`
+  const generated = (slug: string): string =>
+    `  {\n    slug: "${slug}",\n    title: "${slug}",\n    frontendUrl: "/${slug}",\n  },\n`
+
+  const withEol = (text: string, eol: string): string => text.replace(/\n/g, eol)
+  const bareLf = (text: string): boolean => /(?<!\r)\n/.test(text)
+
+  function writeRaw(root: string, content: string): void {
+    mkdirSync(join(root, 'apps', 'frontend', 'src', 'lib'), { recursive: true })
+    writeFileSync(registryFilePath(root), content, 'utf8')
+  }
+
+  const EOLS: Array<[string, string]> = [
+    ['CRLF', '\r\n'],
+    ['LF', '\n'],
+  ]
+  const COUNTS = [0, 1, 3]
+  const slugs = (n: number): string[] => Array.from({ length: n }, (_, i) => `keep${i}`)
+
+  describe.each(EOLS)('%s file', (_label, eol) => {
+    it.each(COUNTS)(
+      'MUST-CATCH: upsert alongside %i existing entries keeps endings intact',
+      (n) => {
+        const root = makeProjectRoot()
+        writeRaw(root, withEol(HEAD + slugs(n).map(hand).join('') + TAIL, eol))
+
+        upsertPluginRegistryEntry(root, {
+          slug: 'widgets',
+          title: 'widgets',
+          frontendUrl: '/widgets',
+        })
+
+        const after = readFileSync(registryFilePath(root), 'utf8')
+        // Hand-authored entries come back re-joined in the same one-line form;
+        // only the new entry is multi-line.
+        expect(after).toBe(
+          withEol(HEAD + slugs(n).map(hand).join('') + generated('widgets') + TAIL, eol),
+        )
+        expect(eol === '\r\n' ? bareLf(after) : after.includes('\r')).toBe(false)
+      },
+    )
+
+    it.each(COUNTS)('MUST-CATCH: removing one entry leaving %i keeps endings intact', (n) => {
+      const root = makeProjectRoot()
+      writeRaw(root, withEol(HEAD + slugs(n).map(hand).join('') + hand('gone') + TAIL, eol))
+
+      removePluginRegistryEntry(root, 'gone')
+
+      const after = readFileSync(registryFilePath(root), 'utf8')
+      expect(after).toBe(withEol(HEAD + slugs(n).map(hand).join('') + TAIL, eol))
+      expect(eol === '\r\n' ? bareLf(after) : after.includes('\r')).toBe(false)
+    })
+
+    it('MUST-CATCH: upsert then remove leaves the file byte-identical', () => {
+      const root = makeProjectRoot()
+      const original = withEol(HEAD + hand('keep0') + TAIL, eol)
+      writeRaw(root, original)
+
+      upsertPluginRegistryEntry(root, WIDGETS_ENTRY)
+      removePluginRegistryEntry(root, 'widgets')
+
+      expect(readFileSync(registryFilePath(root), 'utf8')).toBe(original)
+    })
+  })
+
+  it('MUST-CATCH: the issue repro — CRLF, remove "a" — leaves START marker line ending in CRLF', () => {
+    const root = makeProjectRoot()
+    writeRaw(root, withEol(HEAD + hand('a') + TAIL, '\r\n'))
+
+    removePluginRegistryEntry(root, 'a')
+
+    expect(readFileSync(registryFilePath(root), 'utf8')).toBe(withEol(HEAD + TAIL, '\r\n'))
+  })
+
+  it('MUST-NOT-CATCH: a file with no newline at all defaults to LF', () => {
+    const root = makeProjectRoot()
+    writeRaw(
+      root,
+      'export const I = [ // BIFFO-PLUGIN-REGISTRY:START — managed by `biffo plugin install`/`uninstall`. Do not hand-edit.' +
+        ' // BIFFO-PLUGIN-REGISTRY:END ]',
+    )
+
+    upsertPluginRegistryEntry(root, WIDGETS_ENTRY)
+
+    expect(readFileSync(registryFilePath(root), 'utf8')).not.toContain('\r')
+  })
+})

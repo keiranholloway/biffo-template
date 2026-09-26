@@ -174,6 +174,18 @@ interface ManagedRegion {
    * untouched side of the seam and no write path can drop it.
    */
   after: string
+  /**
+   * The file's own line-ending convention, detected ONCE here (#2130) and the
+   * only source for every line break this module writes. `\r\n` when the
+   * file's first line break is CRLF, otherwise `\n` (including a file with no
+   * line break at all).
+   */
+  eol: '\n' | '\r\n'
+}
+
+function detectEol(source: string): '\n' | '\r\n' {
+  const firstLf = source.indexOf('\n')
+  return firstLf > 0 && source[firstLf - 1] === '\r' ? '\r\n' : '\n'
 }
 
 function findManagedRegion(source: string): { region: ManagedRegion; body: string } | null {
@@ -189,7 +201,11 @@ function findManagedRegion(source: string): { region: ManagedRegion; body: strin
   const seam =
     lineStart >= bodyStart && /^[ \t]*$/.test(source.slice(lineStart, endIdx)) ? lineStart : endIdx
   return {
-    region: { before: source.slice(0, bodyStart), after: source.slice(seam) },
+    region: {
+      before: source.slice(0, bodyStart),
+      after: source.slice(seam),
+      eol: detectEol(source),
+    },
     body: source.slice(bodyStart, seam),
   }
 }
@@ -263,11 +279,11 @@ function splitEntries(body: string): RegistryEntry[] {
   return entries
 }
 
-function serializeEntryRaw(entry: DashboardPluginEntry): string {
+function serializeEntryRaw(entry: DashboardPluginEntry, eol: string): string {
   return (
-    `\n    slug: ${JSON.stringify(entry.slug)},\n` +
-    `    title: ${JSON.stringify(entry.title)},\n` +
-    `    frontendUrl: ${JSON.stringify(entry.frontendUrl)},\n  `
+    `${eol}    slug: ${JSON.stringify(entry.slug)},${eol}` +
+    `    title: ${JSON.stringify(entry.title)},${eol}` +
+    `    frontendUrl: ${JSON.stringify(entry.frontendUrl)},${eol}  `
   )
 }
 
@@ -296,7 +312,8 @@ function readManagedEntries(
 }
 
 function writeManagedEntries(cwd: string, region: ManagedRegion, entries: RegistryEntry[]): void {
-  const body = entries.length > 0 ? '\n' + entries.map((e) => `  {${e.raw}},\n`).join('') : '\n'
+  const { eol } = region
+  const body = eol + entries.map((e) => `  {${e.raw}},${eol}`).join('')
   writeFileSync(registryPath(cwd), region.before + body + region.after, 'utf8')
 }
 
@@ -311,7 +328,7 @@ function writeManagedEntries(cwd: string, region: ManagedRegion, entries: Regist
 export function upsertPluginRegistryEntry(cwd: string, entry: DashboardPluginEntry): void {
   const { region, entries } = readManagedEntries(cwd, entry.slug)
   const preserved = entries.filter((e) => e.slug !== entry.slug)
-  const next: RegistryEntry = { raw: serializeEntryRaw(entry), slug: entry.slug }
+  const next: RegistryEntry = { raw: serializeEntryRaw(entry, region.eol), slug: entry.slug }
   writeManagedEntries(cwd, region, [...preserved, next])
 }
 

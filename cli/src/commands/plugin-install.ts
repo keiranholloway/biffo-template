@@ -472,6 +472,17 @@ export async function runPluginInstall(
     applyWorkspaceSources(targetDir, options.cwd, relTargetDir)
 
     const stagePaths = [relTargetDir]
+    let dashboardCommitted: string | null = null
+    // What is on disk but not committed if the install stops now. An in-tree install (`--local` at the plugin's own path) has the
+    // plugin directory committed already; what it touches under it is the provenance file and any workspace sources it added.
+    const uncommittedSoFar = (): string =>
+      (inTreeSource
+        ? [
+            `the install's own changes under ${relTargetDir}/ (provenance, workspace sources)`,
+            ...stagePaths.filter((p) => p !== relTargetDir),
+          ]
+        : stagePaths
+      ).join(', ')
 
     const tfSourceDir = join(targetDir, 'terraform')
     if (existsSync(tfSourceDir)) {
@@ -535,21 +546,16 @@ export async function runPluginInstall(
         generatedPaths = await deps.migrations.generate(options.cwd, [pluginName])
       } catch (err) {
         // Nothing above is rolled back, so say what the install left behind rather than leave the operator to diff (#2106).
-        const left = stagePaths.join(', ')
-        throw new Error(
-          `${err instanceof Error ? err.message : String(err)}\n\n` +
-            `The install stopped here. It had already written (uncommitted): ${left}. ` +
+        throw withLeftBehind(
+          err,
+          `The install stopped here. It had already written, uncommitted: ${uncommittedSoFar()}. ` +
             `Fix the error above, then \`biffo plugin sync-migrations ${pluginName}\` and commit, ` +
             `or discard those paths with git.`,
-          { cause: err },
         )
       }
       for (const absPath of generatedPaths) {
         stagePaths.push(relative(options.cwd, absPath))
       }
-      // `uv run` above re-resolves and rewrites the instance's uv.lock when the plugin adds a workspace member. Leaving it out of
-      // the commit ships a lockfile that `uv lock --check` / `uv sync --locked` reject (biffo-template#2106).
-      if (existsSync(join(options.cwd, 'uv.lock'))) stagePaths.push('uv.lock')
       if (generatedPaths.length > 0) {
         log.success(`Generated migration: ${relative(options.cwd, generatedPaths[0]!)}`)
       }
@@ -617,7 +623,16 @@ export async function runPluginInstall(
         // as its own commit, in its own checkout.
         const dashboardCommitMessage = `feat(plugins): register ${pluginName}@${source!.version} in dashboard`
         await deps.git.add(registryCwd, [PLUGIN_REGISTRY_RELATIVE_PATH])
-        await deps.git.commit(registryCwd, dashboardCommitMessage)
+        try {
+          await deps.git.commit(registryCwd, dashboardCommitMessage)
+        } catch (err) {
+          throw withLeftBehind(
+            err,
+            `The dashboard commit failed. ${PLUGIN_REGISTRY_RELATIVE_PATH} is staged, not committed, in ${registryCwd}. ` +
+              `Nothing has been committed in ${options.cwd}; written there, uncommitted: ${uncommittedSoFar()}.`,
+          )
+        }
+        dashboardCommitted = dashboardCommitMessage
         log.success(
           `Registered ${pluginName} in ${registryCwd}/${PLUGIN_REGISTRY_RELATIVE_PATH} ` +
             `(committed there: "${dashboardCommitMessage}")`,
@@ -628,9 +643,24 @@ export async function runPluginInstall(
       }
     }
 
+    // The migration step's `uv run` (and the workspace member this install adds) rewrite the instance's uv.lock. Leaving it out of
+    // the commit ships a lockfile that `uv lock --check` / `uv sync --locked` reject (biffo-template#2106), whether or not the plugin
+    // has tables. `git add` of an unchanged file is a no-op.
+    if (existsSync(join(options.cwd, 'uv.lock'))) stagePaths.push('uv.lock')
     const commitMessage = `feat(plugins): install ${pluginName}@${source!.version}`
     await deps.git.add(options.cwd, stagePaths)
-    await deps.git.commit(options.cwd, commitMessage)
+    try {
+      await deps.git.commit(options.cwd, commitMessage)
+    } catch (err) {
+      throw withLeftBehind(
+        err,
+        `The commit in ${options.cwd} failed (a commit hook, usually). Staged, not committed: ${stagePaths.join(', ')}.` +
+          (dashboardCommitted
+            ? ` A dashboard commit was ALREADY made in ${registryCwd}: "${dashboardCommitted}".`
+            : '') +
+          ' Fix what the hook reported and run `git commit` there, or discard with git.',
+      )
+    }
     log.success(`Committed: ${commitMessage}`)
 
     console.log(chalk.bold('\n  Plugin installed!\n'))
@@ -651,6 +681,11 @@ export async function runPluginInstall(
   } finally {
     source!.cleanup()
   }
+}
+
+/** `err`'s message, then a note on what the install left behind, keeping the original as `cause`. */
+function withLeftBehind(err: unknown, note: string): Error {
+  return new Error(`${err instanceof Error ? err.message : String(err)}\n\n${note}`, { cause: err })
 }
 
 /**

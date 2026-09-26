@@ -35,6 +35,11 @@ import { log } from './logger.js'
 export function readTomlStringArray(text: string, key: string): string[] {
   const open = new RegExp(`^${key}\\s*=\\s*\\[`, 'm').exec(text)
   if (!open) return []
+  return scanStringArray(text, open.index + open[0].length)
+}
+
+/** The top-level quoted strings of the array whose opening `[` ends just before `from`; [] if it never closes. */
+function scanStringArray(text: string, from: number): string[] {
   // Single comment-aware, string-aware scan from just after the opening `[`: it
   // both finds the array's matching close bracket and collects its top-level
   // quoted strings. Comments (`# … the SDK's require_group … [maybe brackets]`)
@@ -43,7 +48,7 @@ export function readTomlStringArray(text: string, key: string): string[] {
   // (a dependency's `[extra]`) does not change depth.
   const strings: string[] = []
   let depth = 1
-  let i = open.index + open[0].length
+  let i = from
   while (i < text.length && depth > 0) {
     const c = text[i]!
     if (c === '#') {
@@ -95,7 +100,8 @@ export function readDependencyNames(text: string): string[] {
  */
 function readTomlTable(text: string, name: string): string | null {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const header = new RegExp(`^\\[${escaped}\\]\\s*$`, 'm').exec(text)
+  // A trailing comment after the header is valid TOML (`[dependency-groups]  # dev tooling`).
+  const header = new RegExp(`^\\[${escaped}\\][ \\t]*(?:#.*)?$`, 'm').exec(text)
   if (!header) return null
   const start = header.index + header[0].length
   const next = /^\[/m.exec(text.slice(start))
@@ -114,11 +120,11 @@ export function readGroupedDependencyNames(text: string): string[] {
   for (const table of ['dependency-groups', 'project.optional-dependencies']) {
     const section = readTomlTable(text, table)
     if (section === null) continue
-    for (const key of new Set(
-      [...section.matchAll(/^([A-Za-z0-9_.-]+)\s*=\s*\[/gm)].map((m) => m[1]!),
+    // Every `key = [` in the table, whatever its spelling: indented, or a quoted key (`"dev" = [`).
+    for (const open of section.matchAll(
+      /^[ \t]*(?:"[^"\n]*"|'[^'\n]*'|[A-Za-z0-9_.-]+)[ \t]*=[ \t]*\[/gm,
     )) {
-      const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-      for (const dep of readTomlStringArray(section, escaped)) {
+      for (const dep of scanStringArray(section, open.index + open[0].length)) {
         const name = /^\s*([A-Za-z0-9._-]+)/.exec(dep)?.[1]
         if (name) names.push(name)
       }
@@ -168,6 +174,23 @@ export function workspaceMemberNames(instanceRoot: string): Set<string> {
   return names
 }
 
+/**
+ * Names that already have a source of ANY kind in `[tool.uv.sources]` (a path, git or index source is the author's choice and must
+ * not get a second key of the same name: that is invalid TOML), plus any `<name> = { workspace = ... }` line in the text.
+ */
+function existingSources(text: string): Set<string> {
+  const names = existingWorkspaceSources(text)
+  const section = readTomlTable(text, 'tool.uv.sources')
+  if (section !== null) {
+    for (const m of section.matchAll(
+      /^[ \t]*(?:"([^"\n]*)"|'([^'\n]*)'|([A-Za-z0-9_.-]+))[ \t]*=/gm,
+    )) {
+      names.add((m[1] ?? m[2] ?? m[3])!)
+    }
+  }
+  return names
+}
+
 /** Names that already have a `<name> = { workspace = ... }` line in the text. */
 function existingWorkspaceSources(text: string): Set<string> {
   return new Set(
@@ -211,13 +234,13 @@ export function ensureWorkspaceSources(
   if (!existsSync(pluginPyprojectPath) || memberNames.size === 0) return []
   const text = readFileSync(pluginPyprojectPath, 'utf8')
 
-  const already = existingWorkspaceSources(text)
+  const already = existingSources(text)
   const declared = new Set([...readDependencyNames(text), ...readGroupedDependencyNames(text)])
   const toAdd = [...declared].filter((n) => memberNames.has(n) && !already.has(n))
   if (toAdd.length === 0) return []
 
   const lines = toAdd.map((n) => `${n} = { workspace = true }`)
-  const header = /^\[tool\.uv\.sources\]\s*$/m.exec(text)
+  const header = /^\[tool\.uv\.sources\][ \t]*(?:#.*)?$/m.exec(text)
   let updated: string
   if (header) {
     // Insert right after the existing section header.

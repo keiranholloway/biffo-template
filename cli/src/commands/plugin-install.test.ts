@@ -206,6 +206,40 @@ describe('runPluginInstall', () => {
     expect(git.add).toHaveBeenCalledWith(projectRoot, ['services/widgets', 'uv.lock'])
   })
 
+  // The prosecutor's finding 1: the lock is rewritten by the workspace member the install adds, not only by the migration step, so a
+  // plugin that declares no tables must still commit it.
+  it('stages uv.lock for a plugin that declares no tables too (#2106)', async () => {
+    writeFileSync(join(projectRoot, 'uv.lock'), 'version = 1\n')
+    const git = makeGitMock(makeClonedPluginDir({ ...VALID_MANIFEST, tables: [], api_routes: [] }))
+    const migrations = makeMigrationsMock()
+
+    await runPluginInstall(
+      'widgets@1.0',
+      { dryRun: false, cwd: projectRoot },
+      { registry: makeRegistryMock() as never, git: git as never, migrations: migrations as never },
+    )
+
+    expect(migrations.generate).not.toHaveBeenCalled()
+    expect(git.add).toHaveBeenCalledWith(projectRoot, ['services/widgets', 'uv.lock'])
+  })
+
+  it('names what is staged, and any dashboard commit already made, when the final commit fails (#2106)', async () => {
+    const git = makeGitMock(makeClonedPluginDir())
+    git.commit.mockRejectedValue(new Error('Command failed with exit code 1: git commit'))
+
+    const run = runPluginInstall(
+      'widgets@1.0',
+      { dryRun: false, cwd: projectRoot },
+      {
+        registry: makeRegistryMock() as never,
+        git: git as never,
+        migrations: makeMigrationsMock() as never,
+      },
+    )
+
+    await expect(run).rejects.toThrow(/git commit[\s\S]*Staged, not committed: services\/widgets/)
+  })
+
   it('does not stage a uv.lock the instance does not have (#2106)', async () => {
     const git = makeGitMock(makeClonedPluginDir())
 
@@ -233,7 +267,7 @@ describe('runPluginInstall', () => {
     )
 
     await expect(run).rejects.toThrow(
-      /uv exploded[\s\S]*uncommitted\): services\/widgets[\s\S]*sync-migrations widgets/,
+      /uv exploded[\s\S]*written, uncommitted: services\/widgets[\s\S]*sync-migrations widgets/,
     )
     expect(git.commit).not.toHaveBeenCalled()
   })
@@ -625,6 +659,50 @@ describe('runPluginInstall', () => {
       expect(existsSync(join(frontendRoot, 'apps'))).toBe(false) // ...but untouched
       expect(git.isGitRepo).not.toHaveBeenCalledWith(frontendRoot)
       expect(git.commit).toHaveBeenCalledTimes(1)
+    })
+
+    it('reports the dashboard commit that already happened when the core commit fails (#2106)', async () => {
+      makeDashboardRegistry(frontendRoot)
+      const git = makeGitMock(makeClonedPluginDir(USER_FRONTEND_MANIFEST))
+      git.commit.mockImplementation(async (cwd: string) => {
+        if (cwd === projectRoot) throw new Error('Command failed with exit code 1: git commit')
+      })
+
+      const run = runPluginInstall(
+        'widgets@1.0',
+        { dryRun: false, cwd: projectRoot, frontendCwd: frontendRoot },
+        {
+          registry: makeRegistryMock() as never,
+          git: git as never,
+          migrations: makeMigrationsMock() as never,
+        },
+      )
+
+      await expect(run).rejects.toThrow(
+        /ALREADY made in .*: "feat\(plugins\): register widgets@1\.0\.0 in dashboard"/,
+      )
+    })
+
+    it('reports what is left in --cwd when the dashboard commit itself fails (#2106)', async () => {
+      makeDashboardRegistry(frontendRoot)
+      const git = makeGitMock(makeClonedPluginDir(USER_FRONTEND_MANIFEST))
+      git.commit.mockImplementation(async (cwd: string) => {
+        if (cwd === frontendRoot) throw new Error('Command failed with exit code 1: git commit')
+      })
+
+      const run = runPluginInstall(
+        'widgets@1.0',
+        { dryRun: false, cwd: projectRoot, frontendCwd: frontendRoot },
+        {
+          registry: makeRegistryMock() as never,
+          git: git as never,
+          migrations: makeMigrationsMock() as never,
+        },
+      )
+
+      await expect(run).rejects.toThrow(
+        /dashboard commit failed[\s\S]*Nothing has been committed in[\s\S]*uncommitted: services\/widgets/,
+      )
     })
 
     it('MUST-CATCH: fails closed, writing nothing anywhere, when --frontend-cwd is not a git repository', async () => {

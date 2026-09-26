@@ -176,6 +176,51 @@ describe('dependency groups and optional dependencies (#2106)', () => {
     expect(ensureWorkspaceSources(plugin, workspaceMemberNames(root))).toEqual([])
   })
 
+  // The prosecutor's finding 2: every valid TOML spelling of the table and its keys, each judged by whether uv would still fail.
+  it.each([
+    [
+      'a comment after the table header',
+      '[dependency-groups]  # dev tooling\ndev = ["biffo-plugin-host~=0.1.0"]\n',
+    ],
+    ['a quoted key', '[dependency-groups]\n"dev" = ["biffo-plugin-host~=0.1.0"]\n'],
+    ['a single-quoted key', '[dependency-groups]\n\'dev\' = ["biffo-plugin-host~=0.1.0"]\n'],
+    ['an indented key', '[dependency-groups]\n  dev = ["biffo-plugin-host~=0.1.0"]\n'],
+    [
+      'an optional-dependencies header with a comment',
+      '[project.optional-dependencies] # extras\nx = ["biffo-plugin-host"]\n',
+    ],
+  ])('reads a group declared with %s', (_label, text) => {
+    expect(readGroupedDependencyNames(text)).toEqual(['biffo-plugin-host'])
+  })
+
+  it('adds no duplicate [tool.uv.sources] table when the header carries a comment, and no duplicate key', () => {
+    write('pyproject.toml', '[tool.uv.workspace]\nmembers = ["services/*"]\n')
+    write('services/_plugin-host/pyproject.toml', '[project]\nname = "biffo-plugin-host"\n')
+    write('services/other/pyproject.toml', '[project]\nname = "other"\n')
+    const plugin = write(
+      'services/acme/pyproject.toml',
+      '[project]\nname = "acme"\ndependencies = ["other"]\n\n[dependency-groups]\ndev = ["biffo-plugin-host"]\n\n' +
+        '[tool.uv.sources]   # mine\nother = { path = "../other" }\n',
+    )
+    const members = workspaceMemberNames(root)
+    expect(ensureWorkspaceSources(plugin, members)).toEqual(['biffo-plugin-host'])
+    const text = readFileSync(plugin, 'utf8')
+    expect(text.match(/^\[tool\.uv\.sources\]/gm)).toHaveLength(1)
+    expect(text.match(/^other\s*=/gm)).toHaveLength(1) // the author's path source is left alone, not doubled
+    expect(text).toContain('biffo-plugin-host = { workspace = true }')
+  })
+
+  it('leaves an existing non-workspace source for a workspace member alone', () => {
+    write('pyproject.toml', '[tool.uv.workspace]\nmembers = ["services/*"]\n')
+    write('services/_plugin-host/pyproject.toml', '[project]\nname = "biffo-plugin-host"\n')
+    const plugin = write(
+      'services/acme/pyproject.toml',
+      '[project]\nname = "acme"\n\n[dependency-groups]\ndev = ["biffo-plugin-host"]\n\n[tool.uv.sources]\nbiffo-plugin-host = { path = "../_plugin-host" }\n',
+    )
+    expect(ensureWorkspaceSources(plugin, workspaceMemberNames(root))).toEqual([])
+    expect(readFileSync(plugin, 'utf8').match(/^biffo-plugin-host\s*=/gm)).toHaveLength(1)
+  })
+
   // The class, not the case: run it over the pyproject `plugin create` really scaffolds, against the members the platform instance
   // really has. Any workspace-provided dependency the skeleton declares anywhere must come out sourced.
   const skeleton = findSkeletonRoot(new URL('.', import.meta.url).pathname, 'plugin-template')

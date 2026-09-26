@@ -41,41 +41,6 @@ import { parse as parseToml } from 'smol-toml'
 import { log } from './logger.js'
 
 /**
- * Extract the quoted strings of a `key = [ ... ]` TOML array (single- or
- * multi-line), matched at line start. Returns [] if the key is absent.
- */
-export function readTomlStringArray(text: string, key: string): string[] {
-  const open = new RegExp(`^${key}\\s*=\\s*\\[`, 'm').exec(text)
-  if (!open) return []
-  // Single comment-aware, string-aware scan from just after the opening `[`: it
-  // both finds the array's matching close bracket and collects its top-level
-  // quoted strings. Comments (`# … the SDK's require_group … [maybe brackets]`)
-  // are skipped to end of line — a stray apostrophe or bracket in one must not be
-  // read as a string delimiter or nesting — and a `]`/`[` inside a string literal
-  // (a dependency's `[extra]`) does not change depth.
-  const strings: string[] = []
-  let depth = 1
-  let i = open.index + open[0].length
-  while (i < text.length && depth > 0) {
-    const c = text[i]!
-    if (c === '#') {
-      const nl = text.indexOf('\n', i)
-      i = nl === -1 ? text.length : nl
-    } else if (c === '"' || c === "'") {
-      const close = text.indexOf(c, i + 1)
-      if (close === -1) break // unterminated string — give up rather than misparse
-      if (depth === 1) strings.push(text.slice(i + 1, close))
-      i = close + 1
-    } else {
-      if (c === '[') depth++
-      else if (c === ']') depth--
-      i++
-    }
-  }
-  return depth === 0 ? strings : []
-}
-
-/**
  * PEP 503 name normalisation — the rule uv applies before comparing package names: runs of `-`, `_` and `.` become one `-`,
  * and case is folded. Both sides of every comparison in this module go through it.
  */
@@ -125,15 +90,25 @@ function requirementsIn(groups: unknown): string[] {
  * `biffo-plugin-sdk` and left the very next `uv run` failing on the host.
  */
 export function readDeclaredDependencyNames(doc: Record<string, unknown>): string[] {
+  return readDeclaredRequirements(doc)
+    .map(requirementName)
+    .filter((name): name is string => name !== null)
+}
+
+/**
+ * Every full requirement string (`httpx>=0.28.1`, not just `httpx`) the pyproject declares in the same three places
+ * `readDeclaredDependencyNames` reads, from the parsed document. The one reader both the sourcing logic and the plugin-upgrade
+ * re-lock trigger derive from, so neither can disagree with the other — or with uv — about what a manifest declares.
+ */
+export function readDeclaredRequirements(doc: Record<string, unknown>): string[] {
   const project = isTable(doc.project) ? doc.project : {}
-  const requirements = [
+  return [
     ...(Array.isArray(project.dependencies) ? project.dependencies : []).filter(
       (dep): dep is string => typeof dep === 'string',
     ),
     ...requirementsIn(project['optional-dependencies']),
     ...requirementsIn(doc['dependency-groups']),
   ]
-  return requirements.map(requirementName).filter((name): name is string => name !== null)
 }
 
 /** The keys of `[tool.uv.sources]`, however they were spelled — bare, quoted, in a table or inline. */

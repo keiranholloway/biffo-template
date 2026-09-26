@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import {
   ensureWorkspaceSources,
+  normaliseName,
   readDeclaredDependencyNames,
   readProjectName,
   readTomlStringArray,
@@ -371,9 +372,158 @@ describe('valid TOML spellings (#2106 prosecution finding 2)', () => {
     expect(readFileSync(pp, 'utf8')).toBe(text)
   })
 
-  it('dotted names in a workspace-provided dependency are written as a quoted key', () => {
+  it("dotted names in a workspace-provided dependency are written under uv's normalised name", () => {
     const pp = write('services/acme/pyproject.toml', HEAD.replace('["fastapi"]', '["ruamel.yaml"]'))
-    expect(ensureWorkspaceSources(pp, new Set(['ruamel.yaml']))).toEqual(['ruamel.yaml'])
-    expect(sourcesOf(readFileSync(pp, 'utf8'))).toEqual({ 'ruamel.yaml': { workspace: true } })
+    expect(ensureWorkspaceSources(pp, new Set(['ruamel.yaml']))).toEqual(['ruamel-yaml'])
+    expect(sourcesOf(readFileSync(pp, 'utf8'))).toEqual({ 'ruamel-yaml': { workspace: true } })
+  })
+})
+
+// biffo-template#2109 — uv compares package names after PEP 503 normalisation (runs of `-`, `_`, `.` are one `-`, case is
+// folded). Every name comparison here must do the same, on BOTH sides, or a dependency uv treats as the workspace member gets
+// no `tool.uv.sources` entry and the next `uv lock` fails with "is included as a workspace member, but is missing an entry".
+describe('PEP 503 name normalisation (#2109)', () => {
+  const HEAD = '[project]\nname = "acme"\n'
+  const sourcesOf = (text: string): Record<string, unknown> =>
+    (parseToml(text).tool as { uv?: { sources?: Record<string, unknown> } } | undefined)?.uv
+      ?.sources ?? {}
+
+  it('normaliseName folds case and runs of - _ . to one hyphen', () => {
+    expect(normaliseName('Biffo_Plugin.SDK')).toBe('biffo-plugin-sdk')
+    expect(normaliseName('a--b__c..d-_.e')).toBe('a-b-c-d-e')
+    expect(normaliseName('biffo-plugin-sdk')).toBe('biffo-plugin-sdk')
+  })
+
+  const spellings = [
+    'biffo_plugin_sdk',
+    'Biffo-Plugin-SDK',
+    'BIFFO.PLUGIN.SDK',
+    'biffo__plugin-sdk',
+  ]
+  const places: Array<[string, (dep: string) => string]> = [
+    ['[project] dependencies', (d) => `${HEAD}dependencies = ["${d}>=1"]\n`],
+    ['a dependency group', (d) => `${HEAD}[dependency-groups]\ndev = ["${d}>=1"]\n`],
+    [
+      'a dependency group under a commented header',
+      (d) => `${HEAD}[dependency-groups] # tooling\n"dev" = ["${d}>=1"]\n`,
+    ],
+    [
+      'an optional extra',
+      (d) => `${HEAD}[project.optional-dependencies]\nx = ["${d}[extra]>=1"]\n`,
+    ],
+  ]
+  for (const spelling of spellings) {
+    for (const [where, build] of places) {
+      it(`sources ${spelling} declared in ${where} for member biffo-plugin-sdk`, () => {
+        const pp = write('services/acme/pyproject.toml', build(spelling))
+        expect(ensureWorkspaceSources(pp, new Set(['biffo-plugin-sdk']))).toEqual([
+          'biffo-plugin-sdk',
+        ])
+        // written under the normalised name uv canonicalises to — and it parses with the entry present
+        expect(sourcesOf(readFileSync(pp, 'utf8'))).toEqual({
+          'biffo-plugin-sdk': { workspace: true },
+        })
+      })
+    }
+  }
+
+  it('normalises the member side too: an unnormalised member name still matches', () => {
+    const pp = write('services/acme/pyproject.toml', `${HEAD}dependencies = ["biffo-plugin-sdk"]\n`)
+    expect(ensureWorkspaceSources(pp, new Set(['Biffo_Plugin_SDK']))).toEqual(['biffo-plugin-sdk'])
+  })
+
+  it('does not add a second source when an existing one is spelled differently', () => {
+    const text = `${HEAD}dependencies = ["biffo_plugin_sdk"]\n[tool.uv.sources]\nBiffo-Plugin-SDK = { path = "../sdk" }\n`
+    const pp = write('services/acme/pyproject.toml', text)
+    expect(ensureWorkspaceSources(pp, new Set(['biffo-plugin-sdk']))).toEqual([])
+    expect(readFileSync(pp, 'utf8')).toBe(text)
+  })
+
+  it('adds one source when the same member is declared under two spellings', () => {
+    const pp = write(
+      'services/acme/pyproject.toml',
+      `${HEAD}dependencies = ["biffo_plugin_sdk"]\n[dependency-groups]\ndev = ["Biffo-Plugin-SDK"]\n`,
+    )
+    expect(ensureWorkspaceSources(pp, new Set(['biffo-plugin-sdk']))).toEqual(['biffo-plugin-sdk'])
+    expect(sourcesOf(readFileSync(pp, 'utf8'))).toEqual({ 'biffo-plugin-sdk': { workspace: true } })
+  })
+
+  it('a name that merely resembles a member is not one', () => {
+    const pp = write(
+      'services/acme/pyproject.toml',
+      `${HEAD}dependencies = ["biffo-plugin-sdk-extras"]\n`,
+    )
+    expect(ensureWorkspaceSources(pp, new Set(['biffo-plugin-sdk']))).toEqual([])
+  })
+})
+
+// biffo-template#2109 — the workspace side read the ROOT and MEMBER pyprojects with line regexes, which miss valid TOML the
+// same way the plugin-side reader once did (a comment after a header, an indented or quoted key).
+describe('workspaceMemberNames reads valid TOML spellings and normalises (#2109)', () => {
+  const member = (name: string) => `[project]\nname = "${name}"\n`
+
+  it('normalises member names', () => {
+    write('pyproject.toml', '[tool.uv.workspace]\nmembers = ["packages/*"]\n')
+    write('packages/sdk/pyproject.toml', member('Biffo_Plugin_SDK'))
+    write('packages/host/pyproject.toml', member('biffo.plugin.host'))
+    expect(workspaceMemberNames(root)).toEqual(new Set(['biffo-plugin-sdk', 'biffo-plugin-host']))
+  })
+
+  const roots: Array<[string, string]> = [
+    ['comment after the header', '[tool.uv.workspace] # members\nmembers = ["packages/*"]\n'],
+    ['indented key', '[tool.uv.workspace]\n  members = [\n    "packages/*",\n  ]\n'],
+    ['quoted key', '[tool.uv.workspace]\n"members" = ["packages/*"]\n'],
+    ['spaces inside the header', '[ tool . uv . workspace ]\nmembers = ["packages/*"]\n'],
+    ['dotted keys under [tool.uv]', '[tool.uv]\nworkspace.members = ["packages/*"]\n'],
+    ['inline table', 'tool = { uv = { workspace = { members = ["packages/*"] } } }\n'],
+  ]
+  for (const [label, text] of roots) {
+    it(`root pyproject: ${label}`, () => {
+      write('pyproject.toml', text)
+      write('packages/sdk/pyproject.toml', member('biffo-plugin-sdk'))
+      expect(workspaceMemberNames(root)).toEqual(new Set(['biffo-plugin-sdk']))
+    })
+  }
+
+  const members: Array<[string, string]> = [
+    ['comment after the header', '[project] # the sdk\nname = "biffo-plugin-sdk"\n'],
+    ['quoted key', '[project]\n"name" = "biffo-plugin-sdk"\n'],
+    ['indented key', '[project]\n  name = "biffo-plugin-sdk"\n'],
+    ['spaces inside the header', '[ project ]\nname = "biffo-plugin-sdk"\n'],
+    ['dotted key', 'project.name = "biffo-plugin-sdk"\n'],
+  ]
+  for (const [label, text] of members) {
+    it(`member pyproject: ${label}`, () => {
+      write('pyproject.toml', '[tool.uv.workspace]\nmembers = ["packages/*"]\n')
+      write('packages/sdk/pyproject.toml', text)
+      expect(workspaceMemberNames(root)).toEqual(new Set(['biffo-plugin-sdk']))
+    })
+  }
+
+  it('excluded paths are still excluded', () => {
+    write(
+      'pyproject.toml',
+      '[tool.uv.workspace] # x\nmembers = ["packages/*"]\nexclude = ["packages/old"]\n',
+    )
+    write('packages/old/pyproject.toml', member('old-thing'))
+    write('packages/sdk/pyproject.toml', member('biffo-plugin-sdk'))
+    expect(workspaceMemberNames(root)).toEqual(new Set(['biffo-plugin-sdk']))
+  })
+
+  it('a member pyproject that is not valid TOML contributes no name rather than aborting', () => {
+    write('pyproject.toml', '[tool.uv.workspace]\nmembers = ["packages/*"]\n')
+    write('packages/bad/pyproject.toml', '[project\nname = \n')
+    write('packages/sdk/pyproject.toml', member('biffo-plugin-sdk'))
+    expect(workspaceMemberNames(root)).toEqual(new Set(['biffo-plugin-sdk']))
+  })
+
+  it('a root pyproject that is not valid TOML throws rather than reporting an empty workspace', () => {
+    write('pyproject.toml', '[tool.uv.workspace\nmembers = [\n')
+    expect(() => workspaceMemberNames(root)).toThrow(/pyproject\.toml.*not valid TOML/s)
+  })
+
+  it('a root with no [tool.uv.workspace] provides no members', () => {
+    write('pyproject.toml', '[project]\nname = "root"\n')
+    expect(workspaceMemberNames(root)).toEqual(new Set())
   })
 })

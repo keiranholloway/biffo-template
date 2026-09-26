@@ -3,6 +3,7 @@ import { Command } from 'commander'
 import { coreCommand } from './commands/core.js'
 import { dataCommand } from './commands/data.js'
 import { deployCommand } from './commands/deploy.js'
+import { devCommand } from './commands/dev.js'
 import { destroyCommand } from './commands/destroy.js'
 import { initCommand } from './commands/init.js'
 import { pluginCommand } from './commands/plugin.js'
@@ -59,6 +60,7 @@ program
 
 program.addCommand(initCommand)
 program.addCommand(deployCommand)
+program.addCommand(devCommand)
 program.addCommand(destroyCommand)
 program.addCommand(teardownCommand)
 program.addCommand(waitForChecksCommand)

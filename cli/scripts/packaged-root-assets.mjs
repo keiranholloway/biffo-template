@@ -216,6 +216,19 @@ export const RESOLVER_SITES = [
     packaged: true,
   },
   {
+    file: 'src/commands/dev.ts',
+    // `biffo dev up` (biffo-template#1525) raises Postgres through the SAME
+    // already-packaged scripts/pg-test-db.sh `plugin verify` uses, resolved with
+    // findPackagedScript() from the command's own import.meta.url. Core itself is
+    // deliberately NOT a packaged asset: it is a biffo-template checkout supplied
+    // via --core-root / BIFFO_CORE_ROOT or fetched at the CLI's own core tag
+    // (lib/plugin-compose/core-source.ts), and the three Python entry points are
+    // embedded strings (lib/plugin-compose/python-assets.ts) so there is no file
+    // whose packaging could be forgotten.
+    asset: 'scripts/pg-test-db.sh',
+    packaged: true,
+  },
+  {
     file: 'src/test-utils/shared-sync-template.ts',
     // Test-only. Locates this repo's real scripts/shared-sync.sh to COPY into a
     // throwaway fixture template, because executing it where it sits makes the

@@ -4,6 +4,7 @@ import chalk from 'chalk'
 import { Command } from 'commander'
 import { GitAdapter } from '../adapters/git/index.js'
 import { PluginMigrationsAdapter } from '../adapters/plugin-migrations/index.js'
+import { withRefreshedLock } from '../lib/plugin-commit.js'
 import { RegistryAdapter, type RegistryPluginEntry } from '../adapters/registry/index.js'
 import { log } from '../lib/logger.js'
 import {
@@ -481,7 +482,7 @@ export async function runPluginInstall(
     const sourced = applyWorkspaceSources(targetDir, options.cwd, relTargetDir)
     if (inTreeSource && sourced.length > 0) left.core.written.push(`${relTargetDir}/pyproject.toml`)
 
-    const stagePaths = [relTargetDir]
+    let stagePaths = [relTargetDir]
     // Stage a path AND record it as written: everything but the plugin directory itself (staged as a whole, recorded above).
     const track = (...paths: string[]) => {
       stagePaths.push(...paths)
@@ -601,10 +602,7 @@ export async function runPluginInstall(
     // tables (only a table-bearing plugin runs `uv` above, and only as a side effect). Re-lock explicitly, AFTER every file that
     // feeds the lock is written and BEFORE anything is committed, then stage the result (biffo-template#2106; #2108 tracks the
     // other commands that commit a stale lock).
-    if (existsSync(join(options.cwd, 'uv.lock'))) {
-      await deps.migrations.refreshLock(options.cwd)
-      stagePaths.push('uv.lock')
-    }
+    stagePaths = await withRefreshedLock(deps, options.cwd, stagePaths)
 
     // Register this plugin's user-facing surface in the installing sibling's
     // dashboard (biffo-template#2041) — create-or-update, keyed by name, so

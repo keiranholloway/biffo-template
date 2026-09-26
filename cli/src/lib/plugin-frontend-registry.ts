@@ -121,6 +121,14 @@ export function titleFromSlug(slug: string): string {
  * The shared plugin host's `user_frontend` mount path (ADR-0021 §2) — served
  * same-origin behind the existing `/api/v1/plugins/*` route family, so no
  * per-plugin domain, CDN behaviour, or config value is needed to compute it.
+ *
+ * The sibling's own frontend-to-BFF guard (`test_frontend_bff_paths.py`, in
+ * `_skeletons/sibling-template/services/api/tests/`) fails any `/api/v1/...`
+ * literal its BFF does not register, and this shape is not one — the plugin host
+ * serves it. The guard therefore exempts exactly this family, as
+ * `PLUGIN_HOST_UI_PATH`, in this registry file only (#2114). Change the shape
+ * here and that constant must change with it; `plugin-registry-bff-guard.test.ts`
+ * runs the real guard over this function's output and fails if they disagree.
  */
 export function frontendUrlForSlug(slug: string): string {
   return `/api/v1/plugins/${slug}/ui`

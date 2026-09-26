@@ -4,6 +4,8 @@ import chalk from 'chalk'
 import { Command } from 'commander'
 import inquirer from 'inquirer'
 import { GitAdapter } from '../adapters/git/index.js'
+import type { PluginMigrationsAdapter } from '../adapters/plugin-migrations/index.js'
+import { commitPluginChange } from '../lib/plugin-commit.js'
 import { log } from '../lib/logger.js'
 import {
   assertPluginRegistryReady,
@@ -57,6 +59,8 @@ export const pluginUninstallCommand = new Command('uninstall')
 
 export interface PluginUninstallDeps {
   git: GitAdapter
+  /** Defaults to the real adapter; see `PluginCommitDeps`. */
+  migrations?: Pick<PluginMigrationsAdapter, 'refreshLock'>
 }
 
 export interface PluginUninstallOptions {
@@ -234,8 +238,8 @@ export async function runPluginUninstall(
 
   const label = version ? `${name}@${version}` : name
   const commitMessage = `chore(plugins): uninstall ${label}`
-  await deps.git.add(options.cwd, stagePaths)
-  await deps.git.commit(options.cwd, commitMessage, stagePaths)
+  // Removing services/<name>/ drops a uv workspace member, so the committed uv.lock is stale unless re-locked (#2108).
+  await commitPluginChange(deps, options.cwd, stagePaths, commitMessage)
   log.success(`Committed: ${commitMessage}`)
 
   console.log(chalk.bold('\n  Plugin uninstalled!\n'))

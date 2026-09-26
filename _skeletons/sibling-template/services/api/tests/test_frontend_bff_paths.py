@@ -202,6 +202,38 @@ def _external_base_name(raw: str) -> str | None:
     return name if name in EXTERNAL_BASE_IDENTIFIERS else None
 
 
+#: The dashboard's plugin registry — the one file `biffo plugin install` writes
+#: a `user_frontend` plugin's `frontendUrl` into (`plugin-frontend-registry.ts`
+#: in biffo-template, ADR-0021 section 2).
+PLUGIN_REGISTRY_FILE = "apps/frontend/src/lib/plugins.ts"
+
+#: The shared plugin host's `user_frontend` mount: `/api/v1/plugins/<slug>/ui`,
+#: served same-origin by the plugin host behind the `/api/v1/plugins/*` route
+#: family and NEVER by this BFF (biffo-template#2114). Every install of a
+#: `user_frontend` plugin writes exactly one such literal into
+#: `PLUGIN_REGISTRY_FILE`, so without this exemption the required check went
+#: red on the first install, in every split dashboard.
+#:
+#: Like `EXTERNAL_BASE_IDENTIFIERS` this is an explicit ALLOWLIST, and it is
+#: scoped on two axes at once — the FILE (only `PLUGIN_REGISTRY_FILE`) and the
+#: SHAPE (exactly `/api/v1/plugins/<kebab-slug>/ui`, nothing before, after or
+#: between). Any other `/api/v1/plugins/...` path, the same path from any other
+#: file, or any other `/api/v1/...` path in the registry still has to match a
+#: route this BFF registers. biffo-template pins this constant against the
+#: writer (`frontendUrlForSlug`) by running THIS test over a `plugins.ts` the
+#: writer produced, so the two cannot drift apart unnoticed.
+PLUGIN_HOST_UI_PATH = re.compile(r"^/api/v1/plugins/[a-z0-9]+(?:-[a-z0-9]+)*/ui$")
+
+
+def is_plugin_host_ui_path(file: Path, normalized: str | None) -> bool:
+    """True for a `user_frontend` mount literal in the plugin registry file."""
+    return (
+        normalized is not None
+        and _relative(file) == PLUGIN_REGISTRY_FILE
+        and PLUGIN_HOST_UI_PATH.match(normalized) is not None
+    )
+
+
 def _template_literals(text: str):
     """Every template literal in `text`, as `(content, start_index)` — scanned
     with brace and backtick depth rather than matched with a regex.
@@ -728,7 +760,12 @@ def test_every_frontend_api_v1_path_is_registered_on_the_bff() -> None:
         extracted.extend(extract_api_paths(file.read_text(encoding="utf-8"), file))
 
     external = [p for p in extracted if p.external_base is not None]
-    in_scope = [p for p in extracted if p.external_base is None]
+    plugin_host = [
+        p
+        for p in extracted
+        if p.external_base is None and is_plugin_host_ui_path(p.file, p.normalized)
+    ]
+    in_scope = [p for p in extracted if p.external_base is None and p not in plugin_host]
     resolved = [p for p in in_scope if p.normalized is not None]
     unresolved = [p for p in in_scope if p.normalized is None]
 
@@ -750,7 +787,8 @@ def test_every_frontend_api_v1_path_is_registered_on_the_bff() -> None:
         f"{matched_count} matched a route this BFF registers, "
         f"{len(unmatched)} did not, {len(unresolved)} could not be resolved "
         f"at all, {len(external)} target a declared external base and are out "
-        "of this BFF's scope."
+        f"of this BFF's scope, {len(plugin_host)} are plugin-host `user_frontend` "
+        "mounts in the plugin registry (also out of this BFF's scope)."
     )
 
     lines = [summary]
@@ -774,6 +812,11 @@ def test_every_frontend_api_v1_path_is_registered_on_the_bff() -> None:
         lines.append(
             f"  EXTERNAL   {_relative(p.file)}:{p.line}  {p.raw!r} "
             f"-> prefixed with ${{{p.external_base}}}, declared external"
+        )
+    for p in plugin_host:
+        lines.append(
+            f"  PLUGIN-HOST {_relative(p.file)}:{p.line}  {p.raw!r} "
+            "-> plugin-host user_frontend mount, declared plugin-host route family"
         )
     if unmatched or unresolved:
         # Display only -- `path_is_registered` above is what actually decided
@@ -1058,3 +1101,35 @@ class TestPathIsRegistered:
         assert path_is_registered(catchall_app, "/api/v1/analytics/pipeline/funnel") is True
         assert path_is_registered(catchall_app, "/api/v1/analytics/pipeline/funnel/{param}") is True
         assert path_is_registered(catchall_app, "/api/v1/other/path") is False
+
+
+class TestPluginHostRouteFamily:
+    """The plugin-host exemption (biffo-template#2114) is an allowlist scoped by
+    file AND shape — every row below is a way it must NOT widen."""
+
+    REGISTRY = REPO_ROOT / PLUGIN_REGISTRY_FILE
+
+    def test_user_frontend_mount_in_the_registry_is_exempt(self) -> None:
+        assert is_plugin_host_ui_path(self.REGISTRY, "/api/v1/plugins/a5-throwaway/ui")
+        assert is_plugin_host_ui_path(self.REGISTRY, "/api/v1/plugins/widgets/ui")
+
+    def test_same_path_in_any_other_file_is_not_exempt(self) -> None:
+        other = FRONTEND_SRC / "lib" / "other.ts"
+        assert not is_plugin_host_ui_path(other, "/api/v1/plugins/widgets/ui")
+
+    def test_other_shapes_in_the_registry_are_not_exempt(self) -> None:
+        for path in (
+            "/api/v1/plugins/widgets",
+            "/api/v1/plugins/widgets/ui/extra",
+            "/api/v1/plugins/widgets/api",
+            "/api/v1/plugins/{param}/ui",
+            "/api/v1/plugins/Widgets/ui",
+            "/api/v1/plugins/a/b/ui",
+            "/api/v1/plugins//ui",
+            "/api/v1/plugins/-x/ui",
+            "/api/v1/courses",
+            "/api/v1/whoami",
+            "/x/api/v1/plugins/widgets/ui",
+            None,
+        ):
+            assert not is_plugin_host_ui_path(self.REGISTRY, path), path

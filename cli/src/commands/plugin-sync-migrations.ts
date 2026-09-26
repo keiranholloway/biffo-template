@@ -5,6 +5,7 @@ import { Command } from 'commander'
 import { GitAdapter } from '../adapters/git/index.js'
 import { PluginMigrationsAdapter } from '../adapters/plugin-migrations/index.js'
 import { log } from '../lib/logger.js'
+import { commitPluginChange } from '../lib/plugin-commit.js'
 
 export const pluginSyncMigrationsCommand = new Command('sync-migrations')
   .description(
@@ -100,10 +101,10 @@ export async function runPluginSyncMigrations(
     if (!isRepo) {
       throw new Error(`${options.cwd} is not a git repository — cannot commit.`)
     }
-    await deps.git.add(options.cwd, relativePaths)
     const label = name ?? `${String(generated.length)} plugin(s)`
     const commitMessage = `chore(plugins): sync migration(s) for ${label}`
-    await deps.git.commit(options.cwd, commitMessage)
+    // `generate` ran `uv run`, which can rewrite uv.lock — commit it with the migration (#2108).
+    await commitPluginChange(deps, options.cwd, relativePaths, commitMessage)
     log.success(`Committed: ${commitMessage}`)
   } else {
     log.warn('--no-commit: generated file(s) are on disk but not staged/committed.')

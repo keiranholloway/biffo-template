@@ -14,9 +14,11 @@
  * `.github/workflows/` was explicitly out of its territory.
  *
  * `MODEL_SNAPSHOT_MAX_AGE_DAYS` in `plugin-tool-supply-audit.ts` fails the
- * guard once the committed snapshot is older than that threshold, so a
- * forgotten refresh becomes a loud CI failure rather than a silently-aging
- * trust — run this script and commit the diff to clear it.
+ * guard IN THE TEMPLATE once the committed snapshot is older than that
+ * threshold, so a forgotten refresh becomes a loud CI failure rather than a
+ * silently-aging trust — run this script and commit the diff to clear it. In
+ * an instance the same age only warns (#2115): the snapshot is the pinned
+ * CLI's, not the instance's to refresh.
  */
 import { writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'

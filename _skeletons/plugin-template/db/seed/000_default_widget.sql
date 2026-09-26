@@ -29,6 +29,15 @@
 -- known tenant in a single statement, from the instance's own deploy step.
 -- Both are legitimate; which one to use for YOUR plugin is exactly the
 -- question BiffoPluginBase's class docstring answers.
+--
+-- SET search_path: the instance's DDL guard (test_ddl_import_conventions.py,
+-- biffo-template#1338) requires every module to open with one, so its bare
+-- names resolve the same however the chain is applied. This seed's table and
+-- `users` both live in `public` (created by Alembic, not by a per-import
+-- schema), and the guard resolves a vendored `_plugin-<name>/` directory to
+-- `public` — do not change this to the directory name (biffo-template#2132).
+SET search_path TO public;
+
 INSERT INTO example_widgets (id, tenant_id, name, description, is_active, created_at, updated_at)
 SELECT
   gen_random_uuid()::text,

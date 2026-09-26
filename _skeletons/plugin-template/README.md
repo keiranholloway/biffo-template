@@ -99,7 +99,9 @@ loudly (ADR-0005 §4) rather than silently re-applying or silently skipping. A
 later change to your baseline data ships as a new, additively-numbered file —
 see `db/seed/000_default_widget.sql`'s own header comment for the full
 contract and the `INSERT ... SELECT ... WHERE NOT EXISTS` shape every file
-here must follow.
+here must follow. Every seed file also opens with `SET search_path TO public;` (after its
+banner comment) — the instance's DDL guard requires it, and your tables and
+`users` live in `public`.
 
 This is a second, complementary mechanism to the one below — not a
 replacement for it. `seed_default_widget()` in `plugin.py` still demonstrates

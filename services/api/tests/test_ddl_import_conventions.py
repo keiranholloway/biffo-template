@@ -97,7 +97,9 @@ and carries no instance's data.
   (`CREATE TABLE tenants` …) are legitimately not idempotent and were never
   intended to be re-run. Defaults to guarding everything.
 - `schema` — the schema this import's modules must select. Defaults to the
-  import directory's name.
+  import directory's name, except a vendored plugin seed directory
+  (`_plugin-<name>/`, written by `biffo plugin install`) which defaults to
+  `public` — the schema its tables actually live in (#2132).
 - `grandfathered_bare_policies` — policy names in a module that is already
   applied somewhere and so can no longer be corrected. Pinned per name, so a
   *new* bare policy in that same file still fails, and a stale entry fails too.
@@ -307,9 +309,44 @@ def _iter_statements(sql: str):
         yield trailing
 
 
+# `biffo plugin install` vendors a plugin's seed into `db/imports/_plugin-<name>/`
+# (cli/src/lib/plugin-seed-vendor.ts, VENDOR_PREFIX). That directory name is not
+# a schema: the seed inserts into tables Alembic created in `public` and reads
+# Core's `users`, also `public`. cli/src/lib/plugin-seed-guard-pairing.test.ts
+# runs the real vendor step through this guard, so the two prefixes cannot
+# drift apart unnoticed (#2132).
+_VENDORED_PLUGIN_PREFIX = "_plugin-"
+_VENDORED_PLUGIN_SCHEMA = "public"
+
+_BARE_IDENTIFIER = re.compile(r"^[a-z_][a-z0-9_]*$")
+
+
 def _expected_schema(module: GuardedModule) -> str:
-    """The schema this module must select — derived, never hardcoded."""
-    return module.config.schema or module.path.parent.name
+    """The schema this module must select — derived, never hardcoded.
+
+    An explicit `schema` key wins. Otherwise a vendored plugin seed directory
+    resolves to `public`, and any other directory to its own name.
+    """
+    if module.config.schema:
+        return module.config.schema
+    directory = module.path.parent.name
+    if directory.startswith(_VENDORED_PLUGIN_PREFIX):
+        return _VENDORED_PLUGIN_SCHEMA
+    return directory
+
+
+def _search_path_statement(schema: str) -> str:
+    """The exact header to tell an author to write — always valid SQL.
+
+    A directory name may legitimately contain a hyphen (`biffo data import`
+    allows `[a-z][a-z0-9-]*`), and an unquoted `SET search_path TO my-import`
+    is an expression, not a schema. Quote anything that is not a bare
+    identifier; `_header_schema` already strips quotes when reading it back.
+    """
+    if schema == "public":
+        return "SET search_path TO public;"
+    name = schema if _BARE_IDENTIFIER.match(schema) else '"' + schema.replace('"', '""') + '"'
+    return f"SET search_path TO {name}, public;"
 
 
 def _header_schema(sql: str) -> tuple[str | None, str]:
@@ -454,7 +491,7 @@ class TestDdlImportNameResolution:
         assert selected is not None, (
             f"{_module_id(module)} does not open with a SET search_path header — "
             f"{reason}.\n\n"
-            f"Add `SET search_path TO {expected}, public;` as the module's first "
+            f"Add `{_search_path_statement(expected)}` as the module's first "
             "statement, after the banner comment. Without it, every unqualified "
             "name in this module resolves against whatever search_path an earlier "
             "module happened to leave set on the shared connection — so the module "
@@ -473,7 +510,7 @@ class TestDdlImportNameResolution:
             f"{selected!r} first, but this import's schema is {expected!r}.\n\n"
             "The import's own schema must come first in the list, or unqualified "
             f"names resolve into {selected!r} instead. Expected "
-            f"`SET search_path TO {expected}, public;`.\n\n"
+            f"`{_search_path_statement(expected)}`.\n\n"
             f"If {expected!r} is genuinely the wrong name for this import, set "
             f"'schema' in {module.path.parent / CONFIG_FILENAME} — it defaults to "
             "the import directory's name."
@@ -824,6 +861,60 @@ class TestSearchPathHeaderDetection:
         """Derived, not hardcoded — an instance's schema is not `tabsii`."""
         module = _write_module(tmp_path / "acme", "010_x.sql", "SET search_path TO acme;")
         assert _expected_schema(module) == "acme"
+
+    def test_vendored_plugin_seed_directory_resolves_to_public(self, tmp_path) -> None:
+        """`_plugin-<name>` is a vendoring prefix, not a schema (#2132)."""
+        module = _write_module(
+            tmp_path / "_plugin-a5-throwaway",
+            "000_default_widget.sql",
+            "SET search_path TO public;",
+        )
+        assert _expected_schema(module) == "public"
+
+    def test_vendored_plugin_seed_with_the_header_passes(self, tmp_path, header_checks) -> None:
+        module = _write_module(
+            tmp_path / "_plugin-a5-throwaway",
+            "000_default_widget.sql",
+            "-- banner\nSET search_path TO public;\nSELECT 1;",
+        )
+        header_checks.test_opens_with_set_search_path(module)
+
+    def test_vendored_plugin_seed_naming_the_directory_fails(self, tmp_path, header_checks) -> None:
+        """The old, wrong expectation must not be accepted either."""
+        module = _write_module(
+            tmp_path / "_plugin-a5-throwaway",
+            "000_default_widget.sql",
+            'SET search_path TO "_plugin-a5-throwaway", public;',
+        )
+        with pytest.raises(AssertionError, match="selects .*_plugin-a5-throwaway.* first"):
+            header_checks.test_opens_with_set_search_path(module)
+
+    def test_schema_key_beats_the_vendored_plugin_rule(self, tmp_path) -> None:
+        import_dir = tmp_path / "_plugin-x"
+        import_dir.mkdir()
+        (import_dir / CONFIG_FILENAME).write_text(json.dumps({"schema": "acme"}))
+        module = _write_module(import_dir, "010_x.sql", "SET search_path TO acme;")
+        assert _expected_schema(module) == "acme"
+
+    def test_remedy_for_a_hyphenated_directory_is_valid_sql(self, tmp_path, header_checks) -> None:
+        """An unquoted `TO my-import` is an expression; the remedy must quote it."""
+        module = _write_module(tmp_path / "my-import", "010_x.sql", "SELECT 1;")
+        with pytest.raises(AssertionError) as raised:
+            header_checks.test_opens_with_set_search_path(module)
+        assert 'SET search_path TO "my-import", public;' in str(raised.value)
+        assert "TO my-import" not in str(raised.value)
+
+    def test_remedy_quoted_form_is_accepted_when_written(self, tmp_path, header_checks) -> None:
+        module = _write_module(
+            tmp_path / "my-import", "010_x.sql", 'SET search_path TO "my-import", public;'
+        )
+        header_checks.test_opens_with_set_search_path(module)
+
+    def test_wrong_schema_remedy_is_also_quoted(self, tmp_path, header_checks) -> None:
+        module = _write_module(tmp_path / "my-import", "010_x.sql", "SET search_path TO public;")
+        with pytest.raises(AssertionError) as raised:
+            header_checks.test_opens_with_set_search_path(module)
+        assert 'Expected `SET search_path TO "my-import", public;`' in str(raised.value)
 
     def test_schema_key_overrides_the_directory_name(self, tmp_path, header_checks) -> None:
         import_dir = tmp_path / "vendored"

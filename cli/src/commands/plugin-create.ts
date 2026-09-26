@@ -24,6 +24,7 @@ import { getLatestCoreVersion, INSTANCE_CORE_FILE } from '../lib/core-version.js
 import { log } from '../lib/logger.js'
 import { pluginDir, type PluginChannel } from '../lib/plugin-locations.js'
 import { validateManifest } from '../lib/plugin-manifest.js'
+import { sortScaffoldedImports } from '../lib/plugin-import-sort.js'
 import { applyWorkspaceSources } from '../lib/plugin-workspace-sources.js'
 import { deriveNames, findSkeletonRoot, scaffoldPlugin } from '../lib/plugin-scaffold.js'
 import { restorePackagedDotfiles } from '../lib/skeleton-dotfiles.js'
@@ -262,6 +263,11 @@ export async function runPluginCreate(
   // packaged skeleton carries `_gitignore`. No-op from a template checkout.
   restorePackagedDotfiles(destDir)
   log.success(`Scaffolded ${files.length} file(s) into ${relDir}/`)
+  // Substitution renamed the modules, so the skeleton's import order may no longer be isort-clean (#2134).
+  await sortScaffoldedImports(
+    destDir,
+    files.filter((f) => f.endsWith('.py')).map((f) => join(destDir, f)),
+  )
   for (const { entry, reason } of skipped) {
     log.info(`Skipped ${entry} — ${reason}`)
   }
@@ -356,6 +362,10 @@ async function runStandaloneCreate(
   const { files } = scaffoldPlugin(skeletonRoot, destDir, names, { layout: 'standalone' })
   restorePackagedDotfiles(destDir)
   log.success(`Scaffolded ${String(files.length)} file(s) into ${names.dist}/`)
+  await sortScaffoldedImports(
+    destDir,
+    files.filter((f) => f.endsWith('.py')).map((f) => join(destDir, f)),
+  )
 
   const manifest = validateManifest(
     JSON.parse(readFileSync(join(destDir, 'biffo.plugin.json'), 'utf8')),

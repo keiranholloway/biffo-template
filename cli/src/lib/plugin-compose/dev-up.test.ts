@@ -111,6 +111,41 @@ describe('runDevUp', () => {
     expect(out).toContain('host restarts on plugin source changes')
   })
 
+  it('hands the interrupt signal to the composition, so a SIGTERM mid-startup can tear it down', async () => {
+    const ctx = stackWith(realRouter())
+    stackToken = () => ctx.stack.adminToken
+    const ac = new AbortController()
+    await runDevUp({ ...base, check: true, signal: ac.signal }, ctx.deps, hooks().h)
+    expect(composeStackMock.mock.calls.at(-1)![0].signal).toBe(ac.signal)
+  })
+
+  it('a compose interrupted by a signal exits 130 and says so, rather than reporting a failure', async () => {
+    const ac = new AbortController()
+    ac.abort()
+    composeStackMock.mockRejectedValue(new Error('interrupted'))
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const { lines, h } = hooks()
+    expect(await runDevUp({ ...base, check: true, signal: ac.signal }, {} as ComposeDeps, h)).toBe(
+      130,
+    )
+    expect(errors.mock.calls.flat().join(' ')).not.toMatch(/failed/)
+    expect(lines).toEqual([])
+    errors.mockRestore()
+  })
+
+  it('--check interrupted while probing exits 130 and does not claim the stack healthy', async () => {
+    const ac = new AbortController()
+    const ctx = stackWith(async (input, init) => {
+      ac.abort()
+      return realRouter()(input, init)
+    })
+    stackToken = () => ctx.stack.adminToken
+    const { lines, h } = hooks()
+    expect(await runDevUp({ ...base, check: true, signal: ac.signal }, ctx.deps, h)).toBe(130)
+    expect(ctx.closed()).toBe(true)
+    expect(lines.join('\n')).not.toContain('composition healthy')
+  })
+
   it('surfaces AWS calls the sink refused', async () => {
     const ctx = stackWith(realRouter())
     stackToken = () => ctx.stack.adminToken

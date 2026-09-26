@@ -170,6 +170,29 @@ describe('runPluginToolSupplyCheck', () => {
       expect(warned).toContain('older than the refresh window')
     })
 
+    it('an instance failing for a real reason (unknown model id) is not told to refresh a snapshot it cannot refresh', async () => {
+      const root = makeTmpDir('plugin-tool-supply-instance-stale-bad-id')
+      write(root, 'biffo.core.json', JSON.stringify({ version: '1.0.0' }))
+      writeRealCoreApi(root)
+      write(
+        root,
+        'services/api/src/api/config.py',
+        readFileSync(join(repoRoot, 'services/api/src/api/config.py'), 'utf8').replace(
+          /(default_model[^=]*=\s*)"[^"]+"/,
+          '$1"anthropic/definitely-not-a-model"',
+        ),
+      )
+      setRoot(root)
+      vi.useFakeTimers({ toFake: ['Date'] })
+      vi.setSystemTime(FAR_FUTURE)
+
+      await expect(runPluginToolSupplyCheck()).rejects.toThrow('process.exit(1)')
+
+      const reported = vi.mocked(console.error).mock.calls.flat().join('\n')
+      expect(reported).toContain('UNKNOWN-MODEL')
+      expect(reported).not.toContain('SNAPSHOT STALE')
+    })
+
     it('the template, which owns the snapshot, still fails on the same old snapshot', async () => {
       const root = makeTmpDir('plugin-tool-supply-template-stale')
       write(root, 'core-manifest.json', '{}')

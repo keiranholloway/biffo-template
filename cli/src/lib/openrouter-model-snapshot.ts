@@ -24,9 +24,8 @@
  * plausible id, which is the whole failure mode.
  *
  * So: a snapshot, refreshed out of band by
- * `cli/src/scripts/refresh-openrouter-model-snapshot.ts` (run by hand today;
- * wiring it to a schedule is follow-up, see that script's own docstring —
- * touching `.github/workflows/` was out of this change's assigned territory),
+ * `cli/src/scripts/refresh-openrouter-model-snapshot.ts`
+ * (scheduled by `.github/workflows/openrouter-snapshot-refresh.yml`, #2115),
  * checked into this file. Ordinary CI reads only this array — no network, no
  * credential, no flakiness — at the cost of bounded staleness: a model
  * OpenRouter adds after the last refresh reads as "unknown" until the

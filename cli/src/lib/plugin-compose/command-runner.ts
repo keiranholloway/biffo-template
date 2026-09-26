@@ -15,13 +15,22 @@ export interface CommandResult {
 }
 
 export interface CommandRunner {
-  run(cmd: string, args: string[], opts: { cwd: string; captureStdout: boolean }): CommandResult
+  run(
+    cmd: string,
+    args: string[],
+    opts: { cwd: string; captureStdout: boolean; env?: Record<string, string> },
+  ): CommandResult
 }
 
 export class RealCommandRunner implements CommandRunner {
-  run(cmd: string, args: string[], opts: { cwd: string; captureStdout: boolean }): CommandResult {
+  run(
+    cmd: string,
+    args: string[],
+    opts: { cwd: string; captureStdout: boolean; env?: Record<string, string> },
+  ): CommandResult {
     const result = spawnSync(cmd, args, {
       cwd: opts.cwd,
+      ...(opts.env ? { env: opts.env } : {}),
       // Progress/errors always go to the terminal so a human watching a local
       // run (or CI's own log) sees them as they happen; stdout is captured only
       // when the caller needs the value back (pg-test-db.sh's DSN) — capturing

@@ -1,8 +1,8 @@
 import { log } from '../logger.js'
 import { packagedScriptMissing } from '../packaged-scripts.js'
-import type { CommandRunner } from './command-runner.js'
+import type { CommandRunner } from '../plugin-compose/command-runner.js'
 import { listChecks, runChecksOnce } from './conformance-driver.js'
-import { raisePostgres } from './raise-postgres.js'
+import { raisePostgres } from '../plugin-compose/raise-postgres.js'
 
 export interface PluginVerifyOptions {
   cwd: string

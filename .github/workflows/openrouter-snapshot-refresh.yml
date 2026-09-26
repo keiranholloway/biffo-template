@@ -135,8 +135,15 @@ jobs:
           git config user.email "biffo-fleet[bot]@users.noreply.github.com"
           git checkout -B "$BRANCH"
           git add cli/src/lib/openrouter-model-snapshot.ts
+          # `pnpm install` above ran the `prepare` script, which arms the repo's
+          # commit-msg hook (commitlint) on this runner -- and unlike pre-push,
+          # that hook has no CI skip. Every -m paragraph must therefore fit
+          # commitlint's 100-column limit; a longer one made this commit fail and
+          # the whole refresh die before any branch was pushed.
+          # cli/src/lib/workflow-commit-messages.test.ts runs these exact
+          # messages through the real hook, so keep them as plain -m strings.
           git commit -m "chore(cli): refresh OpenRouter model snapshot" \
-            -m "Scheduled by openrouter-snapshot-refresh.yml so the 45-day age gate never fires on the calendar alone (#2115)."
+            -m "Scheduled refresh: keeps the 45-day age gate from firing on the calendar alone (#2115)."
           remote="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git push --force "$remote" "HEAD:refs/heads/$BRANCH"
           git ls-remote "$remote" "refs/heads/$BRANCH" | grep -q "$(git rev-parse HEAD)"

@@ -28,10 +28,10 @@
  * exercised here too, so the fix cannot be read as silencing the real signal
  * along with the false one.
  */
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { execa } from 'execa'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { makeTmpDir } from '../test-utils/tmp.js'
 import { runPluginToolSupplyCheck } from './check-plugin-tool-supply.js'
 
@@ -56,6 +56,7 @@ beforeEach(() => {
   exitCode = undefined
   vi.spyOn(console, 'log').mockImplementation(() => {})
   vi.spyOn(console, 'error').mockImplementation(() => {})
+  vi.spyOn(console, 'warn').mockImplementation(() => {})
   vi.spyOn(process, 'exit').mockImplementation(((code?: number) => {
     exitCode = code
     throw new Error(`process.exit(${String(code)})`)
@@ -135,5 +136,52 @@ describe('runPluginToolSupplyCheck', () => {
     expect(exitCode).toBe(1)
     const reported = vi.mocked(console.error).mock.calls.flat().join('\n')
     expect(reported).toContain('MISSING services/api/src/api/schemas/orchestration.py')
+  })
+
+  describe('snapshot age is a clock, not a change defect (#2115)', () => {
+    // A date long past the snapshot's fetched-at + MODEL_SNAPSHOT_MAX_AGE_DAYS.
+    const FAR_FUTURE = new Date('2099-01-01T00:00:00Z')
+    const repoRoot = join(__dirname, '..', '..', '..')
+    const realApiFiles = [
+      'services/api/src/api/config.py',
+      'services/api/src/api/schemas/orchestration.py',
+    ]
+
+    function writeRealCoreApi(root: string): void {
+      for (const rel of realApiFiles) write(root, rel, readFileSync(join(repoRoot, rel), 'utf8'))
+    }
+
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    it('an instance on a pinned CLI with an old snapshot passes, and warns', async () => {
+      const root = makeTmpDir('plugin-tool-supply-instance-stale')
+      write(root, 'biffo.core.json', JSON.stringify({ version: '1.0.0' }))
+      writeRealCoreApi(root)
+      setRoot(root)
+      vi.useFakeTimers({ toFake: ['Date'] })
+      vi.setSystemTime(FAR_FUTURE)
+
+      await expect(runPluginToolSupplyCheck()).resolves.toBeUndefined()
+
+      expect(process.exit).not.toHaveBeenCalled()
+      const warned = vi.mocked(console.warn).mock.calls.flat().join('\n')
+      expect(warned).toContain('older than the refresh window')
+    })
+
+    it('the template, which owns the snapshot, still fails on the same old snapshot', async () => {
+      const root = makeTmpDir('plugin-tool-supply-template-stale')
+      write(root, 'core-manifest.json', '{}')
+      writeRealCoreApi(root)
+      setRoot(root)
+      vi.useFakeTimers({ toFake: ['Date'] })
+      vi.setSystemTime(FAR_FUTURE)
+
+      await expect(runPluginToolSupplyCheck()).rejects.toThrow('process.exit(1)')
+
+      const reported = vi.mocked(console.error).mock.calls.flat().join('\n')
+      expect(reported).toContain('SNAPSHOT STALE')
+    })
   })
 })

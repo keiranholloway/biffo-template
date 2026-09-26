@@ -704,6 +704,11 @@ export interface ModelIdAuditReport {
   snapshotModelCount: number
   snapshotEmpty: boolean
   snapshotStale: boolean
+  /** Whether snapshot age counted toward `ok`. False for an instance, where
+   * the snapshot is whatever the pinned CLI shipped and age is a clock, not a
+   * property of the PR under test (#2115) — `snapshotStale` is still
+   * reported, as a warning. */
+  snapshotAgeEnforced: boolean
   findings: ModelIdFinding[]
   ok: boolean
   summary: string
@@ -716,6 +721,14 @@ export interface ModelIdAuditOptions {
   knownModelIds?: readonly string[]
   snapshotFetchedAt?: string
   now?: Date
+  /** Whether a stale snapshot fails the audit. Defaults to `true` (fail
+   * closed). Pass `false` only where the snapshot is not the repo's to
+   * refresh: an instance runs the CLI pinned in `biffo.core.json`, whose
+   * embedded snapshot ages on the calendar regardless of what a PR changes,
+   * so failing on age reds every unrelated PR on a date alone (#2115). The
+   * template, which owns the snapshot, keeps enforcing it. Emptiness and
+   * unknown ids still fail either way. */
+  enforceSnapshotAge?: boolean
 }
 
 /** Reads `config.py` and `schemas/orchestration.py` under `repoRoot`,
@@ -731,6 +744,7 @@ export function auditDeclaredModelIds(
   const knownModelIds = options.knownModelIds ?? OPENROUTER_MODEL_IDS
   const snapshotFetchedAt = options.snapshotFetchedAt ?? OPENROUTER_MODEL_SNAPSHOT_FETCHED_AT
   const now = options.now ?? new Date()
+  const snapshotAgeEnforced = options.enforceSnapshotAge ?? true
 
   const configPath = join(repoRoot, CONFIG_PY_PATH)
   const orchestrationPath = join(repoRoot, ORCHESTRATION_SCHEMA_PATH)
@@ -789,7 +803,7 @@ export function auditDeclaredModelIds(
     !settingsBlind &&
     !curatedFieldsBlind &&
     !snapshotEmpty &&
-    !snapshotStale &&
+    !(snapshotStale && snapshotAgeEnforced) &&
     badFindings.length === 0
 
   const summaryParts = [
@@ -803,7 +817,9 @@ export function auditDeclaredModelIds(
   if (snapshotEmpty) summaryParts.push('SNAPSHOT EMPTY')
   if (snapshotStale)
     summaryParts.push(
-      `SNAPSHOT STALE (older than ${MODEL_SNAPSHOT_MAX_AGE_DAYS}d — run refresh-openrouter-model-snapshot.ts)`,
+      snapshotAgeEnforced
+        ? `SNAPSHOT STALE (older than ${MODEL_SNAPSHOT_MAX_AGE_DAYS}d — run refresh-openrouter-model-snapshot.ts)`
+        : `snapshot older than ${MODEL_SNAPSHOT_MAX_AGE_DAYS}d (warning only — bump biffo.core.json's pinned CLI version)`,
     )
 
   return {
@@ -817,6 +833,7 @@ export function auditDeclaredModelIds(
     snapshotModelCount: knownModelIds.length,
     snapshotEmpty,
     snapshotStale,
+    snapshotAgeEnforced,
     findings,
     ok,
     summary: summaryParts.join('; '),

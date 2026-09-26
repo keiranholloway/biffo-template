@@ -47,6 +47,9 @@ env:
 
 jobs:
   refresh:
+    # Template-owned workflow, so it is distributed to every instance; the
+    # snapshot is only ours to refresh here (an instance's is its pinned CLI's).
+    if: github.repository == 'keiranholloway/biffo-template'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -61,6 +64,11 @@ jobs:
           FORCE: ${{ inputs.force }}
         run: |
           set -eu
+          if [ -f biffo.core.json ]; then
+            echo "biffo.core.json present — this is an instance, not the template. Skipping."
+            echo "due=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           fetched=$(sed -n "s/^export const OPENROUTER_MODEL_SNAPSHOT_FETCHED_AT = '\(.*\)'$/\1/p" cli/src/lib/openrouter-model-snapshot.ts)
           # Fail closed: an unreadable timestamp is a reason to refresh (and to
           # fail loudly if the refresh cannot fix it), never a reason to skip.

@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { makeTmpDir, removeTmpDir } from '../../test-utils/tmp.js'
 import type { CommandRunner } from './command-runner.js'
 import {
+  cloneDropCommand,
   composeStack,
   realComposeDeps,
   toAsyncpgDsn,
@@ -471,6 +472,19 @@ describe('realComposeDeps.removeDir', () => {
     deps.removeDir(run)
     expect(existsSync(run)).toBe(false)
     expect(existsSync(join(plugin, 'biffo.plugin.json'))).toBe(true)
+  })
+})
+
+describe('cloneDropCommand', () => {
+  it('returns null for a DSN that does not parse, rather than guessing a database name', () => {
+    expect(cloneDropCommand('not a dsn')).toBeNull()
+  })
+  it('defaults the port and decodes credentials', () => {
+    const drop = cloneDropCommand(
+      'postgresql://us%40er:p%2Fw@dbhost/biffo_test_abcd1234_r0f1e2d3c',
+    )!
+    expect(drop.args).toEqual(expect.arrayContaining(['-p', '5432', '-U', 'us@er']))
+    expect(drop.env.PGPASSWORD).toBe('p/w')
   })
 })
 

@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import { createServer } from 'node:net'
-import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -48,6 +48,12 @@ export interface ComposeOptions {
   /** Hot-reload the host on plugin source changes. */
   reload: boolean
   readyTimeoutMs: number
+  /**
+   * Fires when the process is asked to stop (SIGINT/SIGTERM/SIGHUP). Everything
+   * started so far is torn down at once — even mid-startup, when the caller is
+   * still blocked in `composeStack` and has no `close()` to call yet.
+   */
+  signal?: AbortSignal
 }
 
 export interface ComposeDeps {
@@ -58,6 +64,8 @@ export interface ComposeDeps {
   parentEnv: NodeJS.ProcessEnv
   freePort: () => Promise<number>
   makeWorkDir: () => string
+  /** Removes a directory made by `makeWorkDir`, with everything under it. */
+  removeDir: (dir: string) => void
   sleep: (ms: number) => Promise<void>
   log: (line: string) => void
 }
@@ -78,6 +86,56 @@ export interface ComposedStack {
 }
 
 const PG_TEST_DB_SCRIPT = 'scripts/pg-test-db.sh'
+
+/** Exit code of the preflight snippet when `plugin_host` is not importable (distinct from uv's own failures). */
+const HOST_MISSING_EXIT = 3
+const HOST_PREFLIGHT_PY =
+  `import importlib.util, sys; ` +
+  `sys.exit(0 if importlib.util.find_spec('plugin_host') else ${HOST_MISSING_EXIT})`
+
+/**
+ * The per-run clone `scripts/pg-test-db.sh` makes (`<template>_r<8 hex>`, where the
+ * template is `biffo_test_<8 hex>`). Only this exact shape is ever removed: a shared
+ * database (`BIFFO_PG_SHARED`, an explicit `BIFFO_PG_DB`) is somebody else's, and
+ * a teardown that removed it would destroy the fixture every later run reuses.
+ */
+const CLONE_DB_NAME = /^biffo_test_[0-9a-f]{8}_r[0-9a-f]{8}$/
+
+interface CloneDrop {
+  name: string
+  args: string[]
+  env: Record<string, string>
+}
+
+/** The `psql` invocation that removes the run's cloned database, or null if `dsn` is not a clone. */
+export function cloneDropCommand(dsn: string): CloneDrop | null {
+  let url: URL
+  try {
+    url = new URL(dsn)
+  } catch {
+    return null
+  }
+  const name = decodeURIComponent(url.pathname.slice(1))
+  if (!CLONE_DB_NAME.test(name)) return null
+  return {
+    name,
+    // Admin connection to `postgres`: a session cannot drop the database it is connected to.
+    args: [
+      '-q',
+      '-h',
+      url.hostname,
+      '-p',
+      url.port || '5432',
+      '-U',
+      decodeURIComponent(url.username),
+      '-d',
+      'postgres',
+      '-c',
+      `DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`,
+    ],
+    env: { PGPASSWORD: decodeURIComponent(url.password) },
+  }
+}
 
 export function toAsyncpgDsn(dsn: string): string {
   return dsn.replace(/^postgres(ql)?:\/\//, 'postgresql+asyncpg://')
@@ -101,6 +159,15 @@ export async function composeStack(
     options.configFile ? `dev config ${options.configFile}` : 'dev config (no --config-file given)',
   )
 
+  const signal = options.signal
+  const throwIfInterrupted = () => {
+    if (signal?.aborted) throw new Error('interrupted by a signal — tore down what had started')
+  }
+  throwIfInterrupted()
+
+  preflightHost(options.pluginRoot, manifest.name, deps)
+  throwIfInterrupted()
+
   const script = deps.findScript(PG_TEST_DB_SCRIPT)
   if (!script) throw new Error(packagedScriptMissing(PG_TEST_DB_SCRIPT))
   const raised = raisePostgres(deps.runner, script, options.pluginRoot)
@@ -109,17 +176,42 @@ export async function composeStack(
   }
   const dsn = raised.dsn
 
+  // Teardown, in reverse order of what was started. Idempotent and shared: the
+  // signal handler, the failure path and the caller's own close() may all race here.
   const cleanups: Array<() => Promise<void>> = []
-  const close = async () => {
-    for (const fn of cleanups.reverse()) await fn().catch(() => undefined)
-    cleanups.length = 0
+  let closing: Promise<void> | null = null
+  const close = (): Promise<void> => {
+    closing ??= (async () => {
+      signal?.removeEventListener('abort', onAbort)
+      for (const fn of [...cleanups].reverse()) await fn().catch(() => undefined)
+      cleanups.length = 0
+    })()
+    return closing
   }
+  const onAbort = () => void close()
+  signal?.addEventListener('abort', onAbort, { once: true })
+
+  // Registered first, so it runs last: every process that holds the clone open is gone by then.
+  cleanups.push(async () => {
+    const drop = cloneDropCommand(dsn)
+    if (!drop) return
+    const { status } = deps.runner.run('psql', drop.args, {
+      cwd: options.pluginRoot,
+      captureStdout: false,
+      env: { ...definedEnv(deps.parentEnv), ...drop.env },
+    })
+    if (status !== 0) {
+      deps.log(`dev: could not remove cloned database ${drop.name} (psql exited ${status})`)
+    }
+  })
 
   try {
+    throwIfInterrupted()
     const sink = await startLocalAwsSink(config.parameters)
     cleanups.push(() => sink.close())
 
     const workDir = deps.makeWorkDir()
+    cleanups.push(async () => deps.removeDir(workDir))
     const servicesRoot = join(workDir, 'services')
     const appDir = join(workDir, 'apps')
     mkdirSync(servicesRoot, { recursive: true })
@@ -180,6 +272,7 @@ export async function composeStack(
     if (boot.status !== 0) {
       throw new Error(`Core/plugin migrations failed (exit ${boot.status}) — see output above`)
     }
+    throwIfInterrupted()
 
     const core = deps.spawnProcess(
       'core',
@@ -203,6 +296,18 @@ export async function composeStack(
       { cwd: coreApi, env: coreEnv },
     )
     cleanups.push(() => core.kill())
+
+    // Core first, and healthy, BEFORE the host exists. A plugin's startup may call
+    // Core (ideation seeds its agent config through a signed Core call); a host
+    // spawned alongside a not-yet-listening Core hits ConnectError, is quarantined
+    // by the shared host, and answers 503 on every route for the life of the
+    // process (#1525 verdict, finding 1). Start order is the fix, not a probe.
+    await waitReady(
+      { proc: core, url: `${coreUrl}/api/v1/health`, name: 'Core' },
+      deps,
+      options.readyTimeoutMs,
+      signal,
+    )
 
     const hostEnv = {
       ...base,
@@ -237,12 +342,10 @@ export async function composeStack(
     cleanups.push(() => host.kill())
 
     await waitReady(
-      [
-        { proc: core, url: `${coreUrl}/api/v1/health`, name: 'Core' },
-        { proc: host, url: `${hostUrl}/`, name: 'plugin host' },
-      ],
+      { proc: host, url: `${hostUrl}/`, name: 'plugin host' },
       deps,
       options.readyTimeoutMs,
+      signal,
     )
 
     return {
@@ -264,27 +367,60 @@ export async function composeStack(
   }
 }
 
+/**
+ * Refuses, before anything is started, a plugin whose own Python environment cannot
+ * import the shared host. The host runs from the plugin's venv (`uv run --directory
+ * <plugin>`); a repo that predates the plugin skeleton's `biffo-plugin-host`
+ * dev-dependency otherwise costs a 120s readiness wait and a bare
+ * `ModuleNotFoundError: plugin_host` traceback (#1525 verdict, finding 2).
+ */
+function preflightHost(pluginRoot: string, name: string, deps: ComposeDeps): void {
+  const { status } = deps.runner.run(
+    'uv',
+    ['run', '--frozen', '--directory', pluginRoot, 'python', '-c', HOST_PREFLIGHT_PY],
+    { cwd: pluginRoot, captureStdout: false },
+  )
+  if (status === 0) return
+  if (status === HOST_MISSING_EXIT) {
+    throw new Error(
+      `plugin ${name} cannot run under the shared plugin host: biffo-plugin-host is not ` +
+        `installed in ${pluginRoot}'s Python environment. Add it with ` +
+        `\`uv add --dev biffo-plugin-host\` (the plugin skeleton pins ~=0.1.0), then re-run.`,
+    )
+  }
+  throw new Error(
+    `could not run the plugin's Python environment to check for biffo-plugin-host ` +
+      `(uv run exited ${status}) — see output above`,
+  )
+}
+
+function definedEnv(env: NodeJS.ProcessEnv): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(env).filter((e): e is [string, string] => e[1] !== undefined),
+  )
+}
+
 async function waitReady(
-  targets: Array<{ proc: ManagedProcess; url: string; name: string }>,
+  target: { proc: ManagedProcess; url: string; name: string },
   deps: ComposeDeps,
   timeoutMs: number,
+  signal?: AbortSignal,
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs
-  for (const t of targets) {
-    for (;;) {
-      if (t.proc.hasExited()) {
-        throw new Error(`${t.name} exited before it became ready — see its output above`)
+  for (;;) {
+    if (signal?.aborted) throw new Error('interrupted by a signal — tore down what had started')
+    if (target.proc.hasExited()) {
+      throw new Error(`${target.name} exited before it became ready — see its output above`)
+    }
+    try {
+      // Any HTTP answer (even 401) proves the server is up; only a refused connection retries.
+      await deps.fetchFn(target.url)
+      return
+    } catch {
+      if (Date.now() > deadline) {
+        throw new Error(`${target.name} did not answer ${target.url} within ${timeoutMs}ms`)
       }
-      try {
-        // Any HTTP answer (even 401) proves the server is up; only a refused connection retries.
-        await deps.fetchFn(t.url)
-        break
-      } catch {
-        if (Date.now() > deadline) {
-          throw new Error(`${t.name} did not answer ${t.url} within ${timeoutMs}ms`)
-        }
-        await deps.sleep(500)
-      }
+      await deps.sleep(500)
     }
   }
 }
@@ -385,6 +521,8 @@ export function realComposeDeps(
       mkdirSync(root, { recursive: true })
       return mkdtempSync(join(root, 'run-'))
     },
+    // rmSync never follows the symlink to the plugin repo inside the run directory: it unlinks it.
+    removeDir: (dir) => rmSync(dir, { recursive: true, force: true }),
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
     log,
   }

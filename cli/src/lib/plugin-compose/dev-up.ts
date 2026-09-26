@@ -12,6 +12,8 @@ export interface DevUpOptions {
   reload: boolean
   /** Compose, run the probes, tear down, exit — instead of staying up. */
   check: boolean
+  /** Fires on SIGINT/SIGTERM/SIGHUP for the whole run; handed to the composition so it can tear down mid-startup. */
+  signal?: AbortSignal
 }
 
 export interface DevUpHooks {
@@ -19,6 +21,9 @@ export interface DevUpHooks {
   untilInterrupted: () => Promise<void>
   write: (line: string) => void
 }
+
+/** Conventional exit for a run cut short by a signal (128 + SIGINT). */
+const INTERRUPTED_EXIT = 130
 
 export const DEFAULT_DEV_CONFIG = 'biffo.dev.json'
 
@@ -64,6 +69,11 @@ export async function runDevUp(
   try {
     stack = await composeStack({ ...options, readyTimeoutMs: 120_000 }, deps)
   } catch (err) {
+    if (options.signal?.aborted) {
+      // Not a failure: the operator (or a supervisor) stopped it, and the composition tore itself down.
+      log.info('dev up: interrupted — everything started so far was torn down')
+      return INTERRUPTED_EXIT
+    }
     log.error(`dev up: ${(err as Error).message}`)
     return 1
   }
@@ -92,6 +102,8 @@ export async function runDevUp(
     }
 
     if (options.check) {
+      // A signal during the probes means the answers cannot be trusted as a verdict either way.
+      if (options.signal?.aborted) return INTERRUPTED_EXIT
       if (!verdict.ok) log.error(`dev up --check: ${verdict.reason}`)
       else log.success('dev up --check: composition healthy')
       return verdict.ok ? 0 : 1

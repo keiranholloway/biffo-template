@@ -7,6 +7,7 @@ import { RealCommandRunner } from '../lib/plugin-compose/command-runner.js'
 import { realComposeDeps } from '../lib/plugin-compose/compose-stack.js'
 import { resolveCoreRoot } from '../lib/plugin-compose/core-source.js'
 import { pickConfigFile, runDevUp } from '../lib/plugin-compose/dev-up.js'
+import { installInterruptSignal } from '../lib/plugin-compose/interrupt.js'
 import { log } from '../lib/logger.js'
 
 const devUpCommand = new Command('up')
@@ -51,6 +52,9 @@ const devUpCommand = new Command('up')
         (p) => findPackagedScript(here, p),
         (l) => log.info(l),
       )
+      // Installed before anything starts: the servers are detached, so a signal that
+      // kills this process unhandled would orphan them (see interrupt.ts).
+      const interrupt = installInterruptSignal()
       const exitCode = await runDevUp(
         {
           pluginRoot,
@@ -61,17 +65,19 @@ const devUpCommand = new Command('up')
           ),
           reload: options.reload,
           check: options.check ?? false,
+          signal: interrupt.signal,
         },
         deps,
         {
           write: (line) => console.log(line),
           untilInterrupted: () =>
             new Promise<void>((done) => {
-              process.once('SIGINT', () => done())
-              process.once('SIGTERM', () => done())
+              if (interrupt.signal.aborted) done()
+              else interrupt.signal.addEventListener('abort', () => done(), { once: true })
             }),
         },
       )
+      interrupt.dispose()
       process.exit(exitCode)
     },
   )

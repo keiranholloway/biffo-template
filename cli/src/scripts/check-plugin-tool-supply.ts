@@ -117,7 +117,13 @@ export async function runPluginToolSupplyCheck(): Promise<void> {
   if (!existsSync(servicesApiRoot)) {
     console.log('✓ plugin model-id guard: no services/api/ — nothing to audit')
   } else {
-    const modelReport = auditDeclaredModelIds(root)
+    // Snapshot age is enforced only where the snapshot is ours to refresh (the
+    // template). An instance runs the CLI pinned in biffo.core.json, whose
+    // embedded snapshot ages on the calendar regardless of the PR under test —
+    // failing there reds every unrelated PR on a date alone (#2115), so it warns.
+    const modelReport = auditDeclaredModelIds(root, {
+      enforceSnapshotAge: ownership === 'template',
+    })
     console.log(`audited ${modelReport.findings.length} declared model id(s)`)
 
     if (!modelReport.ok) {
@@ -155,6 +161,14 @@ export async function runPluginToolSupplyCheck(): Promise<void> {
       }
     } else {
       console.log(`✓ plugin model-id guard: ${modelReport.summary}`)
+      if (modelReport.snapshotStale && !modelReport.snapshotAgeEnforced) {
+        console.warn(
+          `⚠ plugin model-id guard: the OpenRouter snapshot in this CLI (fetched ` +
+            `${modelReport.snapshotFetchedAt}) is older than the refresh window. Not failing — ` +
+            "it is the pinned CLI's snapshot, not this PR's. Bump the CLI pin in " +
+            'biffo.core.json (biffo core upgrade) to pick up a fresher one.',
+        )
+      }
     }
   }
 

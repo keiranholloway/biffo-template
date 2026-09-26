@@ -735,6 +735,31 @@ describe('auditDeclaredModelIds', () => {
     expect(report.ok).toBe(false)
   })
 
+  it('a stale snapshot is a warning, not a failure, when age is not enforced (an instance on a pinned CLI, #2115)', () => {
+    const root = makeTmpDir('model-id-stale-snapshot-unenforced')
+    writeCoreApiFixture(root, { configText: OK_CONFIG, schemaText: OK_SCHEMA })
+
+    const report = auditDeclaredModelIds(root, {
+      knownModelIds,
+      snapshotFetchedAt: '2026-01-01T00:00:00Z',
+      now,
+      enforceSnapshotAge: false,
+    })
+    expect(report.snapshotStale).toBe(true)
+    expect(report.snapshotAgeEnforced).toBe(false)
+    expect(report.ok).toBe(true)
+    expect(report.summary).toContain('warning only')
+  })
+
+  it('not enforcing age does not excuse an unknown model id or an empty snapshot', () => {
+    const root = makeTmpDir('model-id-stale-unenforced-still-strict')
+    writeCoreApiFixture(root, { configText: OK_CONFIG, schemaText: OK_SCHEMA })
+    const opts = { snapshotFetchedAt: '2026-01-01T00:00:00Z', now, enforceSnapshotAge: false }
+
+    expect(auditDeclaredModelIds(root, { ...opts, knownModelIds: [] }).ok).toBe(false)
+    expect(auditDeclaredModelIds(root, { ...opts, knownModelIds: ['other/model'] }).ok).toBe(false)
+  })
+
   it('a declared :online variant is checked against its base id, not rejected as unknown', () => {
     const root = makeTmpDir('model-id-online-variant')
     const onlineOnlySchema = `

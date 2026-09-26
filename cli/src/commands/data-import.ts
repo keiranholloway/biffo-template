@@ -171,7 +171,7 @@ export async function runDataImport(
 
     const commitMessage = `feat(data): import ${name} (${String(sqlFiles.length)} SQL file(s))`
     await deps.git.add(options.cwd, [`db/imports/${name}`])
-    await deps.git.commit(options.cwd, commitMessage)
+    await deps.git.commit(options.cwd, commitMessage, [`db/imports/${name}`])
     log.success(`Committed: ${commitMessage}`)
 
     console.log(chalk.bold('\n  Data import staged!\n'))

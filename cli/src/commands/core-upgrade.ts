@@ -249,7 +249,7 @@ export interface CoreUpgradeGit {
   /** Switch to an existing branch — the undo of `createBranch` (#984). */
   switchBranch(cwd: string, branch: string): Promise<void>
   add(cwd: string, paths: string[]): Promise<void>
-  commit(cwd: string, message: string): Promise<void>
+  commit(cwd: string, message: string, paths: readonly string[]): Promise<void>
   push(cwd: string, branch: string, opts?: { remote?: string; token?: string }): Promise<void>
   /**
    * Branch hygiene (#758). Optional so the many existing fakes in the test
@@ -941,7 +941,7 @@ async function buildCommitAndOpenPr(
   const carriedPrs = readCarriedPrs(options.templateRepo, fromVersion, toVersion)
 
   await git.add(options.cwd, ['-A'])
-  await git.commit(options.cwd, buildCommitMessage(fromVersion, toVersion, carriedPrs))
+  await git.commit(options.cwd, buildCommitMessage(fromVersion, toVersion, carriedPrs), ['.'])
 
   // Install dependencies before pushing (#1040). `.husky/pre-push` runs
   // `scripts/verify.sh`, which cannot run against a tree with no `node_modules`

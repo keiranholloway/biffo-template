@@ -411,7 +411,7 @@ async function runStandaloneCreate(
     // happened to run this from, which is what the in-tree path does.
     await deps.git.init(destDir)
     await deps.git.add(destDir, ['.'])
-    await deps.git.commit(destDir, `feat: scaffold ${names.slug} plugin`)
+    await deps.git.commit(destDir, `feat: scaffold ${names.slug} plugin`, ['.'])
     log.success(`Initialised a git repo on dev with an initial commit`)
   }
 
@@ -587,7 +587,9 @@ async function registerInRegistrySources(
 
     writeFileSync(path, serialiseSources(next))
     await deps.git.add(dir, ['sources.json'])
-    await deps.git.commit(dir, `feat(registry): track ${names.slug} in sources.json`)
+    await deps.git.commit(dir, `feat(registry): track ${names.slug} in sources.json`, [
+      'sources.json',
+    ])
     await deps.git.push(dir, 'main', { token })
     log.success(`Registered ${names.slug} in the plugin registry's sources.json`)
   } catch (err: unknown) {

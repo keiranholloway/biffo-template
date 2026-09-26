@@ -75,7 +75,9 @@ describe('plugin commits carry a current uv.lock (#2108)', () => {
   it('control — the old hand-picked add+commit of a new member leaves the committed tree stale', async () => {
     writeMember(root, 'gadgets')
     await new GitAdapter().add(root, ['services/gadgets'])
-    await new GitAdapter().commit(root, 'feat(plugins): scaffold gadgets plugin')
+    await new GitAdapter().commit(root, 'feat(plugins): scaffold gadgets plugin', [
+      'services/gadgets',
+    ])
     expect(await lockCheckOnCommittedTree(root)).not.toBe(0)
   })
 

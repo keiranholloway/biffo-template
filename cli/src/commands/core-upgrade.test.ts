@@ -122,7 +122,9 @@ describe('runCoreUpgrade --apply', () => {
     })
     // staged, committed, pushed with the token
     expect(git.add).toHaveBeenCalledWith(instance, ['-A'])
-    expect(git.commit).toHaveBeenCalledWith(instance, expect.stringContaining('0.1.0 -> 0.2.0'))
+    expect(git.commit).toHaveBeenCalledWith(instance, expect.stringContaining('0.1.0 -> 0.2.0'), [
+      '.',
+    ])
     expect(git.push).toHaveBeenCalledWith(instance, 'biffo/core-upgrade-0.1.0-to-0.2.0', {
       token: 'TOKEN',
     })
@@ -174,6 +176,7 @@ describe('runCoreUpgrade --apply', () => {
     expect(git.commit).toHaveBeenCalledWith(
       instance,
       expect.stringContaining('<!-- biffo:carries-template-prs:42 -->'),
+      ['.'],
     )
   })
 

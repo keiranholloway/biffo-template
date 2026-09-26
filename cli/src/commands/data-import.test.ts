@@ -125,6 +125,7 @@ describe('runDataImport', () => {
       expect(git.commit).toHaveBeenCalledWith(
         projectRoot,
         'feat(data): import tabsii (2 SQL file(s))',
+        ['db/imports/tabsii'],
       )
     })
 

@@ -49,7 +49,10 @@ export async function withRefreshedLock(
   return stagePaths.includes('uv.lock') ? stagePaths : [...stagePaths, 'uv.lock']
 }
 
-/** Re-locks, stages `stagePaths` plus `uv.lock`, and commits. Returns the paths that were staged. */
+/**
+ * Re-locks, stages `stagePaths` plus `uv.lock`, and commits exactly those paths (#2119: `GitAdapter.commit` takes an explicit
+ * pathspec and never sweeps in whatever else is staged). Returns the paths that were committed.
+ */
 export async function commitPluginChange(
   deps: PluginCommitDeps,
   cwd: string,
@@ -58,6 +61,6 @@ export async function commitPluginChange(
 ): Promise<string[]> {
   const paths = await withRefreshedLock(deps, cwd, stagePaths)
   await deps.git.add(cwd, paths)
-  await deps.git.commit(cwd, message)
+  await deps.git.commit(cwd, message, paths)
   return paths
 }

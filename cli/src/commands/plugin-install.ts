@@ -629,7 +629,7 @@ export async function runPluginInstall(
         await deps.git.add(registryCwd, [PLUGIN_REGISTRY_RELATIVE_PATH])
         left.dashboard.stage = 'staged'
         left.dashboard.staged = [PLUGIN_REGISTRY_RELATIVE_PATH]
-        await deps.git.commit(registryCwd, dashboardCommitMessage)
+        await deps.git.commit(registryCwd, dashboardCommitMessage, [PLUGIN_REGISTRY_RELATIVE_PATH])
         left.dashboard.stage = 'committed'
         left.dashboard.committed = dashboardCommitMessage
         log.success(
@@ -647,7 +647,7 @@ export async function runPluginInstall(
     await deps.git.add(options.cwd, stagePaths)
     left.core.stage = 'staged'
     left.core.staged = stagePaths
-    await deps.git.commit(options.cwd, commitMessage)
+    await deps.git.commit(options.cwd, commitMessage, stagePaths)
     log.success(`Committed: ${commitMessage}`)
 
     console.log(chalk.bold('\n  Plugin installed!\n'))

@@ -6,16 +6,15 @@
  * itself (`auditDeclaredModelIds` in `plugin-tool-supply-audit.ts`) never
  * calls the network — see that snapshot file's own module docstring for why a
  * live call was rejected as the CI-time check. This script is how the
- * committed snapshot it reads gets refreshed, and it is deliberately NOT
- * wired into any CI workflow: run it by hand (`pnpm --filter @biffo/cli
- * refresh:openrouter-models`) and commit the result, or wire a scheduled
- * workflow to do the same later. That wiring is follow-up work — this change
- * was scoped to `cli/src/lib/**` and `cli/src/scripts/**`, and
- * `.github/workflows/` was explicitly out of its territory.
+ * committed snapshot it reads gets refreshed. It runs on a schedule via
+ * `.github/workflows/openrouter-snapshot-refresh.yml` (weekly, refreshing once
+ * the snapshot is over 21 days old, opening an auto-merge PR — #2115), and can
+ * still be run by hand: `pnpm --filter @biffo/cli refresh:openrouter-models`,
+ * then commit the result.
  *
  * `MODEL_SNAPSHOT_MAX_AGE_DAYS` in `plugin-tool-supply-audit.ts` fails the
  * guard IN THE TEMPLATE once the committed snapshot is older than that
- * threshold, so a forgotten refresh becomes a loud CI failure rather than a
+ * threshold, so a failed scheduled refresh becomes a loud CI failure rather than a
  * silently-aging trust — run this script and commit the diff to clear it. In
  * an instance the same age only warns (#2115): the snapshot is the pinned
  * CLI's, not the instance's to refresh.

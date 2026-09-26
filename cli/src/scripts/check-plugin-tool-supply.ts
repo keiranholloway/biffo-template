@@ -150,7 +150,10 @@ export async function runPluginToolSupplyCheck(): Promise<void> {
       if (modelReport.snapshotEmpty) {
         console.error('  SNAPSHOT EMPTY: the committed OpenRouter snapshot has zero ids.')
       }
-      if (modelReport.snapshotStale) {
+      // Only when age is enforced (the template). In an instance a stale
+      // snapshot is not a failure cause and the instance cannot run the refresh
+      // script, so naming it there would send the reader after the wrong fix.
+      if (modelReport.snapshotStale && modelReport.snapshotAgeEnforced) {
         console.error(
           `  SNAPSHOT STALE: fetched ${modelReport.snapshotFetchedAt}, older than the ` +
             'refresh window — run refresh-openrouter-model-snapshot.ts and commit the result.',

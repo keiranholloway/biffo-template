@@ -1,0 +1,131 @@
+name: OpenRouter model snapshot refresh
+
+# Keeps cli/src/lib/openrouter-model-snapshot.ts fresh so the template's own
+# plugin-tool-supply age gate (MODEL_SNAPSHOT_MAX_AGE_DAYS, 45d) never becomes a
+# calendar-driven red on every PR (#2115).
+#
+# ## Why a schedule and not a louder failure
+#
+# The age gate only detects a forgotten refresh. Left as the sole mechanism,
+# the template goes red for every open PR on the date alone, and the fix is a
+# human remembering a manual script. A refresh nobody has to remember removes
+# the cause; the gate stays as the backstop for THIS workflow failing.
+#
+# ## Cadence
+#
+# Runs weekly but only refreshes once the committed snapshot is older than
+# REFRESH_AFTER_DAYS (21) -- half the 45-day failure window -- so a normal
+# month produces one PR, not four, and a failed run has three more weekly
+# attempts before the gate can fire.
+#
+# ## Why an App token, not GITHUB_TOKEN
+#
+# A PR opened with GITHUB_TOKEN does not trigger `pull_request` workflows, so
+# the required checks would never run and the PR could never merge. The
+# biffo-fleet App (same secrets as plugin-staleness-report.yml) does trigger
+# them. The PR is armed for auto-merge; branch protection still requires green.
+on:
+  schedule:
+    - cron: '0 9 * * 1'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Refresh even if the snapshot is younger than the threshold'
+        type: boolean
+        default: false
+
+concurrency:
+  group: openrouter-snapshot-refresh
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  REFRESH_AFTER_DAYS: '21'
+  BRANCH: chore/refresh-openrouter-model-snapshot
+
+jobs:
+  refresh:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: dev
+          fetch-depth: 0
+
+      - name: Decide whether the snapshot is due
+        id: due
+        env:
+          FORCE: ${{ inputs.force }}
+        run: |
+          set -eu
+          fetched=$(sed -n "s/^export const OPENROUTER_MODEL_SNAPSHOT_FETCHED_AT = '\(.*\)'$/\1/p" cli/src/lib/openrouter-model-snapshot.ts)
+          # Fail closed: an unreadable timestamp is a reason to refresh (and to
+          # fail loudly if the refresh cannot fix it), never a reason to skip.
+          if [ -z "$fetched" ] || ! then_s=$(date -u -d "$fetched" +%s 2>/dev/null); then
+            echo "::warning title=snapshot timestamp unreadable::refreshing"
+            echo "due=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          age_days=$(( ( $(date -u +%s) - then_s ) / 86400 ))
+          echo "snapshot fetched ${fetched} (${age_days}d old; refresh after ${REFRESH_AFTER_DAYS}d)"
+          if [ "$FORCE" = "true" ] || [ "$age_days" -ge "$REFRESH_AFTER_DAYS" ]; then
+            echo "due=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "due=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Mint a write token (biffo-fleet App)
+        id: token
+        if: steps.due.outputs.due == 'true'
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.BIFFO_APP_ID }}
+          private-key: ${{ secrets.BIFFO_APP_PRIVATE_KEY }}
+
+      - uses: pnpm/action-setup@v4
+        if: steps.due.outputs.due == 'true'
+      - uses: actions/setup-node@v5
+        if: steps.due.outputs.due == 'true'
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: Regenerate the snapshot from the live catalogue
+        if: steps.due.outputs.due == 'true'
+        run: |
+          set -eu
+          pnpm install --frozen-lockfile --filter @biffo/cli...
+          pnpm --filter @biffo/cli refresh:openrouter-models
+          git diff --stat -- cli/src/lib/openrouter-model-snapshot.ts
+
+      - name: Open (or update) the refresh PR and arm auto-merge
+        if: steps.due.outputs.due == 'true'
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+        run: |
+          set -eu
+          if git diff --quiet -- cli/src/lib/openrouter-model-snapshot.ts; then
+            echo "::error title=snapshot refresh produced no change::the refresh script ran but left the committed snapshot untouched"
+            exit 1
+          fi
+          git config user.name "biffo-fleet[bot]"
+          git config user.email "biffo-fleet[bot]@users.noreply.github.com"
+          git checkout -B "$BRANCH"
+          git add cli/src/lib/openrouter-model-snapshot.ts
+          git commit -m "chore(cli): refresh OpenRouter model snapshot" \
+            -m "Scheduled by openrouter-snapshot-refresh.yml so the 45-day age gate never fires on the calendar alone (#2115)."
+          remote="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push --force "$remote" "HEAD:refs/heads/$BRANCH"
+          git ls-remote "$remote" "refs/heads/$BRANCH" | grep -q "$(git rev-parse HEAD)"
+          pr=$(gh pr list --head "$BRANCH" --base dev --state open --json number --jq '.[0].number // empty')
+          if [ -z "$pr" ]; then
+            gh pr create --base dev --head "$BRANCH" \
+              --title "chore(cli): refresh OpenRouter model snapshot" \
+              --body "Scheduled refresh from openrouter-snapshot-refresh.yml. Regenerated with \`pnpm --filter @biffo/cli refresh:openrouter-models\`; only the snapshot module changes."
+            pr=$(gh pr list --head "$BRANCH" --base dev --state open --json number --jq '.[0].number')
+          fi
+          gh pr merge "$pr" --squash --delete-branch --auto || \
+            echo "::warning title=auto-merge not armed::PR #$pr is open but could not be armed for auto-merge"

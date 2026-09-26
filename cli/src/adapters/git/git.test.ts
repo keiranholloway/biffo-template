@@ -165,7 +165,7 @@ describe('GitAdapter', () => {
       await adapter.add('/repo', ['services/widgets', 'modules/plugins/widgets'])
       expect(execaMock).toHaveBeenCalledWith(
         'git',
-        ['add', 'services/widgets', 'modules/plugins/widgets'],
+        ['--literal-pathspecs', 'add', 'services/widgets', 'modules/plugins/widgets'],
         expect.objectContaining({ cwd: '/repo' }),
       )
     })
@@ -173,11 +173,32 @@ describe('GitAdapter', () => {
     it('commits with the given message', async () => {
       execaMock.mockResolvedValue({} as never)
       await adapter.commit('/repo', 'feat(plugins): install widgets@1.0.0', ['services/widgets'])
-      expect(execaMock).toHaveBeenCalledWith(
+      expect(execaMock).toHaveBeenNthCalledWith(
+        1,
         'git',
-        ['commit', '-m', 'feat(plugins): install widgets@1.0.0', '--', 'services/widgets'],
+        [
+          '--literal-pathspecs',
+          'commit',
+          '-m',
+          'feat(plugins): install widgets@1.0.0',
+          '--',
+          'services/widgets',
+        ],
         expect.objectContaining({ cwd: '/repo' }),
       )
+      // Then the real index is reconciled for those paths only (#2113 review).
+      expect(execaMock).toHaveBeenNthCalledWith(
+        2,
+        'git',
+        ['--literal-pathspecs', 'reset', '-q', '--', 'services/widgets'],
+        expect.objectContaining({ cwd: '/repo' }),
+      )
+    })
+
+    it('does not reconcile the index when the commit itself fails', async () => {
+      execaMock.mockRejectedValueOnce(new Error('hook failed'))
+      await expect(adapter.commit('/repo', 'msg', ['a'])).rejects.toThrow('hook failed')
+      expect(execaMock).toHaveBeenCalledTimes(1)
     })
 
     it('refuses an empty pathspec instead of degrading to a bare commit (#2113)', async () => {

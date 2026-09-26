@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { makeTmpDir } from '../test-utils/tmp.js'
 import { findSkeletonRoot } from './plugin-scaffold.js'
 
+import { parse as parseToml } from 'smol-toml'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import {
@@ -198,4 +199,128 @@ describe('dependency groups and optional dependencies (#2106)', () => {
       for (const n of added) expect(text).toContain(`${n} = { workspace = true }`)
     },
   )
+})
+
+// biffo-template#2106, prosecution of #2107 finding 2. The group reader and the sources edit were line regexes, so every valid
+// TOML spelling they had not been shown (a comment after a header, a quoted or indented key) silently skipped a group — the very
+// `uv` failure the change existed to fix — or wrote an invalid, duplicated `[tool.uv.sources]`. These cases are the CLASS: every
+// spelling of the dependency table crossed with every spelling of the sources table, judged by a real TOML parser.
+describe('valid TOML spellings (#2106 prosecution finding 2)', () => {
+  const MEMBERS = new Set(['biffo-plugin-host', 'biffo-plugin-sdk'])
+  const HEAD = '[project]\nname = "acme"\ndependencies = ["fastapi"]\n\n'
+
+  const declarations: Array<[string, string]> = [
+    ['plain', '[dependency-groups]\ndev = ["pytest", "biffo-plugin-host~=0.1.0"]\n'],
+    [
+      'comment after the header',
+      '[dependency-groups] # dev tooling\ndev = ["biffo-plugin-host~=0.1.0"]\n',
+    ],
+    ['spaces inside the header', '[ dependency-groups ]\ndev = ["biffo-plugin-host~=0.1.0"]\n'],
+    ['quoted header segment', '["dependency-groups"]\ndev = ["biffo-plugin-host~=0.1.0"]\n'],
+    ['double-quoted key', '[dependency-groups]\n"dev" = ["biffo-plugin-host~=0.1.0"]\n'],
+    ['single-quoted key', '[dependency-groups]\n\'dev\' = ["biffo-plugin-host~=0.1.0"]\n'],
+    ['indented key', '[dependency-groups]\n  dev = [\n    "biffo-plugin-host~=0.1.0",\n  ]\n'],
+    ['key with spaces around =', '[dependency-groups]\ndev   =   ["biffo-plugin-host~=0.1.0"]\n'],
+    [
+      'include-group entry beside a string',
+      '[dependency-groups]\ndev = [{include-group = "lint"}, "biffo-plugin-host"]\nlint = ["ruff"]\n',
+    ],
+    ['inline table', 'dependency-groups = { dev = ["biffo-plugin-host~=0.1.0"] }\n'],
+    [
+      'optional-dependencies, comment after header',
+      '[project.optional-dependencies] # extras\nserve = ["biffo-plugin-host>=0.1"]\n',
+    ],
+  ]
+  const sourcesTables: Array<[string, string, string]> = [
+    ['absent', '', ''],
+    ['plain', '\n[tool.uv.sources]\nother = { path = "../other" }\n', ''],
+    [
+      'comment after the header',
+      '\n[tool.uv.sources] # workspace deps\nother = { path = "../other" }\n',
+      '',
+    ],
+    ['spaces inside the header', '\n[ tool.uv.sources ]\nother = { path = "../other" }\n', ''],
+    ['quoted header segment', '\n[tool."uv".sources]\nother = { path = "../other" }\n', ''],
+    ['empty', '\n[tool.uv.sources]\n', ''],
+    ['last in file, no trailing newline', '\n[tool.uv.sources]\nother = { path = "../other" }', ''],
+  ]
+
+  function sourcesOf(text: string): Record<string, unknown> {
+    const tool = parseToml(text).tool as { uv?: { sources?: Record<string, unknown> } } | undefined
+    return tool?.uv?.sources ?? {}
+  }
+
+  for (const [decl, declText] of declarations) {
+    for (const [src, srcText] of sourcesTables) {
+      it(`declaration: ${decl} × sources table: ${src}`, () => {
+        const pp = write('services/acme/pyproject.toml', HEAD + declText + srcText)
+        const added = ensureWorkspaceSources(pp, MEMBERS)
+        const out = readFileSync(pp, 'utf8')
+
+        expect(added).toEqual(['biffo-plugin-host'])
+        // A real parser accepts it (a duplicate [tool.uv.sources] table, or a duplicate key, does not parse)...
+        expect(sourcesOf(out)['biffo-plugin-host']).toEqual({ workspace: true })
+        // ...and what was there is still there.
+        if (srcText.includes('other')) expect(sourcesOf(out).other).toEqual({ path: '../other' })
+        // Exactly one sources table, wherever it was written.
+        expect(out.match(/^\s*\[\s*tool\s*\.\s*"?uv"?\s*\.\s*sources\s*\]/gm)).toHaveLength(1)
+        // Idempotent.
+        expect(ensureWorkspaceSources(pp, MEMBERS)).toEqual([])
+        expect(readFileSync(pp, 'utf8')).toBe(out)
+      })
+    }
+  }
+
+  it('leaves an existing NON-workspace source alone: no duplicate key, no rewrite', () => {
+    const text =
+      HEAD +
+      '[dependency-groups]\ndev = ["biffo-plugin-host"]\n\n[tool.uv.sources] # pinned by hand\nbiffo-plugin-host = { path = "../host" }\n'
+    const pp = write('services/acme/pyproject.toml', text)
+    expect(ensureWorkspaceSources(pp, MEMBERS)).toEqual([])
+    expect(readFileSync(pp, 'utf8')).toBe(text)
+  })
+
+  it('treats a quoted existing key as the same source', () => {
+    const text =
+      HEAD +
+      '[dependency-groups]\ndev = ["biffo-plugin-host"]\n\n[tool.uv.sources]\n"biffo-plugin-host" = { workspace = true }\n'
+    const pp = write('services/acme/pyproject.toml', text)
+    expect(ensureWorkspaceSources(pp, MEMBERS)).toEqual([])
+    expect(readFileSync(pp, 'utf8')).toBe(text)
+  })
+
+  it('is not fooled by header-shaped text inside a multi-line string or an array', () => {
+    const text =
+      '[project]\nname = "acme"\ndescription = """\n[tool.uv.sources]\nfake = { workspace = true }\n"""\n' +
+      'dependencies = [\n  "fastapi",\n]\n\n[dependency-groups]\ndev = [\n  "biffo-plugin-host",\n]\n'
+    const pp = write('services/acme/pyproject.toml', text)
+    expect(ensureWorkspaceSources(pp, MEMBERS)).toEqual(['biffo-plugin-host'])
+    const out = readFileSync(pp, 'utf8')
+    expect(sourcesOf(out)).toEqual({ 'biffo-plugin-host': { workspace: true } })
+    expect((parseToml(out).project as { description: string }).description).toContain('fake')
+  })
+
+  it('refuses, writing nothing, when [tool.uv.sources] exists in a form it cannot extend in place', () => {
+    const text =
+      HEAD +
+      '[dependency-groups]\ndev = ["biffo-plugin-host"]\n\n[tool.uv]\nsources = { other = { path = "../o" } }\n'
+    const pp = write('services/acme/pyproject.toml', text)
+    expect(() => ensureWorkspaceSources(pp, MEMBERS)).toThrow(
+      /tool\.uv\.sources.*biffo-plugin-host/s,
+    )
+    expect(readFileSync(pp, 'utf8')).toBe(text)
+  })
+
+  it('refuses, writing nothing, on a pyproject that is not valid TOML', () => {
+    const text = HEAD + '[dependency-groups]\ndev = [\n'
+    const pp = write('services/acme/pyproject.toml', text)
+    expect(() => ensureWorkspaceSources(pp, MEMBERS)).toThrow(/pyproject\.toml.*not valid TOML/s)
+    expect(readFileSync(pp, 'utf8')).toBe(text)
+  })
+
+  it('dotted names in a workspace-provided dependency are written as a quoted key', () => {
+    const pp = write('services/acme/pyproject.toml', HEAD.replace('["fastapi"]', '["ruamel.yaml"]'))
+    expect(ensureWorkspaceSources(pp, new Set(['ruamel.yaml']))).toEqual(['ruamel.yaml'])
+    expect(sourcesOf(readFileSync(pp, 'utf8'))).toEqual({ 'ruamel.yaml': { workspace: true } })
+  })
 })

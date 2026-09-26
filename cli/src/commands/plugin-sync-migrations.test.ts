@@ -105,6 +105,7 @@ describe('runPluginSyncMigrations', () => {
     expect(git.commit).toHaveBeenCalledWith(
       projectRoot,
       'chore(plugins): sync migration(s) for rbac',
+      expect.any(Array),
     )
   })
 

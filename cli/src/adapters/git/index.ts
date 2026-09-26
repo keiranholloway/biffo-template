@@ -18,6 +18,9 @@ import {
   type BranchRef,
 } from '../../lib/upgrade-branch-reaper.js'
 
+/** Global git flag: treat every pathspec as a literal path, never a glob or magic (:(top) etc.). */
+const LITERAL = '--literal-pathspecs'
+
 export class GitAdapter {
   /** True if `cwd` is inside a git working tree. */
   /**
@@ -133,11 +136,53 @@ export class GitAdapter {
   }
 
   async add(cwd: string, paths: string[]): Promise<void> {
-    await execa('git', ['add', ...paths], { cwd })
+    // Literal, not glob: a path containing `[`, `*` or `?` must name that file only (#2113 review).
+    await execa('git', [LITERAL, 'add', ...paths], { cwd })
   }
 
-  async commit(cwd: string, message: string): Promise<void> {
-    await execa('git', ['commit', '-m', message], { cwd })
+  /**
+   * Commits `paths` and nothing else (#2113).
+   *
+   * `paths` is required, and a bare `git commit -m` is unrepresentable here:
+   * without a pathspec git commits the *whole index*, so anything the operator
+   * had already staged for unrelated work (in `--cwd`, or in someone else's
+   * `--frontend-cwd` checkout) was swept into the plugin commit. With a
+   * pathspec git commits only those paths' working-tree state — their changes
+   * were staged by the preceding `add`, so they are all included — and leaves
+   * every other staged file staged, untouched, for the operator.
+   *
+   * Pass exactly what the same command handed to `add`. Throws on an empty
+   * list rather than degrading to a bare commit (`git commit -- ` with no
+   * paths is a bare commit).
+   *
+   * ## Two properties the pathspec form needs handled here (#2113 review)
+   *
+   * **The real index is reconciled afterwards.** `git commit -- <paths>` (git's
+   * `--only` mode) commits via a *temporary* index, which is exactly what stops
+   * the operator's other staged files being swept in. But a pre-commit hook that
+   * rewrites files (the estate's lint-staged: prettier / eslint --fix / ruff
+   * format) re-stages its output into that temporary index only — the real index
+   * keeps the pre-hook content, so a successful commit left `MM <file>` and a
+   * staged revert of the formatting for the operator's next commit to pick up. A
+   * bare commit never had this, because it commits the real index. After the
+   * commit, `paths` are therefore reset in the real index to HEAD, which is what
+   * was just committed. Only `paths` are touched, so every other staged file
+   * stays staged. If the commit itself fails nothing is reconciled and the
+   * paths stay staged, as before.
+   *
+   * **Paths are literal, not pathspecs** (`--literal-pathspecs`). Otherwise
+   * `[a].txt` also matches `a.txt`, and the commit widens to an unrelated
+   * staged file.
+   */
+  async commit(cwd: string, message: string, paths: readonly string[]): Promise<void> {
+    if (paths.length === 0) {
+      throw new Error(
+        'GitAdapter.commit requires at least one path: a commit with no pathspec would sweep ' +
+          'in whatever else is staged.',
+      )
+    }
+    await execa('git', [LITERAL, 'commit', '-m', message, '--', ...paths], { cwd })
+    await execa('git', [LITERAL, 'reset', '-q', '--', ...paths], { cwd })
   }
 
   /** The current branch name (e.g. "dev"). */
@@ -146,9 +191,18 @@ export class GitAdapter {
     return stdout.trim()
   }
 
-  /** True if the working tree or index has uncommitted changes. */
-  async hasUncommittedChanges(cwd: string): Promise<boolean> {
-    const { stdout } = await execa('git', ['status', '--porcelain'], { cwd })
+  /**
+   * True if the working tree or index has uncommitted changes — restricted to
+   * `paths` when given (#2113: a pathspec commit only commits those, so "is
+   * there anything for *me* to commit" must not be answered by an unrelated
+   * staged file).
+   */
+  async hasUncommittedChanges(cwd: string, paths?: readonly string[]): Promise<boolean> {
+    const { stdout } = await execa(
+      'git',
+      [LITERAL, 'status', '--porcelain', ...(paths && paths.length > 0 ? ['--', ...paths] : [])],
+      { cwd },
+    )
     return stdout.trim().length > 0
   }
 

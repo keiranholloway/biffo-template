@@ -201,7 +201,7 @@ export interface SiblingCreateGit {
   init(cwd: string, initialBranch?: string): Promise<void>
   addRemote(cwd: string, name: string, url: string): Promise<void>
   add(cwd: string, paths: string[]): Promise<void>
-  commit(cwd: string, message: string): Promise<void>
+  commit(cwd: string, message: string, paths: readonly string[]): Promise<void>
   push(cwd: string, branch: string, opts?: { remote?: string; token?: string }): Promise<void>
   cloneForEditing(repoUrl: string, namePrefix: string, token?: string): Promise<string>
   createBranch(cwd: string, branch: string): Promise<void>
@@ -676,6 +676,7 @@ async function pushSkeleton(
     await git.commit(
       workDir,
       `feat: scaffold ${config.project.name} sibling app (ADR-0007)\n\n[skip ci]`,
+      ['.'],
     )
     await git.push(workDir, 'dev', { token: githubToken })
   } finally {
@@ -1140,6 +1141,7 @@ async function registerWithCore(
       isRootPathPrefix(pathPrefix)
         ? `infra(cdn): register root application sibling "${name}" at / (ADR-0007)`
         : `infra(cdn): register sibling "${name}" for path-based routing (ADR-0007)`,
+      touchedFiles,
     )
     await git.push(cloneDir, branch, { token: githubToken })
 

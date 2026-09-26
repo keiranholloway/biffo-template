@@ -235,7 +235,7 @@ export async function runPluginUninstall(
   const label = version ? `${name}@${version}` : name
   const commitMessage = `chore(plugins): uninstall ${label}`
   await deps.git.add(options.cwd, stagePaths)
-  await deps.git.commit(options.cwd, commitMessage)
+  await deps.git.commit(options.cwd, commitMessage, stagePaths)
   log.success(`Committed: ${commitMessage}`)
 
   console.log(chalk.bold('\n  Plugin uninstalled!\n'))

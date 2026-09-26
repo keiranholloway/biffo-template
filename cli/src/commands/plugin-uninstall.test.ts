@@ -572,3 +572,134 @@ describe('runPluginUninstall — dashboard plugin registry (biffo-template#2041)
     expect(git.commit).not.toHaveBeenCalled()
   })
 })
+
+describe('runPluginUninstall — split core + dashboard checkouts (biffo-template#2110)', () => {
+  let coreRoot: string
+  let dashboardRoot: string
+
+  beforeEach(() => {
+    // Core checkout holds services/widgets/ but NO apps/frontend registry.
+    coreRoot = makeProjectRootWithUserFrontend()
+    dashboardRoot = makeTmpDir('biffo-dashboard')
+    makeDashboardRegistryWithWidgets(dashboardRoot)
+    promptMock.mockReset()
+    promptMock.mockResolvedValue({ confirmed: true })
+  })
+
+  afterEach(() => {
+    rmSync(coreRoot, { recursive: true, force: true })
+    rmSync(dashboardRoot, { recursive: true, force: true })
+  })
+
+  const opts = () => ({
+    dryRun: false,
+    force: true,
+    keepData: false,
+    cwd: coreRoot,
+    frontendCwd: dashboardRoot,
+  })
+
+  it('MUST-CATCH: removes the entry from the --frontend-cwd checkout and commits in each tree separately', async () => {
+    const git = makeGitMock()
+
+    await runPluginUninstall('widgets', opts(), { git: git as never })
+
+    expect(existsSync(join(coreRoot, 'services', 'widgets'))).toBe(false)
+    expect(readFileSync(join(dashboardRoot, PLUGIN_REGISTRY_RELATIVE_PATH), 'utf8')).not.toContain(
+      'slug: "widgets"',
+    )
+    // The registry path is not staged in the core tree — it does not exist there.
+    expect(git.add).toHaveBeenCalledWith(coreRoot, ['services/widgets'])
+    expect(git.add).toHaveBeenCalledWith(dashboardRoot, [PLUGIN_REGISTRY_RELATIVE_PATH])
+    expect(git.commit).toHaveBeenCalledWith(coreRoot, 'chore(plugins): uninstall widgets@1.0.0')
+    expect(git.commit).toHaveBeenCalledWith(
+      dashboardRoot,
+      'chore(plugins): unregister widgets@1.0.0 from dashboard',
+    )
+    // Fail-closed ordering: the dashboard commit comes strictly after the core commit.
+    const commitRoots = git.commit.mock.calls.map((c) => c[0])
+    expect(commitRoots).toEqual([coreRoot, dashboardRoot])
+  })
+
+  it('MUST-CATCH: a core commit failure leaves the dashboard registry untouched', async () => {
+    const git = makeGitMock()
+    git.commit.mockRejectedValueOnce(new Error('commit hook rejected'))
+    const before = readFileSync(join(dashboardRoot, PLUGIN_REGISTRY_RELATIVE_PATH), 'utf8')
+
+    await expect(runPluginUninstall('widgets', opts(), { git: git as never })).rejects.toThrow(
+      /commit hook rejected/,
+    )
+
+    expect(readFileSync(join(dashboardRoot, PLUGIN_REGISTRY_RELATIVE_PATH), 'utf8')).toBe(before)
+    expect(git.add).not.toHaveBeenCalledWith(dashboardRoot, expect.anything())
+  })
+
+  it('MUST-CATCH: fails closed before touching EITHER checkout when the dashboard registry is missing', async () => {
+    rmSync(join(dashboardRoot, PLUGIN_REGISTRY_RELATIVE_PATH))
+    const git = makeGitMock()
+
+    await expect(runPluginUninstall('widgets', opts(), { git: git as never })).rejects.toThrow(
+      /apps\/frontend\/src\/lib\/plugins\.ts does not exist/,
+    )
+
+    expect(existsSync(join(coreRoot, 'services', 'widgets'))).toBe(true)
+    expect(git.add).not.toHaveBeenCalled()
+    expect(git.commit).not.toHaveBeenCalled()
+  })
+
+  it('MUST-CATCH: fails closed before touching either checkout when --frontend-cwd is not a git repo', async () => {
+    const git = makeGitMock()
+    git.isGitRepo.mockImplementation(async (cwd: string) => cwd === coreRoot)
+    const before = readFileSync(join(dashboardRoot, PLUGIN_REGISTRY_RELATIVE_PATH), 'utf8')
+
+    await expect(runPluginUninstall('widgets', opts(), { git: git as never })).rejects.toThrow(
+      /--frontend-cwd\) is not a git repository/,
+    )
+
+    expect(existsSync(join(coreRoot, 'services', 'widgets'))).toBe(true)
+    expect(readFileSync(join(dashboardRoot, PLUGIN_REGISTRY_RELATIVE_PATH), 'utf8')).toBe(before)
+    expect(git.commit).not.toHaveBeenCalled()
+  })
+
+  it('MUST-CATCH: a dashboard failure AFTER the core commit says so and names the manual repair', async () => {
+    const git = makeGitMock()
+    // 1st commit (core) succeeds, 2nd (dashboard) fails.
+    git.commit.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('disk full'))
+
+    await expect(runPluginUninstall('widgets', opts(), { git: git as never })).rejects.toThrow(
+      /was removed and committed in .*disk full[\s\S]*by hand/,
+    )
+    expect(existsSync(join(coreRoot, 'services', 'widgets'))).toBe(false)
+  })
+
+  it('MUST-NOT-CATCH: a plugin with no user_frontend block never touches --frontend-cwd', async () => {
+    const root = makeProjectRoot()
+    try {
+      const before = readFileSync(join(dashboardRoot, PLUGIN_REGISTRY_RELATIVE_PATH), 'utf8')
+      const git = makeGitMock()
+
+      await runPluginUninstall('widgets', { ...opts(), cwd: root }, { git: git as never })
+
+      expect(readFileSync(join(dashboardRoot, PLUGIN_REGISTRY_RELATIVE_PATH), 'utf8')).toBe(before)
+      expect(git.isGitRepo).not.toHaveBeenCalledWith(dashboardRoot)
+      expect(git.commit).toHaveBeenCalledTimes(1)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('--dry-run names the dashboard checkout and writes nothing', async () => {
+    const git = makeGitMock()
+    const before = readFileSync(join(dashboardRoot, PLUGIN_REGISTRY_RELATIVE_PATH), 'utf8')
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => undefined)
+
+    await runPluginUninstall('widgets', { ...opts(), dryRun: true }, { git: git as never })
+
+    const out = spy.mock.calls.map((c) => String(c[0])).join('\n')
+    spy.mockRestore()
+    expect(out).toContain(dashboardRoot)
+    expect(readFileSync(join(dashboardRoot, PLUGIN_REGISTRY_RELATIVE_PATH), 'utf8')).toBe(before)
+    expect(existsSync(join(coreRoot, 'services', 'widgets'))).toBe(true)
+    expect(git.commit).not.toHaveBeenCalled()
+  })
+})

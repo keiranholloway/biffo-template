@@ -31,10 +31,25 @@ export const pluginUninstallCommand = new Command('uninstall')
     'No-op today (see notes) — the CLI never drops plugin data regardless of this flag',
   )
   .option('--cwd <path>', 'Project root to uninstall from (defaults to the current directory)')
+  .option(
+    '--frontend-cwd <path>',
+    'Dashboard sibling checkout to remove the user_frontend dashboard-registry entry from, ' +
+      'when the core project and its dashboard are split siblings (biffo-template#2110, the ' +
+      'mirror of `biffo plugin install --frontend-cwd`). Every other removal (services/<name>/, ' +
+      'Terraform wiring) still resolves against --cwd only, and the dashboard entry is removed ' +
+      'and committed in that checkout only AFTER the --cwd removal has committed. Omit it for ' +
+      'the common single-repo topology. Ignored for a plugin with no user_frontend block.',
+  )
   .action(
     async (
       name: string,
-      options: { dryRun?: boolean; force?: boolean; keepData?: boolean; cwd?: string },
+      options: {
+        dryRun?: boolean
+        force?: boolean
+        keepData?: boolean
+        cwd?: string
+        frontendCwd?: string
+      },
     ) => {
       const cwd = options.cwd ? resolve(options.cwd) : process.cwd()
       try {
@@ -45,6 +60,7 @@ export const pluginUninstallCommand = new Command('uninstall')
             force: options.force ?? false,
             keepData: options.keepData ?? false,
             cwd,
+            ...(options.frontendCwd ? { frontendCwd: resolve(options.frontendCwd) } : {}),
           },
           { git: new GitAdapter() },
         )
@@ -64,6 +80,12 @@ export interface PluginUninstallOptions {
   force: boolean
   keepData: boolean
   cwd: string
+  /**
+   * Dashboard sibling checkout holding the `user_frontend` registry, when it
+   * is a separate git tree from `cwd` (biffo-template#2110). Unset means the
+   * registry lives in `cwd`, as before.
+   */
+  frontendCwd?: string
 }
 
 /**
@@ -150,12 +172,23 @@ export async function runPluginUninstall(
     stagePaths.push(`modules/plugins/${name}`)
   }
   const hasUserFrontend = installedManifest?.user_frontend !== undefined
-  if (hasUserFrontend) {
+  // Split core+dashboard topology (biffo-template#2110): the registry lives in
+  // another git tree, so it neither rides in the --cwd commit nor resolves
+  // against --cwd. Only the two registry call sites use `registryCwd`.
+  const registryCwd = options.frontendCwd ?? options.cwd
+  const splitFrontend = hasUserFrontend && options.frontendCwd !== undefined
+  if (hasUserFrontend && !splitFrontend) {
     stagePaths.push(PLUGIN_REGISTRY_RELATIVE_PATH)
   }
 
   if (options.dryRun) {
-    printDryRun(name, version, stagePaths, options.keepData)
+    printDryRun(
+      name,
+      version,
+      stagePaths,
+      options.keepData,
+      splitFrontend ? registryCwd : undefined,
+    )
     return
   }
 
@@ -181,7 +214,21 @@ export async function runPluginUninstall(
   // and silently leaving a dangling registry entry pointing at a plugin that
   // no longer exists.
   if (hasUserFrontend) {
-    assertPluginRegistryReady(options.cwd, name)
+    if (splitFrontend) {
+      // The two checkouts are separate git trees, so no single operation can
+      // be atomic across them. Fail closed instead: every check that could
+      // stop the dashboard removal runs HERE, before the core checkout is
+      // touched, and the dashboard write itself happens only after the core
+      // removal has committed (below) — so a core failure never leaves the
+      // dashboard already edited.
+      if (!(await deps.git.isGitRepo(registryCwd))) {
+        throw new Error(
+          `${registryCwd} (--frontend-cwd) is not a git repository — biffo plugin uninstall ` +
+            'must remove the dashboard registry entry from a real checkout.',
+        )
+      }
+    }
+    assertPluginRegistryReady(registryCwd, name)
   }
 
   if (existsSync(modulesDir)) {
@@ -227,7 +274,7 @@ export async function runPluginUninstall(
     }
   }
 
-  if (hasUserFrontend) {
+  if (hasUserFrontend && !splitFrontend) {
     removePluginRegistryEntry(options.cwd, name)
     log.success(`Removed ${name} from ${PLUGIN_REGISTRY_RELATIVE_PATH}`)
   }
@@ -238,12 +285,46 @@ export async function runPluginUninstall(
   await deps.git.commit(options.cwd, commitMessage)
   log.success(`Committed: ${commitMessage}`)
 
+  if (splitFrontend) {
+    // Only reached once the core removal has committed. `assertPluginRegistryReady`
+    // above makes a failure here unexpected, but if it happens the core commit
+    // cannot be undone from here — say so precisely rather than let a bare
+    // error suggest nothing changed.
+    const dashboardCommitMessage = `chore(plugins): unregister ${label} from dashboard`
+    try {
+      removePluginRegistryEntry(registryCwd, name)
+      await deps.git.add(registryCwd, [PLUGIN_REGISTRY_RELATIVE_PATH])
+      await deps.git.commit(registryCwd, dashboardCommitMessage)
+    } catch (err) {
+      throw new Error(
+        `services/${name}/ was removed and committed in ${options.cwd}, but removing ${name} ` +
+          `from the dashboard registry in ${registryCwd} (--frontend-cwd) failed: ` +
+          `${(err as Error).message}\nThe two checkouts are now out of step, and re-running ` +
+          `uninstall cannot repair it (the plugin is already gone from ${options.cwd}): ` +
+          `remove the ${name} entry from ${PLUGIN_REGISTRY_RELATIVE_PATH} in ${registryCwd} by hand.`,
+      )
+    }
+    log.success(
+      `Removed ${name} from ${registryCwd}/${PLUGIN_REGISTRY_RELATIVE_PATH} ` +
+        `(committed there: "${dashboardCommitMessage}")`,
+    )
+  }
+
   console.log(chalk.bold('\n  Plugin uninstalled!\n'))
   console.log(`  services/${name}/ has been removed and committed.`)
+  if (splitFrontend) {
+    console.log(
+      `  Its dashboard registration was removed and committed separately at ` +
+        `${registryCwd}/${PLUGIN_REGISTRY_RELATIVE_PATH}.`,
+    )
+  }
   console.log(
     '  Push and redeploy so the Core API stops discovering its routes at the next db-init:',
   )
   console.log(chalk.dim(`    git push`))
+  if (splitFrontend) {
+    console.log(chalk.dim(`    (and, in ${registryCwd}) git push`))
+  }
   console.log(chalk.dim(`    biffo deploy <environment> --app-only\n`))
 
   if (options.keepData) {
@@ -300,6 +381,7 @@ function printDryRun(
   version: string | undefined,
   stagePaths: string[],
   keepData: boolean,
+  frontendCwd?: string,
 ): void {
   const label = version ? `${name}@${version}` : name
   console.log(chalk.bold('\n  Dry run — no changes will be made\n'))
@@ -310,6 +392,12 @@ function printDryRun(
       `infra/environments/*/plugins.generated.tf`,
   )
   console.log(`  Would commit:  chore(plugins): uninstall ${label}`)
+  if (frontendCwd) {
+    console.log(
+      `  Would remove:  dashboard entry ${PLUGIN_REGISTRY_RELATIVE_PATH} in ${frontendCwd} ` +
+        `(separate --frontend-cwd checkout, committed there after the core commit)`,
+    )
+  }
   console.log(
     `  --keep-data:   ${keepData ? 'no-op — CLI never drops tables either way' : 'not set — no DB action taken either way; see notes'}\n`,
   )

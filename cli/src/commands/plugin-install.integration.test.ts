@@ -9,7 +9,7 @@
  * adapter, a manifest shape the real validator rejects, etc.
  */
 import { execa } from 'execa'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { http, HttpResponse } from 'msw'
 import { setupServer } from 'msw/node'
@@ -154,6 +154,49 @@ describe('runPluginInstall — end-to-end', () => {
 
     const status = await execa('git', ['status', '--porcelain'], { cwd: projectRoot })
     expect(status.stdout.trim()).toBe('')
+  })
+
+  it('leaves the checkout clean when the repo pre-commit hook reformats the installed files (#2113 review)', async () => {
+    // Stand-in for the estate's lint-staged pre-commit hook: rewrites staged
+    // *.json and re-stages it. `git commit -- <paths>` runs the hook against a
+    // temporary index, so without the adapter reconciling the real index this
+    // left `MM services/widgets/biffo.plugin.json` behind.
+    const hook = join(projectRoot, '.git', 'hooks', 'pre-commit')
+    writeFileSync(
+      hook,
+      [
+        '#!/bin/sh',
+        'for f in $(git diff --cached --name-only --diff-filter=ACM | grep "\\.json$"); do',
+        `  node -e "const fs=require('fs');const f=process.argv[1];fs.writeFileSync(f,JSON.stringify(JSON.parse(fs.readFileSync(f,'utf8')),null,2)+'\\n')" "$f"`,
+        '  git add -- "$f"',
+        'done',
+        '',
+      ].join('\n'),
+    )
+    chmodSync(hook, 0o755)
+    writeFileSync(join(projectRoot, 'unrelated.txt'), 'operator work\n')
+    await execa('git', ['add', 'unrelated.txt'], { cwd: projectRoot })
+
+    await runPluginInstall(
+      'widgets@1.3',
+      { dryRun: false, cwd: projectRoot },
+      {
+        registry: new RegistryAdapter(REGISTRY_URL),
+        git: new GitAdapter(),
+        migrations: new FakePluginMigrationsAdapter() as never,
+      },
+    )
+
+    const committed = await execa('git', ['show', 'HEAD:services/widgets/biffo.plugin.json'], {
+      cwd: projectRoot,
+    })
+    expect(committed.stdout).toContain('\n  "name": "widgets"') // the hook's formatting landed
+    const files = await execa('git', ['show', '--name-only', '--format=', 'HEAD'], {
+      cwd: projectRoot,
+    })
+    expect(files.stdout).not.toContain('unrelated.txt')
+    const status = await execa('git', ['status', '--porcelain'], { cwd: projectRoot })
+    expect(status.stdout.trim()).toBe('A  unrelated.txt')
   })
 
   it('propagates a plugin-not-found registry error without cloning anything', async () => {

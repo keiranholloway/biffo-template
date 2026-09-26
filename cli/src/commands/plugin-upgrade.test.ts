@@ -162,6 +162,7 @@ describe('runPluginUpgrade', () => {
     expect(git.commit).toHaveBeenCalledWith(
       projectRoot,
       'feat(plugins): upgrade widgets 1.0.0 -> 1.1.0',
+      ['services/widgets'],
     )
   })
 
@@ -638,6 +639,7 @@ describe('runPluginUpgrade --local', () => {
     expect(git.commit).toHaveBeenCalledWith(
       projectRoot,
       'chore(plugins): refresh widgets from local checkout',
+      ['services/widgets'],
     )
   })
 

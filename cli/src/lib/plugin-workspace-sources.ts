@@ -19,7 +19,8 @@
  * provides, and adds a `workspace = true` source to the vendored plugin's
  * `pyproject.toml` for each dependency that matches one.
  *
- * What the plugin DECLARES and what it already SOURCES are read with a real TOML
+ * What the plugin DECLARES and what it already SOURCES — and the instance's workspace
+ * `members` and each member's `[project] name` — are read with a real TOML
  * parser (`smol-toml`), never with line regexes: a regex reader only sees the
  * spellings its author thought of, and every valid one it missed (a comment after
  * a table header, a quoted or indented key) silently skipped a dependency group —
@@ -29,6 +30,10 @@
  * table headers and verified by re-parsing the result before anything is written,
  * so it cannot emit a duplicate table or key: it either produces TOML that parses
  * with every added source present, or throws and writes nothing.
+ *
+ * Every name comparison goes through `normaliseName` (PEP 503), because uv compares
+ * package names that way: `biffo_plugin_sdk`, `Biffo-Plugin-SDK` and `biffo-plugin-sdk`
+ * are one package to uv, so they must be one name here too (biffo-template#2109).
  */
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -70,27 +75,34 @@ export function readTomlStringArray(text: string, key: string): string[] {
   return depth === 0 ? strings : []
 }
 
-/** The `[project] name = "..."` of a pyproject, or null. Scoped to the `[project]`
- * table so a `name =` under another table can't be mistaken for it. */
+/**
+ * PEP 503 name normalisation — the rule uv applies before comparing package names: runs of `-`, `_` and `.` become one `-`,
+ * and case is folded. Both sides of every comparison in this module go through it.
+ */
+export function normaliseName(name: string): string {
+  return name.replace(/[-_.]+/g, '-').toLowerCase()
+}
+
+/** The `[project] name = "..."` of a pyproject text (as written, not normalised), or null — also null when the text is not
+ * valid TOML, so one broken member does not hide the rest of the workspace. */
 export function readProjectName(text: string): string | null {
-  let inProject = false
-  for (const line of text.split('\n')) {
-    const trimmed = line.trim()
-    if (trimmed.startsWith('[')) {
-      inProject = trimmed === '[project]'
-      continue
-    }
-    if (inProject) {
-      const m = /^name\s*=\s*["']([^"']+)["']/.exec(trimmed)
-      if (m) return m[1]!
-    }
+  let doc: Record<string, unknown>
+  try {
+    doc = parseToml(text)
+  } catch {
+    return null
   }
-  return null
+  const name = isTable(doc.project) ? doc.project.name : undefined
+  return typeof name === 'string' && name !== '' ? name : null
 }
 
 /** The base name of a PEP 508 requirement string: `biffo-plugin-sdk[user-serving]>=1.1` → `biffo-plugin-sdk`. */
 function requirementName(requirement: string): string | null {
   return /^\s*([A-Za-z0-9._-]+)/.exec(requirement)?.[1] ?? null
+}
+
+function stringsIn(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : []
 }
 
 function isTable(value: unknown): value is Record<string, unknown> {
@@ -218,9 +230,12 @@ function isSourcesHeader(header: string): boolean {
 export function workspaceMemberNames(instanceRoot: string): Set<string> {
   const rootPyproject = join(instanceRoot, 'pyproject.toml')
   if (!existsSync(rootPyproject)) return new Set()
-  const text = readFileSync(rootPyproject, 'utf8')
-  const members = readTomlStringArray(text, 'members')
-  const excluded = new Set(readTomlStringArray(text, 'exclude'))
+  const doc = parsePyproject(readFileSync(rootPyproject, 'utf8'), rootPyproject)
+  const tool = isTable(doc.tool) ? doc.tool : {}
+  const uv = isTable(tool.uv) ? tool.uv : {}
+  const workspace = isTable(uv.workspace) ? uv.workspace : {}
+  const members = stringsIn(workspace.members)
+  const excluded = new Set(stringsIn(workspace.exclude))
 
   const dirs: string[] = []
   for (const member of members) {
@@ -246,7 +261,7 @@ export function workspaceMemberNames(instanceRoot: string): Set<string> {
     const pp = join(instanceRoot, dir, 'pyproject.toml')
     if (!existsSync(pp)) continue
     const name = readProjectName(readFileSync(pp, 'utf8'))
-    if (name) names.add(name)
+    if (name) names.add(normaliseName(name))
   }
   return names
 }
@@ -289,14 +304,15 @@ export function ensureWorkspaceSources(
   const doc = parsePyproject(text, pluginPyprojectPath)
 
   // Any existing source for a name — workspace or not, however spelled — is the plugin's own decision; never write a second.
-  const already = existingSourceNames(doc)
-  const declared = new Set(readDeclaredDependencyNames(doc))
-  const toAdd = [...declared].filter((n) => memberNames.has(n) && !already.has(n))
+  // Both sides of every comparison are PEP 503-normalised, as uv does; the entry is written under the normalised name.
+  const members = new Set([...memberNames].map(normaliseName))
+  const already = new Set([...existingSourceNames(doc)].map(normaliseName))
+  const declared = new Set(readDeclaredDependencyNames(doc).map(normaliseName))
+  const toAdd = [...declared].filter((n) => members.has(n) && !already.has(n))
   if (toAdd.length === 0) return []
 
-  const lines = toAdd.map(
-    (n) => `${/^[A-Za-z0-9_-]+$/.test(n) ? n : JSON.stringify(n)} = { workspace = true }`,
-  )
+  // `requirementName` only yields [A-Za-z0-9._-], so a normalised name is [a-z0-9-]: always a valid bare TOML key.
+  const lines = toAdd.map((n) => `${n} = { workspace = true }`)
   let updated: string
   if (hasSourcesTable(doc)) {
     const insertAt = sourcesHeaderLineEnd(text)
@@ -323,7 +339,7 @@ export function ensureWorkspaceSources(
   // an inline `tool = { uv = … }`, a construct the header scan misjudged — throws with nothing written.
   let written = new Set<string>()
   try {
-    written = existingSourceNames(parseToml(updated))
+    written = new Set([...existingSourceNames(parseToml(updated))].map(normaliseName))
   } catch {
     // The edit produced invalid TOML (e.g. `tool` was an inline table the appended header redefines); `written` stays empty.
   }

@@ -188,7 +188,11 @@ describe('runPluginInstall', () => {
     )
 
     expect(git.add).toHaveBeenCalledWith(projectRoot, ['services/widgets'])
-    expect(git.commit).toHaveBeenCalledWith(projectRoot, 'feat(plugins): install widgets@1.0.0')
+    expect(git.commit).toHaveBeenCalledWith(
+      projectRoot,
+      'feat(plugins): install widgets@1.0.0',
+      expect.any(Array),
+    )
   })
 
   // biffo-template#2106: the migration step's `uv run` rewrites the instance's uv.lock; it must ride in the install commit.
@@ -328,7 +332,11 @@ describe('runPluginInstall', () => {
       )
 
       expect(existsSync(join(projectRoot, 'services', 'widgets'))).toBe(true)
-      expect(git.commit).toHaveBeenCalledWith(projectRoot, 'feat(plugins): install widgets@1.0.0')
+      expect(git.commit).toHaveBeenCalledWith(
+        projectRoot,
+        'feat(plugins): install widgets@1.0.0',
+        expect.any(Array),
+      )
     })
 
     it('installs cleanly when terraform/ exists but declares none of the three retired signals', async () => {
@@ -343,7 +351,11 @@ describe('runPluginInstall', () => {
       )
 
       expect(existsSync(join(projectRoot, 'modules', 'plugins', 'widgets'))).toBe(true)
-      expect(git.commit).toHaveBeenCalledWith(projectRoot, 'feat(plugins): install widgets@1.0.0')
+      expect(git.commit).toHaveBeenCalledWith(
+        projectRoot,
+        'feat(plugins): install widgets@1.0.0',
+        expect.any(Array),
+      )
     })
   })
 
@@ -572,7 +584,11 @@ describe('runPluginInstall', () => {
         'services/widgets',
         PLUGIN_REGISTRY_RELATIVE_PATH,
       ])
-      expect(git.commit).toHaveBeenCalledWith(projectRoot, 'feat(plugins): install widgets@1.0.0')
+      expect(git.commit).toHaveBeenCalledWith(
+        projectRoot,
+        'feat(plugins): install widgets@1.0.0',
+        expect.any(Array),
+      )
       expect(git.commit).toHaveBeenCalledTimes(1)
       expect(existsSync(join(frontendRoot, PLUGIN_REGISTRY_RELATIVE_PATH))).toBe(false)
     })
@@ -602,10 +618,15 @@ describe('runPluginInstall', () => {
       // Two separate commits: one per checkout, each staging only its own path.
       expect(git.add).toHaveBeenCalledWith(projectRoot, ['services/widgets'])
       expect(git.add).toHaveBeenCalledWith(frontendRoot, [PLUGIN_REGISTRY_RELATIVE_PATH])
-      expect(git.commit).toHaveBeenCalledWith(projectRoot, 'feat(plugins): install widgets@1.0.0')
+      expect(git.commit).toHaveBeenCalledWith(
+        projectRoot,
+        'feat(plugins): install widgets@1.0.0',
+        expect.any(Array),
+      )
       expect(git.commit).toHaveBeenCalledWith(
         frontendRoot,
         'feat(plugins): register widgets@1.0.0 in dashboard',
+        [PLUGIN_REGISTRY_RELATIVE_PATH],
       )
       expect(git.commit).toHaveBeenCalledTimes(2)
     })
@@ -1119,7 +1140,11 @@ describe('runPluginInstall', () => {
         projectRoot,
         expect.arrayContaining(['services/widgets/biffo.plugin-config.json']),
       )
-      expect(git.commit).toHaveBeenCalledWith(projectRoot, 'feat(plugins): install widgets@1.0.0')
+      expect(git.commit).toHaveBeenCalledWith(
+        projectRoot,
+        'feat(plugins): install widgets@1.0.0',
+        expect.any(Array),
+      )
     })
 
     it('refuses a secret value that is not an SSM parameter path, leaving the checkout untouched', async () => {
@@ -1337,7 +1362,11 @@ describe('runPluginInstall', () => {
         'services/widgets',
         'services/api/migrations/versions/abc_widgets.py',
       ])
-      expect(git.commit).toHaveBeenCalledWith(projectRoot, 'feat(plugins): install widgets@1.0.0')
+      expect(git.commit).toHaveBeenCalledWith(
+        projectRoot,
+        'feat(plugins): install widgets@1.0.0',
+        expect.any(Array),
+      )
       rmSync(local, { recursive: true, force: true })
     })
 
@@ -1379,7 +1408,11 @@ describe('runPluginInstall', () => {
       )
 
       expect(existsSync(join(projectRoot, 'modules', 'plugins', 'widgets', 'main.tf'))).toBe(true)
-      expect(git.commit).toHaveBeenCalledWith(projectRoot, 'feat(plugins): install widgets@1.0.0')
+      expect(git.commit).toHaveBeenCalledWith(
+        projectRoot,
+        'feat(plugins): install widgets@1.0.0',
+        expect.any(Array),
+      )
     })
 
     it('rejects a --local path that is not a plugin directory', async () => {

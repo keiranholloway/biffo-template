@@ -4,6 +4,8 @@ import { fileURLToPath } from 'node:url'
 import chalk from 'chalk'
 import { Command } from 'commander'
 import { GitAdapter } from '../adapters/git/index.js'
+import type { PluginMigrationsAdapter } from '../adapters/plugin-migrations/index.js'
+import { commitPluginChange } from '../lib/plugin-commit.js'
 import { GitHubAdapter } from '../adapters/source-control/github/index.js'
 import {
   recordBranchProtectionOutcome,
@@ -108,6 +110,8 @@ export const pluginCreateCommand = new Command('create')
 
 export interface PluginCreateDeps {
   git: GitAdapter
+  /** Defaults to the real adapter; see `PluginCommitDeps`. */
+  migrations?: Pick<PluginMigrationsAdapter, 'refreshLock'>
   /**
    * Only needed for `--standalone --org`. Injected rather than constructed
    * inline so the remote path is unit-testable without a GitHub token, and so
@@ -288,8 +292,8 @@ export async function runPluginCreate(
       )
     }
     const commitMessage = `feat(plugins): scaffold ${names.slug} plugin`
-    await deps.git.add(options.cwd, [relDir])
-    await deps.git.commit(options.cwd, commitMessage, [relDir])
+    // The new directory is a uv workspace member, so the committed uv.lock is stale unless re-locked (#2108).
+    await commitPluginChange(deps, options.cwd, [relDir], commitMessage)
     log.success(`Committed: ${commitMessage}`)
   }
 

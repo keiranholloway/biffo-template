@@ -1,9 +1,8 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   CORE_MANIFEST_FILE,
   type CoreManifest,
@@ -436,7 +435,7 @@ describe('real repo core-manifest.json', () => {
     }
   })
 
-  it('never resolves the OS scratch root itself as a template root, however it is littered', () => {
+  it('never resolves the OS scratch root itself as a template root, however it is littered', async () => {
     // Found live: some unrelated process left a core-manifest.json directly at
     // the OS tmp root (no biffo.core.json beside it), which is exactly what a
     // real template root looks like to this walk. Every fixture this suite's
@@ -444,21 +443,23 @@ describe('real repo core-manifest.json', () => {
     // next parent step after a "no root" fixture is the tmp root itself --
     // this reproduces that collision directly rather than relying on the
     // ambient state of whatever machine the suite happens to run on.
-    const strayManifestPath = join(tmpdir(), CORE_MANIFEST_FILE)
-    const preexisting = existsSync(strayManifestPath)
-      ? readFileSync(strayManifestPath, 'utf8')
-      : null
-    writeFileSync(strayManifestPath, JSON.stringify({ version: 1 }))
-    const dir = makeTmpDir('biffo-noroot-tmp-pollution')
+    // The "OS scratch root" is a private mkdtemp dir made the scratch root via
+    // TMPDIR and a fresh module import, so nothing is written to the shared
+    // system tmp directory.
+    const fakeScratch = makeTmpDir('biffo-fake-scratch')
+    const savedTmpdir = process.env.TMPDIR
+    process.env.TMPDIR = fakeScratch
     try {
-      expect(findTemplateRoot(dir)).toBeNull()
+      vi.resetModules()
+      const fresh = await import('./core-manifest.js')
+      writeFileSync(join(fakeScratch, CORE_MANIFEST_FILE), JSON.stringify({ version: 1 }))
+      const dir = join(fakeScratch, 'biffo-noroot-tmp-pollution')
+      mkdirSync(dir)
+      expect(fresh.findTemplateRoot(dir)).toBeNull()
     } finally {
-      rmSync(dir, { recursive: true, force: true })
-      if (preexisting === null) {
-        rmSync(strayManifestPath, { force: true })
-      } else {
-        writeFileSync(strayManifestPath, preexisting)
-      }
+      if (savedTmpdir === undefined) delete process.env.TMPDIR
+      else process.env.TMPDIR = savedTmpdir
+      vi.resetModules()
     }
   })
 })

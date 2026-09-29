@@ -615,10 +615,15 @@ describe('runPluginUninstall — split core + dashboard checkouts (biffo-templat
     // The registry path is not staged in the core tree — it does not exist there.
     expect(git.add).toHaveBeenCalledWith(coreRoot, ['services/widgets'])
     expect(git.add).toHaveBeenCalledWith(dashboardRoot, [PLUGIN_REGISTRY_RELATIVE_PATH])
-    expect(git.commit).toHaveBeenCalledWith(coreRoot, 'chore(plugins): uninstall widgets@1.0.0')
+    // Both commits go through commitPluginChange (#2108/#2119), which always passes the
+    // explicit pathspec it staged as a third argument -- never a bare (cwd, message) call.
+    expect(git.commit).toHaveBeenCalledWith(coreRoot, 'chore(plugins): uninstall widgets@1.0.0', [
+      'services/widgets',
+    ])
     expect(git.commit).toHaveBeenCalledWith(
       dashboardRoot,
       'chore(plugins): unregister widgets@1.0.0 from dashboard',
+      [PLUGIN_REGISTRY_RELATIVE_PATH],
     )
     // Fail-closed ordering: the dashboard commit comes strictly after the core commit.
     const commitRoots = git.commit.mock.calls.map((c) => c[0])

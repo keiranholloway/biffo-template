@@ -297,8 +297,12 @@ export async function runPluginUninstall(
     const dashboardCommitMessage = `chore(plugins): unregister ${label} from dashboard`
     try {
       removePluginRegistryEntry(registryCwd, name)
-      await deps.git.add(registryCwd, [PLUGIN_REGISTRY_RELATIVE_PATH])
-      await deps.git.commit(registryCwd, dashboardCommitMessage)
+      await commitPluginChange(
+        deps,
+        registryCwd,
+        [PLUGIN_REGISTRY_RELATIVE_PATH],
+        dashboardCommitMessage,
+      )
     } catch (err) {
       throw new Error(
         `services/${name}/ was removed and committed in ${options.cwd}, but removing ${name} ` +

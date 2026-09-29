@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
-import { dirname, join, relative, sep } from 'node:path'
+import { tmpdir } from 'node:os'
+import { dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { z } from 'zod'
 import { INSTANCE_CORE_FILE } from './core-version.js'
@@ -53,6 +54,14 @@ const HARD_EXCLUDED_DIRS: ReadonlySet<string> = new Set([
   '.terraform',
 ])
 
+// The OS's own scratch directory (`/tmp` on Linux/macOS) is never a legitimate
+// template root, whatever happens to be lying in it -- it is shared, ambient
+// space that unrelated tools and processes write to and rarely clean up.
+// `resolve()` because `tmpdir()` can carry a trailing slash (e.g. via a
+// `TMPDIR` env var) that a plain string comparison against `dirname()`'s
+// output would never match.
+const OS_SCRATCH_ROOT = resolve(tmpdir())
+
 /**
  * Walk up from `startDir` for a Biffo **template** root: a directory holding a
  * core-manifest.json but no `biffo.core.json`. Returns it, or null.
@@ -64,11 +73,22 @@ const HARD_EXCLUDED_DIRS: ReadonlySet<string> = new Set([
  * marker used to be a `core.version` file beside the manifest, which instances
  * also carry, so it never actually drew that line; `biffo.core.json` is the
  * same instance discriminator the Release Guards job and the tag job use.
+ *
+ * The walk also never matches the OS scratch root itself (see
+ * OS_SCRATCH_ROOT above) — found live: a stray, unrelated core-manifest.json
+ * left directly at `/tmp` by some earlier process made every test whose
+ * fixture directory sits one level under `/tmp` (which is where this suite's
+ * own `makeTmpDir` puts them) walk up into a false "template root" match the
+ * instant its own fixture didn't qualify, rather than correctly finding none.
  */
 export function findTemplateRoot(startDir: string): string | null {
   let dir = startDir
   for (;;) {
-    if (existsSync(join(dir, CORE_MANIFEST_FILE)) && !existsSync(join(dir, INSTANCE_CORE_FILE))) {
+    if (
+      resolve(dir) !== OS_SCRATCH_ROOT &&
+      existsSync(join(dir, CORE_MANIFEST_FILE)) &&
+      !existsSync(join(dir, INSTANCE_CORE_FILE))
+    ) {
       return dir
     }
     const parent = dirname(dir)

@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -432,6 +433,32 @@ describe('real repo core-manifest.json', () => {
       ).toThrow(/Could not locate a Biffo template root.*Pass --template-repo <path>\./s)
     } finally {
       rmSync(noRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('never resolves the OS scratch root itself as a template root, however it is littered', () => {
+    // Found live: some unrelated process left a core-manifest.json directly at
+    // the OS tmp root (no biffo.core.json beside it), which is exactly what a
+    // real template root looks like to this walk. Every fixture this suite's
+    // own makeTmpDir creates sits ONE level under that same root, so the very
+    // next parent step after a "no root" fixture is the tmp root itself --
+    // this reproduces that collision directly rather than relying on the
+    // ambient state of whatever machine the suite happens to run on.
+    const strayManifestPath = join(tmpdir(), CORE_MANIFEST_FILE)
+    const preexisting = existsSync(strayManifestPath)
+      ? readFileSync(strayManifestPath, 'utf8')
+      : null
+    writeFileSync(strayManifestPath, JSON.stringify({ version: 1 }))
+    const dir = makeTmpDir('biffo-noroot-tmp-pollution')
+    try {
+      expect(findTemplateRoot(dir)).toBeNull()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+      if (preexisting === null) {
+        rmSync(strayManifestPath, { force: true })
+      } else {
+        writeFileSync(strayManifestPath, preexisting)
+      }
     }
   })
 })

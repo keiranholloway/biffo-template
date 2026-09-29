@@ -279,6 +279,28 @@ This paragraph is a pre-registered, falsifiable experiment (issue #1083), not
 an assumed-effective rule. If review finds it did not move the metric, this
 paragraph comes back out rather than accumulating.
 
+### Review step: does any assertion contradict the docstring beside it?
+
+When reviewing a diff (your own before opening the PR, or a subagent's), run
+one named check:
+
+> **Does any assertion contradict the docstring or issue-stated intent beside
+> it?**
+
+A test written by observing the code pins _current_ behaviour, not _intended_
+behaviour, so it cannot find a defect that already exists. Read each new or
+changed test's docstring, module docstring and the issue text against what it
+asserts. Worked examples:
+
+- `test_404s_when_no_source_creative_exists` asserted a 404 as correct,
+  contradicting its own module docstring (marketing#64).
+- `does not attach the rewrite function` pinned the _absence_ of the CloudFront
+  rewrite as intended, while the docstring said it should exist (marketing#52).
+
+Decision from #1514 remedy 3 / epic #1521. This is a review instruction, not a
+lint; a lint for "4xx asserted as expected while the adjacent docstring
+describes success" may be tried later.
+
 ### Fixing a bug: reproduce the actual failure, not a theory of it
 
 A green test suite proves your test passes. It does **not** prove the reported

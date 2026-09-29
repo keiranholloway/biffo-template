@@ -1,0 +1,74 @@
+{
+  "duration_api_ms": 16110,
+  "stop_reason": "end_turn",
+  "session_id": "8c044b80-3c6f-4eff-8f1a-6315289efd05",
+  "total_cost_usd": 0.054100800000000004,
+  "usage": {
+    "input_tokens": 10,
+    "cache_creation_input_tokens": 7125,
+    "cache_read_input_tokens": 33554,
+    "output_tokens": 1887,
+    "output_tokens_details": { "thinking_tokens": 340 },
+    "server_tool_use": { "web_search_requests": 0, "web_fetch_requests": 0 },
+    "service_tier": "standard",
+    "cache_creation": { "ephemeral_1h_input_tokens": 7125, "ephemeral_5m_input_tokens": 0 },
+    "inference_geo": "not_available",
+    "iterations": [
+      {
+        "input_tokens": 2,
+        "output_tokens": 492,
+        "cache_read_input_tokens": 9326,
+        "cache_creation_input_tokens": 1324,
+        "cache_creation": { "ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 1324 },
+        "type": "message"
+      }
+    ],
+    "speed": "standard"
+  },
+  "modelUsage": {
+    "claude-sonnet-5-5": {
+      "inputTokens": 10,
+      "outputTokens": 1887,
+      "cacheReadInputTokens": 33554,
+      "cacheCreationInputTokens": 7125,
+      "webSearchRequests": 0,
+      "costUSD": 0.054100800000000004,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "thinkingTokens": 340,
+      "canonicalModel": "claude-sonnet-5-5",
+      "provider": "firstParty",
+      "costBasis": "list"
+    }
+  },
+  "permission_denials": [],
+  "terminal_reason": "completed",
+  "fast_mode_state": "off",
+  "fast_mode_disabled_reason": "sdk_opt_in_required",
+  "subagent_stats": {
+    "spawned": 0,
+    "requested": { "background": 0, "foreground": 0, "unset": 0 },
+    "started_in_background": 0,
+    "max_depth": 0,
+    "spawned_by_subagents": 0,
+    "completed": 0,
+    "failed": 0,
+    "killed": { "parent": 0, "user": 0, "system": 0 },
+    "refused": { "depth_limit": 0, "concurrency_limit": 0, "budget": 0 },
+    "by_type": {}
+  },
+  "is_error": false,
+  "num_turns": 6,
+  "subtype": "success",
+  "api_error_status": null,
+  "result": "I fixed the stray-manifest failure in `findTemplateRoot` in `cli/src/lib/core-manifest.ts`. I did not touch or check the plugin-uninstall half of the claim, since the prosecutor did not dispute it.\n\n**Cause:** the guard only skipped a match at the exact `tmpdir()` directory. Under vitest that directory is a per-run folder under `/tmp`. A fixture two levels down still walked up past it and matched a stray `/tmp/core-manifest.json`.\n\n**Fix:** the walk now returns null as soon as it reaches the scratch root, instead of skipping that directory and continuing upward. I also made `tmpdir()` be read when the function runs rather than once at import. `TMPDIR` can be changed after import, and vitest does that per run.\n\n**Verification:** I ran the prosecutor's reproduction against the changed code. I created `/tmp/core-manifest.json` containing `{}`, then ran `npx vitest run src/lib/core-manifest.test.ts src/commands/core-diff src/commands/core-upgrade`. All 4 files and 131 tests passed, including the three that failed before. I then deleted the stray file and reran the same command, which also passed 131 of 131. I did not run the full suite.\n\nI did not update the comment on `findTemplateRoot` that says fixtures sit \"one level under /tmp\". It is now inaccurate, but you asked me not to touch anything outside the finding.\n\nVERDICT: FIXED",
+  "ttft_ms": 1448,
+  "type": "result",
+  "duration_ms": 19990,
+  "uuid": "9b7c36b0-16e3-4384-9357-8e36b89e820a",
+  "ttft_stream_ms": 884,
+  "time_to_request_ms": 39,
+  "first_content_frame_ms": 884,
+  "queued_turn_count": 0,
+  "result_index": 0
+}

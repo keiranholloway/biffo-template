@@ -79,13 +79,12 @@ module "core_api" {
   # var to tell "not configured" apart from a live function name.
   invoke_function_arns = var.enable_pr_signer ? [module.pr_signer[0].function_arn] : []
   # `local.core_api_environment` is declared in the TEMPLATE-OWNED
-  # core-api-environment.core.tf (#1538, #1540) and is the only channel a
-  # template change has into this Lambda's environment: this map is a literal
-  # inside a module block in a user-owned file, and Terraform cannot add an
-  # argument to it from another file. BIFFO_PLUGIN_MEDIA_BUCKET and
-  # BIFFO_PR_SIGNER_FUNCTION_NAME are supplied there for exactly that reason and
-  # are deliberately no longer listed below. Keys in this literal still win over
-  # that map, so nothing an instance already sets here changes behaviour.
+  # core-api-environment.core.tf (#1538, #1540) and is the home of the core
+  # environment keys, merged in here. This block is template-owned too, so it is
+  # no longer the only channel into this Lambda's environment; it is kept so the
+  # core keys stay in one place. BIFFO_PLUGIN_MEDIA_BUCKET and
+  # BIFFO_PR_SIGNER_FUNCTION_NAME are supplied there and are deliberately not
+  # listed below. Keys in this literal still win over that map.
   environment_variables = merge(local.core_api_environment, {
     BIFFO_ENVIRONMENT = local.environment
     # Full DB URLs baked in — Lambda has no outbound internet so it can't call

@@ -32,7 +32,7 @@ def test_registers_a_declared_chat_agent_resolvable_by_key():
     assert agent.agent_name == "ideation-challenger"
     # Defaults for the omitted bounds match Core's assistant values.
     assert agent.max_history_messages == 40
-    assert agent.max_output_tokens == 1024
+    assert agent.max_output_tokens == 4096
     assert agent.timeout_seconds == 20.0
 
 

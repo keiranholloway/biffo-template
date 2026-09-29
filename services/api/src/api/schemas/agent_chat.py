@@ -33,3 +33,6 @@ class AgentChatResponse(BaseModel):
     input_tokens: int | None = None
     output_tokens: int | None = None
     cost_usd: float | None = None
+    # Why the model stopped ("stop", "length" when the token ceiling truncated the
+    # reply, ...). Additive and authoritative (ADR-0016 §8): lets callers detect truncation.
+    finish_reason: str | None = None

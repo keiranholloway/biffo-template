@@ -39,5 +39,5 @@ class PluginChatAgent(TenantScopedModel):
     required_group: Mapped[str] = mapped_column(String(100), nullable=False)
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     max_history_messages: Mapped[int] = mapped_column(Integer, nullable=False, default=40)
-    max_output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=1024)
+    max_output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=4096)
     timeout_seconds: Mapped[float] = mapped_column(Float, nullable=False, default=20.0)

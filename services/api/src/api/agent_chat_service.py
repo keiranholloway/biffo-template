@@ -153,4 +153,5 @@ async def run_chat_turn(
         input_tokens=turn.input_tokens,
         output_tokens=turn.output_tokens,
         cost_usd=turn.cost_usd,
+        finish_reason=turn.finish_reason,
     )

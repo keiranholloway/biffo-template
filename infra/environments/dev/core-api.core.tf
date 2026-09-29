@@ -60,36 +60,31 @@ module "core_api" {
   # Lets the Core API invoke, over IAM, the isolated PR-signer (ADR-0008; the
   # signer, not the Core API, holds the GitHub App credential). Present only when
   # the signer is provisioned. module.pr_signer itself is now defined in the
-  # template-owned pr-signer.core.tf (#568), not here — that carve-out moved the
-  # signer's own module/secret/check block, but this argument stays on
-  # module.core_api's own block, which is not part of that carve-out. Terraform
-  # resolves module.pr_signer by name regardless of which file in this directory
-  # declares it, so the cross-file reference is unremarkable.
+  # template-owned pr-signer.core.tf (#568), and so is module.core_api together
+  # with this argument: this whole file is template-owned. Terraform resolves
+  # module.pr_signer by name regardless of which file in this directory declares
+  # it, so the cross-file reference is unremarkable.
   #
-  # BIFFO_PR_SIGNER_FUNCTION_NAME no longer stays here: #1540 moved it to the
-  # template-owned core-api-environment.core.tf, because an env var that only
-  # exists on a line in this user-owned file can never reach an instance. This
-  # argument cannot follow it — `invoke_function_arns` is a module ARGUMENT, not
-  # an environment variable, and there is still no channel for one of those; see
-  # that file's "What this does NOT solve".
+  # BIFFO_PR_SIGNER_FUNCTION_NAME is not set here: #1540 moved it to the
+  # template-owned core-api-environment.core.tf. `invoke_function_arns` is a
+  # module ARGUMENT, not an environment variable, so it is set directly on this
+  # block rather than through that file's local.core_api_environment map.
   #
   # The Core -> agent-runtime sync-invoke grant (ADR-0016) is deliberately NOT
   # here: it lives in the template-owned plugins.core.tf as a standalone
-  # aws_iam_role_policy on this role, so it rides `biffo core upgrade` instead of
-  # depending on a hand-edit of this user-owned file. Core derives the runtime's
+  # aws_iam_role_policy on this role. Core derives the runtime's
   # function name by convention (services/api config.py), not from an env var set
   # here. pr-signer can't follow that same convention-only shape: it is
   # conditionally provisioned per `var.enable_pr_signer`, so Core needs this env
   # var to tell "not configured" apart from a live function name.
   invoke_function_arns = var.enable_pr_signer ? [module.pr_signer[0].function_arn] : []
   # `local.core_api_environment` is declared in the TEMPLATE-OWNED
-  # core-api-environment.core.tf (#1538, #1540) and is the only channel a
-  # template change has into this Lambda's environment: this map is a literal
-  # inside a module block in a user-owned file, and Terraform cannot add an
-  # argument to it from another file. BIFFO_PLUGIN_MEDIA_BUCKET and
-  # BIFFO_PR_SIGNER_FUNCTION_NAME are supplied there for exactly that reason and
-  # are deliberately no longer listed below. Keys in this literal still win over
-  # that map, so nothing an instance already sets here changes behaviour.
+  # core-api-environment.core.tf (#1538, #1540) and is the home of the core
+  # environment keys, merged in here. This block is template-owned too, so it is
+  # no longer the only channel into this Lambda's environment; it is kept so the
+  # core keys stay in one place. BIFFO_PLUGIN_MEDIA_BUCKET and
+  # BIFFO_PR_SIGNER_FUNCTION_NAME are supplied there and are deliberately not
+  # listed below. Keys in this literal still win over that map.
   environment_variables = merge(local.core_api_environment, {
     BIFFO_ENVIRONMENT = local.environment
     # Full DB URLs baked in — Lambda has no outbound internet so it can't call

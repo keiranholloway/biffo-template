@@ -21,7 +21,7 @@
 # out-of-band; it is never stored in Terraform state.
 #
 # This file depends only on the template-seeded shape every instance has
-# (var.project_name, local.environment, local.tags — all defined in main.tf)
+# (var.project_name in variables.tf; local.environment and local.tags in main.tf)
 # plus the per-instance pr_signer_* variables, the same
 # cross-file pattern plugin-host.core.tf uses for module.auth/module.events/
 # module.api_gateway. module.core_api (core-api.core.tf) references module.pr_signer's

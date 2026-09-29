@@ -225,3 +225,25 @@ def test_each_supplied_value_is_computed_from_terraform_state() -> None:
             f"no Terraform resource. If a constant is genuinely right, it belongs "
             f"in var.core_api_environment's default, not here."
         )
+
+
+_MODULE_TF = _REPO_ROOT / "infra" / "environments" / "dev" / "core-api.core.tf"
+_MODULE_DECL = re.compile(r'^\s*module\s+"core_api"\s*\{', re.MULTILINE)
+
+
+def test_the_whole_core_api_module_is_declared_in_the_template_owned_file() -> None:
+    """#1538 option 2: every module ARGUMENT rides `biffo core upgrade`, not
+    only environment_variables. The block must live in core-api.core.tf and
+    (the template's own main.tf is asserted by the gated core-api-environment-adoption.test.ts)."""
+    text = _MODULE_TF.read_text(encoding="utf-8")
+    assert _MODULE_DECL.search(text), "core-api.core.tf must declare module core_api"
+    # invoke_function_arns moved with it, and the env-var channel is still merged.
+    assert re.search(r"^\s*invoke_function_arns\s*=\s*var\.enable_pr_signer\s*\?", text, re.M)
+    assert re.search(r"environment_variables\s*=\s*merge\(\s*local\.core_api_environment\s*,", text)
+
+
+def test_the_module_file_is_listed_template_owned() -> None:
+    import json
+
+    manifest = json.loads((_REPO_ROOT / "core-manifest.json").read_text(encoding="utf-8"))
+    assert "infra/environments/dev/core-api.core.tf" in manifest["templateOwned"]

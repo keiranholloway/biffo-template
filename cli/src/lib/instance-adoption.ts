@@ -110,6 +110,10 @@ export interface AdoptionPair {
  * Instance 1 of #1538/#1570, registered as data rather than a one-off
  * function — see the module docstring for the full evidence trail.
  */
+/** Matches (zero-width, at start of input) only when no `module "core_api" {`
+ * declaration appears anywhere in the text. Use with the `m` flag. */
+const NO_CORE_API_MODULE_SOURCE = String.raw`(?<![\s\S])(?![\s\S]*^[ \t]*module[ \t]+"core_api"[ \t]*\{)`
+
 export const REGISTERED_ADOPTION_PAIRS: AdoptionPair[] = [
   {
     id: 'core-api-environment',
@@ -121,11 +125,34 @@ export const REGISTERED_ADOPTION_PAIRS: AdoptionPair[] = [
       'channel only takes effect once `main.tf` itself merges it in (#1538/#1540/#1579).',
     templateFile: 'infra/environments/dev/core-api-environment.core.tf',
     userFile: 'infra/environments/dev/main.tf',
-    adoptedPattern: /environment_variables\s*=\s*merge\(\s*local\.core_api_environment\s*,/,
+    // Adopted either by merging the channel into the instance's own block, or
+    // (#1538 option 2) by deleting that block because core-api.core.tf now
+    // declares the whole module and merges the channel itself.
+    adoptedPattern: new RegExp(
+      String.raw`environment_variables\s*=\s*merge\(\s*local\.core_api_environment\s*,|` +
+        NO_CORE_API_MODULE_SOURCE,
+      'm',
+    ),
     remedy:
       'In `module "core_api"` (infra/environments/dev/main.tf), change ' +
       '`environment_variables = {` to `environment_variables = merge(local.core_api_environment, {` ' +
       'and close the extra paren on the block’s closing `}` — then `terraform apply`.',
+  },
+  {
+    id: 'core-api-module',
+    description:
+      '`infra/environments/dev/core-api.core.tf` declares the whole `module "core_api"` ' +
+      '(#1538 option 2), so every argument rides `biffo core upgrade`. An instance whose ' +
+      'user-owned `main.tf` still declares its own `module "core_api"` now has a ' +
+      '`Duplicate module call`. No `moved` block is needed: the resource address does not ' +
+      'include the declaring file, so state and the live Lambda are untouched.',
+    templateFile: 'infra/environments/dev/core-api.core.tf',
+    userFile: 'infra/environments/dev/main.tf',
+    adoptedPattern: new RegExp(NO_CORE_API_MODULE_SOURCE, 'm'),
+    remedy:
+      'Delete the `module "core_api" { ... }` block from infra/environments/dev/main.tf ' +
+      '(first move any instance-only arguments into `core_api_environment`), then run ' +
+      '`terraform plan` and confirm module.core_api shows no changes to destroy/create.',
   },
 ]
 

@@ -24,6 +24,7 @@
     "eslint.config.mjs",
     "infra/environments/dev/artifacts.core.tf",
     "infra/environments/dev/core-api-environment.core.tf",
+    "infra/environments/dev/core-api.core.tf",
     "infra/environments/dev/plugin-host.core.tf",
     "infra/environments/dev/plugin-storage.core.tf",
     "infra/environments/dev/plugins.core.tf",

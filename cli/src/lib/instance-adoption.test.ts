@@ -202,6 +202,12 @@ module "plugin_host" {
     BIFFO_PLUGIN_MEDIA_BUCKET = module.storage.plugin_media_bucket_name
   }
 }
+
+module "core_api" {
+  environment_variables = {
+    BIFFO_ENVIRONMENT = "dev"
+  }
+}
 `
     expect(isAdopted(corePair, decoy)).toBe(false)
   })
@@ -312,5 +318,23 @@ describe('REGISTERED_ADOPTION_PAIRS — extensible without touching checkInstanc
     expect(report.registeredPairs).toBe(1)
     expect(report.applicablePairs).toBe(1)
     expect(report.findings).toEqual([{ pair: extraPair, status: 'unadopted' }])
+  })
+})
+
+describe('core-api-module pair (#1538 option 2)', () => {
+  const pair = REGISTERED_ADOPTION_PAIRS.find((p) => p.id === 'core-api-module')!
+  it('is unadopted while main.tf still declares module "core_api"', () => {
+    expect(isAdopted(pair, BIFFO_PLATFORM_MAIN_TF_AFTER_PR174)).toBe(false)
+    expect(isAdopted(pair, BIFFO_PLATFORM_MAIN_TF_BEFORE_PR174)).toBe(false)
+  })
+  it('is adopted once the block is deleted', () => {
+    expect(isAdopted(pair, 'module "api_gateway" {\n  x = module.core_api.function_arn\n}\n')).toBe(
+      true,
+    )
+  })
+  it('the environment pair also reads a deleted block as adopted', () => {
+    const env = REGISTERED_ADOPTION_PAIRS.find((p) => p.id === 'core-api-environment')!
+    expect(isAdopted(env, 'module "api_gateway" {}\n')).toBe(true)
+    expect(isAdopted(env, BIFFO_PLATFORM_MAIN_TF_BEFORE_PR174)).toBe(false)
   })
 })

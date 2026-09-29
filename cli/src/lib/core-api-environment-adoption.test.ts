@@ -42,12 +42,19 @@ describe.skipIf(isInstanceRepo(repoRoot))(
   "the template's own core_api adopts the environment carve-out (#1538/#1540)",
   () => {
     const envDir = ['infra', 'environments', 'dev']
-    const mainTf = join(repoRoot, ...envDir, 'main.tf')
+    const mainTf = join(repoRoot, ...envDir, 'core-api.core.tf') // the module's new home
+    const realMainTf = join(repoRoot, ...envDir, 'main.tf')
     const carveOut = join(repoRoot, ...envDir, 'core-api-environment.core.tf')
 
     it('module "core_api" merges local.core_api_environment into its literal map', () => {
       const text = readFileSync(mainTf, 'utf8')
       expect(text).toMatch(/environment_variables\s*=\s*merge\(\s*local\.core_api_environment\s*,/)
+    })
+
+    it('main.tf no longer declares module "core_api" (whole module is template-owned)', () => {
+      expect(readFileSync(realMainTf, 'utf8')).not.toMatch(/^\s*module\s+"core_api"\s*\{/m)
+      expect(readFileSync(mainTf, 'utf8')).toMatch(/^\s*module\s+"core_api"\s*\{/m)
+      expect(readFileSync(mainTf, 'utf8')).toMatch(/^\s*invoke_function_arns\s*=/m)
     })
 
     it('the local it merges is actually declared, in the template-owned carve-out', () => {

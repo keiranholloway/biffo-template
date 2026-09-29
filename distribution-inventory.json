@@ -101,6 +101,15 @@
       "notes": "This is currency of the CHANNEL generically, not of any one templateOwned file -- individual templateOwned artifacts with their OWN adoption gap (the CDN entries below) are tracked as separate entries because a clean `biffo doctor` run says nothing about whether a specific file's consuming line was ever written."
     },
     {
+      "id": "core-api-module-template-owned",
+      "artifact": "module \"core_api\" declared in template-owned infra/environments/dev/core-api.core.tf (main.tf's own copy must be deleted)",
+      "channel": "instanceAdoptionPair",
+      "targets": ["every instance's infra/environments/dev/main.tf"],
+      "status": "detected",
+      "evidence": ["#1538", "#1540", "core-manifest.json"],
+      "notes": "Registered as the core-api-module pair in REGISTERED_ADOPTION_PAIRS. The resource address module.core_api is file-independent, so no moved block is needed and the live Lambda is not recreated; the instance only has to delete its own block to avoid a Duplicate module call."
+    },
+    {
       "id": "core-api-environment-merge-wiring",
       "artifact": "module \"core_api\"'s environment_variables merging in local.core_api_environment (infra/environments/dev/main.tf)",
       "channel": "instanceAdoptionPair",

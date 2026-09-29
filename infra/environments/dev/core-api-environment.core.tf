@@ -77,15 +77,11 @@
 # AccessDenied in the browser, which is the failure shape that capability has
 # already paid for once.
 #
-# ## What this does NOT solve
+# ## Relationship to the module block
 #
-# Only environment variables. A future template change needing a different
-# module ARGUMENT on module.core_api — a timeout, a new secret ARN, another
-# grant expressed as a module input — still has no channel, for the same reason
-# stated at the top. Fixing the general case means moving `module "core_api"`
-# wholesale into a template-owned .core.tf file (option 2 in #1538), which is a
-# separate, deliberately-deferred decision. This is the specific case, not the
-# class.
+# `module "core_api"` is itself template-owned now (core-api.core.tf, #1538
+# option 2), so every module ARGUMENT — not only the environment — can change
+# via a template file. This file keeps owning the core environment keys.
 #
 # `services/api/tests/test_core_api_environment_distribution.py` guards this
 # file: it reads the env-var names Core's own Settings fields resolve to and

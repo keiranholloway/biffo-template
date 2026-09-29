@@ -60,7 +60,11 @@ const HARD_EXCLUDED_DIRS: ReadonlySet<string> = new Set([
 // `resolve()` because `tmpdir()` can carry a trailing slash (e.g. via a
 // `TMPDIR` env var) that a plain string comparison against `dirname()`'s
 // output would never match.
-const OS_SCRATCH_ROOT = resolve(tmpdir())
+// Read lazily: `TMPDIR` can be repointed after import (vitest does so per run).
+// The walk must also STOP at this root, not merely skip it -- otherwise a
+// fixture two levels down (`/tmp/<run>/fixture`) climbs past a per-run scratch
+// root and false-matches a stray manifest in `/tmp` itself.
+const osScratchRoot = (): string => resolve(tmpdir())
 
 /**
  * Walk up from `startDir` for a Biffo **template** root: a directory holding a
@@ -83,12 +87,11 @@ const OS_SCRATCH_ROOT = resolve(tmpdir())
  */
 export function findTemplateRoot(startDir: string): string | null {
   let dir = startDir
+  const scratch = osScratchRoot()
   for (;;) {
-    if (
-      resolve(dir) !== OS_SCRATCH_ROOT &&
-      existsSync(join(dir, CORE_MANIFEST_FILE)) &&
-      !existsSync(join(dir, INSTANCE_CORE_FILE))
-    ) {
+    // Never match the scratch root, and never climb out of it.
+    if (resolve(dir) === scratch) return null
+    if (existsSync(join(dir, CORE_MANIFEST_FILE)) && !existsSync(join(dir, INSTANCE_CORE_FILE))) {
       return dir
     }
     const parent = dirname(dir)

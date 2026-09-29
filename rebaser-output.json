@@ -1,0 +1,74 @@
+{
+  "duration_api_ms": 13208,
+  "stop_reason": "end_turn",
+  "session_id": "ce57eb89-5b87-4849-9f0a-a28dec85e411",
+  "total_cost_usd": 0.047662,
+  "usage": {
+    "input_tokens": 6,
+    "cache_creation_input_tokens": 7793,
+    "cache_read_input_tokens": 20240,
+    "output_tokens": 1243,
+    "output_tokens_details": { "thinking_tokens": 316 },
+    "server_tool_use": { "web_search_requests": 0, "web_fetch_requests": 0 },
+    "service_tier": "standard",
+    "cache_creation": { "ephemeral_1h_input_tokens": 7793, "ephemeral_5m_input_tokens": 0 },
+    "inference_geo": "not_available",
+    "iterations": [
+      {
+        "input_tokens": 2,
+        "output_tokens": 576,
+        "cache_read_input_tokens": 10982,
+        "cache_creation_input_tokens": 637,
+        "cache_creation": { "ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 637 },
+        "type": "message"
+      }
+    ],
+    "speed": "standard"
+  },
+  "modelUsage": {
+    "claude-sonnet-5-5": {
+      "inputTokens": 6,
+      "outputTokens": 1243,
+      "cacheReadInputTokens": 20240,
+      "cacheCreationInputTokens": 7793,
+      "webSearchRequests": 0,
+      "costUSD": 0.047662,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "thinkingTokens": 316,
+      "canonicalModel": "claude-sonnet-5-5",
+      "provider": "firstParty",
+      "costBasis": "list"
+    }
+  },
+  "permission_denials": [],
+  "terminal_reason": "completed",
+  "fast_mode_state": "off",
+  "fast_mode_disabled_reason": "sdk_opt_in_required",
+  "subagent_stats": {
+    "spawned": 0,
+    "requested": { "background": 0, "foreground": 0, "unset": 0 },
+    "started_in_background": 0,
+    "max_depth": 0,
+    "spawned_by_subagents": 0,
+    "completed": 0,
+    "failed": 0,
+    "killed": { "parent": 0, "user": 0, "system": 0 },
+    "refused": { "depth_limit": 0, "concurrency_limit": 0, "budget": 0 },
+    "by_type": {}
+  },
+  "is_error": false,
+  "num_turns": 3,
+  "subtype": "success",
+  "api_error_status": null,
+  "result": "Both files are resolved. I ran no test suite, because they are generated agent-run logs and no repo tests exercise them. The check I ran was that both parse as valid JSON and that no conflict markers remain.\n\n**What the files are.** `builder-output.json` and `implementer-output.json` are pipeline records of a single agent run: session id, token counts, cost, and the final result text. They hold no source or config that anything consumes. Each side's version describes a different run, so the two can't be merged field by field. Doing that would splice numbers from one run onto the summary of another.\n\n**Each side.**\n- **HEAD (the PR branch):** its records belong to this PR's work. The builder log covers fixing the `var.project_name`, `local.environment` and `local.tags` comment in `pr-signer.core.tf`. The implementer log covers repointing the `pr-signer.core.tf` comments from `main.tf` to `core-api.core.tf`.\n- **origin/dev (the base branch):** its records describe a different run. The builder log covers rewording the stale comment in `core-api.core.tf`, and the implementer log is a separate run.\n\n**Resolution.** In every hunk of both files I kept the HEAD side and dropped the origin/dev side. The hunks were the usage and token counts, the per-iteration counts, the `modelUsage` block, and the `result` text with its timing fields. Taking one side in every hunk means each file describes one coherent run, and it is the run that matches this PR's claim. Nothing of substance is lost, because the origin/dev logs describe work that already exists as commits on the base branch.\n\n**Not touched.** I did not touch `infra/environments/dev/core-api.core.tf`, which is already staged, or any other file.\n\nVERDICT: RESOLVED",
+  "ttft_ms": 1657,
+  "type": "result",
+  "duration_ms": 13465,
+  "uuid": "dc39da28-d24a-49b5-8047-8cd8cf19c3a2",
+  "ttft_stream_ms": 1238,
+  "time_to_request_ms": 53,
+  "first_content_frame_ms": 1238,
+  "queued_turn_count": 0,
+  "result_index": 0
+}

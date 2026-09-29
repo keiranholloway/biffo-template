@@ -7,7 +7,7 @@
 #
 # The signer is the only component that holds the GitHub App credential. The
 # Core API authorizes an admin's request and invokes this function over IAM
-# (see invoke_function_arns on module.core_api in main.tf); the signer then
+# (see invoke_function_arns on module.core_api in core-api.core.tf); the signer then
 # edits a plugin's permissions block and opens a PR. Nothing goes live until
 # that PR is merged through the normal pipeline — config-as-code is preserved
 # (ADR-0004).
@@ -21,14 +21,14 @@
 # out-of-band; it is never stored in Terraform state.
 #
 # This file depends only on the template-seeded shape every instance has
-# (var.project_name, local.environment, local.tags — all defined in main.tf)
+# (var.project_name in variables.tf; local.environment and local.tags in main.tf)
 # plus the per-instance pr_signer_* variables, the same
 # cross-file pattern plugin-host.core.tf uses for module.auth/module.events/
-# module.api_gateway. module.core_api (main.tf) references module.pr_signer's
+# module.api_gateway. module.core_api (core-api.core.tf) references module.pr_signer's
 # outputs back (invoke_function_arns, BIFFO_PR_SIGNER_FUNCTION_NAME) — that
 # direction of reference could not move here without editing module.core_api's
 # own block, which is outside this carve-out's scope; see the comment on
-# module.core_api in main.tf.
+# module.core_api in core-api.core.tf.
 check "pr_signer_config" {
   assert {
     condition = !var.enable_pr_signer || (

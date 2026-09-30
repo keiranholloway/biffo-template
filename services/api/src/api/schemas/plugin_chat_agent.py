@@ -25,7 +25,7 @@ class CreatePluginChatAgentRequest(BaseModel):
     required_group: str = Field(min_length=1)
     active: bool = Field(default=True)
     max_history_messages: int = Field(default=40, gt=0)
-    max_output_tokens: int = Field(default=1024, gt=0)
+    max_output_tokens: int = Field(default=4096, gt=0)
     timeout_seconds: float = Field(default=20.0, gt=0)
 
 
@@ -39,7 +39,7 @@ class UpdatePluginChatAgentRequest(BaseModel):
     required_group: str = Field(min_length=1)
     active: bool = Field(default=True)
     max_history_messages: int = Field(default=40, gt=0)
-    max_output_tokens: int = Field(default=1024, gt=0)
+    max_output_tokens: int = Field(default=4096, gt=0)
     timeout_seconds: float = Field(default=20.0, gt=0)
 
 
@@ -97,7 +97,7 @@ class SeedPluginChatAgentRequest(BaseModel):
     required_group: str = Field(min_length=1)
     active: bool = Field(default=True)
     max_history_messages: int = Field(default=40, gt=0)
-    max_output_tokens: int = Field(default=1024, gt=0)
+    max_output_tokens: int = Field(default=4096, gt=0)
     timeout_seconds: float = Field(default=20.0, gt=0)
 
 

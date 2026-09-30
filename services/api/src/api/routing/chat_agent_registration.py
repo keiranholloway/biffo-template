@@ -49,7 +49,7 @@ class PluginChatAgentDef(BaseModel):
     #: The Cognito group a caller must be in to drive this agent (ADR-0017 §3).
     required_group: str = Field(min_length=1)
     max_history_messages: int = Field(default=40, gt=0)
-    max_output_tokens: int = Field(default=1024, gt=0)
+    max_output_tokens: int = Field(default=4096, gt=0)
     timeout_seconds: float = Field(default=20.0, gt=0)
 
     def to_chat_agent(self) -> ChatAgent:

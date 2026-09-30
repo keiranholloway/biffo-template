@@ -50,7 +50,7 @@ _KIND_KEY = "kind"
 
 # Hard output ceiling (ADR-0016 §8). A worker/turn may ask for fewer tokens; it can
 # never ask for more. Overridable per deployment, defaulting generously but bounded.
-DEFAULT_MAX_OUTPUT_TOKENS = 1024
+DEFAULT_MAX_OUTPUT_TOKENS = 4096
 MAX_OUTPUT_TOKENS_ENV = "AGENT_CHAT_MAX_OUTPUT_TOKENS"
 
 # Hard wall-clock ceiling for one turn (seconds). Sits inside the API Gateway ~29s

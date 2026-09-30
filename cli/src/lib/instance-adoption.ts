@@ -150,7 +150,8 @@ export const REGISTERED_ADOPTION_PAIRS: AdoptionPair[] = [
     userFile: 'infra/environments/dev/main.tf',
     adoptedPattern: new RegExp(NO_CORE_API_MODULE_SOURCE, 'm'),
     remedy:
-      'Delete the `module "core_api" { ... }` block from infra/environments/dev/main.tf ' +
+      'Run `biffo core upgrade` to receive `core-api.core.tf` (or equivalent), then ' +
+      'delete the `module "core_api" { ... }` block from infra/environments/dev/main.tf ' +
       '(first move any instance-only arguments into `core_api_environment`), then run ' +
       '`terraform plan` and confirm module.core_api shows no changes to destroy/create.',
   },

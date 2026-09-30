@@ -60,6 +60,7 @@ export const pluginVerifyCommand = new Command('verify')
         {
           runner,
           findScript,
+          schemaCoreRoot: () => resolveCoreRootForCli(options.coreRoot, runner),
           realCore: {
             coreRoot: () => resolveCoreRootForCli(options.coreRoot, runner),
             compose: realComposeDeps(runner, findScript, (l) => log.info(l)),

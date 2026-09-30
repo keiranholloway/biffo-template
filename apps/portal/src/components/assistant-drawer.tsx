@@ -47,7 +47,11 @@ function detailOf(err: unknown): string {
 interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
-  meta?: { model?: string | undefined; cost_usd?: number | undefined }
+  meta?: {
+    model?: string | undefined
+    cost_usd?: number | undefined
+    finish_reason?: string | undefined
+  }
 }
 
 /** Human phrase for what's being drafted — used in the header and the seed line
@@ -136,7 +140,7 @@ export function AssistantDrawer({ open, onClose, onAccept, context }: AssistantD
         {
           role: 'assistant',
           content: res.reply,
-          meta: { model: res.model, cost_usd: res.cost_usd },
+          meta: { model: res.model, cost_usd: res.cost_usd, finish_reason: res.finish_reason },
         },
       ])
     } catch (err: unknown) {
@@ -247,6 +251,15 @@ export function AssistantDrawer({ open, onClose, onAccept, context }: AssistantD
                 <pre className="mt-1 whitespace-pre-wrap break-words text-sm text-gray-800">
                   {m.content}
                 </pre>
+                {m.meta?.finish_reason === 'length' && (
+                  <p
+                    data-testid="truncated-notice"
+                    className="mt-2 text-xs text-amber-700"
+                    role="status"
+                  >
+                    This reply was truncated because it hit the length limit.
+                  </p>
+                )}
                 <div className="mt-2 border-t border-emerald-100 pt-2">
                   <button
                     type="button"

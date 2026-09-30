@@ -25,6 +25,8 @@ export interface AgentChatResponse {
   input_tokens?: number
   output_tokens?: number
   cost_usd?: number
+  /** `"length"` when the output-token ceiling truncated the reply. */
+  finish_reason?: string
 }
 
 type Client = ReturnType<typeof createApiClient>

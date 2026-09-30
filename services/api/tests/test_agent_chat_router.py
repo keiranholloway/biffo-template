@@ -138,6 +138,7 @@ def test_prompt_assistant_runs_through_the_generic_route_for_an_admin(admin_app)
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["reply"] == "a buffered reply"
+    assert body["finish_reason"] == "stop"
     run = asyncio.run(_load_run(session_factory, body["run_id"]))
     assert run.run_as_kind == "user"
     assert run.run_as_user_id == "user-123"
@@ -215,3 +216,22 @@ def test_an_unknown_agent_key_is_404():
     assert resp.status_code == 404
     assert invoker.calls == []
     asyncio.run(engine.dispose())
+
+
+def test_finish_reason_length_reaches_the_json_response():
+    fastapi, _, engine, _ = _build_app(
+        caller=_caller(roles=["admin"]),
+        invoker=FakeInvoker(
+            result=ChatTurnResult(
+                content="cut off", model="test/model", finish_reason="length", output_tokens=4096
+            )
+        ),
+    )
+    try:
+        resp = TestClient(fastapi).post(
+            "/api/v1/agent-chat/prompt-assistant", json={"message": "help me draft"}
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["finish_reason"] == "length"
+    finally:
+        asyncio.run(engine.dispose())

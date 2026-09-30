@@ -58,7 +58,7 @@ def upgrade() -> None:
         sa.Column("required_group", sa.String(100), nullable=False),
         sa.Column("active", sa.Boolean(), nullable=False, server_default=sa.true()),
         sa.Column("max_history_messages", sa.Integer(), nullable=False, server_default="40"),
-        sa.Column("max_output_tokens", sa.Integer(), nullable=False, server_default="4096"),
+        sa.Column("max_output_tokens", sa.Integer(), nullable=False, server_default="1024"),
         sa.Column("timeout_seconds", sa.Float(), nullable=False, server_default="20.0"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint(

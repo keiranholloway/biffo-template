@@ -117,6 +117,11 @@ env:
 jobs:
   report:
     name: Report shared-file drift across the estate
+    # `.github/` is template-owned, so every instance (biffo-platform,
+    # tabsii-platform) inherits this file. An instance cannot fix satellite
+    # drift, and each one filed its own copy of the report. Only the template
+    # reports.
+    if: github.repository == 'keiranholloway/biffo-template'
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     timeout-minutes: 30
     permissions:
@@ -354,15 +359,22 @@ jobs:
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
+          # Cross-repo read only, for the workstation-round liveness probe
+          # below. Issue creation keeps using the scoped github.token.
+          BIFFO_GITHUB_TOKEN: ${{ secrets.BIFFO_GITHUB_TOKEN }}
         run: |
           set -u
 
+          estate="${{ steps.estate.outputs.estate }}"
           estate_ok="${{ steps.estate.outcome }}"
           sync_ran="${{ steps.sync.outcome }}"
           rc="${{ steps.sync.outputs.rc }}"
           log="${{ steps.sync.outputs.log }}"
           cloned="${{ steps.estate.outputs.cloned }}"
 
+          drift_detail=""
+          round_note=""
+          fixable_list=""
           if [ "$estate_ok" != "success" ]; then
             denom="checked 0 satellites, 0 drifted: (could not discover/clone the governed set -- see the 'Discover the governed set' step above)"
             body_extra="The estate discovery step failed outright, so shared-sync never ran. See the run log for which repo listing or clone call failed."
@@ -451,6 +463,76 @@ jobs:
               body_extra="**shared-sync.sh never surveyed anything** -- it exited ${rc} before printing its applicability line, so \`applicable 0\` above is ABSENT, not measured. Do not read it as a scope collapse. The refusal it printed was:\n\n> ${refusal:-(no recognised refusal line -- read the run log)}\n\n${body_extra}"
             fi
             [ -n "${body_extra_ratio:-}" ] && body_extra="${body_extra_ratio} ${body_extra}"
+
+            # Per-repo drift, split by what can fix it. `--check` prints one
+            # `<repo>  DRIFTED <file> <file>(missing) <file>(overrides:a,b)`
+            # row per repo. A `(overrides:...)` token is an overridesFloor gap,
+            # which a round NEVER writes (#1352) -- it needs a hand edit. Every
+            # other token is a shared file a round rewrites.
+            NL=$(printf '\nx'); NL=${NL%x}
+            fixable_list=""
+            hand_list=""
+            set -f
+            while IFS= read -r row; do
+              [ -n "$row" ] || continue
+              rlabel=${row%% *}
+              for tok in ${row#"$rlabel"}; do
+                case "$tok" in
+                  DRIFTED) ;;
+                  *"(overrides:"*) hand_list="${hand_list}- \`${rlabel}\`: \`${tok}\` -- missing pnpm.overrides key(s); add by hand and refresh the lockfile${NL}" ;;
+                  *) fixable_list="${fixable_list}- \`${rlabel}\`: \`${tok}\`${NL}" ;;
+                esac
+              done
+            done <<EOF_DRIFT
+          $(grep -E '^[^[:space:]]+ +DRIFTED' "$clean_log" || true)
+          EOF_DRIFT
+            set +f
+            # Findings a round cannot fix either: differing pnpm.overrides
+            # lists (keyMustBeUniform) and *.test.sh files nothing runs.
+            while IFS= read -r row; do
+              [ -n "$row" ] || continue
+              hand_list="${hand_list}- \`$(printf '%s' "$row" | sed -E 's/^ +//; s/ +/ /g')\`${NL}"
+            done <<EOF_HAND
+          $(grep -E '^ +(WORSENED|UNWIRED) ' "$clean_log" || true)
+          EOF_HAND
+
+            drift_detail=""
+            if [ -n "$fixable_list" ]; then
+              drift_detail="${drift_detail}#### A sync round fixes these${NL}${NL}${fixable_list}${NL}"
+            fi
+            if [ -n "$hand_list" ]; then
+              drift_detail="${drift_detail}#### Needs a hand edit (a sync round will NOT fix these)${NL}${NL}${hand_list}${NL}"
+            fi
+
+            # Is the fix path alive? A round that finds drift opens a
+            # `chore(shared): sync template-shared files` PR in that satellite,
+            # so the newest such PR across the drifted satellites is the best
+            # readable proxy for "last successful round". Only meaningful when
+            # something has drifted (a clean estate opens no PR).
+            round_stale_days=3
+            round_note=""
+            if [ -n "$fixable_list" ] || [ -n "$hand_list" ]; then
+              newest=""
+              for rlabel in $(grep -E '^[^[:space:]]+ +DRIFTED' "$clean_log" | awk '{print $1}'); do
+                rslug=$(git -C "$estate/$rlabel" remote get-url origin 2>/dev/null | sed -E 's#^.*github\.com[:/]##; s#\.git$##')
+                [ -n "$rslug" ] || continue
+                ts=$(GH_TOKEN="${BIFFO_GITHUB_TOKEN:-}" gh pr list -R "$rslug" --state all --limit 30 \
+                  --json title,createdAt \
+                  --jq '[.[] | select(.title | startswith("chore(shared)")) | .createdAt] | max // empty' 2>/dev/null || true)
+                [ -n "$ts" ] || continue
+                if [ -z "$newest" ] || [ "$ts" \> "$newest" ]; then newest="$ts"; fi
+              done
+              if [ -z "$newest" ]; then
+                round_note="**Workstation round: no \`chore(shared)\` PR found in any drifted satellite** -- could not confirm scripts/shared-sync-daily.sh is running at all."
+              else
+                age_days=$(( ( $(date +%s) - $(date -d "$newest" +%s) ) / 86400 ))
+                if [ "$age_days" -ge "$round_stale_days" ]; then
+                  round_note="**Workstation round looks DEAD:** the newest \`chore(shared)\` PR across drifted satellites is ${age_days} day(s) old (${newest}; threshold ${round_stale_days}). Check the daily cron / \`scripts/shared-sync-daily.sh\` on the workstation before anything else."
+                else
+                  round_note="Workstation round: newest \`chore(shared)\` PR across drifted satellites is ${age_days} day(s) old (${newest}); under the ${round_stale_days}-day threshold."
+                fi
+              fi
+            fi
           fi
 
           echo "$denom"
@@ -460,26 +542,39 @@ jobs:
             echo "\`$denom\`"
             echo
             echo "$body_extra"
+            echo
+            echo "$round_note"
+            echo
+            printf '%s\n' "$drift_detail"
           } >> "$GITHUB_STEP_SUMMARY"
 
           if [ "${hard_fail:-1}" -eq 1 ]; then
             run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
             title="shared-sync scheduled report: satellite drift or an unreadable repo detected"
+            if [ -n "$fixable_list" ]; then
+              remediate=$(printf '%s\n' \
+                "A sync round fixes the first list above. Remediate from a workstation with the estate cloned:" \
+                "" \
+                '```bash' \
+                "sh scripts/shared-sync.sh --now --estate ~/code" \
+                '```' \
+                "" \
+                "(or wait for the daily workstation round -- scripts/shared-sync-daily.sh -- if" \
+                "it is running; \`--check\` only reports, it never opens anything itself.)")
+            else
+              remediate="A sync round will NOT fix any of this drift -- do not run \`--now\`. Edit the listed repos by hand."
+            fi
             body=$(printf '%s\n' \
               "\`$denom\`" \
               "" \
               "$body_extra" \
               "" \
+              "$round_note" \
+              "" \
+              "$drift_detail" \
               "Run: ${run_url}" \
               "" \
-              "Remediate with a shared-sync round from a workstation with the estate cloned:" \
-              "" \
-              '```bash' \
-              "sh scripts/shared-sync.sh --now --estate ~/code" \
-              '```' \
-              "" \
-              "(or wait for the daily workstation round -- scripts/shared-sync-daily.sh -- if" \
-              "one is still running; \`--check\` above only reports, it never opens anything itself.)" \
+              "$remediate" \
               "" \
               "This issue is not auto-closed on the next clean run, per AGENTS.md section 4 --" \
               "confirm the satellites actually converged before closing it.")

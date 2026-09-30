@@ -42,7 +42,8 @@ plugin-template/
 │   └── main.py               # Lambda entrypoint dispatching EventBridge events
 └── tests/
     ├── conftest.py
-    ├── fakes.py              # in-memory fake of the Core API's generic CRUD routes
+    ├── fakes.py              # in-memory fake of the Core API's generic CRUD routes (bounds generated from the manifest)
+    ├── example_plugin_record_fixtures.py  # captures real payloads into tests/captured/ (don't invent fixtures)
     └── test_example_plugin.py
 ```
 

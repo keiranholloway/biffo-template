@@ -117,3 +117,35 @@ class TestUserCreatedLogsEvent:
             payload={"cognito_sub": "user-123", "email": "new@example.com"},
         )
         await plugin.events.dispatch(event)
+
+
+class TestFakeRejectsWhatProductionRejects:
+    """The fake's bounds are generated from the manifest, so widening a value
+    past the declared `String(100)` must be refused, not silently recorded."""
+
+    async def test_value_within_declared_bound_is_accepted(self) -> None:
+        _, fake = _make_plugin()
+        await fake.client().post("/api/v1/plugins/example-plugin/widgets", json={"name": "x" * 100})
+        assert len(fake.tables["widgets"]) == 1
+
+    async def test_value_past_declared_bound_is_rejected(self) -> None:
+        import pytest
+        from biffo_plugin_sdk import BiffoAPIError
+
+        _, fake = _make_plugin()
+        with pytest.raises(BiffoAPIError) as err:
+            await fake.client().post(
+                "/api/v1/plugins/example-plugin/widgets", json={"name": "x" * 101}
+            )
+        assert err.value.status_code == 422
+        assert fake.tables["widgets"] == []
+
+    async def test_missing_not_null_column_is_rejected(self) -> None:
+        import pytest
+        from biffo_plugin_sdk import BiffoAPIError
+
+        _, fake = _make_plugin()
+        with pytest.raises(BiffoAPIError):
+            await fake.client().post(
+                "/api/v1/plugins/example-plugin/widgets", json={"description": "no name"}
+            )

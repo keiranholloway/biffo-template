@@ -81,7 +81,12 @@ name = "biffo-plugin-sdk"
 # named gap with no `run`) — reached only via the existing opt-in
 # `conformance` extra, so this half is unobservable to a consumer that
 # doesn't already opt into it.
-version = "1.7.0"
+#
+# 1.8.0 (biffo-template Phase 2 of #1521) adds `biffo_plugin_sdk.fixtures`:
+# `FixtureRecorder` (capture a real payload once, replay the committed copy) and
+# `ManifestSchema` (String(n) / type / NOT NULL enforcement generated from the
+# manifest's own table declarations, for fakes). Purely additive -> minor bump.
+version = "1.8.0"
 description = "Biffo Plugin SDK — manifest validation, Core API client, and event system for Biffo plugins"
 readme = "README.md"
 license = "MIT"

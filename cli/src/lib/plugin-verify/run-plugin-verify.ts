@@ -138,11 +138,15 @@ export async function runPluginVerify(
     )
     return 0
   }
-  return runRealCore(options, deps.realCore as RealCoreDeps)
+  return runRealCore(options, deps.realCore as RealCoreDeps, schemaEnv)
 }
 
 /** The `real_core` seam: hand `plugin-compose` the plugin and report its verdict. */
-async function runRealCore(options: PluginVerifyOptions, real: RealCoreDeps): Promise<number> {
+async function runRealCore(
+  options: PluginVerifyOptions,
+  real: RealCoreDeps,
+  schemaEnv: Record<string, string> | undefined,
+): Promise<number> {
   let coreRoot: string
   try {
     coreRoot = real.coreRoot()
@@ -158,6 +162,7 @@ async function runRealCore(options: PluginVerifyOptions, real: RealCoreDeps): Pr
       configFile: pickConfigFile(options.cwd, options.configFile),
       reload: false,
       label: REAL_CORE_LABEL,
+      ...(schemaEnv ? { schemaEnv } : {}),
       ...(options.signal ? { signal: options.signal } : {}),
     },
     real.compose,

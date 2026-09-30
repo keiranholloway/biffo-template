@@ -121,7 +121,27 @@
 
 set -eu
 
-REPO_ROOT=$(cd "$(dirname "$0")/.." && pwd)
+# Which repo's schema to build. The script used to always use the directory two
+# levels above ITSELF, which is the template checkout when run from one but the
+# npm package directory when run from the published `@biffo/cli` -- so
+# `biffo plugin verify` in a plugin repo looked for a schema in the package and
+# found none. Resolution order:
+#   1. BIFFO_REPO_ROOT, when a caller (e.g. `plugin verify`) names the repo;
+#   2. the caller's working directory, when it holds a schema (db/imports/*/*.sql
+#      or an alembic.ini, here or in services/api);
+#   3. the directory above this script -- the template-checkout behaviour.
+_script_root=$(cd "$(dirname "$0")/.." && pwd)
+_has_schema() {
+  [ -n "$(find "$1/db/imports" -mindepth 2 -maxdepth 2 -name '*.sql' 2>/dev/null | head -n 1)" ] ||
+    [ -f "$1/services/api/alembic.ini" ] || [ -f "$1/alembic.ini" ]
+}
+if [ -n "${BIFFO_REPO_ROOT:-}" ]; then
+  REPO_ROOT=$(cd "$BIFFO_REPO_ROOT" && pwd)
+elif _has_schema "$PWD"; then
+  REPO_ROOT=$(pwd -P)
+else
+  REPO_ROOT="$_script_root"
+fi
 
 # sha256sum is already a dependency of this script (see `fingerprint` below),
 # so reusing it here for a deterministic, cheap per-checkout key adds nothing
@@ -198,6 +218,12 @@ ALEMBIC_DIR=""
 for _d in services/api .; do
   [ -f "$_d/alembic.ini" ] && ALEMBIC_DIR="$_d" && break
 done
+# A caller that has BUILT a schema elsewhere (`plugin verify` generates an Alembic
+# chain from biffo.plugin.json's tables into a scratch directory) names it here.
+# BIFFO_PG_ALEMBIC_PROJECT is the uv project that supplies alembic + the async
+# driver; when unset, uv uses the alembic directory itself, as before.
+[ -n "${BIFFO_PG_ALEMBIC_DIR:-}" ] && ALEMBIC_DIR="$BIFFO_PG_ALEMBIC_DIR"
+ALEMBIC_PROJECT="${BIFFO_PG_ALEMBIC_PROJECT:-}"
 
 if [ -z "$DDL_FILES" ] && [ -z "$ALEMBIC_DIR" ]; then
   say "no db/imports/*/ DDL and no alembic.ini - this repo has no schema to build"
@@ -629,7 +655,7 @@ psql_admin -c "DROP DATABASE IF EXISTS $DB WITH (FORCE)" >/dev/null
 psql_admin -c "CREATE DATABASE $DB" >/dev/null
 
 if [ -n "$ALEMBIC_DIR" ]; then
-  BIFFO_DATABASE_URL="$DSN" uv run --directory "$ALEMBIC_DIR" alembic upgrade head >/dev/null
+  BIFFO_DATABASE_URL="$DSN" uv run ${ALEMBIC_PROJECT:+--project "$ALEMBIC_PROJECT"} --directory "$ALEMBIC_DIR" alembic upgrade head >/dev/null
   say "alembic upgrade head"
 fi
 

@@ -4,6 +4,7 @@ import type { CommandRunner } from '../plugin-compose/command-runner.js'
 import { listChecks, runChecksOnce } from './conformance-driver.js'
 import type { ComposeDeps } from '../plugin-compose/compose-stack.js'
 import { pickConfigFile, runCompositionCheck } from '../plugin-compose/dev-up.js'
+import { buildManifestSchema, hasNativeSchema } from './manifest-schema.js'
 import { raisePostgres } from '../plugin-compose/raise-postgres.js'
 
 export interface PluginVerifyOptions {
@@ -30,6 +31,11 @@ export interface PluginVerifyDeps {
   findScript: (relativePath: string) => string | null
   /** Required unless `options.realCore` is false — a missing one is refused, never skipped. */
   realCore?: RealCoreDeps
+  /**
+   * Resolves the Core checkout whose migration generator builds a manifest-declared
+   * schema. Falls back to `realCore.coreRoot`. May throw (nothing to fetch, offline).
+   */
+  schemaCoreRoot?: () => string
 }
 
 const REAL_CORE_LABEL = 'plugin verify (real_core)'
@@ -80,7 +86,25 @@ export async function runPluginVerify(
     return 2
   }
 
-  const raised = raisePostgres(deps.runner, script, options.cwd)
+  // A plugin has no db/imports/ or alembic.ini: build its schema from the manifest's
+  // `tables` with the generator `plugin install` uses (see manifest-schema.ts).
+  let schemaEnv: Record<string, string> | undefined
+  if (!hasNativeSchema(options.cwd)) {
+    const resolveCore = deps.schemaCoreRoot ?? deps.realCore?.coreRoot
+    try {
+      if (resolveCore) {
+        const built = buildManifestSchema(deps.runner, options.cwd, resolveCore())
+        if (built) schemaEnv = built.env
+      }
+    } catch (err) {
+      log.error(
+        `plugin verify: could not build the test schema from biffo.plugin.json's tables: ${(err as Error).message}`,
+      )
+      return 1
+    }
+  }
+
+  const raised = raisePostgres(deps.runner, script, options.cwd, schemaEnv)
   if (!raised.dsn) {
     log.error(
       `plugin verify: could not provision the local Postgres test database (${PG_TEST_DB_SCRIPT} exited ${raised.status})`,

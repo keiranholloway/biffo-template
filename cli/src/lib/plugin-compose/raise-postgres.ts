@@ -15,9 +15,21 @@ export interface RaisedPostgres {
  * reaches stdout, so it is safe to capture; progress goes to stderr") — no
  * `--export` flag here, since this process consumes the DSN directly rather
  * than needing it as a shell-sourceable `export` statement.
+ *
+ * The script builds the schema of the repo it is run FROM (or `BIFFO_REPO_ROOT`), not of
+ * the package it ships in -- `cwd` is therefore load-bearing, not cosmetic.
  */
-export function raisePostgres(runner: CommandRunner, script: string, cwd: string): RaisedPostgres {
-  const { status, stdout } = runner.run(script, [], { cwd, captureStdout: true })
+export function raisePostgres(
+  runner: CommandRunner,
+  script: string,
+  cwd: string,
+  env?: Record<string, string>,
+): RaisedPostgres {
+  const { status, stdout } = runner.run(script, [], {
+    cwd,
+    captureStdout: true,
+    ...(env ? { env } : {}),
+  })
   if (status !== 0) {
     return { dsn: null, status: status ?? 2 }
   }

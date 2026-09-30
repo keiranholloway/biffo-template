@@ -11,7 +11,7 @@ class GeneratorRunner implements CommandRunner {
     this.calls.push({ cmd, args })
     // Play the generator: drop one migration into --versions-dir.
     const dir = args[args.indexOf('--versions-dir') + 1]!
-    writeFileSync(join(dir, 'abc_create_t.py'), 'revision = "abc"\n')
+    writeFileSync(join(dir, 'abc_create_t.py'), 'revision = "abc"\n', { mode: 0o600 })
     return { status: 0, stdout: '' }
   }
 }

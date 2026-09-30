@@ -1,5 +1,11 @@
-import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { CommandRunner } from '../plugin-compose/command-runner.js'
@@ -57,18 +63,16 @@ export function buildManifestSchema(
 
   // The directory name must contain "alembic": pg-test-db.sh fingerprints only
   // `*.py` files whose path does, and that fingerprint is what tells it the schema changed.
-  const scratch = join(
-    tmpdir(),
-    `biffo-plugin-verify-alembic-${createHash('sha256').update(pluginRoot).digest('hex').slice(0, 12)}`,
-  )
-  rmSync(scratch, { recursive: true, force: true })
+  const scratch = mkdtempSync(join(tmpdir(), 'biffo-plugin-verify-alembic-'))
   const versions = join(scratch, 'migrations', 'versions')
   const serviceDir = join(scratch, 'services', manifest.name)
   mkdirSync(versions, { recursive: true })
   mkdirSync(serviceDir, { recursive: true })
-  writeFileSync(join(serviceDir, MANIFEST), readFileSync(manifestPath))
-  writeFileSync(join(scratch, 'alembic.ini'), '[alembic]\nscript_location = migrations\n')
-  writeFileSync(join(scratch, 'migrations', 'env.py'), ENV_PY)
+  writeFileSync(join(serviceDir, MANIFEST), readFileSync(manifestPath), { mode: 0o600 })
+  writeFileSync(join(scratch, 'alembic.ini'), '[alembic]\nscript_location = migrations\n', {
+    mode: 0o600,
+  })
+  writeFileSync(join(scratch, 'migrations', 'env.py'), ENV_PY, { mode: 0o600 })
 
   const coreApi = join(coreRoot, 'services', 'api')
   const generator = join(coreApi, 'scripts', 'generate_plugin_migrations.py')

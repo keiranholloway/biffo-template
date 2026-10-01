@@ -55,6 +55,7 @@ run() {
     if [ "$drift" = 1 ]; then printf 'sat-a                      \033[31mDRIFTED\033[0m scripts/x.sh\n'; fi
     if [ "$unread" = 1 ]; then printf 'sat-b                      \033[31mcannot fetch\033[0m - boom\n'; fi
     if [ "$drift" = 2 ]; then printf 'package.json is missing an override for foo; a round will NOT fix this\n'; fi
+    if [ "$drift" = 3 ]; then printf '  \033[31m%-12s\033[0m %-42s %s variants across %s repos (baseline %s)\n' WORSENED scripts/lib/x.sh 3 5 2; fi
     printf '\n3 of 4 repo(s) under /e judged applicable by applies()\n'
     printf '%s current, %s drifted\n' "$((2 - (drift == 1)))" "$((drift == 1))"
   } > "$d/check.log"
@@ -62,6 +63,7 @@ run() {
   printf '%s' "$issues" > "$d/issues.json"
   rc=0; [ "$drift" = 1 ] && rc=1
   [ "$drift" = 2 ] && rc=1
+  [ "$drift" = 3 ] && rc=1
   [ "$unread" = 1 ] && rc=1
   set +e
   STUBDIR="$d" PATH="$TMP/bin:$PATH" ESTATE_OUTCOME=success SYNC_OUTCOME="$sync_outcome" \
@@ -112,6 +114,10 @@ if [ "$RC" -eq 0 ] && calls_has 'issue reopen.* 5' && ! calls_has 'issue create'
 run c10 2 0 success none '[]'
 if [ "$RC" -eq 1 ] && calls_has 'issue create' && grep -q 'will NOT fix' "$CALLS"; then
   ok "10 rc=1, no DRIFTED line, hand-edit text -> red, issue filed"; else bad "10" "rc=$RC $(cat "$OUT")"; fi
+
+run c11 3 0 success none '[]'
+if [ "$RC" -eq 1 ] && grep -q 'WORSENED *scripts/lib/x.sh' "$CALLS"; then
+  ok "11 WORSENED line -> path listed in hand-edit section"; else bad "11" "rc=$RC $(cat "$OUT")"; fi
 
 printf '%s passed, %s failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

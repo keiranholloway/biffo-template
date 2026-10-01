@@ -54,12 +54,14 @@ run() {
   {
     if [ "$drift" = 1 ]; then printf 'sat-a                      \033[31mDRIFTED\033[0m scripts/x.sh\n'; fi
     if [ "$unread" = 1 ]; then printf 'sat-b                      \033[31mcannot fetch\033[0m - boom\n'; fi
+    if [ "$drift" = 2 ]; then printf 'package.json is missing an override for foo; a round will NOT fix this\n'; fi
     printf '\n3 of 4 repo(s) under /e judged applicable by applies()\n'
-    printf '%s current, %s drifted\n' "$((2 - drift))" "$drift"
+    printf '%s current, %s drifted\n' "$((2 - (drift == 1)))" "$((drift == 1))"
   } > "$d/check.log"
   [ "$age" = none ] || iso_ago "$age" > "$d/pr-created"
   printf '%s' "$issues" > "$d/issues.json"
   rc=0; [ "$drift" = 1 ] && rc=1
+  [ "$drift" = 2 ] && rc=1
   [ "$unread" = 1 ] && rc=1
   set +e
   STUBDIR="$d" PATH="$TMP/bin:$PATH" ESTATE_OUTCOME=success SYNC_OUTCOME="$sync_outcome" \
@@ -106,6 +108,10 @@ run c8 0 0 skipped none '[]' failure
 run c9 1 0 success 3600 "[{\"number\":5,\"state\":\"CLOSED\",\"title\":\"$TITLE\",\"body\":\"old\"}]"
 if [ "$RC" -eq 0 ] && calls_has 'issue reopen.* 5' && ! calls_has 'issue create'; then
   ok "9 legacy closed issue (title only) -> reopened"; else bad "9" "rc=$RC $(cat "$CALLS")"; fi
+
+run c10 2 0 success none '[]'
+if [ "$RC" -eq 1 ] && calls_has 'issue create' && grep -q 'will NOT fix' "$CALLS"; then
+  ok "10 rc=1, no DRIFTED line, hand-edit text -> red, issue filed"; else bad "10" "rc=$RC $(cat "$OUT")"; fi
 
 printf '%s passed, %s failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

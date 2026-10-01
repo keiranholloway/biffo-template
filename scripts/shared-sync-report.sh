@@ -122,6 +122,12 @@ ${handedit}
 
 "
 
+  # --check exits 1 for problems with no DRIFTED line (missing overrides,
+  # unwired guards, mustBeUniform): a round cannot fix them, so never green.
+  if [ "$rc" = "1" ] && [ "$drifted_n" -eq 0 ]; then
+    add_reason "--check exited 1 with no drifted satellite: needs a hand edit (a round will not fix it); see the hand-edit list"
+  fi
+
   # ---- delivery ----
   if [ "$drifted_n" -gt 0 ]; then
     case "$delivery" in

@@ -18,15 +18,26 @@ from itertools import count
 from typing import Any
 
 import httpx
-from biffo_plugin_sdk import BiffoAPIClient
+from biffo_plugin_sdk import BiffoAPIClient, ManifestSchema, SchemaViolation, load_manifest
+
+from example_plugin.manifest import MANIFEST_PATH
 
 _BASE_PATH = "/api/v1/plugins/example-plugin"
 
 
 class FakeCoreApi:
-    """Fake backing store for the plugin's own generic CRUD routes."""
+    """Fake backing store for the plugin's own generic CRUD routes.
+
+    Rejects what production rejects: on create it validates the payload
+    against the column bounds, types and NOT NULLs *generated from this
+    plugin's own `biffo.plugin.json` table declarations* (SDK `ManifestSchema`),
+    returning 422 like Core. Nothing here hand-writes a bound, so a manifest
+    change (e.g. `String(100)` -> `String(64)`) changes the fake with it.
+    """
 
     def __init__(self) -> None:
+        self._manifest = load_manifest(MANIFEST_PATH)
+        self._schema = ManifestSchema.from_manifest(self._manifest)
         self.tables: dict[str, list[dict[str, Any]]] = {"widgets": []}
         self.request_log: list[tuple[str, str]] = []
         self._ids = count(1)
@@ -60,6 +71,12 @@ class FakeCoreApi:
 
         if request.method == "POST":
             payload = json.loads(request.content or b"{}")
+            declared = self._schema.table_for_route(self._manifest, table)
+            if declared is not None:
+                try:
+                    self._schema.validate(declared, payload)
+                except SchemaViolation as exc:
+                    return httpx.Response(422, json={"detail": exc.problems})
             row = {"id": f"id-{next(self._ids)}", "tenant_id": "default", **payload}
             rows.append(row)
             return httpx.Response(201, json=row)

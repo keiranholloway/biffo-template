@@ -12,6 +12,12 @@ from .config import (
     resolve_setting,
 )
 from .events import BiffoEvent, EventSubscriber, create_event_handler
+from .fixtures import (
+    FixtureNotRecordedError,
+    FixtureRecorder,
+    ManifestSchema,
+    SchemaViolation,
+)
 from .plugin import (
     AdminIngress,
     BiffoPluginBase,
@@ -63,15 +69,19 @@ __all__ = [
     "ConfigState",
     "EventSubscriber",
     "EventSubscription",
+    "FixtureNotRecordedError",
+    "FixtureRecorder",
     "ForbiddenError",
     "ForwardedUser",
     "IndexDefinition",
+    "ManifestSchema",
     "PermissionRule",
     "PluginConfigError",
     "PluginConfigTransientError",
     "PluginManifest",
     "PrincipalCoreClient",
     "RouteDef",
+    "SchemaViolation",
     "SecretResolution",
     "SeedDeclaration",
     "SignedCoreClient",

@@ -949,6 +949,10 @@ jobs:
         # changes it is unverifiable there, and this self-test is the only
         # gate that sees it before it is live.
         run: sh scripts/rerun-on-stuck-queue.test.sh
+      - name: Shared-sync report decision — self-test
+        if: ${{ !cancelled() }}
+        # #2166. Red/green and issue routing for shared-sync-report.yml.
+        run: bash scripts/shared-sync-report.test.sh
       - name: Guard self-test wiring audit
         if: ${{ !cancelled() }}
         # #1705: three scripts/*.test.sh guards -- branch-health-workflow-run-

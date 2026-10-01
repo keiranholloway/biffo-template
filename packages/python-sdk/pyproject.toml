@@ -86,7 +86,13 @@ name = "biffo-plugin-sdk"
 # `FixtureRecorder` (capture a real payload once, replay the committed copy) and
 # `ManifestSchema` (String(n) / type / NOT NULL enforcement generated from the
 # manifest's own table declarations, for fakes). Purely additive -> minor bump.
-version = "1.8.0"
+#
+# 1.9.0 (biffo-template#1517 follow-up) lets `user_ingress`/`admin_ingress`/
+# `user_frontend` `required_group` be `"setting:<name>"`, a reference to a
+# `kind: setting` `config` entry (a dangling or non-setting reference is
+# rejected). A literal group still validates but emits
+# `LegacyRequiredGroupWarning`. Additive -> minor bump.
+version = "1.9.0"
 description = "Biffo Plugin SDK — manifest validation, Core API client, and event system for Biffo plugins"
 readme = "README.md"
 license = "MIT"

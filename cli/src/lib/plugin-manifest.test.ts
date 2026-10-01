@@ -41,6 +41,35 @@ function validManifest() {
 }
 
 describe('validateManifest — user-facing surfaces (ADR-0021 / frontend)', () => {
+  describe('required_group as a setting reference', () => {
+    const base = {
+      name: 'ideation',
+      version: '1.0.0',
+      user_ingress: { required_group: 'setting:founder_group', app: 'ideation.app:app' },
+    }
+    const setting = { name: 'founder_group', kind: 'setting', description: 'Founder group.' }
+
+    it('accepts a reference to a declared setting', () => {
+      expect(() => validateManifest({ ...base, config: [setting] })).not.toThrow()
+    })
+    it('rejects a reference to a missing entry', () => {
+      expect(() => validateManifest(base)).toThrow(/does not declare/)
+    })
+    it('rejects a reference to a non-setting entry', () => {
+      expect(() => validateManifest({ ...base, config: [{ ...setting, kind: 'secret' }] })).toThrow(
+        /not "setting"/,
+      )
+    })
+    it('still accepts a legacy literal group', () => {
+      expect(() =>
+        validateManifest({
+          ...base,
+          user_ingress: { ...base.user_ingress, required_group: 'founder' },
+        }),
+      ).not.toThrow()
+    })
+  })
+
   it('accepts an app-ref ingress (shared host) + user_frontend', () => {
     const manifest = validateManifest({
       name: 'ideation',

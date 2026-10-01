@@ -168,6 +168,19 @@
       "status": "unverified",
       "gapReason": "Skills are workstation-local (#1128): a fix filed against the skill that owns this practice has its remedy in a directory nothing syncs and no CI reads. 'Done' on one machine is indistinguishable from absent everywhere else. #1570 itself says this needs an architectural decision (are skills distributable at all) before it can be a channel, not a channel this inventory can wire today -- recorded here as the gap, per #1570's instruction, rather than built around.",
       "evidence": ["#1526", "#1128"]
+    },
+    {
+      "id": "plugin-skeleton-required-group-setting-form",
+      "artifact": "The plugin skeleton's biffo.plugin.json `required_group: \"setting:<name>\"` references, its config: declarations, and its CI's supplied stand-in values (biffo-template#1517)",
+      "channel": "none",
+      "targets": [
+        "_skeletons/plugin-template (scaffolded by `biffo plugin create`)",
+        "biffo-plugin-marketing",
+        "biffo-plugin-idea-scout"
+      ],
+      "status": "unverified",
+      "gapReason": "Reaches a NEW plugin only by scaffolding, and an existing plugin repo only when its own SDK pin is raised and its manifest edited by hand: no channel carries a skeleton's biffo.plugin.json or its SDK lock to repos already scaffolded. The skeleton's own pin/lock is raised by #2168 once the SDK release (#2178) exists; marketing adopting the setting form is tracked under #1527's measured validation. Recorded as the gap rather than a channel built around it.",
+      "evidence": ["#1517", "#1521", "#2168", "#2178"]
     }
   ]
 }

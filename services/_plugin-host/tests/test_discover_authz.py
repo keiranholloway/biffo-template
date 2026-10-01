@@ -850,3 +850,53 @@ def test_discover_skips_invalid_json_but_keeps_other_plugins(tmp_path, caplog) -
     assert [p.name for p in found] == ["good"]
     assert any("badjson" in record.message for record in caplog.records)
     assert any(record.levelname == "ERROR" for record in caplog.records)
+
+
+def _write_setting_plugin(root, name, *, config=None) -> None:
+    d = root / name
+    d.mkdir()
+    (d / "biffo.plugin.json").write_text(
+        json.dumps(
+            {
+                "name": name,
+                "version": "1.0.0",
+                "config": config
+                if config is not None
+                else [{"name": "grp", "kind": "setting", "description": "group"}],
+                "user_ingress": {"app": f"{name}.app:app", "required_group": "setting:grp"},
+                "admin_ingress": {"app": f"{name}.admin:app", "required_group": "setting:grp"},
+                "user_frontend": {"dir": "web/dist", "required_group": "setting:grp"},
+            }
+        )
+    )
+
+
+def test_discover_resolves_a_setting_reference_per_plugin(tmp_path, monkeypatch) -> None:
+    _write_setting_plugin(tmp_path, "alpha")
+    _write_setting_plugin(tmp_path, "beta")
+    monkeypatch.setenv("BIFFO_PLUGIN_ALPHA_GRP", "founders")
+    monkeypatch.setenv("BIFFO_PLUGIN_BETA_GRP", "editors")
+
+    found = {p.name: p for p in discover_plugins(tmp_path)}
+
+    assert found["alpha"].required_group == "founders"
+    assert found["alpha"].admin_required_group == "founders"
+    assert found["alpha"].user_frontend_required_group == "founders"
+    assert found["beta"].required_group == "editors"  # scoped by plugin name
+
+
+def test_discover_fails_closed_when_a_referenced_setting_is_unsupplied(
+    tmp_path, monkeypatch, caplog
+) -> None:
+    monkeypatch.delenv("BIFFO_PLUGIN_ALPHA_GRP", raising=False)
+    _write_setting_plugin(tmp_path, "alpha")
+
+    assert discover_plugins(tmp_path) == []
+    assert "BIFFO_PLUGIN_ALPHA_GRP" in caplog.text
+
+
+def test_discover_skips_a_reference_to_a_missing_config_entry(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("BIFFO_PLUGIN_ALPHA_GRP", "founders")
+    _write_setting_plugin(tmp_path, "alpha", config=[])
+
+    assert discover_plugins(tmp_path) == []

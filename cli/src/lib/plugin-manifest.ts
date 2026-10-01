@@ -218,6 +218,11 @@ const RouteDefSchema = z
 // as unknown keys) so `biffo plugin install` can recognise a user-facing plugin
 // and surface the two-apply register + frontend-sync flow it needs.
 const REL_DIR = /^[\w][\w./-]*$/
+// Mirrors biffo_plugin_sdk.plugin.SETTING_REF_PREFIX / parse_setting_ref.
+export const SETTING_REF_PREFIX = 'setting:'
+export function parseSettingRef(value: string): string | null {
+  return value.startsWith(SETTING_REF_PREFIX) ? value.slice(SETTING_REF_PREFIX.length).trim() : null
+}
 const NON_EMPTY_GROUP = 'required_group must be a non-empty Cognito group name.'
 
 // Mirrors plugin_user_surface.py's UserIngress (ADR-0021): `app` names the ASGI app
@@ -440,6 +445,33 @@ export const PluginManifestSchema = z
     const settingNames = new Set(
       manifest.config.filter((c) => c.kind === 'setting').map((c) => c.name),
     )
+    // user_ingress / admin_ingress / user_frontend `required_group` may reference a
+    // `kind: "setting"` config entry as `setting:<name>` — mirrors the SDK's
+    // `_validate_required_group_references`. A reference to a missing or
+    // non-setting entry is rejected; a legacy literal still validates (the SDK
+    // validator emits the deprecation warning; the CLI has no warning channel
+    // here, so it only guards the reference shape).
+    const configKinds = new Map(manifest.config.map((c) => [c.name, c.kind]))
+    const surfaces = [
+      ['user_ingress', manifest.user_ingress],
+      ['admin_ingress', manifest.admin_ingress],
+      ['user_frontend', manifest.user_frontend],
+    ] as const
+    for (const [label, surface] of surfaces) {
+      const ref = surface ? parseSettingRef(surface.required_group) : null
+      if (ref === null) continue
+      const kind = configKinds.get(ref)
+      if (kind !== 'setting') {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            `${label}.required_group '${surface!.required_group}' references config entry ` +
+            `'${ref}', which ${kind === undefined ? 'this manifest does not declare' : `is kind '${kind}', not "setting"`}. ` +
+            `Declared setting config names: ${[...settingNames].sort().join(', ') || 'none'}`,
+        })
+      }
+    }
+
     for (const agent of manifest.chat_agents) {
       if (!settingNames.has(agent.required_group)) {
         ctx.addIssue({

@@ -90,16 +90,30 @@
   "dependencies": {
     "biffo-plugin-sdk": "^1.0"
   },
+  "config": [
+    {
+      "name": "founder_group",
+      "kind": "setting",
+      "required": true,
+      "description": "Cognito group allowed on the user ingress and the user frontend. Supplied by the instance at install time (e.g. --config founder_group=<group>)."
+    },
+    {
+      "name": "admin_group",
+      "kind": "setting",
+      "required": true,
+      "description": "Cognito group allowed on the admin ingress. Supplied by the instance at install time (e.g. --config admin_group=<group>)."
+    }
+  ],
   "user_ingress": {
-    "required_group": "founder",
+    "required_group": "setting:founder_group",
     "app": "example_plugin.user_app:app"
   },
   "admin_ingress": {
-    "required_group": "admin",
+    "required_group": "setting:admin_group",
     "app": "example_plugin.admin_app:app"
   },
   "user_frontend": {
     "dir": "web/dist",
-    "required_group": "founder"
+    "required_group": "setting:founder_group"
   }
 }

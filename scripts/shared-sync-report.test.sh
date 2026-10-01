@@ -119,5 +119,16 @@ run c11 3 0 success none '[]'
 if [ "$RC" -eq 1 ] && grep -q 'WORSENED *scripts/lib/x.sh' "$CALLS"; then
   ok "11 WORSENED line -> path listed in hand-edit section"; else bad "11" "rc=$RC $(cat "$OUT")"; fi
 
+# 12: per-repo MISSING / WORSENED lines reach the body
+run c12 1 0 success 3600 '[]'
+printf '    \033[31mMISSING     \033[0m sat-a                    missing: lodash axios\n    \033[31mWORSENED    \033[0m scripts/y.sh                                 3 variants across 4 repos (baseline 2)\n' >> "$TMP/c12/check.log"
+set +e
+STUBDIR="$TMP/c12" PATH="$TMP/bin:$PATH" ESTATE_OUTCOME=success SYNC_OUTCOME=success CHECK_RC=1 \
+  CHECK_LOG="$TMP/c12/check.log" DELIVERY_OUTCOME=success CLONED=4 ESTATE="$TMP/c12/estate" \
+  RUN_URL=http://run GITHUB_REPOSITORY=o/tmpl GH_TOKEN=x SUMMARY_FILE="$TMP/c12/summary" bash "$SCRIPT" > "$TMP/c12/out" 2>&1
+set -e
+if grep -q 'MISSING .*sat-a .*missing: lodash axios' "$TMP/c12/calls" && grep -q 'WORSENED .*scripts/y.sh' "$TMP/c12/calls"; then
+  ok "12 MISSING/WORSENED per-repo lines (repo + keys) in the body"; else bad "12" "$(cat "$TMP/c12/calls")"; fi
+
 printf '%s passed, %s failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

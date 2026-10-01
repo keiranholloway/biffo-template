@@ -1206,6 +1206,7 @@ class TestIngressRequiredGroupSettingReference:
             manifest = PluginManifest.model_validate(
                 self._manifest("setting:founder_group", [self._SETTING])
             )
+        assert manifest.user_ingress is not None
         assert manifest.user_ingress.required_group == "setting:founder_group"
 
     def test_reference_to_missing_entry_rejected(self):
@@ -1222,4 +1223,5 @@ class TestIngressRequiredGroupSettingReference:
 
         with pytest.warns(LegacyRequiredGroupWarning, match="deprecated"):
             manifest = PluginManifest.model_validate(self._manifest("founder"))
+        assert manifest.user_ingress is not None
         assert manifest.user_ingress.required_group == "founder"

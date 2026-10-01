@@ -104,6 +104,10 @@ export interface AdoptionPair {
   adoptedPattern: RegExp
   /** What the instance operator must actually do, named concretely. */
   remedy: string
+  /** Optional user-owned scaffold (seeded by `biffo core upgrade`) that must
+   * exist in the INSTANCE tree whenever the target ships it, independent of
+   * `userFile`'s content. Its absence makes the pair unadopted. */
+  requiredInstanceFile?: string
 }
 
 /**
@@ -149,8 +153,13 @@ export const REGISTERED_ADOPTION_PAIRS: AdoptionPair[] = [
     templateFile: 'infra/environments/dev/core-api.core.tf',
     userFile: 'infra/environments/dev/main.tf',
     adoptedPattern: new RegExp(NO_CORE_API_MODULE_SOURCE, 'm'),
+    // core-api.core.tf references local.core_api_instance_environment, which is
+    // declared only in this user-owned, upgrade-seeded file.
+    requiredInstanceFile: 'infra/environments/dev/core-api.instance.tf',
     remedy:
-      'Run `biffo core upgrade` to receive `core-api.core.tf` (or equivalent), then ' +
+      'Run `biffo core upgrade` to receive `core-api.core.tf` and to seed ' +
+      'infra/environments/dev/core-api.instance.tf if it is missing (core-api.core.tf references ' +
+      '`local.core_api_instance_environment`, declared only there), then ' +
       'delete the `module "core_api" { ... }` block from infra/environments/dev/main.tf ' +
       '(first move instance-only environment variables into `local.core_api_instance_environment` in ' +
       'infra/environments/dev/core-api.instance.tf, and memory/SnapStart/timeout into terraform.tfvars as ' +
@@ -221,7 +230,14 @@ export function checkInstanceAdoption(
 
     const userPath = join(oursDir, pair.userFile)
     const content = existsSync(userPath) ? readFileSync(userPath, 'utf8') : null
-    findings.push({ pair, status: isAdopted(pair, content) ? 'adopted' : 'unadopted' })
+    const scaffoldMissing =
+      pair.requiredInstanceFile !== undefined &&
+      existsSync(join(theirsDir, pair.requiredInstanceFile)) &&
+      !existsSync(join(oursDir, pair.requiredInstanceFile))
+    findings.push({
+      pair,
+      status: !scaffoldMissing && isAdopted(pair, content) ? 'adopted' : 'unadopted',
+    })
   }
 
   return {

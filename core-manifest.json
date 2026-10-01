@@ -86,5 +86,6 @@
     "uv.lock",
     "biffo.divergence.json"
   ],
+  "seeded": ["infra/environments/dev/core-api.instance.tf"],
   "released": ["cli/"]
 }

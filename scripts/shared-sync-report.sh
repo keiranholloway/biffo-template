@@ -106,7 +106,7 @@ else
 
   # ---- drift detail: what a round fixes vs what needs a hand edit ----
   fixable=$(grep -E '^[^[:space:]]+ +DRIFTED' "$clean" || true)
-  handedit=$(grep -iE 'will NOT fix|by hand|reconcile the copies|no caller anywhere|UNWIRED' "$clean" || true)
+  handedit=$(grep -iE 'will NOT fix|by hand|reconcile the copies|no caller anywhere|UNWIRED|^ *WORSENED' "$clean" || true)
   [ -n "$fixable" ] && detail="${detail}**A delivery round fixes these (sync PRs):**
 
 \`\`\`

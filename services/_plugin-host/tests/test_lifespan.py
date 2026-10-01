@@ -554,3 +554,50 @@ def test_aclose_logs_a_genuine_shutdown_failure_unlike_its_quiet_sibling(caplog)
         assert "different loop" in caplog.text
     finally:
         loop_started.close()
+
+
+# --------------------------------------------------------------------------------
+# Startup Core calls carry the plugin's identity, not the host's.
+# --------------------------------------------------------------------------------
+
+
+def test_startup_handler_core_call_carries_the_plugins_identity_header():
+    """A startup handler runs outside any request, so group_gate's per-request
+    `acting_as_plugin` binding is absent. Without the host binding it, Core sees
+    `system:host` and every self-seeded row lands under plugin_name 'host'."""
+    import httpx
+    from biffo_plugin_sdk import PLUGIN_IDENTITY_HEADER, SignedCoreClient, acting_as_plugin
+    from botocore.credentials import Credentials
+
+    seen: list[tuple[str, str | None]] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        seen.append((request.url.path, request.headers.get(PLUGIN_IDENTITY_HEADER)))
+        return httpx.Response(200, json={})
+
+    def make_plugin(name: str) -> FastAPI:
+        @contextlib.asynccontextmanager
+        async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+            client = SignedCoreClient(
+                base_url="https://core.example.com",
+                region="eu-west-1",
+                credentials=Credentials("AKID", "SECRET"),
+                client=httpx.AsyncClient(transport=httpx.MockTransport(handle)),
+            )
+            await client.post(f"/seed/{name}", json={})
+            yield
+
+        return FastAPI(lifespan=lifespan)
+
+    host = build_host(
+        [
+            MountedPlugin("ideation", make_plugin("ideation"), "founder"),
+            MountedPlugin("idea-scout", make_plugin("idea-scout"), "founder"),
+        ],
+        authorize=_authorizer,
+    )
+    with TestClient(host):
+        pass
+
+    assert sorted(seen) == [("/seed/idea-scout", "idea-scout"), ("/seed/ideation", "ideation")]
+    assert acting_as_plugin.get() is None  # binding does not leak out of startup

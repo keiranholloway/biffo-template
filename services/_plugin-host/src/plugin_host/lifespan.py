@@ -34,6 +34,8 @@ import logging
 from collections.abc import Sequence
 from typing import Any
 
+from biffo_plugin_sdk import acting_as_plugin
+
 _LOGGER = logging.getLogger(__name__)
 
 #: The ASGI lifespan connection scope, per the ASGI 3.0 spec. ``state`` is the
@@ -234,6 +236,10 @@ class PluginLifespans:
         self._started = True
         for labels, app in self._targets:
             runner = SubAppLifespan(labels[0], app)
+            # Startup runs outside any request, so group_gate's per-request binding
+            # is absent. Bind the owning plugin (start() creates the lifespan task,
+            # which inherits this context); else Core sees system:host (#host-rows).
+            reset_sdk = acting_as_plugin.set(labels[0].split("/", 1)[0])
             try:
                 await runner.start()
             except PluginStartupError as exc:
@@ -242,6 +248,8 @@ class PluginLifespans:
                     self.failures[label] = str(exc)
             else:
                 self._runners.append(runner)
+            finally:
+                acting_as_plugin.reset(reset_sdk)
 
     async def aclose(self) -> None:
         """Release every started plugin's suspended lifespan task.

@@ -116,6 +116,14 @@ class TestTypesAndNotNull:
             "chan_channels", {"notes": "x"}, partial=True
         )
 
+    def test_unparseable_type_argument_is_ignored(self) -> None:
+        from biffo_plugin_sdk.fixtures import _parse_type
+
+        # A non-literal argument cannot be a length bound: it is skipped, not raised.
+        assert _parse_type("String(abc)") == ("String", [])
+        assert _parse_type("String(1 +)") == ("String", [])
+        assert _parse_type("String(64)") == ("String", [64])
+
     def test_table_for_route(self) -> None:
         m = _manifest()
         assert ManifestSchema.from_manifest(m).table_for_route(m, "channels") == "chan_channels"

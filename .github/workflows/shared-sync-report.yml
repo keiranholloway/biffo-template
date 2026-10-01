@@ -1,5 +1,25 @@
-name: Shared-sync drift report
+name: Shared-sync delivery and report
 
+# ## UPDATE (#2166, owner decision 2026-10-01): this workflow now DELIVERS
+#
+# The paragraphs below describe the original report-only design. Owner
+# decision: GitHub Actions delivers shared-sync; the workstation cron
+# (scripts/shared-sync-daily.sh) is no longer the delivery path (it kept
+# aborting: rc=128, then rc=2 on scratch clones). After the `--check` survey
+# this workflow runs `scripts/shared-sync.sh --now` over the same org-listed
+# satellite set, opening sync PRs in each drifted satellite for the fleet to
+# prosecute and merge. It needs BIFFO_GITHUB_TOKEN with contents:write and
+# pull_requests:write on the satellites -- if it lacks either, the delivery
+# step fails red and the missing permission must be granted by the owner;
+# do not widen it here. Once verified live, the workstation cron line is removed.
+#
+# RED only when we cannot tell, the delivery round failed, or a satellite's
+# sync PR is older than 48h. Fresh drift with PRs opened is GREEN. The
+# decision and issue routing live in scripts/shared-sync-report.sh (tested by
+# scripts/shared-sync-report.test.sh). Closing the tracking issue while the
+# report is still true REOPENS it (stable body marker) rather than filing a
+# new number; the "never auto-close" rule below is unchanged.
+#
 # Nothing scheduled scripts/shared-sync.sh in GitHub Actions before this file
 # (#1421). scripts/shared-sync-daily.sh exists, but it is a WORKSTATION cron
 # entry: it operates on local clones under `--estate ~/code` and only ever
@@ -116,7 +136,7 @@ env:
 
 jobs:
   report:
-    name: Report shared-file drift across the estate
+    name: Deliver shared-file sync and report drift across the estate
     # `.github/` is template-owned, so every instance (biffo-platform,
     # tabsii-platform) inherits this file. An instance cannot fix satellite
     # drift, and each one filed its own copy of the report. Only the template
@@ -355,237 +375,33 @@ jobs:
           echo "log=$log" >> "$GITHUB_OUTPUT"
           exit 0
 
-      - name: Report the denominator, and open/update a tracking issue on any failure
-        if: always()
+      # Delivery round (#2166). Runs only when --check completed and found
+      # drift or something unreadable (rc 1); the decision script reads this
+      # step's outcome. continue-on-error so the report step always runs.
+      - name: Deliver the sync round (shared-sync.sh --now)
+        id: deliver
+        if: steps.sync.outputs.rc == '1'
+        continue-on-error: true
         env:
-          GH_TOKEN: ${{ github.token }}
-          # Cross-repo read only, for the workstation-round liveness probe
-          # below. Issue creation keeps using the scoped github.token.
-          BIFFO_GITHUB_TOKEN: ${{ secrets.BIFFO_GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.BIFFO_GITHUB_TOKEN }}
         run: |
           set -u
+          bash scripts/shared-sync.sh --now --estate "${{ steps.estate.outputs.estate }}"
 
-          estate="${{ steps.estate.outputs.estate }}"
-          estate_ok="${{ steps.estate.outcome }}"
-          sync_ran="${{ steps.sync.outcome }}"
-          rc="${{ steps.sync.outputs.rc }}"
-          log="${{ steps.sync.outputs.log }}"
-          cloned="${{ steps.estate.outputs.cloned }}"
-
-          drift_detail=""
-          round_note=""
-          fixable_list=""
-          if [ "$estate_ok" != "success" ]; then
-            denom="checked 0 satellites, 0 drifted: (could not discover/clone the governed set -- see the 'Discover the governed set' step above)"
-            body_extra="The estate discovery step failed outright, so shared-sync never ran. See the run log for which repo listing or clone call failed."
-            hard_fail=1
-          elif [ "$sync_ran" != "success" ] || [ -z "${rc:-}" ]; then
-            denom="checked 0 satellites, 0 drifted: (shared-sync --check did not complete)"
-            body_extra="shared-sync.sh --check did not produce a result. See the run log."
-            hard_fail=1
-          else
-            clean_log="$RUNNER_TEMP/shared-sync-check-plain.log"
-            sed -E 's/\x1b\[[0-9;]*m//g' "$log" > "$clean_log" 2>/dev/null || cp "$log" "$clean_log"
-
-            summary_line=$(grep -E '^[0-9]+ current, [0-9]+ drifted' "$clean_log" | tail -1 || true)
-            current_n=$(printf '%s' "$summary_line" | sed -E 's/^([0-9]+) current.*/\1/')
-            drifted_n=$(printf '%s' "$summary_line" | sed -E 's/.*, ([0-9]+) drifted.*/\1/')
-            case "$current_n" in ''|*[!0-9]*) current_n=0 ;; esac
-            case "$drifted_n" in ''|*[!0-9]*) drifted_n=0 ;; esac
-            checked_n=$((current_n + drifted_n))
-
-            drifted_names=$(grep -E '^[^[:space:]]+ +DRIFTED' "$clean_log" | awk '{print $1}' | paste -sd, - || true)
-            [ -n "$drifted_names" ] || drifted_names="(none)"
-
-            unreadable=$(grep -c 'cannot fetch\|repo(s) could not be read' "$clean_log" || true)
-
-            # #1426: "checked N satellites" alone -- current+drifted, excluding
-            # anything applies() accepted but diff_files could not read -- is
-            # exactly the number that read as fine at 2 while 12 of the 17
-            # cloned repos were silently unreadable. shared-sync.sh now prints
-            # its own "$applicable of $considered ... judged applicable"
-            # line (and hard-fails itself, exit 2, if that ratio collapses) --
-            # this pulls the same number into the headline a human actually
-            # reads, rather than leaving it to a line buried under 17 repo
-            # rows and only implied by the "N could not be read" aside.
-            applicable_line=$(grep -E '^[0-9]+ of [0-9]+ repo\(s\) under .* judged applicable by applies\(\)' "$clean_log" | tail -1 || true)
-            applicable_n=$(printf '%s' "$applicable_line" | sed -E 's/^([0-9]+) of.*/\1/')
-            case "$applicable_n" in ''|*[!0-9]*) applicable_n=0 ;; esac
-
-            # ABSENT is not ZERO, and conflating the two is what made #1508
-            # misdiagnose itself. When shared-sync.sh refuses BEFORE surveying
-            # anything -- the "template checkout is behind origin/dev" exit 2
-            # was the real case, red from 2026-08-10 -- it never prints the
-            # line grepped above, `applicable_n` falls back to 0, and the
-            # ratio check below then reports a confident "scope collapse"
-            # about a survey that never ran. A reader is sent to look at
-            # clone credentials and applies(), neither of which was involved.
-            #
-            # So: distinguish "the line was missing" from "the line said 0",
-            # and say which. This is the same lesson as the metric-denominator
-            # one -- a zero means nothing until you know whether it counted
-            # something and found none, or could not count at all.
-            if [ -z "$applicable_line" ]; then
-              applicable_absent=1
-              refusal=$(grep -m1 -E 'shared-sync: (this template checkout is|surveyed zero)' "$clean_log" || true)
-            else
-              applicable_absent=0
-              refusal=""
-            fi
-
-            denom="cloned ${cloned:-0}, applicable ${applicable_n}, checked ${checked_n} satellites, ${drifted_n} drifted: ${drifted_names}"
-
-            hard_fail=0
-            # rc from shared-sync.sh --check: 0 clean, 1 drift/unreadable-repo,
-            # 2 cannot-tell (including "surveyed zero repos" and, since #1426,
-            # applicable collapsing to under half of considered). Any non-zero
-            # is a red job -- see the workflow header for why zero is never a
-            # pass.
-            [ "$rc" -ne 0 ] 2>/dev/null && hard_fail=1
-            [ "$checked_n" -eq 0 ] && hard_fail=1
-
-            # Belt-and-suspenders at the layer a human actually reads: even if
-            # shared-sync.sh's own ratchet above did not fire (a parsing
-            # mismatch, a log truncated before that line), a cloned/applicable
-            # ratio under 50% here is loud on its own terms. Same threshold and
-            # same justification as scripts/shared-sync.sh's -- see the
-            # comment there for the 4-of-17 (~24%) measured exclusion rate this
-            # is sized against.
-            if [ -n "${cloned:-}" ] && [ "$cloned" -gt 0 ] 2>/dev/null && \
-               [ "$applicable_absent" -eq 0 ] && \
-               [ "$((applicable_n * 2))" -lt "$cloned" ]; then
-              hard_fail=1
-              body_extra_ratio="cloned ${cloned} candidate repo(s) but only ${applicable_n} were judged applicable -- under the 50% floor. That is the #1426 shape: a scope collapse, not ordinary exclusion. Check whether every applicable repo could actually be fetched (git credentials/token reaching the check step) before trusting anything else in this report."
-            fi
-
-            body_extra="Cloned ${cloned:-0} candidate repo(s) under \`biffo-*\`/\`tabsii-*\` from keiranholloway and tabsii-com; shared-sync.sh --check exited ${rc}. ${unreadable:-0} line(s) reported an unreadable repo."
-            if [ "$applicable_absent" -eq 1 ]; then
-              body_extra="**shared-sync.sh never surveyed anything** -- it exited ${rc} before printing its applicability line, so \`applicable 0\` above is ABSENT, not measured. Do not read it as a scope collapse. The refusal it printed was:\n\n> ${refusal:-(no recognised refusal line -- read the run log)}\n\n${body_extra}"
-            fi
-            [ -n "${body_extra_ratio:-}" ] && body_extra="${body_extra_ratio} ${body_extra}"
-
-            # Per-repo drift, split by what can fix it. `--check` prints one
-            # `<repo>  DRIFTED <file> <file>(missing) <file>(overrides:a,b)`
-            # row per repo. A `(overrides:...)` token is an overridesFloor gap,
-            # which a round NEVER writes (#1352) -- it needs a hand edit. Every
-            # other token is a shared file a round rewrites.
-            NL=$(printf '\nx'); NL=${NL%x}
-            fixable_list=""
-            hand_list=""
-            set -f
-            while IFS= read -r row; do
-              [ -n "$row" ] || continue
-              rlabel=${row%% *}
-              for tok in ${row#"$rlabel"}; do
-                case "$tok" in
-                  DRIFTED) ;;
-                  *"(overrides:"*) hand_list="${hand_list}- \`${rlabel}\`: \`${tok}\` -- missing pnpm.overrides key(s); add by hand and refresh the lockfile${NL}" ;;
-                  *) fixable_list="${fixable_list}- \`${rlabel}\`: \`${tok}\`${NL}" ;;
-                esac
-              done
-            done <<EOF_DRIFT
-          $(grep -E '^[^[:space:]]+ +DRIFTED' "$clean_log" || true)
-          EOF_DRIFT
-            set +f
-            # Findings a round cannot fix either: differing pnpm.overrides
-            # lists (keyMustBeUniform) and *.test.sh files nothing runs.
-            while IFS= read -r row; do
-              [ -n "$row" ] || continue
-              hand_list="${hand_list}- \`$(printf '%s' "$row" | sed -E 's/^ +//; s/ +/ /g')\`${NL}"
-            done <<EOF_HAND
-          $(grep -E '^ +(WORSENED|UNWIRED) ' "$clean_log" || true)
-          EOF_HAND
-
-            drift_detail=""
-            if [ -n "$fixable_list" ]; then
-              drift_detail="${drift_detail}#### A sync round fixes these${NL}${NL}${fixable_list}${NL}"
-            fi
-            if [ -n "$hand_list" ]; then
-              drift_detail="${drift_detail}#### Needs a hand edit (a sync round will NOT fix these)${NL}${NL}${hand_list}${NL}"
-            fi
-
-            # Is the fix path alive? A round that finds drift opens a
-            # `chore(shared): sync template-shared files` PR in that satellite,
-            # so the newest such PR across the drifted satellites is the best
-            # readable proxy for "last successful round". Only meaningful when
-            # something has drifted (a clean estate opens no PR).
-            round_stale_days=3
-            round_note=""
-            if [ -n "$fixable_list" ] || [ -n "$hand_list" ]; then
-              newest=""
-              for rlabel in $(grep -E '^[^[:space:]]+ +DRIFTED' "$clean_log" | awk '{print $1}'); do
-                rslug=$(git -C "$estate/$rlabel" remote get-url origin 2>/dev/null | sed -E 's#^.*github\.com[:/]##; s#\.git$##')
-                [ -n "$rslug" ] || continue
-                ts=$(GH_TOKEN="${BIFFO_GITHUB_TOKEN:-}" gh pr list -R "$rslug" --state all --limit 30 \
-                  --json title,createdAt \
-                  --jq '[.[] | select(.title | startswith("chore(shared)")) | .createdAt] | max // empty' 2>/dev/null || true)
-                [ -n "$ts" ] || continue
-                if [ -z "$newest" ] || [ "$ts" \> "$newest" ]; then newest="$ts"; fi
-              done
-              if [ -z "$newest" ]; then
-                round_note="**Workstation round: no \`chore(shared)\` PR found in any drifted satellite** -- could not confirm scripts/shared-sync-daily.sh is running at all."
-              else
-                age_days=$(( ( $(date +%s) - $(date -d "$newest" +%s) ) / 86400 ))
-                if [ "$age_days" -ge "$round_stale_days" ]; then
-                  round_note="**Workstation round looks DEAD:** the newest \`chore(shared)\` PR across drifted satellites is ${age_days} day(s) old (${newest}; threshold ${round_stale_days}). Check the daily cron / \`scripts/shared-sync-daily.sh\` on the workstation before anything else."
-                else
-                  round_note="Workstation round: newest \`chore(shared)\` PR across drifted satellites is ${age_days} day(s) old (${newest}); under the ${round_stale_days}-day threshold."
-                fi
-              fi
-            fi
-          fi
-
-          echo "$denom"
-          {
-            echo "### Shared-sync drift report"
-            echo
-            echo "\`$denom\`"
-            echo
-            echo "$body_extra"
-            echo
-            echo "$round_note"
-            echo
-            printf '%s\n' "$drift_detail"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-          if [ "${hard_fail:-1}" -eq 1 ]; then
-            run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-            title="shared-sync scheduled report: satellite drift or an unreadable repo detected"
-            if [ -n "$fixable_list" ]; then
-              remediate=$(printf '%s\n' \
-                "A sync round fixes the first list above. Remediate from a workstation with the estate cloned:" \
-                "" \
-                '```bash' \
-                "sh scripts/shared-sync.sh --now --estate ~/code" \
-                '```' \
-                "" \
-                "(or wait for the daily workstation round -- scripts/shared-sync-daily.sh -- if" \
-                "it is running; \`--check\` only reports, it never opens anything itself.)")
-            else
-              remediate="A sync round will NOT fix any of this drift -- do not run \`--now\`. Edit the listed repos by hand."
-            fi
-            body=$(printf '%s\n' \
-              "\`$denom\`" \
-              "" \
-              "$body_extra" \
-              "" \
-              "$round_note" \
-              "" \
-              "$drift_detail" \
-              "Run: ${run_url}" \
-              "" \
-              "$remediate" \
-              "" \
-              "This issue is not auto-closed on the next clean run, per AGENTS.md section 4 --" \
-              "confirm the satellites actually converged before closing it.")
-            existing=$(gh issue list --state open --limit 100 --json number,title \
-              --jq "map(select(.title == \"${title}\")) | .[0].number // empty")
-            if [ -n "$existing" ]; then
-              gh issue comment "$existing" --body "$body"
-            else
-              gh issue create --title "$title" --body "$body"
-            fi
-            exit 1
-          fi
-
-          exit 0
+      - name: Decide red/green and update the tracking issue
+        if: always()
+        env:
+          # Satellite PR reads need the cross-repo token; issue writes use the
+          # workflow's own token (issues: write).
+          GH_TOKEN: ${{ secrets.BIFFO_GITHUB_TOKEN }}
+          ISSUE_GH_TOKEN: ${{ github.token }}
+          ESTATE_OUTCOME: ${{ steps.estate.outcome }}
+          SYNC_OUTCOME: ${{ steps.sync.outcome }}
+          CHECK_RC: ${{ steps.sync.outputs.rc }}
+          CHECK_LOG: ${{ steps.sync.outputs.log }}
+          DELIVERY_OUTCOME: ${{ steps.deliver.outcome }}
+          CLONED: ${{ steps.estate.outputs.cloned }}
+          ESTATE: ${{ steps.estate.outputs.estate }}
+        run: |
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            bash scripts/shared-sync-report.sh

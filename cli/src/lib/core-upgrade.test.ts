@@ -474,7 +474,13 @@ describe('gitMergeFile (real git integration)', () => {
 })
 
 import { existsSync, readFileSync } from 'node:fs'
-import { applyUpgradePlan, parseGitHubRepo, upgradeBranchName } from './core-upgrade.js'
+import {
+  applyUpgradePlan,
+  parseGitHubRepo,
+  pendingSeeds,
+  seedMissingFiles,
+  upgradeBranchName,
+} from './core-upgrade.js'
 import type { UpgradePlan } from './core-upgrade.js'
 
 /**
@@ -1226,5 +1232,34 @@ describe('checkOrphanRatchet (#1026)', () => {
   it('fails when the count exceeds the baseline', () => {
     const r = checkOrphanRatchet(19, { count: 18 })
     expect(r).toEqual({ count: 19, baseline: 18, increased: true })
+  })
+})
+
+describe('seed mode (core-api.instance.tf)', () => {
+  const F = 'infra/environments/dev/core-api.instance.tf'
+  const setup = (instanceContent: string | null) => {
+    const theirs = makeTmpDir('seed-theirs')
+    const inst = makeTmpDir('seed-inst')
+    mkdirSync(join(theirs, 'infra/environments/dev'), { recursive: true })
+    writeFileSync(join(theirs, F), 'locals { core_api_instance_environment = {} }\n')
+    if (instanceContent !== null) {
+      mkdirSync(join(inst, 'infra/environments/dev'), { recursive: true })
+      writeFileSync(join(inst, F), instanceContent)
+    }
+    return { theirs, inst }
+  }
+
+  it('seeds an instance that has no core-api.instance.tf', () => {
+    const { theirs, inst } = setup(null)
+    expect(pendingSeeds(inst, theirs, [F])).toEqual([F])
+    expect(seedMissingFiles(inst, theirs, [F])).toEqual([F])
+    expect(readFileSync(join(inst, F), 'utf8')).toContain('core_api_instance_environment')
+    expect(pendingSeeds(inst, theirs, [F])).toEqual([])
+  })
+
+  it('never overwrites an existing file', () => {
+    const { theirs, inst } = setup('# mine\n')
+    expect(seedMissingFiles(inst, theirs, [F])).toEqual([])
+    expect(readFileSync(join(inst, F), 'utf8')).toBe('# mine\n')
   })
 })

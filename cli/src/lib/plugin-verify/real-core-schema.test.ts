@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process'
 import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -42,11 +43,20 @@ describe('real_core probes cover a Core-table-reading endpoint', () => {
   })
 })
 
-// Needs Docker/Postgres, uv and a Core checkout: opt in with BIFFO_REAL_PG_E2E=1 and BIFFO_CORE_ROOT.
-const coreRoot = process.env.BIFFO_CORE_ROOT
-const enabled = process.env.BIFFO_REAL_PG_E2E === '1' && !!coreRoot
+// Runs by default whenever Docker, psql and uv are available (the template checkout is Core).
+// Set BIFFO_REAL_PG_E2E=0 to opt out; BIFFO_CORE_ROOT overrides the Core checkout.
+const here0 = dirname(fileURLToPath(import.meta.url))
+const coreRoot = process.env.BIFFO_CORE_ROOT ?? resolve(here0, '../../../..')
+const have = (cmd: string, args: string[]) => spawnSync(cmd, args, { stdio: 'ignore' }).status === 0
+const enabled =
+  process.env.BIFFO_REAL_PG_E2E !== '0' &&
+  have('docker', ['info']) &&
+  have('psql', ['--version']) &&
+  have('uv', ['--version'])
+// pg-test-db.sh prints a SQLAlchemy DSN (postgresql+asyncpg://); psql needs a plain libpq URL.
+const toPsqlDsn = (d: string) => d.replace(/^postgresql\+\w+:/, 'postgresql:')
 
-describe.skipIf(!enabled)('real Postgres: Core schema plus plugin manifest schema', () => {
+describe.runIf(enabled)('real Postgres: Core schema plus plugin manifest schema', () => {
   it('has Core tables and the plugin table, with separate alembic version tables', () => {
     const runner = new RealCommandRunner()
     const pluginRoot = makeTmpDir('schema-plugin')
@@ -87,15 +97,18 @@ describe.skipIf(!enabled)('real Postgres: Core schema plus plugin manifest schem
     expect(boot.status).toBe(0)
 
     const q = (sql: string) =>
-      runner.run('psql', [dsn, '-tAc', sql], { cwd: pluginRoot, captureStdout: true }).stdout.trim()
+      runner
+        .run('psql', [toPsqlDsn(dsn), '-tAc', sql], { cwd: pluginRoot, captureStdout: true })
+        .stdout.trim()
     const exists = (t: string) => q(`select to_regclass('public.${t}') is not null`)
     expect(exists('users')).toBe('t')
     expect(exists('plugin_chat_agents')).toBe('t')
     expect(exists('widgets')).toBe('t')
     expect(exists('alembic_version')).toBe('t')
     expect(exists('alembic_version_plugin_manifest')).toBe('t')
-    expect(q('select version_num from alembic_version')).not.toBe(
-      q('select version_num from alembic_version_plugin_manifest'),
-    )
-  })
+    // Separate version tables, each holding exactly one head. (Revision ids may coincide:
+    // Core's chain gets the same generator-produced plugin revision at its head.)
+    expect(q('select count(*) from alembic_version')).toBe('1')
+    expect(q('select count(*) from alembic_version_plugin_manifest')).toBe('1')
+  }, 300_000)
 })

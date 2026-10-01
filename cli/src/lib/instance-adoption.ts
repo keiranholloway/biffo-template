@@ -152,7 +152,9 @@ export const REGISTERED_ADOPTION_PAIRS: AdoptionPair[] = [
     remedy:
       'Run `biffo core upgrade` to receive `core-api.core.tf` (or equivalent), then ' +
       'delete the `module "core_api" { ... }` block from infra/environments/dev/main.tf ' +
-      '(first move any instance-only arguments into `core_api_environment`), then run ' +
+      '(first move instance-only environment variables into `local.core_api_instance_environment` in ' +
+      'infra/environments/dev/core-api.instance.tf, and memory/SnapStart/timeout into terraform.tfvars as ' +
+      '`core_api_memory_size` / `core_api_enable_warm_capacity` / `core_api_timeout`), then run ' +
       '`terraform plan` and confirm module.core_api shows no changes to destroy/create.',
   },
 ]

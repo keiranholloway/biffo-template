@@ -54,12 +54,14 @@ run() {
   {
     if [ "$drift" = 1 ]; then printf 'sat-a                      \033[31mDRIFTED\033[0m scripts/x.sh\n'; fi
     if [ "$unread" = 1 ]; then printf 'sat-b                      \033[31mcannot fetch\033[0m - boom\n'; fi
+    if [ "$drift" = 2 ]; then printf 'package.json is missing an override for foo; a round will NOT fix this\n'; fi
     printf '\n3 of 4 repo(s) under /e judged applicable by applies()\n'
-    printf '%s current, %s drifted\n' "$((2 - drift))" "$drift"
+    printf '%s current, %s drifted\n' "$((2 - (drift == 1)))" "$((drift == 1))"
   } > "$d/check.log"
   [ "$age" = none ] || iso_ago "$age" > "$d/pr-created"
   printf '%s' "$issues" > "$d/issues.json"
   rc=0; [ "$drift" = 1 ] && rc=1
+  [ "$drift" = 2 ] && rc=1
   [ "$unread" = 1 ] && rc=1
   set +e
   STUBDIR="$d" PATH="$TMP/bin:$PATH" ESTATE_OUTCOME=success SYNC_OUTCOME="$sync_outcome" \
@@ -107,16 +109,20 @@ run c9 1 0 success 3600 "[{\"number\":5,\"state\":\"CLOSED\",\"title\":\"$TITLE\
 if [ "$RC" -eq 0 ] && calls_has 'issue reopen.* 5' && ! calls_has 'issue create'; then
   ok "9 legacy closed issue (title only) -> reopened"; else bad "9" "rc=$RC $(cat "$CALLS")"; fi
 
-# 10: per-repo MISSING / WORSENED lines reach the body
-run c10 1 0 success 3600 '[]'
-printf '    \033[31mMISSING     \033[0m sat-a                    missing: lodash axios\n    \033[31mWORSENED    \033[0m scripts/y.sh                                 3 variants across 4 repos (baseline 2)\n' >> "$TMP/c10/check.log"
+run c10 2 0 success none '[]'
+if [ "$RC" -eq 1 ] && calls_has 'issue create' && grep -q 'will NOT fix' "$CALLS"; then
+  ok "10 rc=1, no DRIFTED line, hand-edit text -> red, issue filed"; else bad "10" "rc=$RC $(cat "$OUT")"; fi
+
+# 11: per-repo MISSING / WORSENED lines reach the body
+run c11 1 0 success 3600 '[]'
+printf '    \033[31mMISSING     \033[0m sat-a                    missing: lodash axios\n    \033[31mWORSENED    \033[0m scripts/y.sh                                 3 variants across 4 repos (baseline 2)\n' >> "$TMP/c11/check.log"
 set +e
-STUBDIR="$TMP/c10" PATH="$TMP/bin:$PATH" ESTATE_OUTCOME=success SYNC_OUTCOME=success CHECK_RC=1 \
-  CHECK_LOG="$TMP/c10/check.log" DELIVERY_OUTCOME=success CLONED=4 ESTATE="$TMP/c10/estate" \
-  RUN_URL=http://run GITHUB_REPOSITORY=o/tmpl GH_TOKEN=x SUMMARY_FILE="$TMP/c10/summary" bash "$SCRIPT" > "$TMP/c10/out" 2>&1
+STUBDIR="$TMP/c11" PATH="$TMP/bin:$PATH" ESTATE_OUTCOME=success SYNC_OUTCOME=success CHECK_RC=1 \
+  CHECK_LOG="$TMP/c11/check.log" DELIVERY_OUTCOME=success CLONED=4 ESTATE="$TMP/c11/estate" \
+  RUN_URL=http://run GITHUB_REPOSITORY=o/tmpl GH_TOKEN=x SUMMARY_FILE="$TMP/c11/summary" bash "$SCRIPT" > "$TMP/c11/out" 2>&1
 set -e
-if grep -q 'MISSING .*sat-a .*missing: lodash axios' "$TMP/c10/calls" && grep -q 'WORSENED .*scripts/y.sh' "$TMP/c10/calls"; then
-  ok "10 MISSING/WORSENED per-repo lines (repo + keys) in the body"; else bad "10" "$(cat "$TMP/c10/calls")"; fi
+if grep -q 'MISSING .*sat-a .*missing: lodash axios' "$TMP/c11/calls" && grep -q 'WORSENED .*scripts/y.sh' "$TMP/c11/calls"; then
+  ok "11 MISSING/WORSENED per-repo lines (repo + keys) in the body"; else bad "11" "$(cat "$TMP/c11/calls")"; fi
 
 printf '%s passed, %s failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

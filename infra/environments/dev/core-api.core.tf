@@ -27,7 +27,11 @@
 # next `biffo core upgrade` is DELETE its own `module "core_api"` block from
 # infra/environments/dev/main.tf — otherwise Terraform fails with `Duplicate
 # module call`. Any instance-specific arguments in that block must be re-homed
-# (environment via `core_api_environment`) before deleting. `biffo core upgrade`
+# before deleting: environment variables go in `local.core_api_instance_environment`
+# (user-owned core-api.instance.tf, merged LAST so it wins); memory, SnapStart
+# and timeout go in terraform.tfvars as `core_api_memory_size`,
+# `core_api_enable_warm_capacity` and `core_api_timeout` (declared in
+# core-api-variables.core.tf; defaults match the template's prior behaviour). `biffo core upgrade`
 # reports this via the `core-api-module` pair in cli/src/lib/instance-adoption.ts.
 
 module "core_api" {
@@ -43,7 +47,9 @@ module "core_api" {
   # connection and is expected to comfortably finish well under this, but a
   # file expected to run longer than this is explicitly out of scope for v1
   # (split it or apply manually) rather than raised further.
-  timeout                   = 300
+  timeout                   = var.core_api_timeout
+  memory_size               = var.core_api_memory_size
+  enable_warm_capacity      = var.core_api_enable_warm_capacity
   enable_vpc_access         = true
   vpc_id                    = module.networking.vpc_id
   private_subnet_ids        = module.networking.private_subnet_ids
@@ -117,6 +123,6 @@ module "core_api" {
     # deploy-app.yml's packaging step copies db/imports/<name>/*.sql into the
     # Lambda zip under db/imports/, which AWS extracts to /var/task/ (ADR-0005).
     BIFFO_DDL_IMPORT_ROOT = "/var/task/db/imports"
-  })
+  }, local.core_api_instance_environment)
   tags = local.tags
 }

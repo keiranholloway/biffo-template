@@ -176,6 +176,13 @@ jobs:
         # invokes `uv run --no-sync`, i.e. it expects a synced .venv, not a
         # fresh one) and because biffo.plugin.json's own tables/permissions
         # are exactly what the harness conforms against.
+        # The manifest's ingress `required_group`s are `setting:` references
+        # (biffo-template#1517): verify fails closed unless the instance-
+        # supplied values exist, exactly as `biffo plugin install` does, so
+        # supply stand-ins here (placeholders — never a real instance's groups).
+        env:
+          BIFFO_PLUGIN_EXAMPLE_PLUGIN_FOUNDER_GROUP: founder
+          BIFFO_PLUGIN_EXAMPLE_PLUGIN_ADMIN_GROUP: admin
         run: sh scripts/biffo.sh plugin verify
       - uses: codecov/codecov-action@v5
         if: always()

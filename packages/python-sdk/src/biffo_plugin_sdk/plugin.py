@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import re
+import warnings
 from abc import ABC, abstractmethod
 from collections import Counter
 from collections.abc import Callable
@@ -447,6 +448,27 @@ def _require_group(value: str) -> str:
     return value
 
 
+#: Prefix marking an ingress/frontend ``required_group`` as a REFERENCE to a
+#: ``config`` declaration of ``kind: "setting"`` on the same manifest (e.g.
+#: ``"setting:founder_group"``) rather than a literal Cognito group name. An
+#: explicit marker, not a bare name, because a bare string cannot tell a
+#: reference to a missing entry (which must be rejected) from a legacy literal
+#: group (which must keep validating).
+SETTING_REF_PREFIX = "setting:"
+
+
+class LegacyRequiredGroupWarning(DeprecationWarning):
+    """A manifest ingress/frontend ``required_group`` is a literal Cognito group
+    name rather than a ``setting:<name>`` reference (biffo-template#1517)."""
+
+
+def parse_setting_ref(value: str) -> str | None:
+    """The config name ``value`` references, or ``None`` if it is a literal group."""
+    if value.startswith(SETTING_REF_PREFIX):
+        return value[len(SETTING_REF_PREFIX) :].strip()
+    return None
+
+
 class UserIngress(BaseModel):
     """The plugin's authenticated, group-gated API ingress (ADR-0021).
 
@@ -470,11 +492,10 @@ class UserIngress(BaseModel):
     setting ``BIFFO_PLUGIN_<PLUGIN>_USER_INGRESS_REQUIRED_GROUP`` in the shared
     plugin host's environment (biffo-template#1517 Option B); see
     ``plugin_host.discover._resolve_required_group``, which is where the
-    override is actually read. Deliberately an *override*, not a required
-    reference into this manifest's own ``config:`` list the way
-    ``ChatAgentDeclaration.required_group`` is — every already-shipped plugin
-    manifest bakes in a literal group name here, and requiring a matching
-    ``config`` declaration would break all of them at once.
+    override is actually read. A literal group is **deprecated**: prefer
+    ``"setting:<name>"``, naming a ``kind: "setting"`` ``config`` entry of this
+    manifest (checked by ``PluginManifest``; a literal still validates but
+    emits ``LegacyRequiredGroupWarning``).
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -807,6 +828,55 @@ class PluginManifest(BaseModel):
                     f"Cognito group name is no longer accepted here "
                     f"(biffo-template#1517). Declared setting config names: "
                     f"{sorted(settings) or 'none'}."
+                )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_required_group_references(self) -> PluginManifest:
+        """``user_ingress`` / ``admin_ingress`` / ``user_frontend`` may name a
+        ``kind: "setting"`` ``config`` entry as ``required_group:
+        "setting:<name>"`` (biffo-template#1517), the way
+        ``ChatAgentDeclaration.required_group`` does.
+
+        * a reference to a missing entry, or to a ``secret``, is rejected;
+        * a legacy literal group still validates but emits a
+          ``LegacyRequiredGroupWarning`` (deprecated).
+
+        Reached from every ``PluginManifest`` construction: the host's
+        ``discover`` and ``load_manifest`` (hence ``biffo plugin verify``).
+        """
+        kinds = {c.name: c.kind for c in self.config}
+        setting_names = sorted(n for n, k in kinds.items() if k == "setting") or "none"
+        surfaces = (
+            ("user_ingress", self.user_ingress),
+            ("admin_ingress", self.admin_ingress),
+            ("user_frontend", self.user_frontend),
+        )
+        for label, surface in surfaces:
+            if surface is None:
+                continue
+            ref = parse_setting_ref(surface.required_group)
+            if ref is None:
+                warnings.warn(
+                    f"{label}.required_group {surface.required_group!r} is a literal Cognito "
+                    f"group name, which is deprecated: declare a `config` entry of kind "
+                    f'"setting" and reference it as "{SETTING_REF_PREFIX}<name>" '
+                    f"(biffo-template#1517).",
+                    LegacyRequiredGroupWarning,
+                    stacklevel=2,
+                )
+                continue
+            if ref not in kinds:
+                raise ValueError(
+                    f"{label}.required_group {surface.required_group!r} references config "
+                    f"entry {ref!r}, which this manifest does not declare. Declared setting "
+                    f"config names: {setting_names}."
+                )
+            if kinds[ref] != "setting":
+                raise ValueError(
+                    f"{label}.required_group {surface.required_group!r} references config "
+                    f'entry {ref!r} of kind {kinds[ref]!r}; it must be kind: "setting" '
+                    "(a Cognito group name is not a secret)."
                 )
         return self
 

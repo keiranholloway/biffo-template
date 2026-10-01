@@ -1177,3 +1177,49 @@ class TestBiffoPluginBaseEndToEnd:
         assert plugin.uninstall_called is True
         assert isinstance(plugin.api, BiffoAPIClient)
         assert plugin.events.has_subscription("user.created")
+
+
+class TestIngressRequiredGroupSettingReference:
+    """biffo-template#1517: `user_ingress`/`admin_ingress`/`user_frontend`
+    `required_group` may be `setting:<name>`, naming a `kind: setting` config
+    entry; a literal still validates but warns (deprecated)."""
+
+    def _manifest(self, group: str, config: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+        data: dict[str, Any] = {
+            "name": "ideation",
+            "version": "1.0.0",
+            "user_ingress": {"app": "ideation.app:app", "required_group": group},
+            "admin_ingress": {"app": "ideation.admin:app", "required_group": group},
+            "user_frontend": {"dir": "web/dist", "required_group": group},
+        }
+        if config is not None:
+            data["config"] = config
+        return data
+
+    _SETTING = {"name": "founder_group", "kind": "setting", "description": "Founder group."}
+
+    def test_valid_reference_validates_without_warning(self):
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            manifest = PluginManifest.model_validate(
+                self._manifest("setting:founder_group", [self._SETTING])
+            )
+        assert manifest.user_ingress.required_group == "setting:founder_group"
+
+    def test_reference_to_missing_entry_rejected(self):
+        with pytest.raises(ValidationError, match="does not declare"):
+            PluginManifest.model_validate(self._manifest("setting:founder_group", []))
+
+    def test_reference_to_non_setting_entry_rejected(self):
+        secret = {**self._SETTING, "kind": "secret"}
+        with pytest.raises(ValidationError, match='must be kind: "setting"'):
+            PluginManifest.model_validate(self._manifest("setting:founder_group", [secret]))
+
+    def test_legacy_literal_accepted_with_deprecation_warning(self):
+        from biffo_plugin_sdk import LegacyRequiredGroupWarning
+
+        with pytest.warns(LegacyRequiredGroupWarning, match="deprecated"):
+            manifest = PluginManifest.model_validate(self._manifest("founder"))
+        assert manifest.user_ingress.required_group == "founder"

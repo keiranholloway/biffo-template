@@ -107,6 +107,14 @@ else
   # ---- drift detail: what a round fixes vs what needs a hand edit ----
   fixable=$(grep -E '^[^[:space:]]+ +DRIFTED' "$clean" || true)
   handedit=$(grep -iE 'will NOT fix|by hand|reconcile the copies|no caller anywhere|UNWIRED' "$clean" || true)
+  # Per-repo / per-entry findings the generic text above does not name:
+  # overridesFloor `MISSING <repo> missing: <keys>` and the mustBeUniform /
+  # keyMustBeUniform `WORSENED <path|key> ...` lines.
+  perrepo=$(grep -E '^[[:space:]]+(MISSING|WORSENED)[[:space:]]' "$clean" || true)
+  if [ -n "$perrepo" ]; then
+    if [ -n "$handedit" ]; then handedit="${handedit}
+${perrepo}"; else handedit="$perrepo"; fi
+  fi
   [ -n "$fixable" ] && detail="${detail}**A delivery round fixes these (sync PRs):**
 
 \`\`\`

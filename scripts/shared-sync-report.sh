@@ -106,7 +106,7 @@ else
 
   # ---- drift detail: what a round fixes vs what needs a hand edit ----
   fixable=$(grep -E '^[^[:space:]]+ +DRIFTED' "$clean" || true)
-  handedit=$(grep -iE 'will NOT fix|by hand|reconcile the copies|no caller anywhere|UNWIRED' "$clean" || true)
+  handedit=$(grep -iE 'will NOT fix|by hand|reconcile the copies|no caller anywhere|UNWIRED|^ *WORSENED' "$clean" || true)
   [ -n "$fixable" ] && detail="${detail}**A delivery round fixes these (sync PRs):**
 
 \`\`\`
@@ -121,6 +121,12 @@ ${handedit}
 \`\`\`
 
 "
+
+  # --check exits 1 for problems with no DRIFTED line (missing overrides,
+  # unwired guards, mustBeUniform): a round cannot fix them, so never green.
+  if [ "$rc" = "1" ] && [ "$drifted_n" -eq 0 ]; then
+    add_reason "--check exited 1 with no drifted satellite: needs a hand edit (a round will not fix it); see the hand-edit list"
+  fi
 
   # ---- delivery ----
   if [ "$drifted_n" -gt 0 ]; then

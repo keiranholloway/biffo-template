@@ -137,6 +137,10 @@ env:
 jobs:
   report:
     name: Deliver shared-file sync and report drift across the estate
+    # `.github/` is template-owned, so every instance (biffo-platform,
+    # tabsii-platform) inherits this file. An instance cannot fix satellite
+    # drift, and each one filed its own copy of the report. Only the template
+    # reports.
     if: github.repository == 'keiranholloway/biffo-template'
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     timeout-minutes: 30

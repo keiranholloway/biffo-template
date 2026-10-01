@@ -279,6 +279,17 @@ describe('composeStack', () => {
 
 const CLONE_DSN = 'postgresql+asyncpg://u:p@localhost:5/biffo_test_abcd1234_r0f1e2d3c'
 
+describe('composeStack — manifest-schema env reaches Postgres provisioning', () => {
+  it('passes schemaEnv to pg-test-db.sh for a plugin with no native schema', async () => {
+    const h = harness()
+    const schemaEnv = { BIFFO_REPO_ROOT: h.pluginRoot, BIFFO_PG_ALEMBIC_DIR: '/tmp/alembic-x' }
+    const stack = await composeStack(opts(h, { schemaEnv }), h.deps)
+    const pg = h.runnerCalls.find((c) => c.cmd.endsWith('pg-test-db.sh'))!
+    expect(pg.env).toEqual(schemaEnv)
+    await stack.close()
+  })
+})
+
 describe('composeStack — Core is healthy before the host starts (#1525 finding 1)', () => {
   it('does not spawn the host until Core has answered its health URL', async () => {
     const h = harness()

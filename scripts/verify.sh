@@ -1527,6 +1527,10 @@ fi
 [ -f scripts/rerun-on-runner-loss.test.sh ] &&
   run_check rerun-on-runner-loss sh scripts/rerun-on-runner-loss.test.sh
 
+# #2166: red/green + issue routing for shared-sync-report.yml (0.7s).
+[ -f scripts/shared-sync-report.test.sh ] &&
+  run_check shared-sync-report bash scripts/shared-sync-report.test.sh
+
 # Same shape again (#2081): stubs `gh` on PATH, and lets the real `jq`
 # binary run the script's own filter against a raw fixture rather than a
 # hand-curated final answer. A `schedule` workflow only ever runs the

@@ -56,6 +56,12 @@ export interface ComposeOptions {
    * still blocked in `composeStack` and has no `close()` to call yet.
    */
   signal?: AbortSignal
+  /**
+   * Env for `pg-test-db.sh` that points it at a schema built from the manifest's `tables`
+   * (`plugin-verify/manifest-schema.ts`), for a plugin with no native schema. Built once by
+   * the caller and shared with every other Postgres provisioning path.
+   */
+  schemaEnv?: Record<string, string>
 }
 
 export interface ComposeDeps {
@@ -172,7 +178,7 @@ export async function composeStack(
 
   const script = deps.findScript(PG_TEST_DB_SCRIPT)
   if (!script) throw new Error(packagedScriptMissing(PG_TEST_DB_SCRIPT))
-  const raised = raisePostgres(deps.runner, script, options.pluginRoot)
+  const raised = raisePostgres(deps.runner, script, options.pluginRoot, options.schemaEnv)
   if (!raised.dsn) {
     throw new Error(`could not provision Postgres (${PG_TEST_DB_SCRIPT} exited ${raised.status})`)
   }

@@ -24,6 +24,8 @@ from ..migrations.plugin_migrations import parse_plugin_tables_from_manifest
 from ..plugins import discover_plugin_manifests
 from .crud_handlers import user_columns_from_model
 from .owner_data_handlers import (
+    make_admin_list_handler,
+    make_admin_read_handler,
     make_owner_create_handler,
     make_owner_list_handler,
     make_owner_read_handler,
@@ -112,5 +114,24 @@ def build_owner_data_router(manifests: Sequence[dict[str, Any]] | None = None) -
                 summary=f"update {table_def.name} (owner-scoped)",
             )
             router.include_router(table_router)
+
+            # Admin exception (ADR-0017 §5): read-only, cross-owner, doubly gated.
+            admin_router = APIRouter(
+                prefix=f"/internal/owner-data-admin/{table_def.name}",
+                tags=[f"internal:owner-data-admin:{table_def.name}"],
+            )
+            admin_router.add_api_route(
+                "",
+                make_admin_list_handler(model, allowed),
+                methods=["GET"],
+                summary=f"list {table_def.name} across owners (admin)",
+            )
+            admin_router.add_api_route(
+                "/{id}",
+                make_admin_read_handler(model, allowed),
+                methods=["GET"],
+                summary=f"read {table_def.name} across owners (admin)",
+            )
+            router.include_router(admin_router)
 
     return router

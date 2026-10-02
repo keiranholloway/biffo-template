@@ -153,6 +153,21 @@ fencing, and the LLM invoke.** No plugin Python ever executes in the Core Lambda
   **mandatory `owner_sub` scope** Core enforces on every call. The data stays in
   Core, closed to tenants at large, served only to the module acting for its owner.
 
+- **Admin exception: cross-owner read of a plugin's own owner-scoped tables.** A
+  plugin's admin surface (e.g. Ideation's view of every user's Brain-Storm
+  sessions) needs to see all owners' rows, which the owner routes forbid by
+  design. Core therefore also mounts a **read-only** (list + read, no writes)
+  path at `/api/v1/internal/owner-data-admin/<table>`, which requires **both**
+  gates: (1) the service-principal gate the owner routes use — the table must
+  name the calling plugin, so a plugin can never read another plugin's tables
+  (otherwise 404); and (2) a forwarded, re-verified user in the `admin` group
+  (a non-admin gets 403; a service call with no forwarded user is refused).
+  Tenant scoping (ADR-0001) and tombstone exclusion still apply unconditionally;
+  rows include the owner column; list supports `limit`/`offset`, the same
+  equality filters as the owner list, and filtering by owner (`?<owner_column>=`).
+  The owner routes are unchanged. The SDK exposes it as
+  `PrincipalCoreClient.admin_list_owner_data` / `admin_read_owner_data`.
+
 ## Options Considered
 
 ### Orchestration placement

@@ -891,7 +891,13 @@ fi
 # lane growing 310 -> 946 tests in four days outruns any constant. The other
 # half is below -- the lane now runs CONCURRENTLY where it safely can, which is
 # what actually bends the curve.
-PG_TEST_BUDGET_SECONDS="${BIFFO_VERIFY_PG_BUDGET:-240}"
+#
+# Raised again to 480s: the lane timed out at the 240s budget with 215 modules
+# and no failing tests in the partial output, blocking the pre-push gate
+# (tabsii-com/tabsii-platform#1464). Same doubling as above; this was not
+# re-measured against a live Postgres, so re-measure and tighten this comment
+# when the lane next runs to completion.
+PG_TEST_BUDGET_SECONDS="${BIFFO_VERIFY_PG_BUDGET:-480}"
 PG_TEST_DSN="${BIFFO_TEST_PG_DSN:-${TABSII_TEST_PG_DSN:-}}"
 
 # `.claude/worktrees` is excluded alongside `.worktrees`, and finding out why

@@ -240,6 +240,33 @@ class PrincipalCoreClient(SignedCoreClient):
         merged[FORWARDED_USER_HEADER] = self._user_token
         return super()._sign(method, url, body, merged)
 
+    # -- admin cross-owner read of a plugin's own owner-scoped tables ---------
+    # (ADR-0017 §5 admin exception). Core requires the table to name the calling
+    # plugin AND the forwarded user to be in the `admin` group; otherwise 404 /
+    # 403 surface as ``BiffoAPIError``. Read-only by design: no write verbs.
+
+    async def admin_list_owner_data(
+        self,
+        table: str,
+        *,
+        limit: int | None = None,
+        offset: int | None = None,
+        **filters: Any,
+    ) -> Any:
+        """List every owner's rows in ``table`` (tenant-scoped). ``filters`` are
+        equality filters, including the table's owner column to narrow to one
+        owner. Each row carries its owner column."""
+        params: dict[str, Any] = dict(filters)
+        if limit is not None:
+            params["limit"] = limit
+        if offset is not None:
+            params["offset"] = offset
+        return await self.get(f"/api/v1/internal/owner-data-admin/{table}", params=params or None)
+
+    async def admin_read_owner_data(self, table: str, row_id: str) -> Any:
+        """Read one row of ``table`` regardless of owner (tenant-scoped)."""
+        return await self.get(f"/api/v1/internal/owner-data-admin/{table}/{row_id}")
+
 
 _AUTH_MODE_ENV = "BIFFO_CORE_AUTH_MODE"
 

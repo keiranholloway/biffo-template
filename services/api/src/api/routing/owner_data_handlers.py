@@ -39,9 +39,18 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
+from ..dependencies import ADMIN_GROUP
 from ..middleware.auth import AuthenticatedUser
 from ..middleware.principal import Principal, require_signed_principal
-from .crud_handlers import apply_list_filters, filterable_columns, serialize, visible_rows
+from .crud_handlers import (
+    DEFAULT_LIST_LIMIT,
+    RESERVED_PAGINATION_PARAMS,
+    _validate_pagination,
+    apply_list_filters,
+    filterable_columns,
+    serialize,
+    visible_rows,
+)
 
 Handler = Callable[..., Awaitable[Any]]
 
@@ -208,6 +217,83 @@ def make_owner_update_handler(
                 detail=f"Could not update {model.__tablename__} row: {exc.orig}",
             ) from exc
         await db.refresh(row)
+        return serialize(row)
+
+    return handler
+
+
+# ── admin cross-owner read (ADR-0017 §5 admin exception) ────────────────────────
+#
+# The one deliberate exception to "a caller can never reach another owner's
+# rows": a plugin's admin surface may LIST and READ every owner's rows in that
+# plugin's own owner-scoped tables. Read-only (no write verbs are mounted) and
+# gated twice, both mandatory:
+#   1. the service-principal gate (``_authorize``) — the table must name the
+#      calling plugin, so a plugin can never read another plugin's tables (404);
+#   2. a forwarded, re-verified user in the ``admin`` group (403 otherwise). A
+#      service call with no forwarded user never gets this far:
+#      ``require_signed_principal`` refuses it.
+# Tenant scoping (ADR-0001) and tombstone exclusion apply unconditionally.
+
+
+def _require_admin(caller: Principal) -> AuthenticatedUser:
+    founder = caller.user
+    if ADMIN_GROUP not in founder.roles:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Administrator access required"
+        )
+    return founder
+
+
+def _tenant_rows(model: type[Any], tenant_id: Any):
+    return visible_rows(model, select(model).where(model.tenant_id == tenant_id))
+
+
+def make_admin_list_handler(model: type[Any], allowed: frozenset[str]) -> Handler:
+    """List every owner's rows on this tenant. Same equality filters as the owner
+    list *plus* the owner column (filter by owner), and ``limit``/``offset``
+    paging with the generic list's defaults and bounds. Rows include the owner
+    column."""
+    filterable = filterable_columns(model)
+
+    async def handler(
+        request: Request,
+        caller: Principal = Depends(require_signed_principal),
+        db: AsyncSession = Depends(get_db),
+        limit: int = DEFAULT_LIST_LIMIT,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        _authorize(caller, allowed)
+        founder = _require_admin(caller)
+        _validate_pagination(limit, offset)
+        params = [
+            (name, value)
+            for name, value in request.query_params.multi_items()
+            if name not in RESERVED_PAGINATION_PARAMS
+        ]
+        stmt = apply_list_filters(
+            model, _tenant_rows(model, founder.tenant_id), params, filterable=filterable
+        )
+        stmt = stmt.order_by(model.created_at.desc(), model.id.desc()).limit(limit).offset(offset)
+        rows = (await db.execute(stmt)).scalars().all()
+        return [serialize(row) for row in rows]
+
+    return handler
+
+
+def make_admin_read_handler(model: type[Any], allowed: frozenset[str]) -> Handler:
+    async def handler(
+        id: str,
+        caller: Principal = Depends(require_signed_principal),
+        db: AsyncSession = Depends(get_db),
+    ) -> dict[str, Any]:
+        _authorize(caller, allowed)
+        founder = _require_admin(caller)
+        row = (
+            await db.execute(_tenant_rows(model, founder.tenant_id).where(model.id == id))
+        ).scalar_one_or_none()
+        if row is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
         return serialize(row)
 
     return handler

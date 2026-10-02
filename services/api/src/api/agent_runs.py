@@ -316,6 +316,51 @@ async def aggregate_run_costs(
     return list(groups.values())
 
 
+async def list_runs_by_ids(
+    db: AsyncSession,
+    *,
+    tenant_id: str,
+    run_ids: list[str],
+) -> list[AgentRun]:
+    """The runs with the given ids, tenant-scoped (ADR-0001), oldest first.
+
+    Ids that do not exist, or belong to another tenant, are silently absent.
+    """
+    if not run_ids:
+        return []
+    stmt = (
+        select(AgentRun)
+        .options(
+            load_only(
+                AgentRun.definition_snapshot,
+                AgentRun.agent_name,
+                AgentRun.status,
+                AgentRun.thread_id,
+                AgentRun.input_tokens,
+                AgentRun.output_tokens,
+                AgentRun.cost_usd,
+                AgentRun.created_at,
+            )
+        )
+        .where(AgentRun.tenant_id == tenant_id, AgentRun.id.in_(run_ids))
+        .order_by(AgentRun.created_at.asc(), AgentRun.id.asc())
+    )
+    return list((await db.scalars(stmt)).all())
+
+
+def total_run_costs(runs: list[AgentRun]) -> dict[str, float | int]:
+    """Total cost over ``runs`` with ``aggregate_run_costs`` semantics: runs with
+    NULL ``cost_usd`` are counted in ``unpriced_runs`` and excluded from
+    ``total_cost_usd``, never summed as zero."""
+    return {
+        "runs": len(runs),
+        "total_cost_usd": sum(r.cost_usd for r in runs if r.cost_usd is not None),
+        "total_input_tokens": sum(r.input_tokens or 0 for r in runs),
+        "total_output_tokens": sum(r.output_tokens or 0 for r in runs),
+        "unpriced_runs": sum(1 for r in runs if r.cost_usd is None),
+    }
+
+
 async def list_runs(
     db: AsyncSession,
     *,

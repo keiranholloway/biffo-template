@@ -42,7 +42,7 @@
     "services/api/src/api/routers/admin/users.py:362:except:except CognitoAdminError",
     "services/api/src/api/routers/admin/users.py:380:except:except CognitoAdminError",
     "services/api/src/api/routers/admin/users.py:401:except:except CognitoAdminError",
-    "services/api/src/api/routers/internal_agents.py:192:except:except PromptPartsError",
+    "services/api/src/api/routers/internal_agents.py:197:except:except PromptPartsError",
     "services/api/src/api/routing/owner_data_handlers.py:206:except:except IntegrityError",
     "services/api/src/api/routing/owner_data_handlers.py:87:except:except IntegrityError",
     "services/api/src/api/routing/owner_data_router.py:59:except:except (ValueError, TypeError)",

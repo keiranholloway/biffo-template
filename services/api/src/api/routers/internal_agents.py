@@ -52,9 +52,11 @@ from ..agent_runs import (
     create_run,
     get_run,
     list_runs,
+    list_runs_by_ids,
     list_thread_runs,
     reap_stale_runs,
     run_reference_payload,
+    total_run_costs,
 )
 from ..chat_agents import get_dynamic_chat_agent
 from ..config import settings
@@ -70,6 +72,9 @@ from ..schemas.agent_run import (
     AgentRunSummary,
     CompleteAgentRunRequest,
     CreateAgentRunRequest,
+    RunUsage,
+    RunUsageRequest,
+    RunUsageResponse,
     ThreadMessagesResponse,
 )
 from ..writeback_targets import apply_writeback_output_tool
@@ -303,6 +308,59 @@ async def read_thread_messages(
         if isinstance(message, dict) and message.get("role") in _CONVERSATION_ROLES
     ]
     return ThreadMessagesResponse(thread_id=thread_id, messages=messages)
+
+
+def _usage_response(runs: list[AgentRun], thread_id: str | None) -> RunUsageResponse:
+    rows = []
+    for run in runs:
+        model = run.definition_snapshot.get("model") if run.definition_snapshot else None
+        rows.append(
+            RunUsage(
+                id=run.id,
+                agent_name=run.agent_name,
+                model=model if isinstance(model, str) else None,
+                status=run.status,
+                input_tokens=run.input_tokens,
+                output_tokens=run.output_tokens,
+                cost_usd=run.cost_usd,
+            )
+        )
+    totals = total_run_costs(runs)
+    return RunUsageResponse(
+        thread_id=thread_id,
+        runs=rows,
+        total_cost_usd=float(totals["total_cost_usd"]),
+        total_input_tokens=int(totals["total_input_tokens"]),
+        total_output_tokens=int(totals["total_output_tokens"]),
+        unpriced_runs=int(totals["unpriced_runs"]),
+    )
+
+
+@router.get("/threads/{thread_id}/usage", response_model=RunUsageResponse)
+async def read_thread_usage(
+    thread_id: str,
+    principal: ServicePrincipal = Depends(require_service_principal),
+    db: AsyncSession = Depends(get_db),
+) -> RunUsageResponse:
+    """Model and cost usage of every run on ``thread_id``, tenant-scoped, with a
+    total that counts unpriced runs rather than summing them as zero. An unknown
+    thread is an empty result, not a 404 (as for the messages route)."""
+    runs = await list_thread_runs(
+        db, tenant_id=principal.tenant_id, thread_id=thread_id, limit=1000
+    )
+    return _usage_response(runs, thread_id)
+
+
+@router.post("/usage", response_model=RunUsageResponse)
+async def read_runs_usage(
+    body: RunUsageRequest,
+    principal: ServicePrincipal = Depends(require_service_principal),
+    db: AsyncSession = Depends(get_db),
+) -> RunUsageResponse:
+    """Model and cost usage for an explicit list of run ids in one call,
+    tenant-scoped. Unknown or other-tenant ids are simply absent from the result."""
+    runs = await list_runs_by_ids(db, tenant_id=principal.tenant_id, run_ids=body.run_ids)
+    return _usage_response(runs, None)
 
 
 @router.get("/{run_id}", response_model=AgentRunResponse)

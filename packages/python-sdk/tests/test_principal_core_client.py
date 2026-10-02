@@ -184,3 +184,28 @@ async def test_without_the_fix_the_header_would_be_unsigned():
 
     assert headers[FORWARDED_USER_HEADER] == "founder-jwt"  # present...
     assert "x-biffo-user-token" not in headers["Authorization"].lower()  # ...but not signed
+
+
+async def test_admin_owner_data_reads_hit_the_admin_path_signed_with_the_user_token():
+    """The admin cross-owner read (ADR-0017 §5 exception) goes through the
+    dual-auth client, so the forwarded admin token is inside the signature."""
+    seen: list[httpx.Request] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json=[{"owner_sub": "alice"}])
+
+    client = _client(handle, user_token="admin-jwt")
+    rows = await client.admin_list_owner_data(
+        "ideation_sessions", limit=10, offset=5, owner_sub="alice"
+    )
+    await client.admin_read_owner_data("ideation_sessions", "abc")
+
+    assert rows == [{"owner_sub": "alice"}]
+    assert seen[0].method == "GET"
+    assert seen[0].url.path == "/api/v1/internal/owner-data-admin/ideation_sessions"
+    assert dict(seen[0].url.params) == {"limit": "10", "offset": "5", "owner_sub": "alice"}
+    assert seen[1].url.path == "/api/v1/internal/owner-data-admin/ideation_sessions/abc"
+    for req in seen:
+        assert req.headers[FORWARDED_USER_HEADER] == "admin-jwt"
+        assert "x-biffo-user-token" in req.headers["Authorization"].lower()

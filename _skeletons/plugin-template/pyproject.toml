@@ -94,10 +94,20 @@ line-length = 100
 # place: ANN401 rejects the `Any` in a Pydantic mode="before" validator, which
 # is the one signature where `Any` is genuinely correct.
 [tool.ruff.lint]
-select = ["E", "F", "I", "N", "W", "B", "S", "UP"]
+select = ["E", "F", "I", "N", "W", "B", "S", "UP", "TID251"]
 ignore = [
   "S101", # allow assert in tests
 ]
+
+# `src.<pkg>` imports resolve in this repo only if something puts the repo root on
+# sys.path, then fail with ModuleNotFoundError once the plugin is vendored to
+# services/<name>/ (services/api's own `src` package claims the name first, so
+# the failure only shows when an API test runs earlier in the same session).
+# Import by the package name (`from <pkg>.<mod> import x`) instead. TID251 matches
+# the module and every submodule beneath it, so `from src.<pkg>.<mod> import x`
+# is rejected too. Enforced by `ruff check .` in ci.yml and in pre-push `verify`.
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"src".msg = "Import by package name (`from <pkg>.<mod> import x`), not through `src.`: it fails once the plugin is vendored into an instance."
 
 # FastAPI's dependency-injection defaults are the framework's idiomatic
 # call-in-default pattern, not the B008 mutable-default bug. Without this a

@@ -185,7 +185,9 @@ def test_every_service_borne_route_resolves_its_caller_through_require_principal
     dependency, they use the unified one — so ``is_active``, platform-admin sync
     and permission resolution are reached by construction, not by remembering."""
     routes = _service_borne_routes()
-    assert len(routes) == 5, f"expected the chat route and four owner-data routes, got {routes}"
+    assert len(routes) == 7, (
+        f"expected the chat route, four owner-data routes and two admin read routes, got {routes}"
+    )
 
     missing = sorted(route.path for route, names in routes if UNIFIED not in names)
     assert missing == [], f"routes not resolving their caller via {UNIFIED}: {missing}"

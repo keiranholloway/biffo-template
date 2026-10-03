@@ -129,6 +129,12 @@ cat > "$STUB_DIR/output-vuln-a-b.json" <<'JSON'
 {"metadata":{"vulnerabilities":{"critical":0,"high":2,"moderate":0,"low":0},"totalDependencies":5},"advisories":{"1":{"severity":"high","github_advisory_id":"GHSA-test-0001","module_name":"vuln-pkg-a","findings":[{"version":"1.2.3","paths":[]}]},"2":{"severity":"high","github_advisory_id":"GHSA-test-0002","module_name":"vuln-pkg-b","findings":[{"version":"2.0.0","paths":[]}]}}}
 JSON
 
+# pnpm `auditConfig.ignoreGhsas` shape: advisories emptied, metadata still
+# counting the ignored high advisory.
+cat > "$STUB_DIR/output-ignored.json" <<'JSON'
+{"metadata":{"vulnerabilities":{"critical":0,"high":1,"moderate":0,"low":0},"totalDependencies":5},"advisories":{}}
+JSON
+
 # --- repo scaffolding --------------------------------------------------------
 # One workspace-level pnpm-lock.yaml so discovery finds exactly one tree,
 # matching the real incident (the workspace root, not a vendored tree).
@@ -293,6 +299,13 @@ _assert_output_contains "mixed tree -- pre-existing vuln-pkg-b says so" "pre-exi
 _init_repo "clean" "clean"
 _run dev
 _assert_exit "clean run unaffected" 0
+
+# 8. pnpm ignoreGhsas: metadata still counts the ignored advisory but
+#    .advisories is empty -- must not block.
+_init_repo "ignored" "ignored"
+_run dev
+_assert_exit "ignoreGhsas-suppressed advisory does not block" 0
+_assert_output_contains "ignored case reports 0 high" "0 critical, 0 high"
 
 echo
 if [ "$FAILURES" -eq 0 ]; then

@@ -258,10 +258,16 @@ audit_dir() {
     fi
 
     if printf '%s' "$out" | jq -e '.metadata.vulnerabilities' >/dev/null 2>&1; then
-      high="$(printf '%s' "$out" | jq '.metadata.vulnerabilities.high // 0')"
-      crit="$(printf '%s' "$out" | jq '.metadata.vulnerabilities.critical // 0')"
-      mod="$(printf '%s' "$out" | jq '.metadata.vulnerabilities.moderate // 0')"
-      low="$(printf '%s' "$out" | jq '.metadata.vulnerabilities.low // 0')"
+      # Tally from the advisories that REMAIN in the output when present:
+      # pnpm applies `auditConfig.ignoreGhsas` to `.advisories` but leaves
+      # `.metadata.vulnerabilities` counting the ignored ones, so trusting the
+      # metadata reports suppressed (unfixable) advisories as blocking.
+      # Fall back to the metadata when no advisories object is emitted.
+      _cnt() { printf '%s' "$out" | jq --arg s "$1" 'if (.advisories|type)=="object" then [.advisories[]|select(.severity==$s)]|length else (.metadata.vulnerabilities[$s] // 0) end'; }
+      high="$(_cnt high)"
+      crit="$(_cnt critical)"
+      mod="$(_cnt moderate)"
+      low="$(_cnt low)"
       total="$(printf '%s' "$out" | jq '.metadata.totalDependencies // 0')"
       if [ "$((high + crit))" -gt 0 ]; then
         # Classify each qualifying (high/critical) advisory against the base

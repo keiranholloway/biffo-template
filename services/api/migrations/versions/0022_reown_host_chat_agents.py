@@ -148,7 +148,10 @@ def upgrade() -> None:
             {"tid": target_id, "offset": offset, "sid": row["id"]},
         )
         conn.execute(
-            sa.text("UPDATE agent_runs SET prompt_version_id = :tid WHERE prompt_version_id = :sid"),
+            sa.text(
+                "UPDATE agent_runs SET prompt_version_id = :tid "
+                "WHERE prompt_version_id = :sid"
+            ),
             {"tid": target_id, "sid": row["id"]},
         )
         conn.execute(

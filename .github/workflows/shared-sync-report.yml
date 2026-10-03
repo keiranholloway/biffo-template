@@ -196,18 +196,21 @@ jobs:
           fi
           echo "checkout is at origin/dev tip: $(git rev-parse --short HEAD)"
 
+      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v5
         with:
           node-version: ${{ env.NODE_VERSION }}
-          # shared-sync.sh parses shared-files.json with `node -e` (six call
-          # sites), so this job needs node -- but it never runs pnpm and has no
-          # dependencies to cache. setup-node's package-manager-cache defaults
-          # to true, which makes it shell out to pnpm to build a cache key and
-          # fail the step with "Unable to locate executable file: pnpm". ci.yml
-          # gets away with the default only because it runs pnpm/action-setup
-          # first. Installing a package manager purely to satisfy a cache of
-          # nothing would be the wrong fix, so the cache is turned off instead.
+          # shared-sync.sh parses shared-files.json with `node -e`, and its
+          # delivery gate runs `biffo.sh check shared-file-reduction`, which
+          # executes the CLI through cli/node_modules/.bin/tsx. So this job
+          # DOES need pnpm and the CLI's dependencies (installed below). The
+          # setup-node cache stays off: a daily job gains little from it.
           package-manager-cache: false
+
+      # Without this the reduction gate exec's a missing tsx (exit 127) and
+      # every satellite is refused.
+      - name: Install the CLI dependencies (the reduction gate needs tsx)
+        run: pnpm install --frozen-lockfile
 
       - name: Discover the governed set and clone it fresh
         id: estate

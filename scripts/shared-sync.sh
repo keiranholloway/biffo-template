@@ -2109,13 +2109,29 @@ stage_repo() {
   # Exit 1 is a reduction, exit 2 is "cannot tell" -- and 2 is never a pass,
   # because the operation being gated is irreversible content deletion. Both
   # refuse, so one branch is enough.
-  if ! (cd "$TEMPLATE_ROOT" && sh scripts/biffo.sh check shared-file-reduction \
-    --pairs "$_red_pairs" --manifest "$MANIFEST"); then
+  # 126/127 (or a missing tsx) is neither: the check never RAN. It still
+  # refuses (return 4), but under its own label naming the missing toolchain,
+  # so it is never reported as WOULD DELETE CONTENT.
+  _red_rc=0
+  _red_tsx="$TEMPLATE_ROOT/cli/node_modules/.bin/tsx"
+  if [ -d "$TEMPLATE_ROOT/cli" ] && [ ! -x "$_red_tsx" ]; then
+    _red_rc=127
+    echo "shared-sync: cannot run the reduction check: $_red_tsx is missing (run pnpm install --frozen-lockfile in the template)" >&2
+  else
+    (cd "$TEMPLATE_ROOT" && sh scripts/biffo.sh check shared-file-reduction \
+      --pairs "$_red_pairs" --manifest "$MANIFEST")
+    _red_rc=$?
+  fi
+  if [ "$_red_rc" -ne 0 ]; then
     rm -f "$_red_pairs"
-    wt_log remove-would-delete-content "$label" "$wt"
     git -C "$d" worktree remove --force "$wt" 2>/dev/null
     git -C "$d" branch -D chore/sync-shared >/dev/null 2>&1
     release_stage_lock "$d" "$label"
+    if [ "$_red_rc" -eq 126 ] || [ "$_red_rc" -eq 127 ]; then
+      wt_log reduction-check-could-not-run "$label" "$wt"
+      return 4
+    fi
+    wt_log remove-would-delete-content "$label" "$wt"
     return 3
   fi
   rm -f "$_red_pairs"
@@ -3254,6 +3270,15 @@ else
       rehearsal_failures=$((rehearsal_failures + 1))
       continue
     fi
+    # 4 is "the reduction check could not run" (missing tsx / CLI, exit
+    # 126/127). Still a refusal, but it says nothing about the content.
+    if [ "$stage_rc" -eq 4 ]; then
+      printf '%-26s \033[31mREDUCTION CHECK COULD NOT RUN\033[0m - toolchain missing (cli/node_modules/.bin/tsx); run pnpm install in the template\n' "$label"
+      printf '%s%s%s%s%s\n' "$label" "$TAB" FAIL "$TAB" \
+        'reduction check could not run -- cli toolchain (tsx) missing, nothing judged' >> "$VERDICTS"
+      rehearsal_failures=$((rehearsal_failures + 1))
+      continue
+    fi
     # biffo-template#1836: everything else stage_repo returns 1 for (a fetch
     # blip, a stale lock, or -- the #1785/#1829 case -- `reclaim_sync_branch`
     # correctly refusing to force-remove a foreign worktree it cannot prove is
@@ -3390,6 +3415,8 @@ while IFS="$TAB" read -r label d slug base; do
     case $? in
       2) printf '%-26s \033[32mnothing to sync\033[0m\n' "$label"; continue ;;
       3) printf '%-26s \033[31mWOULD DELETE CONTENT\033[0m - refused (#1577)\n' "$label"
+         failed=$((failed + 1)); continue ;;
+      4) printf '%-26s \033[31mREDUCTION CHECK COULD NOT RUN\033[0m - toolchain missing (cli/node_modules/.bin/tsx)\n' "$label"
          failed=$((failed + 1)); continue ;;
       1) printf '%-26s \033[31mCANNOT STAGE\033[0m\n' "$label"; failed=$((failed + 1)); continue ;;
     esac

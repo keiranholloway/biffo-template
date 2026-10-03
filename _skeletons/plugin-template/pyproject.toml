@@ -24,7 +24,7 @@ dependencies = [
   # PyPI (biffo-template#2064). Confirm what's really pinned with
   # `grep -A2 'name = "biffo-plugin-sdk"' uv.lock` rather than trusting a
   # comment here to still be current.
-  "biffo-plugin-sdk>=1.0,<2.0",
+  "biffo-plugin-sdk>=1.9,<2.0",
   "aws-lambda-powertools[tracer]>=3.4.0",
   "httpx>=0.28.1",
   # ASGI apps for the `user_ingress`/`admin_ingress` surfaces (ADR-0021) —

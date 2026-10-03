@@ -2342,8 +2342,10 @@ rehearse_repo() {
   # the comment above already asserts -- it just stopped being true when the
   # gate moved and its callers did not.
   install_gate_deps "$wt"
-  _out=$( (cd "$wt" && sh scripts/biffo.sh verify 2>&1) )
-  _rc=$?
+  # Capture the status without letting a failing verify trip `set -e` in the
+  # caller (dash exits the function on a bare failing `_out=$(...)`).
+  _rc=0
+  _out=$( (cd "$wt" && sh scripts/biffo.sh verify 2>&1) ) || _rc=$?
   _checks=$(printf '%s' "$_out" | sed -n 's/.*verify passed[^-]*- *//p' | head -1)
 
   # `gate-coverage.sh` reads `--list` rather than running anything, so it is

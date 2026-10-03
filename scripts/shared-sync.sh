@@ -2404,6 +2404,9 @@ rehearse_repo() {
     return 1
   fi
   _why=$(printf '%s' "$_out" | grep -E 'verify failed|verify ran NOTHING' | head -1)
+  # An npm failure's last line is boilerplate ("A complete log of this run...");
+  # its `npm error code ...` line is the actual cause.
+  [ -n "$_why" ] || _why=$(printf '%s' "$_out" | sed 's/\x1b\[[0-9;]*m//g' | grep -E '^npm error code ' | head -1)
   [ -n "$_why" ] || _why=$(printf '%s' "$_out" | tail -1)
   printf '%s\t%s\n' FAIL "$(printf '%s' "$_why" | sed 's/\x1b\[[0-9;]*m//g')"
   return 1
@@ -3280,6 +3283,36 @@ if [ -n "$NO_REHEARSE" ]; then
 else
   printf '\nrehearsing %s repos - staging the candidates and running each gate\n\n' \
     "$(wc -l < "$TARGETS" | tr -d ' ')"
+  # The staged `.biffo-shared-version` pins every satellite's bridge to
+  # `npx @biffo/cli@<that version>`. Right after a merge the tag exists before
+  # the npm publish finishes, so every rehearsal would fail on ETARGET/E404.
+  # Check once, wait a bounded time, and name it as its own verdict rather
+  # than a FAIL per satellite. Only a definite "not found" counts; any other
+  # npm trouble (offline, registry blip) falls through to the rehearsals.
+  _pin=$(git -C "$TEMPLATE_ROOT" describe --tags --match 'core-v*' --abbrev=0 2>/dev/null | sed 's/^core-v//')
+  if [ -n "$_pin" ] && [ -s "$TARGETS" ]; then
+    _tries=${SHARED_SYNC_NPM_VIEW_TRIES:-10}
+    _wait=${SHARED_SYNC_NPM_VIEW_WAIT:-30}
+    _n=0
+    while :; do
+      _n=$((_n + 1))
+      _view_rc=0
+      _view_out=$(npm view "@biffo/cli@$_pin" version 2>&1) || _view_rc=$?
+      [ "$_view_rc" -eq 0 ] && break
+      case "$_view_out" in
+        *E404*|*ETARGET*|*"No match found"*) ;;
+        *) break ;;
+      esac
+      if [ "$_n" -ge "$_tries" ]; then
+        printf '\033[31mCLI %s not yet published\033[0m - @biffo/cli@%s is not on npm after %s checks, so no satellite bridge can run it.\n' \
+          "$_pin" "$_pin" "$_n"
+        printf 'Nothing was rehearsed or shipped. Re-run once the npm publish completes.\n\n'
+        exit 1
+      fi
+      printf 'waiting for @biffo/cli@%s on npm (check %s/%s)\n' "$_pin" "$_n" "$_tries"
+      sleep "$_wait"
+    done
+  fi
   rehearsal_failures=0
   blocked=0
   while IFS="$TAB" read -r label d slug base; do

@@ -338,3 +338,21 @@ describe('core-api-module pair (#1538 option 2)', () => {
     expect(isAdopted(env, BIFFO_PLATFORM_MAIN_TF_BEFORE_PR174)).toBe(false)
   })
 })
+
+describe('core-api-module pair — missing core-api.instance.tf', () => {
+  it('is unadopted when the instance lacks the seeded file even if main.tf has no module block', () => {
+    const theirs = makeTmpDir('adopt-seed-theirs')
+    const ours = makeTmpDir('adopt-seed-ours')
+    const dev = 'infra/environments/dev'
+    for (const d of [theirs, ours]) mkdirSync(join(d, dev), { recursive: true })
+    writeFileSync(join(theirs, dev, 'core-api.core.tf'), '# t\n')
+    writeFileSync(join(theirs, dev, 'core-api.instance.tf'), '# t\n')
+    writeFileSync(join(ours, dev, 'main.tf'), 'module "api_gateway" {}\n')
+    const status = () =>
+      checkInstanceAdoption(theirs, ours).findings.find((f) => f.pair.id === 'core-api-module')!
+        .status
+    expect(status()).toBe('unadopted')
+    writeFileSync(join(ours, dev, 'core-api.instance.tf'), '# mine\n')
+    expect(status()).toBe('adopted')
+  })
+})

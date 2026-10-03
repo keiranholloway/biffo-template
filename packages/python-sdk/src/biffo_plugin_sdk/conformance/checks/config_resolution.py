@@ -59,8 +59,15 @@ from biffo_plugin_sdk.config import (
     get_plugin_config,
     plugin_config_env_names,
     resolve_secret,
+    resolve_setting,
 )
-from biffo_plugin_sdk.plugin import ConfigDeclaration, ConfigKind, PluginManifest, load_manifest
+from biffo_plugin_sdk.plugin import (
+    ConfigDeclaration,
+    ConfigKind,
+    PluginManifest,
+    load_manifest,
+    parse_setting_ref,
+)
 from biffo_plugin_sdk.signed_client import acting_as_plugin
 
 from .. import ConformanceCheckError, ConformanceContext
@@ -238,6 +245,25 @@ def _check_plugin_own_needs(manifest: PluginManifest) -> None:
         if decl.required and value is None:
             missing.append(
                 f"{decl.name!r} ({decl.kind}; supply {_supply_env_name(manifest.name, decl)})"
+            )
+    # `required_group: "setting:<name>"` references (biffo-template#1517): the host
+    # fails closed (does not mount) on an unsupplied one even when the entry is
+    # `required: false`, so verify must too. `PluginManifest` already guarantees
+    # each reference names a declared `kind: setting` entry.
+    for label, surface in (
+        ("user_ingress", manifest.user_ingress),
+        ("admin_ingress", manifest.admin_ingress),
+        ("user_frontend", manifest.user_frontend),
+    ):
+        ref = parse_setting_ref(surface.required_group) if surface else None
+        if ref is None:
+            continue
+        if resolve_setting(manifest.name, ref) is None and not any(
+            m.startswith(f"{ref!r} ") for m in missing
+        ):
+            literal_env, _ = plugin_config_env_names(manifest.name, ref)
+            missing.append(
+                f"{ref!r} (setting; referenced by {label}.required_group; supply {literal_env})"
             )
     if missing:
         raise ConformanceCheckError(

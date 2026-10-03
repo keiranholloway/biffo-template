@@ -138,9 +138,16 @@ in `biffo.plugin.json`:
 ```json
 "user_frontend": {
   "dir": "web/dist",
-  "required_group": "founder"
+  "required_group": "setting:founder_group"
 }
 ```
+
+`required_group` is a **reference**, not a group name: `setting:<name>` names a
+`kind: "setting"` entry in the manifest's `config:` list, which the instance
+supplies at install time (`biffo plugin install --config founder_group=<group>`)
+and the shared host resolves per plugin. The same form applies to
+`user_ingress` and `admin_ingress`. A literal group name still validates but is
+deprecated (the SDK emits a `LegacyRequiredGroupWarning`).
 
 and ships **`web/` and nothing else** — a built static bundle (`index.html`
 plus hashed `assets/*`, the ordinary Vite build-output shape) at the

@@ -1,4 +1,4 @@
-import { mkdirSync, readdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { makeTmpDir } from '../../test-utils/tmp.js'
@@ -54,6 +54,18 @@ describe('buildManifestSchema', () => {
     expect(
       readdirSync(join(built.env.BIFFO_PG_ALEMBIC_DIR!, 'migrations', 'versions')),
     ).toHaveLength(1)
+  })
+
+  it("records the plugin chain in its own version table so Core's alembic_version is untouched", () => {
+    const { cwd, core } = plugin([{ name: 't', columns: [] }])
+    const built = buildManifestSchema(new GeneratorRunner(), cwd, core)!
+    const envPy = readFileSync(
+      join(built.env.BIFFO_PG_ALEMBIC_DIR!, 'migrations', 'env.py'),
+      'utf8',
+    )
+    expect(envPy).toContain('version_table=PLUGIN_VERSION_TABLE')
+    expect(envPy).toContain('PLUGIN_VERSION_TABLE = "alembic_version_plugin_manifest"')
+    expect(envPy).not.toMatch(/PLUGIN_VERSION_TABLE\s*=\s*"alembic_version"/)
   })
 
   it('returns null when the manifest declares no tables', () => {

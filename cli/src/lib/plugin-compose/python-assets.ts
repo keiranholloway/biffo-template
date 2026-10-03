@@ -77,6 +77,44 @@ generated = sync_plugin_migrations(migrations / "versions", services_root=servic
 print(f"bootstrap: generated {len(generated)} plugin migration(s)", flush=True)
 cfg = Config(str(Path.cwd() / "alembic.ini"))
 cfg.set_main_option("script_location", str(migrations))
+
+# \`plugin verify\` provisions the plugin's manifest tables before Core boots, so the generated
+# plugin migration (plain op.create_table) would collide with them. Make table/column/index
+# creation idempotent for this disposable bootstrap run only.
+import sqlalchemy as sa  # noqa: E402
+from alembic import op  # noqa: E402
+
+_create_table, _create_index, _add_column = op.create_table, op.create_index, op.add_column
+_skipped_tables: set = set()
+
+
+def _insp():
+    return sa.inspect(op.get_bind())
+
+
+def _create_table_if_absent(name, *args, **kw):
+    if _insp().has_table(name, schema=kw.get("schema")):
+        _skipped_tables.add(name)
+        return None
+    return _create_table(name, *args, **kw)
+
+
+def _create_index_if_absent(name, table, *args, **kw):
+    if table in _skipped_tables:
+        return None
+    return _create_index(name, table, *args, **kw)
+
+
+def _add_column_if_absent(table, column, **kw):
+    if any(c["name"] == column.name for c in _insp().get_columns(table, schema=kw.get("schema"))):
+        return None
+    return _add_column(table, column, **kw)
+
+
+op.create_table = _create_table_if_absent
+op.create_index = _create_index_if_absent
+op.add_column = _add_column_if_absent
+
 command.upgrade(cfg, "head")
 print("bootstrap: alembic upgrade head complete", flush=True)
 `

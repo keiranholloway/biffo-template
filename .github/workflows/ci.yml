@@ -487,6 +487,31 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: sh scripts/biffo.sh check distribution-inventory
 
+  # Real-Postgres Core-plus-manifest schema test and live real_core /model-catalog check
+  # (#2189). BIFFO_REAL_PG_E2E_REQUIRED makes the test fail, not skip, if tooling is missing.
+  real-core-schema:
+    name: Real Core schema (Postgres + live Core)
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - uses: astral-sh/setup-uv@v6
+      - run: pnpm install --frozen-lockfile
+      - name: Run real-Postgres schema test
+        working-directory: cli
+        env:
+          BIFFO_REAL_PG_E2E: '1'
+          BIFFO_REAL_PG_E2E_REQUIRED: '1'
+          BIFFO_CORE_ROOT: ${{ github.workspace }}
+        run: pnpm vitest run src/lib/plugin-verify/real-core-schema.test.ts
+
   python:
     name: Python (lint, types, test, security)
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}

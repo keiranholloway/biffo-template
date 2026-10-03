@@ -1082,6 +1082,32 @@ describe('runPluginInstall', () => {
       ],
     }
 
+    it('refuses install when a required setting referenced by user_ingress.required_group is unsupplied', async () => {
+      const manifest = {
+        ...VALID_MANIFEST,
+        config: [
+          {
+            name: 'founder_group',
+            kind: 'setting',
+            required: true,
+            description: 'Cognito group allowed on the user ingress.',
+          },
+        ],
+        user_ingress: { required_group: 'setting:founder_group', app: 'widgets.app:app' },
+      }
+      const registry = makeRegistryMock()
+      const git = makeGitMock(makeClonedPluginDir(manifest))
+      const migrations = makeMigrationsMock()
+
+      await expect(
+        runPluginInstall(
+          'widgets@1.0',
+          { dryRun: false, cwd: projectRoot },
+          { registry: registry as never, git: git as never, migrations: migrations as never },
+        ),
+      ).rejects.toThrow(/founder_group/)
+    })
+
     it('refuses install when a required config value is not supplied, leaving the checkout untouched', async () => {
       const registry = makeRegistryMock()
       const git = makeGitMock(makeClonedPluginDir(CONFIG_MANIFEST))

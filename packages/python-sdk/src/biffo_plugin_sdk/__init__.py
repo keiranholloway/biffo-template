@@ -25,6 +25,7 @@ from .plugin import (
     ConfigDeclaration,
     EventSubscription,
     IndexDefinition,
+    LegacyRequiredGroupWarning,
     PermissionRule,
     PluginManifest,
     RouteDef,
@@ -47,6 +48,7 @@ from .signed_client import FORWARDED_USER_HEADER as FORWARDED_USER_HEADER
 from .signed_client import PLUGIN_IDENTITY_HEADER as PLUGIN_IDENTITY_HEADER
 from .signed_client import PrincipalCoreClient, SignedCoreClient, create_core_client
 from .signed_client import acting_as_plugin as acting_as_plugin
+from .usage import get_runs_usage, get_thread_usage
 from .user_serving import (
     CognitoConfig,
     ForbiddenError,
@@ -74,6 +76,7 @@ __all__ = [
     "ForbiddenError",
     "ForwardedUser",
     "IndexDefinition",
+    "LegacyRequiredGroupWarning",
     "ManifestSchema",
     "PermissionRule",
     "PluginConfigError",
@@ -97,6 +100,8 @@ __all__ = [
     "create_core_client",
     "create_event_handler",
     "get_plugin_config",
+    "get_runs_usage",
+    "get_thread_usage",
     "load_manifest",
     "plugin_config_env_names",
     "register_plugin",

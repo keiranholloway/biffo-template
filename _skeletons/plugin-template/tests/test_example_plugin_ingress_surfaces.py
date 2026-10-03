@@ -38,24 +38,42 @@ def _resolve_app(app_ref: str) -> FastAPI:
     return getattr(module, attr)
 
 
+class TestRequiredGroupsAreSettingReferences:
+    """Every surface's `required_group` names a declared `kind: setting` config
+    entry (biffo-template#1517) — never a literal Cognito group baked into the
+    manifest. `PluginManifest` already rejects a dangling/non-setting reference
+    (and warns on a literal); this pins that the skeleton uses the setting form.
+    """
+
+    def test_no_surface_carries_a_literal_group(self) -> None:
+        manifest = load_manifest(MANIFEST_PATH)
+        settings = {c.name for c in manifest.config if c.kind == "setting"}
+        for surface in (manifest.user_ingress, manifest.admin_ingress, manifest.user_frontend):
+            assert surface is not None
+            # Plain string handling, not an SDK helper: the skeleton's locked SDK
+            # may predate the helper (the pin is raised separately, #2168).
+            assert surface.required_group.startswith("setting:"), surface.required_group
+            assert surface.required_group.removeprefix("setting:") in settings
+
+
 class TestManifestDeclaresAllThreeSurfaces:
     def test_manifest_validates_and_declares_user_ingress(self) -> None:
         manifest = load_manifest(MANIFEST_PATH)
         assert manifest.user_ingress is not None
-        assert manifest.user_ingress.required_group == "founder"
+        assert manifest.user_ingress.required_group == "setting:founder_group"
         assert manifest.user_ingress.app == "example_plugin.user_app:app"
 
     def test_manifest_declares_admin_ingress(self) -> None:
         manifest = load_manifest(MANIFEST_PATH)
         assert manifest.admin_ingress is not None
-        assert manifest.admin_ingress.required_group == "admin"
+        assert manifest.admin_ingress.required_group == "setting:admin_group"
         assert manifest.admin_ingress.app == "example_plugin.admin_app:app"
 
     def test_manifest_declares_user_frontend(self) -> None:
         manifest = load_manifest(MANIFEST_PATH)
         assert manifest.user_frontend is not None
         assert manifest.user_frontend.dir == "web/dist"
-        assert manifest.user_frontend.required_group == "founder"
+        assert manifest.user_frontend.required_group == "setting:founder_group"
 
     def test_ui_components_no_longer_point_at_a_dead_admin_path(self) -> None:
         """The old `/admin/example-plugin` paths matched none of the three real

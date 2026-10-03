@@ -31,6 +31,8 @@ import {
   type UpgradePlan,
   ORPHAN_BASELINE_FILE,
   applyUpgradePlan,
+  pendingSeeds,
+  seedMissingFiles,
   checkOrphanRatchet,
   parseGitHubRepo,
   planCoreUpgrade,
@@ -613,7 +615,8 @@ async function runCoreUpgradeResolved(
   // rather than opening a PR of its own.
   const coreVersionCleanup = planCoreVersionCleanup(options.cwd)
 
-  if (plan.changes.length === 0 && migrations.entries.length === 0) {
+  const seedsPending = pendingSeeds(options.cwd, theirsDir, manifest.seeded)
+  if (plan.changes.length === 0 && migrations.entries.length === 0 && seedsPending.length === 0) {
     log.success('Nothing to upgrade — the instance already matches the target for all core files.')
     return
   }
@@ -886,6 +889,10 @@ async function buildCommitAndOpenPr(
 
   const applied = applyUpgradePlan(options.cwd, plan, theirsDir)
   const carried = applyMigrationCarry(options.cwd, migrations)
+  const seeded = seedMissingFiles(options.cwd, theirsDir, readCoreManifest(theirsDir).seeded)
+  for (const f of seeded) {
+    log.info(`Seeded ${f} (user-owned scaffold; created because it was absent, never overwritten).`)
+  }
   writeInstanceCoreVersion(options.cwd, toVersion)
 
   // #1026: the FIRST upgrade this instance runs after the ratchet exists has

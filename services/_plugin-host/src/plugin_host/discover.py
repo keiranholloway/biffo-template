@@ -57,8 +57,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from biffo_plugin_sdk.config import plugin_config_env_names
-from biffo_plugin_sdk.plugin import PluginManifest
+from biffo_plugin_sdk.config import plugin_config_env_names, resolve_setting
+from biffo_plugin_sdk.plugin import PluginManifest, parse_setting_ref
 from pydantic import ValidationError
 
 _LOGGER = logging.getLogger(__name__)
@@ -229,21 +229,40 @@ def _load_manifest_tolerant(manifest_path: Path) -> PluginManifest | None:
             return None
 
 
-def _resolve_required_group(plugin_name: str, manifest_group: str | None) -> str | None:
-    """The Cognito group `user_ingress` actually gates on: an instance-supplied
-    override if the host's environment carries one, else the manifest's own
-    literal (biffo-template#1517 Option B — see
-    `REQUIRED_GROUP_OVERRIDE_CONFIG_NAME`'s module-level docstring for why this
-    is an override rather than a required reference).
+class UnresolvedRequiredGroupError(Exception):
+    """A ``required_group: "setting:<name>"`` reference whose setting the instance
+    never supplied. The plugin must not mount ungated, so discovery skips it."""
 
-    Uses the exact same `BIFFO_PLUGIN_<PLUGIN>_<NAME>` naming
-    (`plugin_config_env_names`) the install-time `config:` mechanism already
-    computes, so the two channels can never disagree about what an env var for
-    a given plugin+name pair is called even though this override does not go
-    through the manifest's `config:` list at all.
+
+def _resolve_required_group(
+    plugin_name: str, manifest_group: str | None, *, allow_override: bool = True
+) -> str | None:
+    """The Cognito group a surface actually gates on, resolved per plugin.
+
+    * ``"setting:<name>"`` (biffo-template#1517): a reference to a
+      ``kind: setting`` ``config`` entry, resolved from the plugin-scoped
+      ``BIFFO_PLUGIN_<PLUGIN>_<NAME>`` env var (`resolve_setting`). Unsupplied
+      raises ``UnresolvedRequiredGroupError`` — fail closed, never an empty or
+      guessed group.
+    * a legacy literal: returned as is, except that for ``user_ingress``
+      (``allow_override``) an instance-supplied
+      ``BIFFO_PLUGIN_<PLUGIN>_USER_INGRESS_REQUIRED_GROUP`` still overrides it
+      (Option B; see `REQUIRED_GROUP_OVERRIDE_CONFIG_NAME`).
     """
     if manifest_group is None:
         return None
+    ref = parse_setting_ref(manifest_group)
+    if ref is not None:
+        value = resolve_setting(plugin_name, ref)
+        if value is None:
+            literal_env, _ = plugin_config_env_names(plugin_name, ref)
+            raise UnresolvedRequiredGroupError(
+                f"required_group {manifest_group!r} references setting {ref!r}, which is not "
+                f"supplied (set {literal_env})."
+            )
+        return value
+    if not allow_override:
+        return manifest_group
     literal_env, _ = plugin_config_env_names(plugin_name, REQUIRED_GROUP_OVERRIDE_CONFIG_NAME)
     override = os.environ.get(literal_env, "").strip()
     return override or manifest_group
@@ -320,10 +339,28 @@ def discover_plugins(services_root: str | Path) -> list[DiscoveredPlugin]:
         if manifest.user_ingress is None and manifest.admin_ingress is None:
             continue  # data/event-only plugin — nothing for the host to mount
 
-        required_group = _resolve_required_group(
-            manifest.name,
-            manifest.user_ingress.required_group if manifest.user_ingress else None,
-        )
+        try:
+            required_group = _resolve_required_group(
+                manifest.name,
+                manifest.user_ingress.required_group if manifest.user_ingress else None,
+            )
+            admin_required_group = _resolve_required_group(
+                manifest.name,
+                manifest.admin_ingress.required_group if manifest.admin_ingress else None,
+                allow_override=False,
+            )
+            frontend_required_group = _resolve_required_group(
+                manifest.name,
+                manifest.user_frontend.required_group if manifest.user_frontend else None,
+                allow_override=False,
+            )
+        except UnresolvedRequiredGroupError as exc:
+            _LOGGER.error(
+                "Plugin %r not mounted: %s (failing closed rather than mounting ungated).",
+                manifest.name,
+                exc,
+            )
+            continue
         declared = _declared_routes(manifest, required_group)
 
         found.append(
@@ -332,14 +369,10 @@ def discover_plugins(services_root: str | Path) -> list[DiscoveredPlugin]:
                 app_ref=manifest.user_ingress.app if manifest.user_ingress else None,
                 required_group=required_group,
                 admin_app_ref=manifest.admin_ingress.app if manifest.admin_ingress else None,
-                admin_required_group=(
-                    manifest.admin_ingress.required_group if manifest.admin_ingress else None
-                ),
+                admin_required_group=admin_required_group,
                 api_routes=declared,
                 user_frontend_dir=(manifest.user_frontend.dir if manifest.user_frontend else None),
-                user_frontend_required_group=(
-                    manifest.user_frontend.required_group if manifest.user_frontend else None
-                ),
+                user_frontend_required_group=frontend_required_group,
             )
         )
     return found

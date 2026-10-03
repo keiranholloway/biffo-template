@@ -196,3 +196,33 @@ class CompleteAgentRunRequest(BaseModel):
     #: that predates this field still completes a run exactly as before —
     #: additive, not required.
     annotations: list[dict[str, Any]] | None = Field(default=None)
+
+
+class RunUsage(BaseModel):
+    """One run's model and cost usage. ``cost_usd`` is None when unpriced."""
+
+    id: str
+    agent_name: str
+    model: str | None = None
+    status: str
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cost_usd: float | None = None
+
+
+class RunUsageResponse(BaseModel):
+    """Per-run usage plus a total. Unpriced runs (NULL cost) are counted in
+    ``unpriced_runs`` and excluded from ``total_cost_usd``, never summed as zero."""
+
+    thread_id: str | None = None
+    runs: list[RunUsage] = Field(default_factory=list)
+    total_cost_usd: float = 0.0
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
+    unpriced_runs: int = 0
+
+
+class RunUsageRequest(BaseModel):
+    """Explicit run ids to report usage for (batched)."""
+
+    run_ids: list[str] = Field(min_length=1, max_length=200)

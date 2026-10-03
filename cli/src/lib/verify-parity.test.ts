@@ -186,6 +186,10 @@ const EXCLUDED: Record<
   // interpreter audit — self-test" step, added for #1629/#1652 specifically
   // to close a different no-caller gap) was invisible a second time, one
   // layer past the bug #1668 fixed.
+  'pnpm vitest run src/lib/plugin-verify/real-core-schema.test.ts': {
+    kind: 'container',
+    why: 'needs Docker (real Postgres + live Core container) and a Core checkout; the opt-in test is run by the dedicated real-core-schema CI job, not the local push gate',
+  },
   'sh scripts/interpreter-audit.test.sh': {
     kind: 'container',
     why: "that step spins up a real debian:stable docker container (pulled over the network) to get a genuine dash, because the point of the test is verifying dash-specific behaviour that this repo's own host shell cannot reproduce; not runnable in the local push gate without that container",

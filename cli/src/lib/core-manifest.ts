@@ -30,6 +30,13 @@ const CoreManifestSchema = z.object({
    * would never reach npm for any instance to install.
    */
   released: z.array(z.string()).default([]),
+  /**
+   * Seed mode: exact repo-relative files the template ships as a one-time
+   * scaffold into a USER-OWNED location (they must also be user-owned, e.g.
+   * under `infra/`). `biffo core upgrade` creates one only when absent from the
+   * instance and never overwrites or deletes it afterwards.
+   */
+  seeded: z.array(z.string()).default([]),
 })
 
 export type CoreManifest = z.infer<typeof CoreManifestSchema>

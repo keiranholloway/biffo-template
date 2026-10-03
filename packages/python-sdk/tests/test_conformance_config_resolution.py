@@ -454,3 +454,31 @@ class TestFixtureIntegrity:
         monkeypatch.setattr(mod, "_FIXTURE_MANIFEST", trimmed)
         with pytest.raises(ConformanceCheckError, match="did not round-trip"):
             _run(clean_repo)
+
+
+class TestRequiredGroupSettingReference:
+    """biffo-template#1517: an ingress `required_group: "setting:<name>"` must be
+    supplied for verify to pass — even when the entry is `required: false`,
+    because the host does not mount a plugin whose group is unresolved."""
+
+    def _repo(self, tmp_path: Path, *, required: bool) -> Path:
+        manifest = {
+            "name": "demo-plugin",
+            "version": "0.1.0",
+            "config": [_need("founder_group", "setting", required)],
+            "user_ingress": {"app": "demo.app:app", "required_group": "setting:founder_group"},
+        }
+        (tmp_path / "biffo.plugin.json").write_text(json.dumps(manifest), encoding="utf-8")
+        return tmp_path
+
+    @pytest.mark.parametrize("required", [True, False])
+    def test_unsupplied_referenced_setting_fails(self, tmp_path, required):
+        with pytest.raises(ConformanceCheckError) as excinfo:
+            _run(self._repo(tmp_path, required=required))
+        assert "BIFFO_PLUGIN_DEMO_PLUGIN_FOUNDER_GROUP" in str(excinfo.value)
+        if not required:  # only the reference check sees an optional entry
+            assert "user_ingress" in str(excinfo.value)
+
+    def test_supplied_referenced_setting_passes(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("BIFFO_PLUGIN_DEMO_PLUGIN_FOUNDER_GROUP", "founder")
+        _run(self._repo(tmp_path, required=False))

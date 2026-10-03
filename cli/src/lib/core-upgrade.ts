@@ -758,6 +758,37 @@ export function applyUpgradePlan(
 }
 
 /**
+ * Seed mode: for each `manifest.seeded` file present in the template but
+ * absent from the instance, copy it in. An existing instance file is never
+ * touched (even if it differs from the template). Returns the files created.
+ */
+export function pendingSeeds(
+  instanceDir: string,
+  theirsDir: string,
+  seeded: readonly string[],
+): string[] {
+  return seeded.filter(
+    (rel) => existsSync(join(theirsDir, rel)) && !existsSync(join(instanceDir, rel)),
+  )
+}
+
+export function seedMissingFiles(
+  instanceDir: string,
+  theirsDir: string,
+  seeded: readonly string[],
+): string[] {
+  const created: string[] = []
+  for (const rel of pendingSeeds(instanceDir, theirsDir, seeded)) {
+    const src = join(theirsDir, rel)
+    const dest = join(instanceDir, rel)
+    mkdirSync(dirname(dest), { recursive: true })
+    writeFileSync(dest, readFileSync(src))
+    created.push(rel)
+  }
+  return created
+}
+
+/**
  * Per-instance baseline for the #1026 orphan ratchet.
  *
  * Lives in the instance's own tree, and is `userOwned` (see

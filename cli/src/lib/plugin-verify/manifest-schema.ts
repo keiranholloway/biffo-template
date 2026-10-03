@@ -40,6 +40,9 @@ export function hasNativeSchema(cwd: string): boolean {
 }
 
 /** Env for `pg-test-db.sh` that points it at the generated schema. */
+/** Version table of the scratch chain; never Core's `alembic_version`. */
+export const PLUGIN_VERSION_TABLE = 'alembic_version_plugin_manifest'
+
 export interface ManifestSchema {
   env: Record<string, string>
 }
@@ -119,10 +122,21 @@ from alembic import context
 from sqlalchemy.ext.asyncio import create_async_engine
 
 
+PLUGIN_VERSION_TABLE = "alembic_version_plugin_manifest"
+
+
 async def run() -> None:
     engine = create_async_engine(os.environ["BIFFO_DATABASE_URL"])
     async with engine.connect() as connection:
-        await connection.run_sync(lambda c: context.configure(connection=c, target_metadata=None))
+        await connection.run_sync(lambda c: context.configure(
+            connection=c,
+            target_metadata=None,
+            # Own version table: the default \`alembic_version\` is Core's, and a plugin-only
+            # revision recorded there makes Core's own migrations look applied (or fail on
+            # an unknown head) when Core boots, leaving its tables (users, ...) missing.
+            version_table=PLUGIN_VERSION_TABLE,
+        )
+    )
         async with connection.begin():
             await connection.run_sync(lambda _: context.run_migrations())
     await engine.dispose()

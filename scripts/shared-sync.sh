@@ -2202,12 +2202,34 @@ stage_repo() {
   # candidate files for this repo (prettier config, hooks, whatever else is
   # drifted) are unrelated and should still ship.
   if [ -n "$OVERRIDES_FLOOR" ]; then
-    printf '%s\n' "$OVERRIDES_FLOOR" | while IFS="$TAB" read -r _ov_target _ov_canonical; do
+    # No pipe into `while`: a subshell could not fail the round (#2342).
+    _ov_list=$(mktemp)
+    printf '%s\n' "$OVERRIDES_FLOOR" > "$_ov_list"
+    _ov_fail=""
+    while IFS="$TAB" read -r _ov_target _ov_canonical; do
       [ -n "$_ov_target" ] || continue
       [ -f "$wt/$_ov_target" ] || continue
       _ov_err=$(apply_overrides_floor "$wt/$_ov_target" "$TEMPLATE_ROOT/$_ov_canonical" 2>&1 >/dev/null)
       [ -n "$_ov_err" ] && printf '    warning: overridesFloor skipped for %s -- %s\n' "$_ov_target" "$_ov_err" >&2
-    done
+      # `apply_overrides_floor` printed nothing on stdout when it changed nothing.
+      _ov_applied=$(git -C "$wt" diff --name-only -- "$_ov_target")
+      if [ -n "$_ov_applied" ]; then
+        # package.json gained override keys: the lockfile must follow or every
+        # frozen install (rehearsal, the sync PR's own CI) fails with
+        # ERR_PNPM_LOCKFILE_CONFIG_MISMATCH. A failure fails the whole round.
+        if ! _ov_lockerr=$(regen_pnpm_lock "$wt" "$_ov_target" 2>&1); then
+          _ov_fail="$_ov_target: $_ov_lockerr"
+          break
+        fi
+      fi
+    done < "$_ov_list"
+    rm -f "$_ov_list"
+    if [ -n "$_ov_fail" ]; then
+      printf '    error: lockfile regeneration failed after delivering pnpm.overrides -- %s\n' "$_ov_fail" >&2
+      git -C "$d" worktree remove --force "$wt" 2>/dev/null
+      release_stage_lock "$d" "$label"
+      return 1
+    fi
   fi
 
   # Stamp the version these files CAME FROM, so a repo can say which template
@@ -2286,6 +2308,29 @@ stage_repo() {
   return 0
 }
 
+# Regenerate the pnpm-lock.yaml that owns package.json `$2` (relative to
+# worktree `$1`) after `apply_overrides_floor` changed it. Walks up from the
+# package's dir to the nearest pnpm-lock.yaml; runs `pnpm install
+# --lockfile-only` there, with --ignore-workspace unless that dir is a
+# workspace root. Prints pnpm's own output on failure and returns non-zero.
+# No lockfile anywhere up the tree: nothing to regenerate, returns 0.
+regen_pnpm_lock() {
+  _rw="$1"; _rd=$(dirname "$2")
+  while :; do
+    [ -f "$_rw/$_rd/pnpm-lock.yaml" ] && break
+    [ "$_rd" = . ] && return 0
+    _rd=$(dirname "$_rd")
+  done
+  _rflag=--ignore-workspace
+  [ -f "$_rw/$_rd/pnpm-workspace.yaml" ] && _rflag=
+  # shellcheck disable=SC2086
+  _rout=$(cd "$_rw/$_rd" && pnpm install --lockfile-only $_rflag 2>&1) || {
+    printf '%s\n' "$_rout"
+    return 1
+  }
+  return 0
+}
+
 # Install what a satellite's gate needs inside a staged worktree, so the
 # rehearsal can reach a PASS/FAIL verdict instead of INCONCLUSIVE ("dependencies
 # not installed"). Every package.json dir (depth <= 3, node_modules pruned) gets
@@ -2300,16 +2345,26 @@ install_gate_deps() {
     _idir=$(dirname "$_ip"); _ibase=$(basename "$_ip")
     if [ "$_ibase" = package.json ]; then
       [ -d "$_iw/$_idir/node_modules" ] && continue
-      (cd "$_iw/$_idir" && { pnpm install --frozen-lockfile >/dev/null 2>&1 ||
-        pnpm install --frozen-lockfile --ignore-workspace >/dev/null 2>&1; }) ||
-        printf '    warning: pnpm install --frozen-lockfile failed in %s\n' "$_idir" >&2
+      _ierr=$(cd "$_iw/$_idir" && { pnpm install --frozen-lockfile 2>&1 ||
+        pnpm install --frozen-lockfile --ignore-workspace 2>&1; }) ||
+        printf '    warning: pnpm install --frozen-lockfile failed in %s: %s\n' "$_idir" \
+          "$(_install_err_line "$_ierr")" >&2
     else
       [ -d "$_iw/$_idir/.venv" ] && continue
-      (cd "$_iw/$_idir" && { uv sync --frozen --all-groups >/dev/null 2>&1 ||
-        uv sync --frozen >/dev/null 2>&1; }) ||
-        printf '    warning: uv sync --frozen failed in %s\n' "$_idir" >&2
+      _ierr=$(cd "$_iw/$_idir" && { uv sync --frozen --all-groups 2>&1 ||
+        uv sync --frozen 2>&1; }) ||
+        printf '    warning: uv sync --frozen failed in %s: %s\n' "$_idir" \
+          "$(_install_err_line "$_ierr")" >&2
     fi
   done
+}
+
+# The line of installer output that names the failure: an ERR_PNPM_* code, else
+# an `error:`/`ERR` line, else the last line.
+_install_err_line() {
+  _el=$(printf '%s\n' "$1" | sed 's/\x1b\[[0-9;]*m//g' | grep -E 'ERR_PNPM_|^ *(ERR|error)' | tail -1)
+  [ -n "$_el" ] || _el=$(printf '%s\n' "$1" | sed 's/\x1b\[[0-9;]*m//g' | grep -v '^ *$' | tail -1)
+  printf '%s' "$_el"
 }
 
 # Phase 1's actual question: with the candidate files in place, does this repo's

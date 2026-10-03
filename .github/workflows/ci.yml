@@ -574,6 +574,7 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           python3 -m unittest scripts/test_check_skeleton_sdk_lock.py
+          python3 -m unittest scripts/test_sdk_tag_decision.py
           python3 scripts/check_skeleton_sdk_lock.py
       # `uv sync` installs the workspace lock — core. An instance's own product
       # domains (ADR-0022) declare their extra dependencies in a user-owned,

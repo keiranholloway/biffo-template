@@ -515,7 +515,9 @@ jobs:
   python:
     name: Python (lint, types, test, security)
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
-    timeout-minutes: 20
+    # Repo variable PYTHON_JOB_TIMEOUT_MINUTES (default 20). Must exceed
+    # ERROR_BRANCH_LANE_WAIT_SECONDS plus the job's own work.
+    timeout-minutes: ${{ fromJSON(vars.PYTHON_JOB_TIMEOUT_MINUTES || '20') }}
     # `contents: read` is restated explicitly rather than left to the ambient
     # default, matching the `security-secrets` job's own pattern in this file.
     #
@@ -731,7 +733,10 @@ jobs:
           # Bounded deliberately. The job's own `timeout-minutes` is the
           # backstop, but a wait that runs into it reports the job as timed
           # out rather than reporting WHY the gate could not assert.
-          LANE_WAIT_SECONDS: '480'
+          # Repo variable ERROR_BRANCH_LANE_WAIT_SECONDS (default 480). The job
+          # timeout (PYTHON_JOB_TIMEOUT_MINUTES) must exceed this wait plus the
+          # job's own work.
+          LANE_WAIT_SECONDS: ${{ vars.ERROR_BRANCH_LANE_WAIT_SECONDS || '480' }}
           LANE_POLL_SECONDS: '15'
         run: |
           set -uo pipefail

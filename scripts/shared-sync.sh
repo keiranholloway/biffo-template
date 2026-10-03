@@ -2226,6 +2226,7 @@ stage_repo() {
     rm -f "$_ov_list"
     if [ -n "$_ov_fail" ]; then
       printf '    error: lockfile regeneration failed after delivering pnpm.overrides -- %s\n' "$_ov_fail" >&2
+      wt_log remove-lockfile-regen-failed "$label" "$wt"
       git -C "$d" worktree remove --force "$wt" 2>/dev/null
       release_stage_lock "$d" "$label"
       return 1

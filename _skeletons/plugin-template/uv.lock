@@ -98,7 +98,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "aws-lambda-powertools", extras = ["tracer"], specifier = ">=3.4.0" },
-    { name = "biffo-plugin-sdk", specifier = ">=1.0,<2.0" },
+    { name = "biffo-plugin-sdk", specifier = ">=1.9,<2.0" },
     { name = "fastapi", specifier = ">=0.115.0" },
     { name = "httpx", specifier = ">=0.28.1" },
 ]

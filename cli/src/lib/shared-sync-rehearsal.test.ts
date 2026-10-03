@@ -349,6 +349,9 @@ function runSync(
     candidateVerifyScript?: string
     /** Puts `makeFakePnpm`'s stub ahead of the real `pnpm` on `PATH`. */
     fakePnpm?: boolean
+    /** Body of a stub `npm` on `PATH`; with `tag`, the template is tagged `core-v<tag>`. */
+    fakeNpm?: string
+    tag?: string
     satellites?: Array<[string, SatelliteOpts]>
     /**
      * Runs after every satellite is cloned and seeded, but before the script
@@ -396,6 +399,11 @@ function runSync(
   const binDir = join(base, 'bin')
   makeFakeGh(binDir, logFile)
   if (opts.fakePnpm) makeFakePnpm(binDir)
+  if (opts.fakeNpm !== undefined) {
+    writeFileSync(join(binDir, 'npm'), `#!/usr/bin/env bash\n${opts.fakeNpm}\n`)
+    chmodSync(join(binDir, 'npm'), 0o755)
+  }
+  if (opts.tag) git(template, 'tag', `core-v${opts.tag}`)
 
   let scriptDir = template
   if (opts.fromWorktree) {
@@ -417,7 +425,12 @@ function runSync(
   const res = spawnSync('sh', [join(scriptDir, scriptUnderTest), '--estate', estate, ...args], {
     encoding: 'utf8',
     cwd: scriptDir,
-    env: { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ''}` },
+    env: {
+      ...process.env,
+      PATH: `${binDir}:${process.env.PATH ?? ''}`,
+      SHARED_SYNC_NPM_VIEW_TRIES: '2',
+      SHARED_SYNC_NPM_VIEW_WAIT: '0',
+    },
     timeout: 120_000,
   })
 
@@ -469,6 +482,42 @@ function stripAnsi(s: string): string {
   // eslint-disable-next-line no-control-regex -- \x1b IS the control character being stripped.
   return s.replace(/\x1b\[[0-9;]*m/g, '')
 }
+
+describe('shared-sync rehearsal and the npm publish race', () => {
+  it('reports "not yet published" once, not a FAIL per satellite', () => {
+    const { run } = runSync(['--rehearse'], {
+      tag: '9.9.9',
+      fakeNpm:
+        'echo "npm error code E404" >&2; echo "npm error A complete log of this run can be found in: x" >&2; exit 1',
+    })
+    const out = stripAnsi(run.out)
+    expect(out.match(/CLI 9\.9\.9 not yet published/g)).toHaveLength(1)
+    expect(out).not.toMatch(/\bFAIL\b/)
+    expect(out).not.toMatch(/PASS/)
+    expect(run.status).toBe(1)
+  }, 120_000)
+
+  it('proceeds to rehearse when the pinned version is published', () => {
+    const { run } = runSync(['--rehearse'], { tag: '9.9.9', fakeNpm: 'echo 9.9.9' })
+    expect(run.out).not.toMatch(/not yet published/)
+    expect(run.out).toMatch(/sat-alpha\s+.*PASS/)
+  }, 120_000)
+
+  it('surfaces the `npm error code` line when a rehearsal fails on an npm error', () => {
+    const { run } = runSync(['--rehearse'], {
+      candidateVerifyScript: `#!/usr/bin/env bash
+[ "\${1:-}" = "--list" ] && exit 0
+echo "npm error code ETARGET" >&2
+echo "npm error notarget No matching version found" >&2
+echo "npm error A complete log of this run can be found in: /x/y.log" >&2
+exit 1
+`,
+    })
+    const out = stripAnsi(run.out)
+    expect(out).toMatch(/sat-alpha\s+FAIL\s+npm error code ETARGET/)
+    expect(out).not.toMatch(/FAIL\s+npm error A complete log/)
+  }, 120_000)
+})
 
 describe('shared-sync rehearsal', () => {
   it('rehearses every target and reports the gate it ran, without opening a PR', () => {

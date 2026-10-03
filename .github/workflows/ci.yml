@@ -566,6 +566,15 @@ jobs:
         # A lockfile nothing verifies is not a lock. `--locked` fails rather
         # than updating, so the drift cannot return quietly.
         run: uv sync --all-groups --locked
+      # The plugin skeleton's uv.lock is invisible to root CI, so it silently
+      # lags the published biffo-plugin-sdk (biffo-template#2064, #1524). Fails
+      # when the lock is behind the newest sdk-v* tag; warns when the SDK source
+      # version is ahead of any published tag. Needs the full tag history above.
+      - name: Skeleton SDK lock freshness
+        if: ${{ !cancelled() }}
+        run: |
+          python3 -m unittest scripts/test_check_skeleton_sdk_lock.py
+          python3 scripts/check_skeleton_sdk_lock.py
       # `uv sync` installs the workspace lock — core. An instance's own product
       # domains (ADR-0022) declare their extra dependencies in a user-owned,
       # fully pinned `domains/<name>/requirements.txt`, which is NOT in that lock

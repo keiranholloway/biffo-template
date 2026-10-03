@@ -207,6 +207,9 @@ jobs:
           # setup-node cache stays off: a daily job gains little from it.
           package-manager-cache: false
 
+      # The rehearsal runs each satellite's gate; Python lanes need `uv sync`.
+      - uses: astral-sh/setup-uv@v6
+
       # Without this the reduction gate exec's a missing tsx (exit 127) and
       # every satellite is refused.
       - name: Install the CLI dependencies (the reduction gate needs tsx)

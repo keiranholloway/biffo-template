@@ -2286,6 +2286,32 @@ stage_repo() {
   return 0
 }
 
+# Install what a satellite's gate needs inside a staged worktree, so the
+# rehearsal can reach a PASS/FAIL verdict instead of INCONCLUSIVE ("dependencies
+# not installed"). Every package.json dir (depth <= 3, node_modules pruned) gets
+# a frozen-lockfile pnpm install (retrying with --ignore-workspace); every
+# pyproject.toml dir gets `uv sync --frozen`. Skips dirs already installed, so
+# it is cheap after stage_repo's own pass. A failed install is not fatal here --
+# the gate then reports it -- but it is NAMED on stderr rather than swallowed.
+install_gate_deps() {
+  _iw="$1"
+  for _ip in $(cd "$_iw" && find . -maxdepth 3 -name node_modules -prune -o \( -name package.json -o -name pyproject.toml \) -print 2>/dev/null |
+    sed 's|^\./||' | sort -u); do
+    _idir=$(dirname "$_ip"); _ibase=$(basename "$_ip")
+    if [ "$_ibase" = package.json ]; then
+      [ -d "$_iw/$_idir/node_modules" ] && continue
+      (cd "$_iw/$_idir" && { pnpm install --frozen-lockfile >/dev/null 2>&1 ||
+        pnpm install --frozen-lockfile --ignore-workspace >/dev/null 2>&1; }) ||
+        printf '    warning: pnpm install --frozen-lockfile failed in %s\n' "$_idir" >&2
+    else
+      [ -d "$_iw/$_idir/.venv" ] && continue
+      (cd "$_iw/$_idir" && { uv sync --frozen --all-groups >/dev/null 2>&1 ||
+        uv sync --frozen >/dev/null 2>&1; }) ||
+        printf '    warning: uv sync --frozen failed in %s\n' "$_idir" >&2
+    fi
+  done
+}
+
 # Phase 1's actual question: with the candidate files in place, does this repo's
 # gate still work HERE?
 #
@@ -2315,6 +2341,7 @@ rehearse_repo() {
   # were drifted. Keeping this identical to what pre-push runs is the invariant
   # the comment above already asserts -- it just stopped being true when the
   # gate moved and its callers did not.
+  install_gate_deps "$wt"
   _out=$( (cd "$wt" && sh scripts/biffo.sh verify 2>&1) )
   _rc=$?
   _checks=$(printf '%s' "$_out" | sed -n 's/.*verify passed[^-]*- *//p' | head -1)
@@ -2365,6 +2392,14 @@ rehearse_repo() {
         printf '%s\t%s\n' PASS "$(printf '%s (%s)' "$_checks" "$_cov")" ;;
     esac
     return 0
+  fi
+  # INCONCLUSIVE is its own verdict, not a FAIL: the gate could not run some
+  # lane (e.g. dependencies missing), so nothing is proven either way. It still
+  # blocks this repo's PR exactly as FAIL does (handled by the callers).
+  _inc=$(printf '%s' "$_out" | sed 's/\x1b\[[0-9;]*m//g' | grep -E 'verify inconclusive' | head -1)
+  if [ -n "$_inc" ]; then
+    printf '%s\t%s\n' INCONCLUSIVE "$(printf '%s' "$_inc" | sed 's/^.*verify inconclusive:* *//')"
+    return 1
   fi
   _why=$(printf '%s' "$_out" | grep -E 'verify failed|verify ran NOTHING' | head -1)
   [ -n "$_why" ] || _why=$(printf '%s' "$_out" | tail -1)
@@ -3308,6 +3343,14 @@ else
     case "$verdict" in
       PASS)  printf '%-26s \033[32mPASS\033[0m  %s\n' "$label" "$detail" ;;
       NO-CI) printf '%-26s \033[90mNO-CI\033[0m %s\n' "$label" "$detail" ;;
+      INCONCLUSIVE)
+        printf '%-26s \033[33mINCONCLUSIVE\033[0m  lanes: %s\n' "$label" "$detail"
+        if grep -q "^$label${TAB}" "$ROTTEN" 2>/dev/null; then
+          printf '%-26s       has an open sync PR -- phase 2 refreshes its branch onto the base, then reaps this tree\n' ''
+        else
+          printf '%-26s       staged tree left at %s\n' '' "$d/.worktrees/shared-sync"
+        fi
+        rehearsal_failures=$((rehearsal_failures + 1)) ;;
       *)
         printf '%-26s \033[31mFAIL\033[0m  %s\n' "$label" "$detail"
         # biffo-template#2004 defect 2: a repo already carrying an open sync
@@ -3336,8 +3379,8 @@ else
     printf 'again to pick up the excluded repo(s).\n'
     printf 'The failing repos keep their staged worktree so the gate can be run there.\n\n'
     while IFS="$TAB" read -r label verdict detail; do
-      [ "$verdict" = FAIL ] || continue
-      printf '  %-24s %s\n' "$label" "$detail"
+      case "$verdict" in FAIL|INCONCLUSIVE) ;; *) continue ;; esac
+      printf '  %-24s %s %s\n' "$label" "$verdict" "$detail"
       # Counted here, not in the phase-1 loop above: `rehearsal_failures` is
       # scoped to THIS gate (it also decides the phase-2 skip), while `failed`
       # is the run's overall tally used for the final summary and exit code.
@@ -3398,7 +3441,7 @@ while IFS="$TAB" read -r label d slug base; do
   # it carries keeps failing the gate -- and it reaps the worktree on success,
   # same as ship_repo does. A repo with no open PR yet gets none of this: the
   # worktree is left in place for a human to inspect, same as before.
-  if grep -q "^$label${TAB}FAIL${TAB}" "$VERDICTS" 2>/dev/null; then
+  if grep -qE "^$label${TAB}(FAIL|INCONCLUSIVE)${TAB}" "$VERDICTS" 2>/dev/null; then
     if grep -q "^$label${TAB}" "$ROTTEN" 2>/dev/null; then
       if refresh_rotting_pr "$d" "$label" "$base"; then
         rotting_refreshed=$((rotting_refreshed + 1))

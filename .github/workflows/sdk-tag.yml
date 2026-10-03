@@ -1,0 +1,64 @@
+name: SDK Version Tag
+
+# Releases biffo-plugin-sdk automatically (owner decision 2026-10-01), the same
+# way core-tag.yml releases the template. State-based, not diff-based: whenever
+# packages/python-sdk/pyproject.toml's version is greater than the highest
+# `sdk-v*` tag, HEAD is tagged `sdk-v<version>` and publish-sdk.yml is
+# dispatched for it. The decision lives in scripts/sdk_tag_decision.py (tested):
+# higher -> tag, equal -> no-op, lower -> refuse, tag on another commit -> refuse.
+on:
+  push:
+    branches: [dev]
+    paths:
+      - 'packages/python-sdk/**'
+      - '.github/workflows/sdk-tag.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  # A tag pushed by GITHUB_TOKEN does NOT trigger `on: push: tags:`, so
+  # publish-sdk.yml has to be dispatched explicitly (same as core-tag.yml).
+  actions: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    name: Tag SDK version
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      # Instances carry their own tag namespace; only the template releases the SDK.
+      - name: Skip in instances
+        id: guard
+        run: |
+          set -euo pipefail
+          if [ -f biffo.core.json ]; then
+            echo "biffo.core.json present — this is an instance. Skipping."
+            echo "is_template=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_template=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Decide
+        id: decide
+        if: steps.guard.outputs.is_template == 'true'
+        run: python3 scripts/sdk_tag_decision.py --github-output
+      - name: Tag and dispatch publish-sdk.yml
+        if: steps.decide.outputs.action == 'tag'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.decide.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "biffo-plugin-sdk ${TAG#sdk-v}" HEAD
+          git push origin "refs/tags/$TAG"
+          echo "::notice::Tagged $TAG — dispatching publish-sdk.yml."
+          gh workflow run publish-sdk.yml --repo "$GITHUB_REPOSITORY" --ref "$TAG"
+          echo "Dispatched publish-sdk.yml for $TAG." >> "$GITHUB_STEP_SUMMARY"

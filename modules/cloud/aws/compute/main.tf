@@ -65,7 +65,7 @@ data "aws_caller_identity" "current" {}
 # passed. Referencing an empty var alone counts as "no encryption" to Checkov
 # and to AWS, so a real key resource is always the encryption backstop.
 resource "aws_kms_key" "logs" {
-  count                   = var.cloudwatch_kms_key_id == "" ? 1 : 0
+  count                   = (var.cloudwatch_kms_key_id == "" || var.retain_legacy_log_key) ? 1 : 0
   description             = "CMK for ${local.function_name} CloudWatch logs"
   enable_key_rotation     = true
   deletion_window_in_days = 7
@@ -77,6 +77,14 @@ resource "aws_kms_key" "logs" {
     ]
   })
   tags = var.tags
+
+  # This key encrypts every event already in the function's log group
+  # (retention 365 days). Destroying it makes them undecryptable after the
+  # deletion window. No lifecycle.prevent_destroy: it would also fail
+  # `terraform test` teardown. The destructive-plan guard (aws_kms_key needs
+  # an Infra-Destroy trailer) protects it; supplying a shared
+  # cloudwatch_kms_key_id while the key exists needs retain_legacy_log_key =
+  # true (keeps it), or `terraform state rm` before merge (see README).
 }
 
 locals {

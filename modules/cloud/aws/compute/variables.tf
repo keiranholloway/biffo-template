@@ -104,6 +104,12 @@ variable "cloudwatch_kms_key_id" {
   default     = ""
 }
 
+variable "retain_legacy_log_key" {
+  description = "Keep the module's own per-function log KMS key (aws_kms_key.logs) even when cloudwatch_kms_key_id is supplied. Set true when adopting a shared key on a function whose existing log events were encrypted with the per-function key: destroying it would make up to 365 days of logs undecryptable after the 7-day deletion window. Alternative: `terraform state rm` the key before merge."
+  type        = bool
+  default     = false
+}
+
 variable "enable_warm_capacity" {
   description = "Attach SnapStart (apply_on = \"PublishedVersions\") to the published version behind the live alias (#1747) — the mechanism biffo-template#1748 chose over provisioned concurrency, on figures measured in tabsii-platform M1 (see README.md's \"Warm capacity\" section). Off by default: no existing instance's cost or behaviour changes on upgrade. Turning it on for a real instance is a separate, instance-side decision — see the README for the version-accumulation cost risk (biffo-template#1957) that must be closed first."
   type        = bool

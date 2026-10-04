@@ -121,6 +121,19 @@ describe('checkDestructivePlan', () => {
     expect(result.destructive[0].replacement).toBe(true)
   })
 
+  it('blocks destroying a KMS key without an Infra-Destroy trailer', () => {
+    const result = checkDestructivePlan(
+      plan(change('module.core_api.aws_kms_key.logs[0]', 'aws_kms_key', ['delete'])),
+    )
+    expect(result.blocked).toBe(true)
+    expect(result.destructive[0].address).toBe('module.core_api.aws_kms_key.logs[0]')
+    const allowed = checkDestructivePlan(
+      plan(change('module.core_api.aws_kms_key.logs[0]', 'aws_kms_key', ['delete'])),
+      'infra: adopt channel\n\nInfra-Destroy: key retained via state rm\n',
+    )
+    expect(allowed.blocked).toBe(false)
+  })
+
   it('reports every destructive change, not just the first', () => {
     const result = checkDestructivePlan(
       plan(
@@ -153,6 +166,7 @@ describe('checkDestructivePlan', () => {
       'aws_cognito_user_pool',
       'aws_s3_bucket',
       'aws_route53_zone',
+      'aws_kms_key',
     ]) {
       expect(STATEFUL_RESOURCE_TYPES).toContain(type)
     }

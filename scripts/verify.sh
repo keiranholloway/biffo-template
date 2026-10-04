@@ -897,7 +897,12 @@ fi
 # (tabsii-com/tabsii-platform#1464). Same doubling as above; this was not
 # re-measured against a live Postgres, so re-measure and tighten this comment
 # when the lane next runs to completion.
-PG_TEST_BUDGET_SECONDS="${BIFFO_VERIFY_PG_BUDGET:-480}"
+#
+# Raised to 960s: the lane hit "TIMED OUT after 480s (budget 480s)" with 1518
+# tests already passing before the kill, so it was slow, not failing
+# (tabsii-com/tabsii-platform#1463). Same doubling; not re-measured to
+# completion, so re-measure and tighten this comment when it next finishes.
+PG_TEST_BUDGET_SECONDS="${BIFFO_VERIFY_PG_BUDGET:-960}"
 PG_TEST_DSN="${BIFFO_TEST_PG_DSN:-${TABSII_TEST_PG_DSN:-}}"
 
 # `.claude/worktrees` is excluded alongside `.worktrees`, and finding out why

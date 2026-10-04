@@ -489,6 +489,10 @@ jobs:
 
   # Real-Postgres Core-plus-manifest schema test and live real_core /model-catalog check
   # (#2189). BIFFO_REAL_PG_E2E_REQUIRED makes the test fail, not skip, if tooling is missing.
+  # TEMPLATE-ONLY: needs cli/, which instances don't have. Every step after
+  # checkout is guarded on the absence of biffo.core.json (hashFiles is not
+  # available in a job-level `if:`), so in an instance the job is skipped steps
+  # only -- green, not failed. (ci-template-only-guard.test.ts)
   real-core-schema:
     name: Real Core schema (Postgres + live Core)
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
@@ -498,13 +502,18 @@ jobs:
         with:
           fetch-depth: 0
       - uses: pnpm/action-setup@v4
+        if: ${{ hashFiles('biffo.core.json') == '' }}
       - uses: actions/setup-node@v5
+        if: ${{ hashFiles('biffo.core.json') == '' }}
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
       - uses: astral-sh/setup-uv@v6
-      - run: pnpm install --frozen-lockfile
+        if: ${{ hashFiles('biffo.core.json') == '' }}
+      - if: ${{ hashFiles('biffo.core.json') == '' }}
+        run: pnpm install --frozen-lockfile
       - name: Run real-Postgres schema test
+        if: ${{ hashFiles('biffo.core.json') == '' }}
         working-directory: cli
         env:
           BIFFO_REAL_PG_E2E: '1'
@@ -572,8 +581,12 @@ jobs:
       # lags the published biffo-plugin-sdk (biffo-template#2064, #1524). Fails
       # when the lock is behind the newest sdk-v* tag; warns when the SDK source
       # version is ahead of any published tag. Needs the full tag history above.
+      #
+      # TEMPLATE-ONLY: `sdk-v*` tags exist only in biffo-template, so in an
+      # instance this step fails with "no sdk-v* tags found". Instances carry
+      # biffo.core.json; the template does not. (ci-template-only-guard.test.ts)
       - name: Skeleton SDK lock freshness
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && hashFiles('biffo.core.json') == '' }}
         run: |
           python3 -m unittest scripts/test_check_skeleton_sdk_lock.py
           python3 -m unittest scripts/test_sdk_tag_decision.py

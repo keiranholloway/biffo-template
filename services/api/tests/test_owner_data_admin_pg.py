@@ -33,13 +33,18 @@ def _pg_dsn() -> str | None:
     return os.environ.get("BIFFO_TEST_PG_DSN") or os.environ.get("TABSII_TEST_PG_DSN")
 
 
-pytestmark = pytest.mark.skipif(
-    _pg_dsn() is None,
-    reason=(
-        "NEVER EXECUTED IN THIS REPO without a Postgres DSN. Run it for real: "
-        'eval "$(sh scripts/pg-test-db.sh --export)"'
+pytestmark = [
+    pytest.mark.skipif(
+        _pg_dsn() is None,
+        reason=(
+            "NEVER EXECUTED IN THIS REPO without a Postgres DSN. Run it for real: "
+            'eval "$(sh scripts/pg-test-db.sh --export)"'
+        ),
     ),
-)
+    # Performs DDL (CREATE/DROP SCHEMA, create_all) against the shared pg-lane
+    # database, so it must run in the serial pass.
+    pytest.mark.serial,
+]
 
 
 def _plugin_manifest(plugin: str, table: str) -> dict:

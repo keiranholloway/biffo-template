@@ -903,6 +903,11 @@ fi
 # (tabsii-com/tabsii-platform#1466, #1475) -- i.e. 97% of the old budget. 960s
 # is the doubling the gate itself suggests. Re-measure this comment when the
 # lane next runs to completion under it.
+#
+# Independently reached again (base): the lane hit "TIMED OUT after 480s (budget 480s)" with 1518
+# tests already passing before the kill, so it was slow, not failing
+# (tabsii-com/tabsii-platform#1463). Same doubling; not re-measured to
+# completion, so re-measure and tighten this comment when it next finishes.
 PG_TEST_BUDGET_SECONDS="${BIFFO_VERIFY_PG_BUDGET:-960}"
 PG_TEST_DSN="${BIFFO_TEST_PG_DSN:-${TABSII_TEST_PG_DSN:-}}"
 

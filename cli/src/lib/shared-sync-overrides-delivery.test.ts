@@ -295,4 +295,55 @@ describe('apply_overrides_floor', () => {
     expect(code).toBe(1)
     expect(stdout.trim()).toBe('')
   })
+
+  describe('superseded keys (same package, canonical floor raised)', () => {
+    const canon = JSON.stringify({ pnpm: { overrides: { 'x@<1.0.2': '>=1.0.2' } } }, null, 2)
+
+    it('--check helper reports the superseded key', () => {
+      const dir = makeTmpDir('overrides-superseded')
+      const canonical = writeFixture(dir, 'canonical.json', canon)
+      const lines = readFileSync(script, 'utf8').split('\n')
+      const start = lines.findIndex((l) => l === 'overrides_drift() {')
+      const end = lines.findIndex((l, i) => i > start && l === '}')
+      const src = lines.slice(start, end + 1).join('\n')
+      const out = execFileSync('bash', ['-c', `${src}\noverrides_drift "$1"`, 'sh', canonical], {
+        encoding: 'utf8',
+        input: JSON.stringify({
+          pnpm: { overrides: { 'x@<1.0.1': '>=1.0.1', 'x@<1.0.2': '>=1.0.2' } },
+        }),
+      })
+      expect(out).toContain('superseded x@<1.0.1')
+    })
+
+    it('rewrites to only the canonical key, keeping unrelated keys and valid JSON', () => {
+      const dir = makeTmpDir('overrides-superseded')
+      const canonical = writeFixture(dir, 'canonical.json', canon)
+      for (const body of [
+        // superseded last, canonical already present
+        '{\n  "name": "a",\n  "pnpm": {\n    "overrides": {\n      "y@<2.0.0": ">=2.0.0",\n      "x@<1.0.2": ">=1.0.2",\n      "x@<1.0.1": ">=1.0.1"\n    }\n  }\n}\n',
+        // superseded only, canonical missing
+        '{\n  "name": "a",\n  "pnpm": {\n    "overrides": {\n      "x@<1.0.1": ">=1.0.1"\n    }\n  }\n}\n',
+      ]) {
+        const target = writeFixture(dir, 'target.json', body)
+        const { code } = run(target, canonical)
+        expect(code).toBe(0)
+        const o = JSON.parse(readFileSync(target, 'utf8')).pnpm.overrides
+        expect(o['x@<1.0.2']).toBe('>=1.0.2')
+        expect('x@<1.0.1' in o).toBe(false)
+        if (body.includes('y@')) expect(o['y@<2.0.0']).toBe('>=2.0.0')
+      }
+    })
+
+    it('leaves an unrelated or higher key for the same package alone', () => {
+      const dir = makeTmpDir('overrides-superseded')
+      const canonical = writeFixture(dir, 'canonical.json', canon)
+      const body =
+        '{\n  "pnpm": {\n    "overrides": {\n      "x@<1.0.2": ">=1.0.2",\n      "x@<2.0.0": ">=2.0.0",\n      "z@<1.0.0": ">=1.0.0"\n    }\n  }\n}\n'
+      const target = writeFixture(dir, 'target.json', body)
+      const { code, stdout } = run(target, canonical)
+      expect(code).toBe(0)
+      expect(stdout.trim()).toBe('')
+      expect(readFileSync(target, 'utf8')).toBe(body)
+    })
+  })
 })

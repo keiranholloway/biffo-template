@@ -484,6 +484,45 @@ console.log(JSON.stringify(canon(cur)));
 ' "$1"
 }
 
+# Drift of a target package.json (stdin) against the canonical copy ($1):
+# prints `missing <keys>` and `superseded <keys>` lines. Superseded = a
+# `pkg@<X` key the canonical lacks, for a package the canonical carries as
+# `pkg@<Y` with Y > X (mirrors apply_overrides_floor). Exits 3 on bad JSON.
+overrides_drift() {
+  node -e '
+  const fs = require("fs")
+let s = ""
+process.stdin.on("data", (d) => (s += d)).on("end", () => {
+  try {
+    const cur = (JSON.parse(s).pnpm || {}).overrides || {}
+    const canon = (JSON.parse(fs.readFileSync(process.argv[1], "utf8")).pnpm || {}).overrides || {}
+    const parse = (k) => {
+      const m = k.match(/^(@?[^@]+)@<(\d+(?:\.\d+)*)$/)
+      return m ? { name: m[1], ver: m[2].split(".").map(Number) } : null
+    }
+    const gt = (a, b) => {
+      for (let i = 0; i < Math.max(a.length, b.length); i += 1) {
+        const d = (a[i] || 0) - (b[i] || 0)
+        if (d !== 0) return d > 0
+      }
+      return false
+    }
+    const cp = Object.keys(canon).map(parse).filter(Boolean)
+    const missing = Object.keys(canon).filter((k) => !(k in cur))
+    const superseded = Object.keys(cur).filter((k) => {
+      if (k in canon) return false
+      const p = parse(k)
+      return p && cp.some((c) => c.name === p.name && gt(c.ver, p.ver))
+    })
+    console.log("missing " + missing.join(" "))
+    console.log("superseded " + superseded.join(" "))
+  } catch (e) {
+    process.exit(3)
+  }
+})
+' "$1"
+}
+
 # The additive-only writer half of `overridesFloor` (#1352). Mutates
 # `$1` (the target package.json) in place, adding every `pnpm.overrides` key
 # `$2` (the canonical copy) declares that `$1` is missing entirely, and
@@ -556,12 +595,35 @@ apply_overrides_floor() {
   const curOverrides = (data.pnpm && data.pnpm.overrides) || {}
   const missing = Object.keys(canonOverrides).filter((k) => !(k in curOverrides))
 
-  if (missing.length === 0) {
+  // Narrow exception to "never touch an existing key": a key `pkg@<X` the
+  // canonical does not carry, for a package the canonical carries as
+  // `pkg@<Y` with Y > X, is SUPERSEDED (the template raised the floor by
+  // introducing a new key). Left in place beside its replacement it can pin
+  // the vulnerable version. Anything else existing stays untouched.
+  const parse = (k) => {
+    const m = k.match(/^(@?[^@]+)@<(\d+(?:\.\d+)*)$/)
+    return m ? { name: m[1], ver: m[2].split(".").map(Number) } : null
+  }
+  const gt = (a, b) => {
+    for (let i = 0; i < Math.max(a.length, b.length); i += 1) {
+      const d = (a[i] || 0) - (b[i] || 0)
+      if (d !== 0) return d > 0
+    }
+    return false
+  }
+  const canonParsed = Object.keys(canonOverrides).map(parse).filter(Boolean)
+  const superseded = Object.keys(curOverrides).filter((k) => {
+    if (k in canonOverrides) return false
+    const p = parse(k)
+    return p && canonParsed.some((c) => c.name === p.name && gt(c.ver, p.ver))
+  })
+
+  if (missing.length === 0 && superseded.length === 0) {
     // Floor already met. True no-op -- exit before touching the file at all.
     process.exit(0)
   }
 
-  const lines = raw.split("\n")
+  let lines = raw.split("\n")
   const idx = lines.findIndex((l) => /"overrides"\s*:\s*\{/.test(l))
   if (idx === -1) {
     console.error("no \"overrides\": { line found -- refusing a synthetic insert")
@@ -581,6 +643,21 @@ apply_overrides_floor() {
 
   const newLines = missing.map((k) => indent + JSON.stringify(k) + ": " + JSON.stringify(canonOverrides[k]) + ",")
   lines.splice(idx + 1, 0, ...newLines)
+
+  // Remove each superseded key: exactly one single-line entry, else refuse.
+  for (const k of superseded) {
+    const re = new RegExp("^\\s*" + JSON.stringify(k).replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\s*:\\s*\"[^\"]*\"\\s*(,?)\\s*$")
+    const hits = lines.map((l, i) => (re.test(l) ? i : -1)).filter((i) => i > idx)
+    if (hits.length !== 1) {
+      console.error("cannot locate superseded key " + k + " on a single line -- refusing")
+      process.exit(1)
+    }
+    const at = hits[0]
+    const hadComma = /,\s*$/.test(lines[at])
+    lines.splice(at, 1)
+    // Removed the last entry: the previous entry must lose its comma.
+    if (!hadComma && at - 1 > idx) lines[at - 1] = lines[at - 1].replace(/,(\s*)$/, "$1")
+  }
   const out = lines.join("\n")
 
   // Verify before writing: re-parse the spliced text and confirm every
@@ -594,6 +671,12 @@ apply_overrides_floor() {
     process.exit(1)
   }
   const nowOverrides = (check.pnpm && check.pnpm.overrides) || {}
+  for (const k of superseded) {
+    if (k in nowOverrides) {
+      console.error("post-splice verification failed: superseded key " + k + " still present")
+      process.exit(1)
+    }
+  }
   for (const k of missing) {
     if (JSON.stringify(nowOverrides[k]) !== JSON.stringify(canonOverrides[k])) {
       console.error("post-splice verification failed for key " + k)
@@ -602,7 +685,7 @@ apply_overrides_floor() {
   }
 
   fs.writeFileSync(target, out)
-  console.log(missing.join(" "))
+  console.log(missing.concat(superseded.map((k) => "-" + k)).join(" "))
 ' "$1" "$2"
 }
 
@@ -997,13 +1080,10 @@ diff_files() {
       [ -n "$target" ] || continue
       remote=$(git -C "$d" show "origin/$base:$target" 2>/dev/null)
       [ -n "$remote" ] || continue
-      missing=$(printf '%s' "$remote" | node -e "
-        let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{
-        try{
-          const cur=(JSON.parse(s).pnpm||{}).overrides||{};
-          const canon=(JSON.parse(require('fs').readFileSync('$TEMPLATE_ROOT/$canonical','utf8')).pnpm||{}).overrides||{};
-          console.log(Object.keys(canon).filter(k=>!(k in cur)).join(' '));
-        }catch(e){process.exit(0)}})" 2>/dev/null)
+      _drift=$(printf '%s' "$remote" | overrides_drift "$TEMPLATE_ROOT/$canonical" 2>/dev/null) || _drift=""
+      missing=$(printf '%s\n' "$_drift" | sed -n 's/^missing //p')
+      _sup=$(printf '%s\n' "$_drift" | sed -n 's/^superseded //p')
+      [ -n "$_sup" ] && printf ' %s(overrides-superseded:%s)' "$target" "$(printf '%s' "$_sup" | tr ' ' ',')"
       [ -n "$missing" ] && printf ' %s(overrides:%s)' "$target" "$(printf '%s' "$missing" | tr ' ' ',')"
     done)"
   fi
@@ -1752,17 +1832,13 @@ if [ -n "$DELIVER" ]; then
       # this is purely to avoid staging work for the common case, which is
       # every live sibling as of 2026-08-09 (`--check` reports `uniform
       # across 6 repos`).
-      missing=$(printf '%s' "$have" | node -e "
-        let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{
-        try{
-          const cur=(JSON.parse(s).pnpm||{}).overrides||{};
-          const canon=JSON.parse(require('fs').readFileSync('$canonical','utf8')).pnpm.overrides||{};
-          console.log(Object.keys(canon).filter(k=>!(k in cur)).join(' '));
-        }catch(e){process.exit(3)}})" 2>/dev/null) || {
+      _drift=$(printf '%s' "$have" | overrides_drift "$canonical" 2>/dev/null) || {
         printf '    \033[31m%-24s\033[0m package.json did not parse\n' "$label"
         printf 'failed\n' >> "$dfailed"
         continue
       }
+      missing=$(printf '%s\n' "$_drift" | sed -n 's/^missing //p')
+      missing="$missing$(printf '%s\n' "$_drift" | sed -n 's/^superseded //p')"
       if [ -z "$missing" ]; then
         printf '    %-24s floor already met -- nothing to deliver\n' "$label"
         continue
@@ -3038,9 +3114,16 @@ if [ -n "$CHECK" ]; then
         for k in $floor; do
           case " $keys " in *" $k "*) ;; *) missing="$missing $k" ;; esac
         done
+        superseded=$(printf '%s' "$have" | overrides_drift "$canonical" 2>/dev/null | sed -n 's/^superseded //p')
+        if [ -n "$superseded" ]; then
+          printf '    \033[31m%-12s\033[0m %-24s superseded (canonical key wins):%s\n' 'SUPERSEDED' "$label" "$superseded"
+          printf 'missing\n' >> "$ofindings"
+        fi
         if [ -n "$missing" ]; then
           printf '    \033[31m%-12s\033[0m %-24s missing:%s\n' 'MISSING' "$label" "$missing"
           printf 'missing\n' >> "$ofindings"
+        elif [ -n "$superseded" ]; then
+          :
         else
           n=$(printf '%s' "$keys" | wc -w | tr -d ' ')
           printf '    %-12s %-24s %s override(s), floor met\n' 'ok' "$label" "$n"

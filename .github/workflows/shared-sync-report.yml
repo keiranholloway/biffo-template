@@ -335,41 +335,31 @@ jobs:
 
       # @tabsii-com/* packages live on GitHub Packages, not npmjs. Without a
       # scope mapping pnpm asks npmjs and gets ERR_PNPM_FETCH_404, failing
-      # lockfile regeneration for every tabsii frontend. Mint the tabsii-com
-      # installation token (needs the App's Packages: read) and write a
-      # job-local npmrc under RUNNER_TEMP (never committed). If either step
-      # fails the scope is reported unavailable ONCE (below) instead of one
-      # CANNOT STAGE per repo.
-      - name: Mint a packages-read token for tabsii-com
-        id: token_tabsii_com
-        if: steps.estate.outcome == 'success'
-        continue-on-error: true
-        uses: actions/create-github-app-token@v2
-        with:
-          app-id: ${{ secrets.BIFFO_APP_ID }}
-          private-key: ${{ secrets.BIFFO_APP_PRIVATE_KEY }}
-          owner: tabsii-com
-          permission-packages: read
-
+      # lockfile regeneration for every tabsii frontend. App installation
+      # tokens cannot read the org's npm packages, so this uses the owner-set
+      # repo secret TABSII_PACKAGES_TOKEN (classic token, read:packages only)
+      # and writes a job-local npmrc under RUNNER_TEMP (never committed). If
+      # the secret is missing or the registry rejects it, the scope is
+      # reported unavailable ONCE (below) instead of one CANNOT STAGE per repo.
       - name: Write the job-local npmrc for @tabsii-com
         id: npmrc
         if: steps.estate.outcome == 'success'
         env:
-          TOKEN_TABSII_COM: ${{ steps.token_tabsii_com.outputs.token }}
+          TABSII_PACKAGES_TOKEN: ${{ secrets.TABSII_PACKAGES_TOKEN }}
         run: |
           set -u
           ok=0
-          if [ -n "${TOKEN_TABSII_COM:-}" ]; then
+          if [ -n "${TABSII_PACKAGES_TOKEN:-}" ]; then
             rc="$RUNNER_TEMP/tabsii-npmrc"
-            # Literal ${TOKEN_TABSII_COM}: pnpm expands it from the env, so the
-            # token value is never written to disk or echoed.
+            # Literal ${TABSII_PACKAGES_TOKEN}: pnpm expands it from the env, so
+            # the token value is never written to disk or echoed.
             {
               echo '@tabsii-com:registry=https://npm.pkg.github.com/'
-              echo '//npm.pkg.github.com/:_authToken=${TOKEN_TABSII_COM}'
+              echo '//npm.pkg.github.com/:_authToken=${TABSII_PACKAGES_TOKEN}'
             } > "$rc"
             chmod 600 "$rc"
             code=$(curl -s -o /dev/null -w '%{http_code}' \
-              -H "Authorization: Bearer ${TOKEN_TABSII_COM}" \
+              -H "Authorization: Bearer ${TABSII_PACKAGES_TOKEN}" \
               "https://npm.pkg.github.com/@tabsii-com%2fui" || echo 000)
             case "$code" in
               401|403) ;;
@@ -377,12 +367,13 @@ jobs:
             esac
             if [ "$ok" -eq 1 ]; then
               echo "NPM_CONFIG_USERCONFIG=$rc" >> "$GITHUB_ENV"
-              echo "TOKEN_TABSII_COM=${TOKEN_TABSII_COM}" >> "$GITHUB_ENV"
+              echo "::add-mask::${TABSII_PACKAGES_TOKEN}"
+              echo "TABSII_PACKAGES_TOKEN=${TABSII_PACKAGES_TOKEN}" >> "$GITHUB_ENV"
             fi
           fi
           echo "ok=$ok" >> "$GITHUB_OUTPUT"
           if [ "$ok" -ne 1 ]; then
-            echo "::error title=shared-sync: registry auth unavailable for @tabsii-com::registry auth unavailable for @tabsii-com -- the tabsii-com App token could not be minted or cannot read packages (needs Packages: read). Satellites depending on @tabsii-com/* are skipped this run." >&2
+            echo "::error title=shared-sync: registry auth unavailable for @tabsii-com::registry auth unavailable for @tabsii-com -- secret TABSII_PACKAGES_TOKEN is unset or the registry rejected it (needs a classic token with read:packages). Satellites depending on @tabsii-com/* are skipped this run." >&2
           fi
 
       - name: Run shared-sync --check against the cloned estate

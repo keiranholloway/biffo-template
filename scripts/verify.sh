@@ -898,7 +898,13 @@ fi
 # re-measured against a live Postgres, so re-measure and tighten this comment
 # when the lane next runs to completion.
 #
-# Raised to 960s: the lane hit "TIMED OUT after 480s (budget 480s)" with 1518
+# Raised again to 960s: the lane timed out at 480s at ~92% of 216 modules with
+# no failures, and a complete run measured 464s with the budget lifted to 1200s
+# (tabsii-com/tabsii-platform#1466, #1475) -- i.e. 97% of the old budget. 960s
+# is the doubling the gate itself suggests. Re-measure this comment when the
+# lane next runs to completion under it.
+#
+# Independently reached again (base): the lane hit "TIMED OUT after 480s (budget 480s)" with 1518
 # tests already passing before the kill, so it was slow, not failing
 # (tabsii-com/tabsii-platform#1463). Same doubling; not re-measured to
 # completion, so re-measure and tighten this comment when it next finishes.

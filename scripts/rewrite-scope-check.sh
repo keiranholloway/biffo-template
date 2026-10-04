@@ -95,6 +95,9 @@ while read -r _local_ref local_sha _remote_ref remote_sha; do
   # Brand-new remote branch: there is no previous scope to compare against.
   [ "$remote_sha" = "$ZERO" ] && continue
   # The remote may not have the old object locally (shallow clone, pruned).
+  # Try a best-effort fetch of the tip first (read-only; never fatal).
+  git cat-file -e "$remote_sha^{commit}" 2>/dev/null ||
+    git fetch --quiet --no-tags "${1:-origin}" "$remote_sha" >/dev/null 2>&1 || true
   git cat-file -e "$remote_sha^{commit}" 2>/dev/null || {
     note "remote tip $remote_sha not available locally — check did NOT run for this ref"
     continue

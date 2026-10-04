@@ -333,6 +333,58 @@ jobs:
           echo "cloned=$cloned" >> "$GITHUB_OUTPUT"
           echo "cloned ${cloned} candidate repo(s) into ${ESTATE}"
 
+      # @tabsii-com/* packages live on GitHub Packages, not npmjs. Without a
+      # scope mapping pnpm asks npmjs and gets ERR_PNPM_FETCH_404, failing
+      # lockfile regeneration for every tabsii frontend. Mint the tabsii-com
+      # installation token (needs the App's Packages: read) and write a
+      # job-local npmrc under RUNNER_TEMP (never committed). If either step
+      # fails the scope is reported unavailable ONCE (below) instead of one
+      # CANNOT STAGE per repo.
+      - name: Mint a packages-read token for tabsii-com
+        id: token_tabsii_com
+        if: steps.estate.outcome == 'success'
+        continue-on-error: true
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.BIFFO_APP_ID }}
+          private-key: ${{ secrets.BIFFO_APP_PRIVATE_KEY }}
+          owner: tabsii-com
+          permission-packages: read
+
+      - name: Write the job-local npmrc for @tabsii-com
+        id: npmrc
+        if: steps.estate.outcome == 'success'
+        env:
+          TOKEN_TABSII_COM: ${{ steps.token_tabsii_com.outputs.token }}
+        run: |
+          set -u
+          ok=0
+          if [ -n "${TOKEN_TABSII_COM:-}" ]; then
+            rc="$RUNNER_TEMP/tabsii-npmrc"
+            # Literal ${TOKEN_TABSII_COM}: pnpm expands it from the env, so the
+            # token value is never written to disk or echoed.
+            {
+              echo '@tabsii-com:registry=https://npm.pkg.github.com/'
+              echo '//npm.pkg.github.com/:_authToken=${TOKEN_TABSII_COM}'
+            } > "$rc"
+            chmod 600 "$rc"
+            code=$(curl -s -o /dev/null -w '%{http_code}' \
+              -H "Authorization: Bearer ${TOKEN_TABSII_COM}" \
+              "https://npm.pkg.github.com/@tabsii-com%2fui" || echo 000)
+            case "$code" in
+              401|403) ;;
+              *) ok=1 ;;
+            esac
+            if [ "$ok" -eq 1 ]; then
+              echo "NPM_CONFIG_USERCONFIG=$rc" >> "$GITHUB_ENV"
+              echo "TOKEN_TABSII_COM=${TOKEN_TABSII_COM}" >> "$GITHUB_ENV"
+            fi
+          fi
+          echo "ok=$ok" >> "$GITHUB_OUTPUT"
+          if [ "$ok" -ne 1 ]; then
+            echo "::error title=shared-sync: registry auth unavailable for @tabsii-com::registry auth unavailable for @tabsii-com -- the tabsii-com App token could not be minted or cannot read packages (needs Packages: read). Satellites depending on @tabsii-com/* are skipped this run." >&2
+          fi
+
       - name: Run shared-sync --check against the cloned estate
         id: sync
         if: steps.estate.outcome == 'success'
@@ -392,6 +444,19 @@ jobs:
           GH_TOKEN: ${{ secrets.BIFFO_GITHUB_TOKEN }}
         run: |
           set -u
+          if [ "${{ steps.npmrc.outputs.ok }}" != "1" ]; then
+            # Reported once above; park dependents outside the estate for the
+            # delivery round rather than emitting a CANNOT STAGE for each.
+            skipped="$RUNNER_TEMP/shared-sync-no-registry-auth"
+            mkdir -p "$skipped"
+            for d in "${{ steps.estate.outputs.estate }}"/*/; do
+              [ -d "$d" ] || continue
+              if find "$d" -name package.json -not -path '*/node_modules/*' -exec grep -l '"@tabsii-com/' {} + 2>/dev/null | grep -q .; then
+                echo "skipping $(basename "$d"): registry auth unavailable for @tabsii-com"
+                mv "$d" "$skipped/"
+              fi
+            done
+          fi
           bash scripts/shared-sync.sh --now --estate "${{ steps.estate.outputs.estate }}"
 
       - name: Decide red/green and update the tracking issue

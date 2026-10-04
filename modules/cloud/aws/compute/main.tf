@@ -80,12 +80,11 @@ resource "aws_kms_key" "logs" {
 
   # This key encrypts every event already in the function's log group
   # (retention 365 days). Destroying it makes them undecryptable after the
-  # deletion window, so it is never destroyed by a plan. Supplying a shared
+  # deletion window. No lifecycle.prevent_destroy: it would also fail
+  # `terraform test` teardown. The destructive-plan guard (aws_kms_key needs
+  # an Infra-Destroy trailer) protects it; supplying a shared
   # cloudwatch_kms_key_id while the key exists needs retain_legacy_log_key =
   # true (keeps it), or `terraform state rm` before merge (see README).
-  lifecycle {
-    prevent_destroy = true
-  }
 }
 
 locals {

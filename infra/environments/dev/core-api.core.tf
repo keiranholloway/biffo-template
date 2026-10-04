@@ -20,6 +20,15 @@
 #
 # ## Adoption in existing instances
 #
+# WARNING — destroys the function's own log KMS key. Passing
+# `cloudwatch_kms_key_id` below makes `module.core_api.aws_kms_key.logs[0]`
+# (which encrypts the existing 365-day log group) plan as a destroy. KMS
+# destroy only schedules deletion (7 days), after which those logs are
+# permanently undecryptable. Before planning, either run
+# `terraform state rm 'module.core_api.aws_kms_key.logs[0]'` (key stays in AWS)
+# or set `retain_legacy_log_key = true` on the module. Any plan destroying an
+# aws_kms_key now needs an `Infra-Destroy:` trailer.
+#
 # A resource's address (`module.core_api`) does not include the file that
 # declares it, so moving the block between files is a no-op to Terraform's state:
 # no `moved` block is needed (and one from an address to itself is an error), and

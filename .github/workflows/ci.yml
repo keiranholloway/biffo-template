@@ -1188,7 +1188,7 @@ jobs:
             echo "== testing $dir =="
             terraform -chdir="$dir" init -backend=false -input=false >/dev/null || { rc=1; continue; }
             terraform -chdir="$dir" test || rc=1
-          done < <(find modules -name '*.tftest.hcl' -exec dirname {} \; | sed 's:/tests$::' | sort -u)
+          done < <(find modules infra/environments/dev -name '*.tftest.hcl' -exec dirname {} \; | sed 's:/tests$::' | sort -u)
           # Fail closed on a zero denominator -- a discovery step that finds
           # nothing must never be reported as a silent pass (the #1363
           # class): otherwise this exact bug returns the moment someone

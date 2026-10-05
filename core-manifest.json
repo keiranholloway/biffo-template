@@ -26,6 +26,7 @@
     "infra/environments/dev/core-api-environment.core.tf",
     "infra/environments/dev/core-api.core.tf",
     "infra/environments/dev/core-api-variables.core.tf",
+    "infra/environments/dev/tests/",
     "infra/environments/dev/plugin-host.core.tf",
     "infra/environments/dev/plugin-storage.core.tf",
     "infra/environments/dev/plugins.core.tf",

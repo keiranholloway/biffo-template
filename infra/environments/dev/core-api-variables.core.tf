@@ -19,3 +19,9 @@ variable "core_api_timeout" {
   type        = number
   default     = 300
 }
+
+variable "core_api_extra_environment" {
+  description = "Extra Core API environment variables from tfvars, merged after local.core_api_instance_environment (core-api.instance.tf). Plain strings only; prefer the local for anything computed."
+  type        = map(string)
+  default     = {}
+}

@@ -132,6 +132,6 @@ module "core_api" {
     # deploy-app.yml's packaging step copies db/imports/<name>/*.sql into the
     # Lambda zip under db/imports/, which AWS extracts to /var/task/ (ADR-0005).
     BIFFO_DDL_IMPORT_ROOT = "/var/task/db/imports"
-  }, local.core_api_instance_environment)
+  }, local.core_api_instance_environment, var.core_api_extra_environment)
   tags = local.tags
 }

@@ -2446,3 +2446,89 @@ def test_a_scope_deriving_target_refuses_the_wrong_scope_level(app, client, lead
 
 def test_a_workflow_with_no_writeback_is_completely_unaffected(client, leads_target):
     assert client.post(f"{_BASE}", json=_writeback_body(None)).status_code == 201
+
+
+# --- save-time SES sender check -------------------------------------------------
+
+
+class _NotFoundError(Exception):
+    response = {"Error": {"Code": "NotFoundException", "Message": "nope"}}
+
+
+class _FakeSesV2:
+    """Verifies only the identities given; anything else is NotFound."""
+
+    def __init__(self, verified: set[str]) -> None:
+        self.verified = verified
+        self.calls: list[str] = []
+
+    def get_email_identity(self, EmailIdentity: str) -> dict:  # noqa: N803
+        self.calls.append(EmailIdentity)
+        if EmailIdentity not in self.verified:
+            raise _NotFoundError()
+        return {"VerifiedForSendingStatus": True}
+
+
+@pytest.fixture
+def fake_ses(monkeypatch) -> _FakeSesV2:
+    from api import sender_check
+
+    fake = _FakeSesV2({"example.com", "ops@example.com"})
+    monkeypatch.setattr(sender_check, "_get_client", lambda: fake)
+    return fake
+
+
+def _from_body(sender: str) -> dict:
+    body = _valid_body()
+    body["action_config"]["from"] = sender
+    return body
+
+
+def test_create_rejects_unverified_sender(client: TestClient, fake_ses):
+    resp = client.post(_BASE, json=_from_body("someone@unverified.example"))
+    assert resp.status_code == 422
+    assert "someone@unverified.example" in resp.json()["detail"]
+    assert client.get(_BASE).json() == []
+
+
+def test_create_accepts_sender_at_verified_domain(client: TestClient, fake_ses):
+    assert client.post(_BASE, json=_from_body("someone@example.com")).status_code == 201
+
+
+def test_display_name_is_stripped_before_lookup(fake_ses):
+    from api.sender_check import require_sendable_sender
+
+    asyncio.run(require_sendable_sender("Ops <ops@example.com>"))
+    assert fake_ses.calls == ["ops@example.com"]
+
+
+def test_update_rejects_unverified_sender_and_accepts_verified(client: TestClient, fake_ses):
+    row = client.post(_BASE, json=_from_body("someone@example.com")).json()
+    bad = client.put(f"{_BASE}/{row['id']}", json=_from_body("someone@unverified.example"))
+    assert bad.status_code == 422
+    assert "someone@unverified.example" in bad.json()["detail"]
+    ok = client.put(f"{_BASE}/{row['id']}", json=_from_body("other@example.com"))
+    assert ok.status_code == 200
+
+
+def test_ses_lookup_error_is_503_and_writes_nothing(client: TestClient, monkeypatch):
+    from api import sender_check
+
+    class _Boom:
+        def get_email_identity(self, EmailIdentity: str):  # noqa: N803
+            raise RuntimeError("ses down")
+
+    monkeypatch.setattr(sender_check, "_get_client", lambda: _Boom())
+    resp = client.post(_BASE, json=_from_body("someone@example.com"))
+    assert resp.status_code == 503
+    assert client.get(_BASE).json() == []
+
+
+def test_require_sendable_sender_importable_from_instance_code(fake_ses):
+    from api.sender_check import require_sendable_sender
+    from fastapi import HTTPException
+
+    asyncio.run(require_sendable_sender("a@example.com"))
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(require_sendable_sender("a@unverified.example"))
+    assert exc.value.status_code == 422

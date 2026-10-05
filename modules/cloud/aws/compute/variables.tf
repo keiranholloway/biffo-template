@@ -76,6 +76,12 @@ variable "invoke_function_arns" {
   default     = []
 }
 
+variable "ses_identity_read" {
+  description = "Grant ses:GetEmailIdentity so the function can check a workflow's From address is a verified SES sending identity before saving it. Only the Core API needs this."
+  type        = bool
+  default     = false
+}
+
 variable "event_bus_name" {
   type    = string
   default = ""

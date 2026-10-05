@@ -1783,3 +1783,16 @@ def test_a_url_without_the_placeholder_is_untouched(monkeypatch: pytest.MonkeyPa
 
     assert http.calls[0]["url"] == "https://hooks.slack.com/services/x"
     assert http.calls[0]["headers"] is None
+
+
+def test_aws_failure_keeps_ses_error_message():
+    from orchestrator.actions import _aws_failure
+
+    class _RejectedError(Exception):
+        response = {
+            "Error": {"Code": "MessageRejected", "Message": "Email address is not verified. x"}
+        }
+
+    err = _aws_failure("SES send", _RejectedError())
+    assert "MessageRejected" in str(err)
+    assert "Email address is not verified" in str(err)

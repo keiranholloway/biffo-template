@@ -183,6 +183,16 @@ data "aws_iam_policy_document" "lambda_permissions" {
   }
 
   dynamic "statement" {
+    for_each = var.ses_identity_read ? [1] : []
+    content {
+      sid       = "SesIdentityRead"
+      effect    = "Allow"
+      actions   = ["ses:GetEmailIdentity"]
+      resources = ["*"]
+    }
+  }
+
+  dynamic "statement" {
     for_each = var.event_bus_name != "" ? [1] : []
     content {
       sid       = "EventBridgePublish"

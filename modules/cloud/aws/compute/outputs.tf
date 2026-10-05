@@ -15,3 +15,14 @@ output "security_group_id" {
 output "role_arn" { value = aws_iam_role.lambda.arn }
 output "role_name" { value = aws_iam_role.lambda.name }
 output "dlq_arn" { value = aws_sqs_queue.dlq.arn }
+# Effective function configuration, as planned. Exposed so environment-level
+# `terraform test` runs (infra/environments/dev/tests/) can assert that instance
+# knobs actually reach the Lambda; a test cannot read a module's inner resources.
+output "memory_size" { value = aws_lambda_function.main.memory_size }
+output "timeout" { value = aws_lambda_function.main.timeout }
+output "snap_start_enabled" { value = length(aws_lambda_function.main.snap_start) > 0 }
+output "environment_variables" {
+  description = "Effective Lambda environment (sensitive: carries DB URLs)."
+  value       = aws_lambda_function.main.environment[0].variables
+  sensitive   = true
+}

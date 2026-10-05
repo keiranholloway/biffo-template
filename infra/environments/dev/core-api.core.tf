@@ -92,6 +92,7 @@ module "core_api" {
   # here. pr-signer can't follow that same convention-only shape: it is
   # conditionally provisioned per `var.enable_pr_signer`, so Core needs this env
   # var to tell "not configured" apart from a live function name.
+  ses_identity_read    = true
   invoke_function_arns = var.enable_pr_signer ? [module.pr_signer[0].function_arn] : []
   # `local.core_api_environment` is declared in the TEMPLATE-OWNED
   # core-api-environment.core.tf (#1538, #1540) and is the home of the core

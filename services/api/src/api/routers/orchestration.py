@@ -74,6 +74,7 @@ from ..schemas.orchestration import (
     resolve_write_secrets,
 )
 from ..scope_resolvers import registered_scope_levels, trigger_reachable_levels
+from ..sender_check import require_sendable_sender
 from ..writeback_targets import (
     WriteBackTarget,
     registered_writeback_targets,
@@ -534,6 +535,15 @@ async def _require_resolvable_agent_prompts(
         ) from exc
 
 
+async def _require_sendable_email_sender(action_type: str, action_config: dict[str, Any]) -> None:
+    """422/503 unless an email action's ``from`` is an address SES can send as."""
+    if action_type != "email":
+        return
+    sender = action_config.get("from")
+    if isinstance(sender, str) and sender:
+        await require_sendable_sender(sender)
+
+
 @router.get("", response_model=list[WorkflowDefinitionResponse])
 async def list_workflows(
     caller: AuthenticatedUser = Depends(require_auth),
@@ -572,6 +582,7 @@ async def create_workflow(
     await _require_resolvable_agent_prompts(
         db, tenant_id=caller.tenant_id, action_type=body.action_type, action_config=action_config
     )
+    await _require_sendable_email_sender(body.action_type, action_config)
     definition = await create_definition(
         db,
         tenant_id=caller.tenant_id,
@@ -639,6 +650,7 @@ async def update_workflow(
     await _require_resolvable_agent_prompts(
         db, tenant_id=caller.tenant_id, action_type=body.action_type, action_config=action_config
     )
+    await _require_sendable_email_sender(body.action_type, action_config)
     definition = await update_definition(
         db,
         tenant_id=caller.tenant_id,

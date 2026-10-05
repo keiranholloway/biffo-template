@@ -157,12 +157,14 @@ def _aws_failure(action: str, exc: Exception) -> ActionError:
     does.
     """
     code = ""
+    message = ""
     response = getattr(exc, "response", None)
     if isinstance(response, dict):
         error = response.get("Error")
         if isinstance(error, dict):
             code = str(error.get("Code", ""))
-    detail = code or str(exc)
+            message = str(error.get("Message", ""))
+    detail = f"{code}: {message}" if code and message else code or str(exc)
     if code in _TRANSIENT_AWS_CODES or isinstance(exc, (TimeoutError, ConnectionError)):
         return TransientActionError(f"{action} failed (transient): {detail}")
     return ActionError(f"{action} failed: {detail}")

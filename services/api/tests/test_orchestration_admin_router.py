@@ -743,6 +743,7 @@ def test_observed_trigger_appears_in_catalog_and_is_selectable(app, client: Test
     body = client.get(f"{_BASE}/catalog").json()
     observed = [t for t in body["triggers"] if t["detail_type"] == "brand.approved"]
     assert observed and observed[0]["origin"] == "observed"
+    assert observed[0]["kind"] == "event"
 
     # ...and is now a valid pick (validation accepts registry ∪ observed).
     created = client.post(_BASE, json=_valid_body(trigger_detail_type="brand.approved"))
@@ -828,11 +829,29 @@ def test_catalog_includes_declared_crud_events(client: TestClient, monkeypatch):
     by_dt = {t["detail_type"]: t for t in body["triggers"]}
     # Every allowed CRUD op is a declared trigger, shown before it ever fires.
     assert by_dt["widgets.created"]["origin"] == "declared"
+    assert by_dt["widgets.created"]["label"] == "Widgets created"
+    assert by_dt["widgets.created"]["kind"] == "record"
     assert by_dt["widgets.updated"]["origin"] == "declared"
     # delete not allowed -> not offered
     assert "widgets.deleted" not in by_dt
     # registry business events are still present
     assert "demo.requested" in by_dt
+    from api.events.registry import registered_events
+
+    demo = next(e for e in registered_events() if e.detail_type == "demo.requested")
+    assert by_dt["demo.requested"]["kind"] == "event"
+    assert by_dt["demo.requested"]["label"] == demo.label
+
+
+def test_catalog_humanises_multi_word_table_names(client: TestClient, monkeypatch):
+    from api.models.plugin_table import PermissionRule, TablePermissions
+
+    registry = {"widget_parts": TablePermissions(create=PermissionRule(allowed=True))}
+    monkeypatch.setattr("api.routers.orchestration.get_permissions_registry", lambda **_: registry)
+    by_dt = {t["detail_type"]: t for t in client.get(f"{_BASE}/catalog").json()["triggers"]}
+    entry = by_dt["widget_parts.created"]
+    assert entry["label"] == "Widget parts created"
+    assert entry["description"] == "A widget parts record was created."
 
 
 def test_a_model_can_decline_to_be_offered_as_a_crud_trigger(client: TestClient, monkeypatch):

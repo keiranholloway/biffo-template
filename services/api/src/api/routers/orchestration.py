@@ -33,7 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..database import get_db
 from ..dependencies import ADMIN_GROUP, require_admin
 from ..events import emit_event
-from ..events.event_fields import fields_for_crud_table, trigger_excluded_ops
+from ..events.event_fields import _humanize, fields_for_crud_table, trigger_excluded_ops
 from ..events.registry import (
     WORKFLOW_DEFINITION_CREATED,
     WORKFLOW_DEFINITION_DELETED,
@@ -198,6 +198,7 @@ async def get_catalog(
                 "label": e.label,
                 "description": e.description,
                 "origin": "declared",
+                "kind": "event",
                 # Advisory field metadata for the "Only when…" editor (#505); an
                 # event that declares none serialises as [] (UI → free text).
                 "fields": _serialize_fields(fields),
@@ -236,9 +237,10 @@ async def get_catalog(
                 {
                     "source": "biffo.core",
                     "detail_type": f"{table}.{verb}",
-                    "label": f"{table} {verb}",
-                    "description": f"A {table} row was {verb}.",
+                    "label": f"{_humanize(table)} {verb}",
+                    "description": f"A {_humanize(table).lower()} record was {verb}.",
                     "origin": "declared",
+                    "kind": "record",
                     # A CRUD event's payload is the mutated row, so its fields are
                     # the table's columns, introspected from the model (#505).
                     # Empty when the table has no locatable model.
@@ -261,6 +263,7 @@ async def get_catalog(
                 "label": observed.detail_type,
                 "description": "Seen on the event bus.",
                 "origin": "observed",
+                "kind": "event",
                 # An undeclared, observed event has no described payload — the UI
                 # falls back to free-text conditions (#505).
                 "fields": [],

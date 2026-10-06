@@ -251,6 +251,21 @@ _INTEGRITY_ERROR_MESSAGES: dict[str, str] = {
 }
 _DEFAULT_INTEGRITY_MESSAGE = "That value conflicts with an existing record."
 
+# 23505 messages that name the actual problem, keyed by constraint/index name.
+# Never the generic text for a pipeline-stage clash (module 209).
+_UNIQUE_VIOLATION_MESSAGES: dict[str, str] = {
+    "uq_pipeline_stages_brand_sequence_live": (
+        "Another stage already holds that position. Refresh the stage list and try again."
+    ),
+    "uq_pipeline_stages_brand_sequence": (
+        "Another stage already holds that position. Refresh the stage list and try again."
+    ),
+    "uq_pipeline_stages_one_default_per_brand": (
+        "This brand already has a default stage. Choose another default before adding one."
+    ),
+    "uq_pipeline_stages_one_kind_per_brand": ("This brand already has a stage of that kind."),
+}
+
 
 def _driver_error(exc: DBAPIError) -> Any:
     """The REAL driver exception, not the DBAPI wrapper SQLAlchemy raises.
@@ -415,6 +430,8 @@ def _integrity_error_response(
         if isinstance(sqlstate, str)
         else _DEFAULT_INTEGRITY_MESSAGE
     )
+    if sqlstate == "23505" and constraint in _UNIQUE_VIOLATION_MESSAGES:
+        message = _UNIQUE_VIOLATION_MESSAGES[constraint]
     logger.warning(
         f"IntegrityError on {operation} {model.__tablename__}",
         extra={

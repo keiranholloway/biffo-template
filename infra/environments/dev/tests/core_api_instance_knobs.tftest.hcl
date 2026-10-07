@@ -55,6 +55,35 @@ mock_provider "http" {
 
 mock_provider "random" {}
 
+# An instance may wire COMPUTED values into inputs that drive a `count` in a
+# module it owns or in template modules (e.g. mail_source_arn from an SES
+# identity resource, or module.api_gateway.execution_arn into a plugin module).
+# Those are unknown under mock providers, so planning fails with "Invalid count
+# argument" even though a real plan against state is fine. Neither module is
+# under test here, so replace them with fixed outputs: the knobs under test
+# depend on neither, and the test then no longer depends on instance wiring.
+override_module {
+  target = module.auth
+  outputs = {
+    user_pool_id     = "us-east-1_mock"
+    user_pool_arn    = "arn:aws:cognito-idp:us-east-1:123456789012:userpool/us-east-1_mock"
+    client_id        = "mockclientid"
+    hosted_ui_domain = "mock.auth.us-east-1.amazoncognito.com"
+  }
+}
+
+override_module {
+  target = module.api_gateway
+  outputs = {
+    api_id                 = "mockapi"
+    api_endpoint           = "https://mockapi.execute-api.us-east-1.amazonaws.com"
+    execution_arn          = "arn:aws:execute-api:us-east-1:123456789012:mockapi"
+    api_domain             = "mockapi.execute-api.us-east-1.amazonaws.com"
+    cognito_authorizer_id  = "mockauth"
+    lambda_integration_uri = "arn:aws:apigateway:us-east-1:lambda:path/2015-03-31/functions/arn:aws:lambda:us-east-1:123456789012:function:mock/invocations"
+  }
+}
+
 variables {
   project_name   = "knobs-test"
   admin_email    = "admin@example.com"

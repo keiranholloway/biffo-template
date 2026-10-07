@@ -28,7 +28,7 @@ a specific line number — the shape of the boundary is the durable part.
 | **Template ownership** | `services/api/` template-owned (except `migrations/versions/`) | Mechanism (`services/_plugins/`, `services/_plugin-host/`, scaffold, allowlist) template-owned; a specific third-party plugin's code (`services/<name>/`) is user-owned the moment it's installed | The scaffold (`_skeletons/sibling-template/`) is template-owned **as a source**; once copied into a new repo it is entirely outside `core-manifest.json`'s reach — there is no per-sibling manifest and `biffo core upgrade` has no code path that targets a sibling repo at all |
 | **How it stays in sync with core** | N/A — it *is* core, upgraded like the rest of the template | `biffo core upgrade` (mechanism only); a third-party plugin's own code needs its *own* `biffo plugin upgrade` against the registry — no version-compatibility check exists yet (`required_core_version` is unverified, `plugin-upgrade.ts:60-77`) | One-time skeleton copy at creation, then only a narrow GitHub-Environment-variable push after every core deploy (`wireSiblingsAfterCoreDeploy`). No `core upgrade`-equivalent resync mechanism for the sibling's own code exists in code today |
 | **Coupling back into the core repo** | N/A | At install time, touches only the core repo's own `services/<name>/`, `modules/plugins/<name>/`, and an appended migration — **unless** the plugin declares `user_frontend` and `install` was given `--frontend-cwd <path>` (biffo-template#2012): then the dashboard-registry entry (`apps/frontend/src/lib/plugins.ts`) is committed into that separate checkout instead, for the split core+dashboard topology (`biffo-platform` / `biffo-platform-app`). Every other write still targets `--cwd` only; omit the flag and behaviour is exactly the single-repo case above | `biffo sibling create` opens a **real PR against the core repo** (`siblings.auto.tfvars.json`) to register CDN routing — a one-time, reviewable coupling point, not a live write |
-| **Cross-boundary calls** | N/A | No code path lets a plugin call another plugin or a sibling directly — everything transits Core | No code path lets a sibling call another sibling or a plugin directly — only one non-core endpoint setting exists (`NEXT_PUBLIC_API_URL`, its own backend) |
+| **Cross-boundary calls** | N/A | No code path lets a plugin call another plugin or a sibling directly — everything transits Core. The only cross-plugin data access is an explicit, owner-scoped read grant (§7) | No code path lets a sibling call another sibling or a plugin directly — only one non-core endpoint setting exists (`NEXT_PUBLIC_API_URL`, its own backend) |
 
 ## 2. Use cases — which mechanism fits
 
@@ -275,3 +275,25 @@ severity; exposure (latent vs. realized) noted per item.
    `--no-verify`; CI (gated by branch protection) is the actual backstop.
    Deliberate defense-in-depth, not a flaw, but worth knowing the local hook
    alone isn't sufficient if branch protection is ever misconfigured.
+
+## 7. Cross-plugin read grants (ADR-0017 §5, amended 2026-10-07)
+
+By default a plugin can never read another plugin's tables. The one exception is
+an explicit, named, owner-scoped **read grant**:
+
+- **Declared** by the owning plugin, in the table's manifest, by naming the
+  grantee's service principal (`system:<plugin>`) in that table's
+  `owner_scoped_service.allowed_principals`. This is the existing mechanism: no
+  new Core record type and no implicit grants.
+- **Scoped to the owner.** Read-only (list + read, no writes), and every read is
+  forced to the verified founder's `owner_sub` — a grantee sees only the rows of
+  the founder it is acting for. The admin cross-owner path is not part of a grant.
+- **Audited here.** Every grant is listed in the table below. A grant not listed
+  here is not permitted; add or remove entries in the same change as the manifest.
+
+| Grantor (owns the tables) | Grantee | Tables | Access |
+|---|---|---|---|
+| Ideation | `system:idea-scout` | sessions, reports, research | read-only, owner-scoped |
+
+Core code support (owner-data handlers accepting a grantee principal on the read
+path) is a separate follow-up item.

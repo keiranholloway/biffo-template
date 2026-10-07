@@ -53,5 +53,12 @@ export default defineConfig({
     environment: 'jsdom',
     include: ['src/**/*.test.{ts,tsx}'],
     setupFiles: ['src/test-setup.ts'],
+    // A one-off `EPIPE` (errno -32) from a ForksPoolWorker failed the pre-push
+    // gate on a PR that touched no JS: a transient resource problem when
+    // several turbo workers compete for memory. Bound the pool, and retry once
+    // only under the pre-push hook (which exports BIFFO_PRE_PUSH) so a real
+    // flake is never masked in CI or in ordinary local runs.
+    maxWorkers: 2,
+    retry: process.env.BIFFO_PRE_PUSH ? 1 : 0,
   },
 })

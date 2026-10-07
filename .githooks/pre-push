@@ -195,6 +195,8 @@ fi
 # own failure text (above) already names the cause; this adds one more line,
 # deliberately placed as close as this hook can get to git's trailing output,
 # so a reader who only sees the last few lines still sees it.
+# Lets vitest configs retry once, for this gate only (#EPIPE flake).
+export BIFFO_PRE_PUSH=1
 sh scripts/biffo.sh verify
 verify_status=$?
 if [ "$verify_status" -ne 0 ]; then

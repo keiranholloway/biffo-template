@@ -107,6 +107,15 @@ run "bootstrap_shared_log_key" {
 run "no_overrides_keeps_template_behaviour" {
   command = plan
 
+  # Pin every override knob to its unset value so this run checks the module's
+  # defaults whatever tfvars an instance's root passes (e.g. SnapStart on).
+  variables {
+    core_api_memory_size          = 512
+    core_api_timeout              = 300
+    core_api_enable_warm_capacity = false
+    core_api_extra_environment    = {}
+  }
+
   assert {
     condition     = module.core_api.memory_size == 512
     error_message = "Default memory must stay the compute module's 512 MB."
@@ -123,7 +132,9 @@ run "no_overrides_keeps_template_behaviour" {
   }
 
   assert {
-    condition     = !contains(keys(module.core_api.environment_variables), "BIFFO_DB_SEARCH_PATH") && !contains(keys(module.core_api.environment_variables), "BIFFO_SIMULATION_PERSONAS_PARAMETER_PATH")
+    # Keys the instance sets itself (core-api.instance.tf) are its own choice;
+    # anything else beyond the template's keys must not appear.
+    condition     = alltrue([for k in ["BIFFO_DB_SEARCH_PATH", "BIFFO_SIMULATION_PERSONAS_PARAMETER_PATH"] : contains(keys(local.core_api_instance_environment), k) || !contains(keys(module.core_api.environment_variables), k)])
     error_message = "No instance keys may appear without an override."
   }
 

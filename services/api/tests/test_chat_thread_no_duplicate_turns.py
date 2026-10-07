@@ -59,6 +59,7 @@ def test_three_real_turns_store_and_replay_each_message_once():
         factory = async_sessionmaker(engine, expire_on_commit=False)
         invoker = _Invoker()
         thread = None
+        stamped: dict[str, datetime] = {}
         async with factory() as db:
             for n in (1, 2, 3):
                 resp = await run_chat_turn(
@@ -71,7 +72,15 @@ def test_three_real_turns_store_and_replay_each_message_once():
                     invoker=invoker,
                     context=TurnContext(),
                 )
-                thread = resp.thread_id
+                thread = getattr(resp, "thread_id", None)
+                assert thread is not None
+                await db.commit()
+                # SQLite timestamps can tie within one instant; give each run a
+                # distinct created_at so ordering is deterministic.
+                for run in await list_thread_runs(db, tenant_id="default", thread_id=thread):
+                    if run.created_at is None or run.id not in stamped:
+                        stamped[run.id] = datetime(2026, 1, 1, 0, 0, n, tzinfo=UTC)
+                        run.created_at = stamped[run.id]
                 await db.commit()
             runs = await list_thread_runs(db, tenant_id="default", thread_id=thread)
         await engine.dispose()

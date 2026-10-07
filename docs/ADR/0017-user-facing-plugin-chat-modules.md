@@ -168,6 +168,31 @@ fencing, and the LLM invoke.** No plugin Python ever executes in the Core Lambda
   The owner routes are unchanged. The SDK exposes it as
   `PrincipalCoreClient.admin_list_owner_data` / `admin_read_owner_data`.
 
+- **Amended 2026-10-07 — owner-scoped read grant between named plugins.** The
+  rule above, "a plugin can never read another plugin's tables", is relaxed in
+  one deliberate, narrow way. The owning plugin may **grant** another plugin read
+  access to specific closed tables for the *same founder only*:
+  - **How a grant is declared.** The owning plugin names the grantee's service
+    principal (`system:<plugin>`) in the `owner_scoped_service.allowed_principals`
+    of each table it is granting, in that table's manifest. This reuses the
+    existing mechanism; there is no new Core record type, no new manifest field
+    and no implicit grant. A table with no such entry stays unreadable to every
+    other plugin. A grant is explicit and per-table.
+  - **Scope of the grant.** Reads only (list + read); a grantee gets no create,
+    update or delete. Every read is still forced to the verified founder's
+    `owner_sub` (from the forwarded, re-verified token), so a grantee sees only
+    the rows of the founder it is acting for, never other owners' rows. The admin
+    cross-owner path above is unchanged and is not available through a grant.
+    Tenant scoping (ADR-0001) and tombstone exclusion still apply.
+  - **Audit.** Every grant is listed in the "Cross-plugin read grants" section (§7) of
+    [`docs/guides/core-plugin-sibling-boundary-matrix.md`](../guides/core-plugin-sibling-boundary-matrix.md)
+    (grantor → grantee, tables). A grant that is not listed there is not
+    permitted; adding or removing one is an amendment to that table, reviewed
+    with the manifest change.
+  - **Implementation.** The owner-data handlers must accept a grantee principal on
+    the read path; that code change follows as a separate item. First grant:
+    Ideation → `system:idea-scout` (sessions, reports, research).
+
 ## Options Considered
 
 ### Orchestration placement

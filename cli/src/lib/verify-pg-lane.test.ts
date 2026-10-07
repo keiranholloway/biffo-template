@@ -804,3 +804,71 @@ describe('verify.sh runs the pg lane concurrently where that is safe (#703)', ()
     expect(run.stdout).toContain('verify passed')
   })
 })
+
+describe('verify.sh scopes the pre-push pg-test lane to the diff (#2420)', () => {
+  const files = {
+    'package.json': PASSING,
+    'services/api/pyproject.toml': '',
+    'services/api/tests/test_changed_pg.py': PG_TEST,
+    'services/api/tests/test_smoke_pg.py': PG_TEST,
+    'services/api/tests/test_refs_pg.py': 'SQL = "select * from tabsii.widgets"\n',
+    'services/api/tests/test_other_pg.py': PG_TEST,
+    'scripts/pg-test-smoke.txt': '# smoke\nservices/api/tests/test_smoke_pg.py\n',
+    'db/imports/tabsii/300_widgets.sql': 'CREATE TABLE IF NOT EXISTS tabsii.widgets (id uuid);\n',
+    '_changed.txt': 'services/api/tests/test_changed_pg.py\ndb/imports/tabsii/300_widgets.sql\n',
+    // Fails and echoes what pytest was handed, so the module set is visible.
+    '_stub-bin/uv':
+      '#!/bin/sh\ncase "$*" in *"import xdist"*) exit 1 ;; esac\ncase "$*" in *pytest*_pg.py*) echo "UVARGS $*"; exit 1 ;; esac\nexit 0\n',
+  }
+  const dsn = { BIFFO_TEST_PG_DSN: 'postgresql+asyncpg://u:p@localhost:1/db' }
+
+  it('runs only the changed file, the smoke set and referencing tests', () => {
+    const run = runIn(files, {
+      ...dsn,
+      BIFFO_PGTEST_PREPUSH: '1',
+      BIFFO_PGTEST_DIFF_RELEVANT: '1',
+      BIFFO_PGTEST_CHANGED_FILES: '_changed.txt',
+    })
+    expect(run.stdout).toContain('pg-test scoped (pre-push): 3 of 4')
+    expect(run.stdout).toContain('widgets')
+    const args =
+      run.stdout.split('\n').find((l) => l.includes('UVARGS') && l.includes('_pg.py')) ?? ''
+    expect(args).toContain('test_changed_pg.py')
+    expect(args).toContain('test_smoke_pg.py')
+    expect(args).toContain('test_refs_pg.py')
+    expect(args).not.toContain('test_other_pg.py')
+  })
+
+  it('does not run the lane for a pre-push with no relevant diff', () => {
+    const run = runIn(files, { ...dsn, BIFFO_PGTEST_PREPUSH: '1', BIFFO_PGTEST_SCOPE: 'none' })
+    expect(run.status).toBe(0)
+    expect(run.stdout).not.toContain('UVARGS')
+    expect(run.stdout).toContain('touches no db/imports/**')
+  })
+
+  it('a hand-run verify still runs the full discovered suite', () => {
+    const run = runIn(files, dsn)
+    const args =
+      run.stdout.split('\n').find((l) => l.includes('UVARGS') && l.includes('_pg.py')) ?? ''
+    expect(args).toContain('test_other_pg.py')
+    expect(args).toContain('test_refs_pg.py')
+    expect(run.stdout).not.toContain('pg-test scoped')
+  })
+
+  it('pre-push budget is below the 900s push timeout and a timeout names the scoped set', () => {
+    const run = runIn(
+      { ...files, '_stub-bin/timeout': '#!/bin/sh\nexit 124\n' },
+      {
+        ...dsn,
+        BIFFO_PGTEST_PREPUSH: '1',
+        BIFFO_PGTEST_DIFF_RELEVANT: '1',
+        BIFFO_PGTEST_CHANGED_FILES: '_changed.txt',
+      },
+    )
+    const m = /budget (\d+)s/.exec(run.stdout)
+    expect(m).not.toBeNull()
+    expect(Number(m?.[1])).toBeLessThan(900)
+    expect(run.stdout).toContain('pre-push SCOPED set')
+    expect(run.stdout).toContain('test_changed_pg.py')
+  })
+})

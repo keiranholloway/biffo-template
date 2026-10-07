@@ -265,6 +265,14 @@ export interface OwnershipCheckInput {
    * on the same branch gets no exemption it did not itself earn.
    */
   upgradeCommitFiles?: string[] | null
+  /**
+   * The first commit ahead of the base carries the CLI's own upgrade subject
+   * (`chore(core): upgrade template core <from> -> <to>`), so the exemption
+   * applies even on a branch not named `biffo/core-upgrade-*` -- the fleet
+   * pushes to `fleet/issue-<N>`. Scoped to that commit's files exactly as the
+   * branch-name route is.
+   */
+  firstCommitIsUpgrade?: boolean
 }
 
 export interface OwnershipCheckResult {
@@ -301,6 +309,7 @@ export function checkCoreOwnership({
   warnOnly = [],
   templateShippedPaths = null,
   upgradeCommitFiles = null,
+  firstCommitIsUpgrade = false,
 }: OwnershipCheckInput): OwnershipCheckResult {
   const empty = {
     blocked: [],
@@ -321,7 +330,7 @@ export function checkCoreOwnership({
   // would be anywhere else. `upgradeCommitFiles` unset/null means "could not
   // determine" and exempts nothing, never everything.
   let effectiveChangedFiles = changedFiles
-  if (branch.startsWith(UPGRADE_BRANCH_PREFIX)) {
+  if (branch.startsWith(UPGRADE_BRANCH_PREFIX) || firstCommitIsUpgrade) {
     const exempt = new Set(upgradeCommitFiles ?? [])
     effectiveChangedFiles = changedFiles.filter((f) => !exempt.has(f))
     if (effectiveChangedFiles.length === 0) return { skipped: 'upgrade-branch', ...empty }

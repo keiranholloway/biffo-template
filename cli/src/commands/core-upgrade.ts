@@ -161,6 +161,10 @@ export const coreUpgradeCommand = new Command('upgrade')
     'Compute the plan even with uncommitted changes in the instance tree (they become part of the merge)',
   )
   .option('--base <branch>', 'Base branch for the PR (defaults to the repo’s default branch)')
+  .option(
+    '--no-push',
+    'With --apply, stop after the local commit and dependency install: no push, no PR, no GitHub token needed',
+  )
   .option('--remote <name>', 'Git remote to push to and open the PR on (default: origin)')
   .option(
     '--reap',
@@ -180,6 +184,7 @@ export const coreUpgradeCommand = new Command('upgrade')
       allowDirty?: boolean
       base?: string
       remote?: string
+      push?: boolean
       reap?: boolean
     }) => {
       try {
@@ -201,6 +206,7 @@ export const coreUpgradeCommand = new Command('upgrade')
         if (options.toTemplate) runOptions.theirsDir = resolve(options.toTemplate)
         if (options.base) runOptions.base = options.base
         if (options.remote) runOptions.remote = options.remote
+        if (options.push === false) runOptions.noPush = true
         if (options.reap) runOptions.reap = true
         await runCoreUpgrade(runOptions)
       } catch (err) {
@@ -232,6 +238,9 @@ export interface CoreUpgradeOptions {
   acknowledgeBreaking?: boolean
   base?: string
   remote?: string
+  /** With apply: commit locally and install dependencies, but skip the push and
+   * the PR and do not resolve a GitHub token (builders run read-only). */
+  noPush?: boolean
   /** Delete previous upgrade branches this tool left behind (#758). */
   reap?: boolean
 }
@@ -722,7 +731,7 @@ async function applyAndOpenPr(
   }
 
   const { git } = deps
-  const token = deps.resolveToken()
+  const token = options.noPush ? '' : deps.resolveToken()
 
   if (!(await git.isGitRepo(options.cwd))) {
     throw new Error(`${options.cwd} is not a git repository.`)
@@ -964,6 +973,13 @@ async function buildCommitAndOpenPr(
   const installOutcomes = await installInstanceDependencies(options.cwd, run)
   const installFailures = describeInstallFailures(installOutcomes)
   for (const message of installFailures) log.warn(message)
+
+  if (options.noPush) {
+    log.success(
+      `Committed the upgrade on ${branch}; --no-push, so nothing was pushed and no PR was opened.`,
+    )
+    return
+  }
 
   log.step(3, 4, `Pushing ${branch}`)
   const pushOpts: { remote?: string; token: string } = { token }

@@ -31,7 +31,7 @@ import {
 import { UPGRADE_BRANCH_PREFIX } from '../lib/core-upgrade.js'
 import { readCoreManifest } from '../lib/core-manifest.js'
 import { fetchTemplateShippedPaths } from '../lib/template-shipped-paths.js'
-import { resolveUpgradeCommitFiles } from '../lib/upgrade-commit-files.js'
+import { firstCommitIsCliUpgrade, resolveUpgradeCommitFiles } from '../lib/upgrade-commit-files.js'
 
 /**
  * The integration branch is `dev` in every Biffo repo (AGENTS.md §2), and an
@@ -124,13 +124,22 @@ export async function runOwnershipCheck(argv: string[]): Promise<void> {
   // `resolveUpgradeCommitFiles` returns `null` ("could not tell") on any
   // failure, which `checkCoreOwnership` treats as "exempt nothing" -- never
   // the old fail-open "exempt everything" this replaces.
-  const upgradeCommitFiles = branch.startsWith(UPGRADE_BRANCH_PREFIX)
-    ? await resolveUpgradeCommitFiles(
-        root,
-        ciBase ?? LOCAL_UPGRADE_BASE,
-        staged ? { stagedFallbackFiles: changedFiles } : {},
-      )
-    : null
+  // The fleet pushes to `fleet/issue-<N>`, so a branch name alone misses its
+  // upgrades: the CLI's own commit subject on the first commit ahead of the
+  // base earns the same scoped exemption. CI mode only -- the hook has no
+  // commit yet to read.
+  const firstCommitIsUpgrade =
+    !staged && !branch.startsWith(UPGRADE_BRANCH_PREFIX) && ciBase !== null
+      ? await firstCommitIsCliUpgrade(root, ciBase)
+      : false
+  const upgradeCommitFiles =
+    branch.startsWith(UPGRADE_BRANCH_PREFIX) || firstCommitIsUpgrade
+      ? await resolveUpgradeCommitFiles(
+          root,
+          ciBase ?? LOCAL_UPGRADE_BASE,
+          staged ? { stagedFallbackFiles: changedFiles } : {},
+        )
+      : null
 
   // Only in CI/PR-diff mode: this is the check this file's own docstring says
   // cannot be bypassed with `--no-verify`, and GitHub Actions runners always
@@ -158,6 +167,7 @@ export async function runOwnershipCheck(argv: string[]): Promise<void> {
     commitMessage,
     warnOnly: readDivergenceConfig(root).warnOnly,
     upgradeCommitFiles,
+    firstCommitIsUpgrade,
     templateShippedPaths,
   })
 

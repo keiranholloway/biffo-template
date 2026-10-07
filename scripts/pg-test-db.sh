@@ -464,10 +464,9 @@ if ! psql_admin -c 'SELECT 1' >/dev/null 2>&1; then
     say "Start one and re-run, or set BIFFO_PG_HOST / BIFFO_PG_PORT."
     exit 1
   fi
-  if docker ps -a --format '{{.Names}}' | grep -qx "$CONTAINER"; then
-    say "starting existing container $CONTAINER"
-    docker start "$CONTAINER" >/dev/null
-  else
+  # Create a fresh labelled container. The one `docker run` path, used both for
+  # a first start and for the self-heal recreate below.
+  create_container() {
     say "creating container $CONTAINER ($IMAGE) on port $PORT"
     # The label is what makes this container reapable by a property rather than
     # by the name it happens to carry (#1383). The name prefix still works and
@@ -480,18 +479,46 @@ if ! psql_admin -c 'SELECT 1' >/dev/null 2>&1; then
     docker run -d --name "$CONTAINER" --label biffo.ephemeral=1 \
       --label "biffo.checkout=$REPO_ROOT" \
       -e POSTGRES_PASSWORD="$PASS" -p "$PORT:5432" "$IMAGE" >/dev/null
-  fi
+  }
   # Polled, not slept: a cold image pull and a warm restart differ by an order of
-  # magnitude, and one fixed sleep is wrong for both.
-  _waited=0
-  until psql_admin -c 'SELECT 1' >/dev/null 2>&1; do
-    _waited=$((_waited + 1))
-    if [ "$_waited" -gt 90 ]; then
-      say "Postgres did not become ready in 90s"
+  # magnitude, and one fixed sleep is wrong for both. Returns 1 on timeout.
+  wait_ready() {
+    _waited=0
+    until psql_admin -c 'SELECT 1' >/dev/null 2>&1; do
+      _waited=$((_waited + 1))
+      if [ "$_waited" -gt "${BIFFO_PG_READY_SECS:-90}" ]; then
+        say "Postgres did not become ready in ${BIFFO_PG_READY_SECS:-90}s"
+        return 1
+      fi
+      sleep 1
+    done
+    return 0
+  }
+  _existed=0
+  if docker ps -a --format '{{.Names}}' | grep -qx "$CONTAINER"; then
+    _existed=1
+    say "starting existing container $CONTAINER"
+    docker start "$CONTAINER" >/dev/null
+  else
+    create_container
+  fi
+  if ! wait_ready; then
+    say "logs of $CONTAINER (last 50 lines):"
+    docker logs --tail 50 "$CONTAINER" >&2 || true
+    if [ "$_existed" -eq 0 ]; then
       exit 1
     fi
-    sleep 1
-  done
+    # Self-heal, once: a container that pre-existed and will not come up is
+    # stale or corrupt. Remove it with its volume and recreate it the same way.
+    say "existing container $CONTAINER never became ready; removing and recreating it once"
+    docker rm -f -v "$CONTAINER" >/dev/null 2>&1 || true
+    create_container
+    if ! wait_ready; then
+      say "recreated container $CONTAINER also failed; logs (last 50 lines):"
+      docker logs --tail 50 "$CONTAINER" >&2 || true
+      exit 1
+    fi
+  fi
   say "Postgres ready after ${_waited}s"
 fi
 

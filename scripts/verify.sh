@@ -1543,6 +1543,7 @@ fi
 # sees the change before it is live.
 [ -f scripts/rerun-on-runner-loss.test.sh ] &&
   run_check rerun-on-runner-loss sh scripts/rerun-on-runner-loss.test.sh
+[ -f services/api/tests/instance/pg-test-db-self-heal.test.sh ] && run_check pg-test-db-self-heal sh services/api/tests/instance/pg-test-db-self-heal.test.sh
 
 # #2166: red/green + issue routing for shared-sync-report.yml (0.7s).
 [ -f scripts/shared-sync-report.test.sh ] &&

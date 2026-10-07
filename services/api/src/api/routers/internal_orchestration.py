@@ -22,13 +22,20 @@ from ..config import settings
 from ..database import get_db
 from ..middleware.service_auth import ServicePrincipal, require_service_principal
 from ..models.orchestration import WorkflowDefinition, WorkflowRun
-from ..orchestration import dispatch_event, fire_scheduled_run, reap_stale_runs, record_result
+from ..orchestration import (
+    dispatch_event,
+    fire_scheduled_run,
+    reap_stale_runs,
+    record_result,
+    schedule_run_at,
+)
 from ..schemas.orchestration import (
     ClaimedRun,
     DispatchEventRequest,
     DispatchEventResponse,
     FireScheduledRunResponse,
     RecordResultRequest,
+    ScheduleRunAtRequest,
     WorkflowRunResponse,
 )
 from ..writeback import WriteBackNotFoundError, execute_writeback
@@ -154,6 +161,37 @@ async def dispatch_incoming_event(
             )
             for c in claimed
         ]
+    )
+
+
+@router.post("/runs/schedule", response_model=ClaimedRun)
+async def schedule_run(
+    body: ScheduleRunAtRequest,
+    principal: ServicePrincipal = Depends(require_service_principal),
+    db: AsyncSession = Depends(get_db),
+) -> ClaimedRun:
+    """Claim one scheduled run of a definition for an explicit instant. The
+    engine then creates the EventBridge schedule exactly as for a delayed run.
+    404 when the definition does not exist or is disabled."""
+    if body.run_at.tzinfo is None:
+        raise HTTPException(status_code=422, detail="run_at must include a timezone")
+    claimed = await schedule_run_at(
+        db,
+        tenant_id=principal.tenant_id,
+        definition_id=body.definition_id,
+        run_at=body.run_at,
+        payload=body.payload,
+        idempotency_key=body.idempotency_key,
+    )
+    if claimed is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    return ClaimedRun(
+        run_id=claimed.run_id,
+        definition_id=claimed.definition_id,
+        action_type=claimed.action_type,
+        action_config=claimed.action_config,
+        created=claimed.created,
+        scheduled_for=claimed.scheduled_for,
     )
 
 

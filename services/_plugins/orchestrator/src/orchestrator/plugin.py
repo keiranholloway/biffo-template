@@ -305,6 +305,45 @@ class OrchestratorPlugin(BiffoPluginBase):
                 continue
             await self._execute_run(run, event.payload)
 
+    async def schedule_run_at(
+        self,
+        definition_id: str,
+        run_at: datetime,
+        payload: dict[str, Any],
+        idempotency_key: str,
+    ) -> bool:
+        """Fire one run of ``definition_id`` with ``payload`` at ``run_at``.
+
+        Core claims a ``scheduled`` run (refusing a missing/disabled definition
+        with a 404) and this creates the one-time EventBridge schedule through
+        ``_schedule_run``; the fire callback is the ordinary
+        ``fire_scheduled_run``, so its guards apply. Returns ``True`` when a
+        schedule was created, ``False`` when the definition was refused or the
+        run was already claimed by an earlier call.
+        """
+        try:
+            run = await self.api.post(
+                f"{_INTERNAL_BASE}/runs/schedule",
+                json={
+                    "definition_id": definition_id,
+                    "run_at": run_at.isoformat(),
+                    "payload": payload,
+                    "idempotency_key": idempotency_key,
+                },
+            )
+        except BiffoAPIError as exc:
+            if exc.status_code == 404:
+                logger.info(
+                    "Refused to schedule a run: definition missing or disabled",
+                    extra={"definition_id": definition_id},
+                )
+                return False
+            raise
+        if not run or not run.get("created"):
+            return False
+        await self._schedule_run(run)
+        return True
+
     async def _schedule_run(self, run: dict[str, Any]) -> None:
         """Create a one-time EventBridge Scheduler schedule for a delayed run
         (docs/implementation/0002-scheduled-workflow-actions, ADR-0023).

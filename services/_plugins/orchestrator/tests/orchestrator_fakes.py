@@ -37,7 +37,9 @@ class FakeCore:
         agent_run_records: dict[str, dict[str, Any]] | None = None,
         chain_runs: list[dict[str, Any]] | None = None,
         fire_response: dict[str, Any] | None = None,
+        schedule_response: dict[str, Any] | None = None,
     ) -> None:
+        self._schedule_response = schedule_response
         self._runs = runs
         self._agent_run_id = agent_run_id
         self._agent_run_status = agent_run_status
@@ -134,6 +136,10 @@ class FakeCore:
                     "depth": body.get("depth"),
                 },
             )
+        if request.url.path.endswith("/runs/schedule"):
+            if self._schedule_response is None:
+                return httpx.Response(404, json={"detail": "Not found"})
+            return httpx.Response(200, json=self._schedule_response)
         if request.url.path.endswith("/events"):
             return httpx.Response(200, json={"runs": self._runs})
         if request.url.path.endswith("/fire"):

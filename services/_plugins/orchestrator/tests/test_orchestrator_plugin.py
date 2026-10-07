@@ -4,10 +4,12 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
-from biffo_plugin_sdk import BiffoEvent
+import pytest
+from biffo_plugin_sdk import BiffoAPIError, BiffoEvent
 from orchestrator import plugin as plugin_module
 from orchestrator.actions import WhatsAppSettings
 from orchestrator.email_branding import EmailBranding
@@ -803,6 +805,69 @@ async def test_fire_scheduled_run_executes_the_claimed_action():
     results = core.result_posts()
     assert len(results) == 1
     assert results[0]["status"] == "succeeded"
+
+
+async def test_schedule_run_at_creates_a_schedule_for_the_explicit_instant(monkeypatch):
+    monkeypatch.setenv("BIFFO_SCHEDULE_GROUP_NAME", "wf-group")
+    core = FakeCore(
+        [],
+        schedule_response=_email_run(created=True, scheduled_for="2026-12-01T09:30:00+00:00"),
+    )
+    ses = FakeSes()
+    scheduler = FakeScheduler()
+    plugin = OrchestratorPlugin(api=core.client(), ses_client=ses, scheduler_client=scheduler)
+
+    created = await plugin.schedule_run_at(
+        "def-1", datetime(2026, 12, 1, 9, 30, tzinfo=UTC), {"lead_id": "l1"}, "key-1"
+    )
+
+    assert created is True
+    assert len(ses.calls) == 0
+    [call] = scheduler.calls
+    assert call["ScheduleExpression"] == "at(2026-12-01T09:30:00)"
+    assert json.loads(call["Target"]["Input"]) == {"biffo_scheduled_run_id": "run-1"}
+    [post] = [b for _, p, b in core.requests if p.endswith("/runs/schedule")]
+    assert post["payload"] == {"lead_id": "l1"}
+    assert post["definition_id"] == "def-1"
+
+
+async def test_schedule_run_at_refused_definition_creates_no_schedule():
+    core = FakeCore([], schedule_response=None)
+    scheduler = FakeScheduler()
+    plugin = OrchestratorPlugin(api=core.client(), ses_client=FakeSes(), scheduler_client=scheduler)
+
+    created = await plugin.schedule_run_at("def-1", datetime(2026, 12, 1, tzinfo=UTC), {}, "key-1")
+
+    assert created is False
+    assert scheduler.calls == []
+
+
+async def test_schedule_run_at_replay_does_not_schedule_twice():
+    core = FakeCore(
+        [], schedule_response=_email_run(created=False, scheduled_for="2026-12-01T00:00:00+00:00")
+    )
+    scheduler = FakeScheduler()
+    plugin = OrchestratorPlugin(api=core.client(), ses_client=FakeSes(), scheduler_client=scheduler)
+
+    assert not await plugin.schedule_run_at("def-1", datetime(2026, 12, 1, tzinfo=UTC), {}, "k")
+    assert scheduler.calls == []
+
+
+async def test_schedule_run_at_reraises_a_non_404_core_error():
+    class _Failing:
+        async def post(self, *_a: Any, **_k: Any) -> Any:
+            raise BiffoAPIError(500, "boom")
+
+    scheduler = FakeScheduler()
+    plugin = OrchestratorPlugin(
+        api=_Failing(),  # type: ignore[arg-type]
+        ses_client=FakeSes(),
+        scheduler_client=scheduler,
+    )
+
+    with pytest.raises(BiffoAPIError):
+        await plugin.schedule_run_at("def-1", datetime(2026, 12, 1, tzinfo=UTC), {}, "k")
+    assert scheduler.calls == []
 
 
 async def test_fire_scheduled_run_not_claimed_does_nothing():

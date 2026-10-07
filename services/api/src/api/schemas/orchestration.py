@@ -54,6 +54,15 @@ class ClaimedRun(BaseModel):
     scheduled_for: datetime | None = None
 
 
+class ScheduleRunAtRequest(BaseModel):
+    """Fire one run of ``definition_id`` with ``payload`` at the UTC instant ``run_at``."""
+
+    definition_id: str = Field(min_length=1)
+    run_at: datetime
+    payload: dict[str, Any] = Field(default_factory=dict)
+    idempotency_key: str = Field(min_length=1)
+
+
 class DispatchEventResponse(BaseModel):
     runs: list[ClaimedRun]
 

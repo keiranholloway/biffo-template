@@ -811,3 +811,81 @@ async def test_reap_is_tenant_scoped(db_session):
     reaped = await svc.reap_stale_runs(db_session, tenant_id="default", stale_after_seconds=1800)
 
     assert reaped == []
+
+
+# ── schedule_run_at: one run at a chosen instant ─────────────────────────────
+
+
+async def test_schedule_run_at_fires_once_at_the_instant_with_the_payload(db_session):
+    definition = await _make_definition(db_session)
+    run_at = datetime(2030, 1, 2, 9, 30, tzinfo=UTC)
+
+    claimed = await svc.schedule_run_at(
+        db_session,
+        tenant_id="default",
+        definition_id=definition.id,
+        run_at=run_at,
+        payload={"lead_id": "l1"},
+        idempotency_key="k1",
+    )
+    assert claimed is not None and claimed.created
+    assert claimed.scheduled_for is not None
+    assert claimed.scheduled_for.replace(tzinfo=UTC) == run_at
+
+    # A replay re-claims the same run rather than a second one.
+    again = await svc.schedule_run_at(
+        db_session,
+        tenant_id="default",
+        definition_id=definition.id,
+        run_at=run_at,
+        payload={"lead_id": "l1"},
+        idempotency_key="k1",
+    )
+    assert again is not None and not again.created and again.run_id == claimed.run_id
+
+    fired = await svc.fire_scheduled_run(db_session, tenant_id="default", run_id=claimed.run_id)
+    assert fired is not None
+    assert fired.trigger_event == {"lead_id": "l1"}
+    # At-least-once guard: a duplicate fire callback does nothing.
+    assert (
+        await svc.fire_scheduled_run(db_session, tenant_id="default", run_id=claimed.run_id) is None
+    )
+
+
+async def test_schedule_run_at_refuses_a_missing_or_disabled_definition(db_session):
+    disabled = await _make_definition(db_session, enabled=False)
+    for definition_id in (disabled.id, "nope"):
+        assert (
+            await svc.schedule_run_at(
+                db_session,
+                tenant_id="default",
+                definition_id=definition_id,
+                run_at=datetime(2030, 1, 1, tzinfo=UTC),
+                payload={},
+                idempotency_key="k",
+            )
+            is None
+        )
+
+
+async def test_schedule_run_at_run_is_skipped_if_definition_goes_stale_before_firing(db_session):
+    definition = await _make_definition(db_session)
+    claimed = await svc.schedule_run_at(
+        db_session,
+        tenant_id="default",
+        definition_id=definition.id,
+        run_at=datetime(2030, 1, 1, tzinfo=UTC),
+        payload={},
+        idempotency_key="k",
+    )
+    assert claimed is not None
+    definition.enabled = False
+    await db_session.flush()
+
+    assert (
+        await svc.fire_scheduled_run(db_session, tenant_id="default", run_id=claimed.run_id) is None
+    )
+    run = (
+        await db_session.execute(select(WorkflowRun).where(WorkflowRun.id == claimed.run_id))
+    ).scalar_one()
+    assert run.status == "skipped"

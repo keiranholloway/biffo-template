@@ -84,6 +84,7 @@ async def _claim_run(
     definition: WorkflowDefinition,
     idempotency_key: str,
     event: dict[str, Any],
+    scheduled_at: datetime | None = None,
 ) -> ClaimedRun:
     """Create-or-get a run for (definition, event), atomically.
 
@@ -92,7 +93,9 @@ async def _claim_run(
     fetched and returned with ``created=False``.
     """
     dedupe_key = _dedupe_key(definition.id, idempotency_key)
-    scheduled_for = _scheduled_for(definition.schedule_config)
+    scheduled_for = (
+        scheduled_at if scheduled_at is not None else _scheduled_for(definition.schedule_config)
+    )
     run = WorkflowRun(
         tenant_id=tenant_id,
         definition_id=definition.id,
@@ -185,6 +188,40 @@ async def dispatch_event(
             )
         )
     return claimed
+
+
+async def schedule_run_at(
+    db: AsyncSession,
+    *,
+    tenant_id: str,
+    definition_id: str,
+    run_at: datetime,
+    payload: dict[str, Any],
+    idempotency_key: str,
+) -> ClaimedRun | None:
+    """Claim one ``scheduled`` run of a definition for an explicit instant.
+
+    Unlike ``dispatch_event`` there is no trigger match and no fixed delay: the
+    caller names the definition, the UTC instant and the payload. The run is an
+    ordinary scheduled run, so the engine creates its EventBridge schedule and
+    ``fire_scheduled_run`` applies the at-least-once and stale-definition guards
+    at fire time. Returns ``None`` (nothing claimed) when the definition does not
+    exist for this tenant or is disabled. A replay of the same
+    ``idempotency_key`` returns the existing run with ``created=False``.
+    """
+    if run_at.tzinfo is None:
+        raise ValueError("run_at must be timezone-aware")
+    definition = await get_definition(db, tenant_id=tenant_id, definition_id=definition_id)
+    if definition is None or not definition.enabled:
+        return None
+    return await _claim_run(
+        db,
+        tenant_id=tenant_id,
+        definition=definition,
+        idempotency_key=idempotency_key,
+        event=payload,
+        scheduled_at=run_at.astimezone(UTC),
+    )
 
 
 async def fire_scheduled_run(db: AsyncSession, *, tenant_id: str, run_id: str) -> ClaimedRun | None:

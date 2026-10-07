@@ -5,6 +5,13 @@ members = ["services/*", "services/_plugins/*", "packages/python-sdk", "packages
 # are claimed by `services/_plugins/*` instead.
 exclude = ["services/_plugins"]
 
+# Root-level source inherited by every workspace member (uv >= 0.4.x), so an
+# editable plugin whose `dev` group pins `biffo-plugin-host` resolves it from the
+# workspace during `biffo plugin upgrade` without its own [tool.uv.sources].
+# A standalone `uv sync` inside the plugin ignores this and uses the index.
+[tool.uv.sources]
+biffo-plugin-host = { workspace = true }
+
 # ============================================================================
 # Ruff — SINGLE authoritative config (issue #345).
 #

@@ -908,7 +908,20 @@ fi
 # tests already passing before the kill, so it was slow, not failing
 # (tabsii-com/tabsii-platform#1463). Same doubling; not re-measured to
 # completion, so re-measure and tighten this comment when it next finishes.
-PG_TEST_BUDGET_SECONDS="${BIFFO_VERIFY_PG_BUDGET:-960}"
+#
+# Pre-push (#2420): the fleet kills a push at 900s, so a 960s lane budget could
+# never report -- the push died first. The pre-push gate (`.githooks/pre-push`
+# exports BIFFO_PGTEST_PREPUSH=1) therefore runs a diff-SCOPED module set under
+# a budget strictly below 900s, and the full suite stays with CI and a
+# hand-run `biffo verify` (960s, unchanged). Do not raise the pre-push number:
+# scope the set instead.
+PG_PREPUSH_BUDGET_SECONDS=600
+if [ -n "${BIFFO_PGTEST_PREPUSH:-}" ]; then
+  PG_TEST_BUDGET_SECONDS="${BIFFO_VERIFY_PG_BUDGET:-$PG_PREPUSH_BUDGET_SECONDS}"
+else
+  PG_TEST_BUDGET_SECONDS="${BIFFO_VERIFY_PG_BUDGET:-960}"
+fi
+PG_SCOPED_DESC=""
 PG_TEST_DSN="${BIFFO_TEST_PG_DSN:-${TABSII_TEST_PG_DSN:-}}"
 
 # `.claude/worktrees` is excluded alongside `.worktrees`, and finding out why
@@ -1153,6 +1166,11 @@ pg_test_run() {
     echo "so nothing below is a verdict on your change. Do not go looking for a"
     echo "bug on this evidence."
     echo ""
+    if [ -n "$PG_SCOPED_DESC" ]; then
+      echo "This was the pre-push SCOPED set (the full suite runs in CI):"
+      printf '%s\n' "$PG_SCOPED_DESC"
+      echo ""
+    fi
     echo "Most likely the lane has simply outgrown its budget. Re-run with more:"
     echo "  BIFFO_VERIFY_PG_BUDGET=$((PG_TEST_BUDGET_SECONDS * 2)) sh scripts/verify.sh"
     echo ""
@@ -1193,6 +1211,64 @@ pg_test_run() {
   fi
   rm -f "$_out"
   return 0
+}
+
+# Pre-push scoping (#2420). Given the pushed diff's changed paths and the full
+# discovered module list, print the modules worth running now, one per line:
+#   1. every changed *_pg.py test file;
+#   2. the smoke set the repo declares in scripts/pg-test-smoke.txt (one path
+#      per line, `#` comments allowed);
+#   3. for each changed db/imports/**.sql, the modules that mention a table it
+#      CREATEs or ALTERs (grep over table names).
+# Runs in a subshell, so the human-readable "why" is rebuilt into
+# PG_SCOPED_DESC by the caller via pg_scope_describe.
+pg_scope_tables() {
+  # table names created/altered in the changed SQL, schema/quotes stripped
+  while IFS= read -r _f; do
+    case "$_f" in
+      */db/imports/*.sql | db/imports/*.sql) [ -f "$_f" ] || continue ;;
+      *) continue ;;
+    esac
+    grep -iE '^[[:space:]]*(create|alter)[[:space:]]+table' "$_f" 2>/dev/null \
+      | sed -E 's/--.*//; s/"//g' \
+      | sed -E 's/^[[:space:]]*[Cc][Rr][Ee][Aa][Tt][Ee][[:space:]]+[Tt][Aa][Bb][Ll][Ee][[:space:]]+([Ii][Ff][[:space:]]+[Nn][Oo][Tt][[:space:]]+[Ee][Xx][Ii][Ss][Tt][Ss][[:space:]]+)?//; s/^[[:space:]]*[Aa][Ll][Tt][Ee][Rr][[:space:]]+[Tt][Aa][Bb][Ll][Ee][[:space:]]+([Ii][Ff][[:space:]]+[Ee][Xx][Ii][Ss][Tt][Ss][[:space:]]+)?([Oo][Nn][Ll][Yy][[:space:]]+)?//' \
+      | awk '{print $1}' | sed -E 's/\(.*//; s/.*\.//; s/[;,]//g' | grep -E '^[A-Za-z_][A-Za-z0-9_]*$'
+  done <"$1" | sort -u
+}
+
+pg_scope_modules() {
+  _sc_changed="$1"
+  _sc_all="$2"
+  {
+    # 1. changed *_pg.py files that exist and were discovered
+    grep -E '_pg\.py$' "$_sc_changed" 2>/dev/null | while IFS= read -r _f; do
+      printf '%s\n' "$_sc_all" | grep -Fx -- "$_f"
+    done
+    # 2. declared smoke set
+    if [ -f scripts/pg-test-smoke.txt ]; then
+      sed 's/#.*//; s/^[[:space:]]*//; s/[[:space:]]*$//' scripts/pg-test-smoke.txt | grep -v '^$' \
+        | while IFS= read -r _f; do
+          [ -f "$_f" ] && printf '%s\n' "$_f"
+        done
+    fi
+    # 3. modules referencing a table the changed DDL creates or alters
+    _sc_tables=$(pg_scope_tables "$_sc_changed")
+    if [ -n "$_sc_tables" ]; then
+      printf '%s\n' "$_sc_all" | while IFS= read -r _m; do
+        [ -f "$_m" ] && printf '%s\n' "$_sc_tables" | grep -qwFf - "$_m" 2>/dev/null && printf '%s\n' "$_m"
+      done
+    fi
+  } | grep -v '^$' | sort -u
+}
+
+pg_scope_describe() {
+  _sd_changed="$1"
+  _sd_all="$2"
+  printf 'selected because changed: %s\n' \
+    "$(grep -E '_pg\.py$' "$_sd_changed" 2>/dev/null | while IFS= read -r _f; do printf '%s\n' "$_sd_all" | grep -Fx -- "$_f"; done | tr '\n' ' ')"
+  [ -f scripts/pg-test-smoke.txt ] && printf 'selected as declared smoke set: scripts/pg-test-smoke.txt\n'
+  _sd_tables=$(pg_scope_tables "$_sd_changed" | tr '\n' ' ')
+  [ -n "$_sd_tables" ] && printf 'selected because they reference tables from changed DDL: %s\n' "$_sd_tables"
 }
 
 _pg_modules=$(pg_test_modules)
@@ -1334,7 +1410,28 @@ else
         "CI runs these as a required check; nothing local is checking them."
     fi
   else
-    _pg_rel=$(echo "$_pg_modules" | sed "s|^$_pg_dir/||" | tr '\n' ' ')
+    _pg_run_modules="$_pg_modules"
+    _pg_skip_lane=""
+    if [ -z "$LIST" ] && [ -n "${BIFFO_PGTEST_PREPUSH:-}" ]; then
+      if [ "${BIFFO_PGTEST_SCOPE:-}" = "none" ]; then
+        _pg_skip_lane=1
+        _pg_skip_msg="pre-push diff touches no db/imports/** or *_pg.py path (CI runs the full suite)"
+      elif [ -n "${BIFFO_PGTEST_CHANGED_FILES:-}" ] && [ -f "$BIFFO_PGTEST_CHANGED_FILES" ]; then
+        _pg_scoped=$(pg_scope_modules "$BIFFO_PGTEST_CHANGED_FILES" "$_pg_modules")
+        if [ -z "$_pg_scoped" ]; then
+          _pg_skip_lane=1
+          _pg_skip_msg="pre-push scope selected no modules (no changed *_pg.py, no scripts/pg-test-smoke.txt entries, no referencing tests); CI runs the full suite"
+        else
+          _pg_run_modules="$_pg_scoped"
+          PG_SCOPED_DESC="$(pg_scope_describe "$BIFFO_PGTEST_CHANGED_FILES" "$_pg_modules")
+modules: $(printf '%s\n' "$_pg_scoped" | tr '\n' ' ')"
+        fi
+      else
+        printf '       \033[33m%s\033[0m\n' \
+          "pre-push could not tell which paths changed: running the full pg-test suite under the ${PG_TEST_BUDGET_SECONDS}s pre-push budget"
+      fi
+    fi
+    _pg_rel=$(echo "$_pg_run_modules" | sed "s|^$_pg_dir/||" | tr '\n' ' ')
     # Not a plain `run_check` call: `pg_test_run` returns THREE states (0 pass,
     # 1 real failure, 2 timed out/inconclusive -- see its own comment), and
     # `run_check` only ever sees pass/fail, so routing through it would collapse
@@ -1343,7 +1440,14 @@ else
     if [ -n "$LIST" ]; then
       # shellcheck disable=SC2086
       echo pg_test_run "$_pg_dir" "$_pg_rel"
+    elif [ -n "$_pg_skip_lane" ]; then
+      skip pg-test "$_pg_skip_msg"
     else
+      if [ "$_pg_run_modules" != "$_pg_modules" ]; then
+        printf '\033[90m  pg-test scoped (pre-push): %s of %s module(s), budget %ss; CI and hand-run verify run all\033[0m\n' \
+          "$(printf '%s\n' "$_pg_run_modules" | grep -c .)" "$(printf '%s\n' "$_pg_modules" | grep -c .)" "$PG_TEST_BUDGET_SECONDS"
+        printf '%s\n' "$PG_SCOPED_DESC" | sed 's/^/       /'
+      fi
       _pg_check_start=$(date +%s)
       _verify_track_tmp "/tmp/biffo-verify-pg-check.$$"
       # shellcheck disable=SC2086

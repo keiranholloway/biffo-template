@@ -8,7 +8,8 @@ from datetime import UTC, datetime
 from typing import Any
 
 import httpx
-from biffo_plugin_sdk import BiffoEvent
+import pytest
+from biffo_plugin_sdk import BiffoAPIError, BiffoEvent
 from orchestrator import plugin as plugin_module
 from orchestrator.actions import WhatsAppSettings
 from orchestrator.email_branding import EmailBranding
@@ -849,6 +850,23 @@ async def test_schedule_run_at_replay_does_not_schedule_twice():
     plugin = OrchestratorPlugin(api=core.client(), ses_client=FakeSes(), scheduler_client=scheduler)
 
     assert not await plugin.schedule_run_at("def-1", datetime(2026, 12, 1, tzinfo=UTC), {}, "k")
+    assert scheduler.calls == []
+
+
+async def test_schedule_run_at_reraises_a_non_404_core_error():
+    class _Failing:
+        async def post(self, *_a: Any, **_k: Any) -> Any:
+            raise BiffoAPIError(500, "boom")
+
+    scheduler = FakeScheduler()
+    plugin = OrchestratorPlugin(
+        api=_Failing(),  # type: ignore[arg-type]
+        ses_client=FakeSes(),
+        scheduler_client=scheduler,
+    )
+
+    with pytest.raises(BiffoAPIError):
+        await plugin.schedule_run_at("def-1", datetime(2026, 12, 1, tzinfo=UTC), {}, "k")
     assert scheduler.calls == []
 
 

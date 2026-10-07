@@ -530,3 +530,53 @@ def test_dispatch_unscoped_definition_unaffected_by_a_registered_resolver(
     resp = client.post(_EVENTS, json=_unit_event_body("brand-1", "unit-1"))
 
     assert len(resp.json()["runs"]) == 1
+
+
+# ── POST /runs/schedule: one run at a chosen instant ─────────────────────────
+
+_SCHEDULE = "/api/v1/internal/orchestration/runs/schedule"
+
+
+def _schedule_body(definition_id: str, run_at: str = "2030-01-02T09:30:00+00:00") -> dict:
+    return {
+        "definition_id": definition_id,
+        "run_at": run_at,
+        "payload": {"lead_id": "l1"},
+        "idempotency_key": "k1",
+    }
+
+
+def test_schedule_claims_a_run_for_the_instant(orchestration_app, client):
+    _, session_factory = orchestration_app
+    definition_id = _seed(session_factory)
+
+    resp = client.post(_SCHEDULE, json=_schedule_body(definition_id))
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["created"] is True
+    assert body["scheduled_for"].startswith("2030-01-02T09:30:00")
+
+
+def test_schedule_unknown_definition_is_404(client):
+    resp = client.post(_SCHEDULE, json=_schedule_body("nope"))
+
+    assert resp.status_code == 404
+
+
+def test_schedule_disabled_definition_is_404(orchestration_app, client):
+    _, session_factory = orchestration_app
+    definition_id = _seed(session_factory, enabled=False)
+
+    resp = client.post(_SCHEDULE, json=_schedule_body(definition_id))
+
+    assert resp.status_code == 404
+
+
+def test_schedule_rejects_a_naive_run_at(orchestration_app, client):
+    _, session_factory = orchestration_app
+    definition_id = _seed(session_factory)
+
+    resp = client.post(_SCHEDULE, json=_schedule_body(definition_id, "2030-01-02T09:30:00"))
+
+    assert resp.status_code == 422

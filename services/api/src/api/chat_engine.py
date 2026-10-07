@@ -102,6 +102,26 @@ def thread_history(
     return conversational
 
 
+def turn_delta(messages: list[Message] | None) -> list[Message]:
+    """What one run's transcript contributed to the conversation: its last ``user``
+    message and everything conversational after it.
+
+    New runs store exactly this (the fenced user turn plus the assistant reply).
+    Runs stored in the older cumulative shape (the whole assembled array, repeating
+    every earlier turn) reduce to the same thing, so one reader serves both.
+    """
+    msgs = [m for m in (messages or []) if isinstance(m, dict)]
+    users = [i for i, m in enumerate(msgs) if m.get("role") == USER]
+    if not users:
+        return [m for m in msgs if m.get("role") == ASSISTANT]
+    return [m for m in msgs[users[-1] :] if m.get("role") in (USER, ASSISTANT)]
+
+
+def thread_conversation(runs: list[Any]) -> list[Message]:
+    """The ordered conversation of a thread: each run's :func:`turn_delta`, once."""
+    return [m for run in runs for m in turn_delta(run.messages)]
+
+
 def assemble_turn(
     system_prompt: str,
     prior_messages: list[Message],

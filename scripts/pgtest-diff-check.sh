@@ -89,7 +89,14 @@ while read -r _local_ref local_sha _remote_ref remote_sha; do
     continue
   fi
 
-  if git diff --name-only "$range" 2>/dev/null | grep -qE "$PATTERN"; then
+  changed=$(git diff --name-only "$range" 2>/dev/null)
+  # Hand the changed paths to the hook so verify.sh can SCOPE the pre-push
+  # pg-test lane to this diff instead of running the whole suite. Optional:
+  # nothing is written unless the caller names a file.
+  if [ -n "${BIFFO_PGTEST_DIFF_LIST_FILE:-}" ] && [ -n "$changed" ]; then
+    printf '%s\n' "$changed" >>"$BIFFO_PGTEST_DIFF_LIST_FILE"
+  fi
+  if printf '%s\n' "$changed" | grep -qE "$PATTERN"; then
     echo hit >>"$RESULT_FILE"
   fi
 done

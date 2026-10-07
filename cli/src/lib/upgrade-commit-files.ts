@@ -96,3 +96,31 @@ export async function resolveUpgradeCommitFiles(
   if (diff.exitCode !== 0) return null
   return splitLines(diff.stdout)
 }
+
+/** The subject `biffo core upgrade --apply` gives its own commit (`buildCommitMessage`). */
+export const UPGRADE_COMMIT_SUBJECT =
+  /^chore\(core\): upgrade template core \d+\.\d+\.\d+ -> \d+\.\d+\.\d+$/
+
+/**
+ * Whether the first commit ahead of `base` is the CLI's own upgrade commit,
+ * recognised by its subject. Lets a fleet branch (`fleet/issue-<N>`) take the
+ * same scoped exemption as a `biffo/core-upgrade-*` branch. Fails closed: any
+ * git failure or no commits yields false.
+ */
+export async function firstCommitIsCliUpgrade(
+  repoRoot: string,
+  base: string,
+  runner: GitCommandRunner = defaultRunner,
+): Promise<boolean> {
+  try {
+    const rev = await runner(['rev-list', '--reverse', `${base}..HEAD`], repoRoot)
+    if (rev.exitCode !== 0) return false
+    const first = splitLines(rev.stdout)[0]
+    if (!first) return false
+    const msg = await runner(['log', '-1', '--format=%s', first], repoRoot)
+    if (msg.exitCode !== 0) return false
+    return UPGRADE_COMMIT_SUBJECT.test(msg.stdout.trim())
+  } catch {
+    return false
+  }
+}

@@ -151,6 +151,7 @@ run_step() {
   env -u GH_TOKEN \
     PATH="$work/bin:$PATH" \
     GH_LOG="$GH_LOG" \
+    RUNNER_TEMP="$work" \
     FAKE_OPEN_IN="${FAKE_OPEN_IN:-}" \
     FAKE_OPEN_NUMBER="${FAKE_OPEN_NUMBER:-}" \
     GITHUB_REPOSITORY="$DETECTOR" \

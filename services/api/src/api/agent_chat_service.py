@@ -28,6 +28,8 @@ from .chat_engine import (
     RuntimeInvocationError,
     RuntimeInvoker,
     assemble_turn,
+    thread_conversation,
+    turn_delta,
 )
 from .config import settings
 from .schemas.agent_chat import AgentChatResponse
@@ -73,8 +75,7 @@ async def run_chat_turn(
     prior_messages: list[dict] = []
     if continuing:
         prior_runs = await list_thread_runs(db, tenant_id=tenant_id, thread_id=thread_id)
-        for run in prior_runs:
-            prior_messages.extend(run.messages or [])
+        prior_messages = thread_conversation(prior_runs)
 
     definition_snapshot = {
         "agent_name": agent.agent_name,
@@ -123,7 +124,7 @@ async def run_chat_turn(
             tenant_id=tenant_id,
             run_id=run.id,
             status="failed",
-            messages=messages,
+            messages=turn_delta(messages),
             error=str(exc)[:2000],
         )
         logger.warning("Chat turn failed", extra={"run_id": run.id, "error": str(exc)})
@@ -132,7 +133,8 @@ async def run_chat_turn(
             content={"detail": "The chat agent could not complete this turn."},
         )
 
-    transcript = [*messages, {"role": "assistant", "content": turn.content}]
+    # Store only what this turn added; history is rebuilt from the thread's runs.
+    transcript = [*turn_delta(messages), {"role": "assistant", "content": turn.content}]
     await complete_run(
         db,
         tenant_id=tenant_id,

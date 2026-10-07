@@ -59,6 +59,7 @@ from ..agent_runs import (
     total_run_costs,
 )
 from ..chat_agents import get_dynamic_chat_agent
+from ..chat_engine import thread_conversation
 from ..config import settings
 from ..database import get_db
 from ..events import emit_event
@@ -280,9 +281,6 @@ def _summary(run: AgentRun) -> AgentRunSummary:
     )
 
 
-_CONVERSATION_ROLES = ("user", "assistant")
-
-
 # Declared before /{run_id}: a three-segment path cannot collide with a single
 # segment, but keeping the more specific route first makes the intent obvious.
 @router.get("/threads/{thread_id}/messages", response_model=ThreadMessagesResponse)
@@ -301,12 +299,7 @@ async def read_thread_messages(
     per-run machinery, not conversation, and are excluded. An unknown thread is an
     empty conversation, not a 404."""
     runs = await list_thread_runs(db, tenant_id=principal.tenant_id, thread_id=thread_id)
-    messages = [
-        message
-        for run in runs
-        for message in (run.messages or [])
-        if isinstance(message, dict) and message.get("role") in _CONVERSATION_ROLES
-    ]
+    messages = thread_conversation(runs)
     return ThreadMessagesResponse(thread_id=thread_id, messages=messages)
 
 

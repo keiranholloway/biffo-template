@@ -103,6 +103,42 @@ describe('runCoreUpgrade --apply', () => {
     for (const d of [base, theirs, instance]) rmSync(d, { recursive: true, force: true })
   })
 
+  it('--no-push commits on the upgrade branch with no push, no PR and no token', async () => {
+    const { deps, git, createPullRequest, defaultBranch, runCommand } = fakeDeps()
+    const resolveToken = vi.fn(() => {
+      throw new Error('no token available')
+    })
+    deps.resolveToken = resolveToken
+    const makeGitHub = vi.fn(deps.makeGitHub)
+    deps.makeGitHub = makeGitHub
+
+    await runCoreUpgrade(
+      {
+        cwd: instance,
+        templateRepo: theirs,
+        baseDir: base,
+        theirsDir: theirs,
+        apply: true,
+        noPush: true,
+      },
+      deps,
+    )
+
+    expect(git.createBranch).toHaveBeenCalledWith(instance, 'biffo/core-upgrade-0.1.0-to-0.2.0')
+    expect(git.commit).toHaveBeenCalledTimes(1)
+    expect(git.commit).toHaveBeenCalledWith(
+      instance,
+      'chore(core): upgrade template core 0.1.0 -> 0.2.0',
+      ['.'],
+    )
+    expect(runCommand).toHaveBeenCalled() // dependencies still installed
+    expect(git.push).not.toHaveBeenCalled()
+    expect(createPullRequest).not.toHaveBeenCalled()
+    expect(defaultBranch).not.toHaveBeenCalled()
+    expect(makeGitHub).not.toHaveBeenCalled()
+    expect(resolveToken).not.toHaveBeenCalled()
+  })
+
   it('creates a branch, applies files, bumps biffo.core.json, commits, pushes, opens a PR', async () => {
     const { deps, git, createPullRequest, defaultBranch } = fakeDeps()
 

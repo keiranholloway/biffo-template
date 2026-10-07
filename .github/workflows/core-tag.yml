@@ -122,7 +122,7 @@ jobs:
           # route the CLI-only version could not catch. release-dispatch.test.ts
           # now derives this list from the workflow files, so a fourth one fails
           # the suite rather than going quiet.
-          for workflow in publish-cli.yml publish-design-tokens.yml; do
+          for workflow in publish-cli.yml publish-design-tokens.yml plugin-staleness-report.yml; do
             echo "::notice::Tag $TAG was ${ACTION}d — dispatching $workflow against it."
             gh workflow run "$workflow" --repo "$GITHUB_REPOSITORY" --ref "$TAG"
             echo "Dispatched $workflow for $TAG." >> "$GITHUB_STEP_SUMMARY"

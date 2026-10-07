@@ -269,6 +269,15 @@ export const GUARD_CANDIDATE_CLASSIFICATION: Record<string, GuardCandidateVerdic
       'auditOnly list). Advisory at ONE call site does not make the module itself not a guard; ' +
       'the same distinction already applies to branch-protection-audit.ts.',
   },
+  'core-staleness.ts': {
+    isGuard: false,
+    reason:
+      'a pure decision helper for `plugin-staleness-report.yml` (a scheduled, tag-dispatched ' +
+      'reporter that files issues; not a CI gate and not reachable from any `biffo check`): it ' +
+      "classifies one instance's biffo.core.json pin against a caller-supplied tag list and " +
+      'files nothing itself. The reporter states its own denominator (instances examined, pairs ' +
+      'behind, cannot-tell) in its step summary.',
+  },
   'sibling-identity-check.ts': {
     isGuard: true,
     reason:

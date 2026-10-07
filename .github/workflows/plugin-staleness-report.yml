@@ -1,4 +1,4 @@
-name: Plugin-staleness estate report
+name: Downstream staleness estate report
 
 # plugin-staleness notifier (#1559): the measurement has existed since #1547 —
 # `biffo check plugin-staleness` / `biffo plugin staleness` (cli/src/lib/
@@ -248,11 +248,22 @@ jobs:
             pathToFileURL(`${theirsDir}/cli/src/adapters/registry/index.js`).href
           )
 
+          const coreStaleness = await import(pathToFileURL(`${theirsDir}/cli/src/lib/core-staleness.js`).href)
+          const { execFileSync } = await import('node:child_process')
+          const git = (...args) =>
+            execFileSync('git', ['-C', theirsDir, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+
           const results = await staleness.checkPluginStaleness(instanceDir, {
             registry: new registryAdapterMod.RegistryAdapter(),
             git: new gitAdapterMod.GitAdapter(),
           })
-          process.stdout.write(JSON.stringify(results))
+          // Core finding: this instance's biffo.core.json against the newest core-v* tag of
+          // this job's own full-history checkout. One extra finding per instance.
+          const core = coreStaleness.checkCoreStaleness(instanceDir, {
+            tags: git('tag', '--list', 'core-v*').split('\n'),
+            subjectsBetween: (from, to) => git('log', '--format=%s', `${from}..${to}`).split('\n'),
+          })
+          process.stdout.write(JSON.stringify([...results, ...core]))
           EOF
 
           examined=0
@@ -293,8 +304,8 @@ jobs:
               for (const r of data) console.log(JSON.stringify({ instance, instanceRepo, ...r }))
             ' "$name" "$slug" >> "$findings"
 
-            plugin_count=$(printf '%s\n' "$out" | node -e 'console.log(JSON.parse(require("fs").readFileSync(0,"utf8")).length)')
-            echo "  ${plugin_count} vendored plugin(s)" >> "$log"
+            plugin_count=$(printf '%s\n' "$out" | node -e 'console.log(JSON.parse(require("fs").readFileSync(0,"utf8")).filter((r) => r.kind !== "core").length)')
+            echo "  ${plugin_count} vendored plugin(s) + core pin check" >> "$log"
             printf '%s\n' "$out" >> "$log"
             examined=$((examined + 1))
           done < "${RUNNER_TEMP}/instances.txt"
@@ -448,6 +459,28 @@ jobs:
           [ -f "$findings" ] || { echo "no findings file — nothing to report"; exit 0; }
           run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
 
+          theirs_dir="$(pwd)"
+          core_filer="$RUNNER_TEMP/core-staleness-filer.mjs"
+          cat > "$core_filer" <<'EOF'
+          import { execFileSync } from 'node:child_process'
+          import { pathToFileURL } from 'node:url'
+
+          const [, , instance, instanceRepo, runUrl, findingJson] = process.argv
+          const lib = await import(
+            pathToFileURL(`${process.cwd()}/cli/src/lib/core-staleness.js`).href
+          )
+          const gh = (args) =>
+            execFileSync('gh', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] }).trim()
+          const result = lib.fileCoreStalenessIssue(instance, instanceRepo, JSON.parse(findingJson), runUrl, {
+            listOpenTitles: (repo) =>
+              JSON.parse(
+                gh(['issue', 'list', '--repo', repo, '--state', 'open', '--limit', '200', '--json', 'title']),
+              ).map((i) => i.title),
+            create: (repo, title, body) => gh(['issue', 'create', '--repo', repo, '--title', title, '--body', body]),
+          })
+          console.log(`${result.action} ${result.url ?? ''}`.trim())
+          EOF
+
           opened=0
           updated=0
           moved=0
@@ -490,6 +523,21 @@ jobs:
             if [ -z "${target_token:-}" ]; then
               echo "::error title=plugin-staleness: empty write token for ${target_owner}::The App token step for '${target_owner}' produced nothing, so ${instance_repo} cannot be written to. Refusing to file elsewhere." >&2
               failed=$((failed + 1))
+              continue
+            fi
+
+            kind=$(printf '%s' "$line" | node -e 'console.log(JSON.parse(require("fs").readFileSync(0,"utf8")).kind ?? "plugin")')
+            if [ "$kind" = 'core' ]; then
+              # One open issue per instance under a stable, version-free title; an open one
+              # is left alone (no comment). Decision and body live in core-staleness.ts.
+              if out=$(GH_TOKEN="$target_token" "$theirs_dir/cli/node_modules/.bin/tsx" "$core_filer" \
+                  "$instance" "$instance_repo" "$run_url" "$line"); then
+                echo "$out"
+                case "$out" in opened*) opened=$((opened + 1)) ;; esac
+              else
+                echo "::error title=core-staleness: could not file into ${instance_repo}::${out}" >&2
+                failed=$((failed + 1))
+              fi
               continue
             fi
 

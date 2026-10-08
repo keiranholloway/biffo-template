@@ -5,15 +5,15 @@ members = ["services/*", "services/_plugins/*", "packages/python-sdk", "packages
 # are claimed by `services/_plugins/*` instead.
 exclude = ["services/_plugins"]
 
+# Security floors (#1450). Each pin is the first release past a published
+# advisory; the constraint stops a later core upgrade or re-lock from
+# resolving back below it. Raise, never lower, and drop only once nothing
+# could resolve below the version.
+#   anyio  >=4.14.2: CVE-2026-63374, CVE-2026-64847, CVE-2026-63349
+#   pyjwt  >=2.14.0: CVE-2026-102274
+#   urllib3 >=2.8.0: CVE-2026-97687
 [tool.uv]
 constraint-dependencies = ["anyio>=4.14.2", "pyjwt>=2.14.0", "urllib3>=2.8.0"]
-
-# Root-level source inherited by every workspace member (uv >= 0.4.x), so an
-# editable plugin whose `dev` group pins `biffo-plugin-host` resolves it from the
-# workspace during `biffo plugin upgrade` without its own [tool.uv.sources].
-# A standalone `uv sync` inside the plugin ignores this and uses the index.
-[tool.uv.sources]
-biffo-plugin-host = { workspace = true }
 
 # ============================================================================
 # Ruff — SINGLE authoritative config (issue #345).
@@ -161,3 +161,10 @@ omit = ["*/tests/*", "*/migrations/*", "services/_template/*"]
 # first place. Only `greenlet,thread` together reach CI's number (47),
 # reproduced twice locally with the identical result.
 concurrency = ["greenlet", "thread"]
+
+# Root-level source inherited by every workspace member (uv >= 0.4.x), so an
+# editable plugin whose `dev` group pins `biffo-plugin-host` resolves it from the
+# workspace during `biffo plugin upgrade` without its own [tool.uv.sources].
+# A standalone `uv sync` inside the plugin ignores this and uses the index.
+[tool.uv.sources]
+biffo-plugin-host = { workspace = true }

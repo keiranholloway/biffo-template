@@ -5,6 +5,9 @@ members = ["services/*", "services/_plugins/*", "packages/python-sdk", "packages
 # are claimed by `services/_plugins/*` instead.
 exclude = ["services/_plugins"]
 
+[tool.uv]
+constraint-dependencies = ["anyio>=4.14.2", "pyjwt>=2.14.0", "urllib3>=2.8.0"]
+
 # Root-level source inherited by every workspace member (uv >= 0.4.x), so an
 # editable plugin whose `dev` group pins `biffo-plugin-host` resolves it from the
 # workspace during `biffo plugin upgrade` without its own [tool.uv.sources].

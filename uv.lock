@@ -13,6 +13,11 @@ members = [
     "biffo-pr-signer",
     "biffo-service-template",
 ]
+constraints = [
+    { name = "anyio", specifier = ">=4.14.2" },
+    { name = "pyjwt", specifier = ">=2.14.0" },
+    { name = "urllib3", specifier = ">=2.8.0" },
+]
 
 [[package]]
 name = "aiosqlite"

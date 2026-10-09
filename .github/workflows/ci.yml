@@ -85,7 +85,8 @@ jobs:
   # Required-check names are unchanged: this job is NOT added to the required
   # set (status-checks.test.ts NOT_REQUIRED), so existing branch protection on
   # every instance and sibling keeps matching what CI reports. Its failure
-  # turns the run red and makes the required heavy jobs skip.
+  # turns the run red and makes the required heavy jobs FAIL (not skip: a skipped
+  # required job satisfies branch protection) via their "Require static checks" step.
   static-checks:
     name: Static checks (fast)
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
@@ -119,6 +120,9 @@ jobs:
 
   js:
     needs: static-checks
+    # Run even when static-checks fails (see the "Require static checks" step):
+    # a skipped required job satisfies branch protection, a failed one does not.
+    if: ${{ !cancelled() }}
     # This job's name has carried "...audit" since before #1880 moved the
     # audit step out to a separate non-required job (2026-09-04) and through
     # #2040 moving it back in (below) as a diff-aware, required check
@@ -134,6 +138,11 @@ jobs:
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     timeout-minutes: 20
     steps:
+      # Required job: a skipped dependency would count as passing branch protection,
+      # so a failed static-checks must fail THIS job rather than skip it.
+      - name: Require static checks
+        if: ${{ needs.static-checks.result != 'success' }}
+        run: echo "static-checks result was ${{ needs.static-checks.result }}"; exit 1
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           # The template's version is its highest core-v* tag (#423), and
@@ -572,6 +581,9 @@ jobs:
 
   python:
     needs: static-checks
+    # Run even when static-checks fails (see the "Require static checks" step):
+    # a skipped required job satisfies branch protection, a failed one does not.
+    if: ${{ !cancelled() }}
     name: Python (lint, types, test, security)
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     # Repo variable PYTHON_JOB_TIMEOUT_MINUTES (default 20). Must exceed
@@ -592,6 +604,11 @@ jobs:
       actions: read
       statuses: write
     steps:
+      # Required job: a skipped dependency would count as passing branch protection,
+      # so a failed static-checks must fail THIS job rather than skip it.
+      - name: Require static checks
+        if: ${{ needs.static-checks.result != 'success' }}
+        run: echo "static-checks result was ${{ needs.static-checks.result }}"; exit 1
       # `fetch-depth: 0` matches the `js` and `security-secrets` checkouts
       # above (#1692). Without it this checkout is shallow (depth 1, single
       # ref) and `origin/dev` — or any other ref/merge-base — is simply not a
@@ -1156,6 +1173,9 @@ jobs:
 
   infra-validate:
     needs: static-checks
+    # Run even when static-checks fails (see the "Require static checks" step):
+    # a skipped required job satisfies branch protection, a failed one does not.
+    if: ${{ !cancelled() }}
     # Both Terraform validations run here as separate STEPS of one job, not as
     # two jobs. GitHub bills each *job* rounded up to a full minute, and the
     # infra/environments validation does ~33 seconds of work -- so as its own
@@ -1185,6 +1205,11 @@ jobs:
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     timeout-minutes: 20
     steps:
+      # Required job: a skipped dependency would count as passing branch protection,
+      # so a failed static-checks must fail THIS job rather than skip it.
+      - name: Require static checks
+        if: ${{ needs.static-checks.result != 'success' }}
+        run: echo "static-checks result was ${{ needs.static-checks.result }}"; exit 1
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       - id: setup
         uses: hashicorp/setup-terraform@v4

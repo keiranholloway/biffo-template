@@ -12,6 +12,7 @@ import {
   listUnwirableEnvironments,
   listWireablePlugins,
   pluginModuleSource,
+  renderGeneratedTerraform,
   retiredFrontendShapeError,
   staleFirstPartyCopies,
   syncPluginTerraform,
@@ -168,6 +169,12 @@ describe('syncPluginTerraform', () => {
     // core_api -> api_gateway -> plugin -> core_api. It must stay out of here.
     expect(tf).not.toContain('BIFFO_SERVICE_PRINCIPAL_ARN_ALLOWLIST =')
     expect(tf).not.toContain('.role_arn')
+  })
+
+  it('defaults the handler to <name>.main.handler', () => {
+    const tf = renderGeneratedTerraform([{ name: 'acme', declaredVariables: new Set(['handler']) }])
+    expect(tf).toContain('"acme.main.handler"')
+    expect(tf).not.toContain('src.lambda.main.handler')
   })
 
   it('omits arguments a plugin module does not declare, so older modules still validate', () => {

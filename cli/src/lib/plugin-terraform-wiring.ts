@@ -78,8 +78,9 @@ import { join, relative, sep } from 'node:path'
 /** Never a real plugin — the copy-me skeleton shipped by the template. */
 const TEMPLATE_MODULE_DIR = '_template'
 
-/** Lambda entrypoint assumed for a plugin, per ADR-0003 section 2's repo layout. */
-export const DEFAULT_PLUGIN_HANDLER = 'src.lambda.main.handler'
+/** Lambda entrypoint assumed for a plugin: `<name>.main.handler`, matching the
+ * plugin module docs and deploy-app.yml, which packages the plugin's `src/` to match. */
+export const defaultPluginHandler = (name: string): string => `${name}.main.handler`
 
 export const GENERATED_TF_FILE = 'plugins.generated.tf'
 export const GENERATED_TFVARS_FILE = 'plugins.auto.tfvars.json'
@@ -697,7 +698,7 @@ export function renderGeneratedTerraform(
     renderModuleBlock(
       p.name,
       p.declaredVariables,
-      p.handler ?? DEFAULT_PLUGIN_HANDLER,
+      p.handler ?? defaultPluginHandler(p.name),
       p.source ?? THIRD_PARTY_TERRAFORM(p.name),
       p.declaredOutputs ?? new Set<string>(),
     ),

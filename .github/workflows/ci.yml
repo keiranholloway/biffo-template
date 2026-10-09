@@ -99,6 +99,9 @@ jobs:
           enable-cache: true
       - id: install
         run: uv sync --all-groups --locked
+      - name: Product-domain dependencies
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: sh scripts/sync-domain-deps.sh
       - name: Lint
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: uv run ruff check .

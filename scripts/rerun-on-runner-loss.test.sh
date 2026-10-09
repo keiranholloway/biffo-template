@@ -59,6 +59,8 @@ case "$1" in
         # Count reads so a case can assert a failed read is not retried (#2099).
         printf 'x\n' >> "$STUBDIR/ann-calls"
         cat "$STUBDIR/annotations" 2>/dev/null || { echo "$GH_ERR" >&2; exit 1; } ;;
+      *"/pulls/"*)      cat "$STUBDIR/pr-head" 2>/dev/null || { echo "$GH_ERR" >&2; exit 1; } ;;
+      *"/branches/"*)   cat "$STUBDIR/branch-head" 2>/dev/null || { echo "$GH_ERR" >&2; exit 1; } ;;
       *"/actions/runs/"*) cat "$STUBDIR/run" 2>/dev/null || { echo "$GH_ERR" >&2; exit 1; } ;;
       *) echo "$GH_ERR" >&2; exit 1 ;;
     esac ;;
@@ -127,8 +129,8 @@ assert_case() {
 # MUST-CATCH: the reclaimed runner. This is the tabsii-platform#1420 shape --
 # a failed run whose failed job carries the Actions service's own annotation.
 # ---------------------------------------------------------------------------
-C="$TMP/lost"; mkdir -p "$C"
-printf '1\tfailure\n' > "$C/run"
+C="$TMP/lost"; mkdir -p "$C"; printf 'CUR\n' > "$C/branch-head"
+printf '1\tfailure\tCUR\tpush\tmain\t\n' > "$C/run"
 printf '900001\n'      > "$C/jobs"
 printf '%s\n' "$ANN_LOST" > "$C/annotations"
 assert_case "a reclaimed runner is re-run once" "$C" yes 0 "re-ran the failed jobs"
@@ -138,7 +140,7 @@ assert_case "a reclaimed runner is re-run once" "$C" yes 0 "re-ran the failed jo
 # this file -- re-running this one would manufacture flakiness on a real bug.
 # ---------------------------------------------------------------------------
 C="$TMP/real"; mkdir -p "$C"
-printf '1\tfailure\n' > "$C/run"
+printf '1\tfailure\tCUR\tpush\tmain\t\n' > "$C/run"
 printf '900001\n'      > "$C/jobs"
 printf '%s\n' "$ANN_REAL" > "$C/annotations"
 assert_case "a real test failure is left red" "$C" no 0 "must stay red"
@@ -149,7 +151,7 @@ assert_case "a real test failure is left red" "$C" no 0 "must stay red"
 # itself for ever, since its own re-run produces another completed run.
 # ---------------------------------------------------------------------------
 C="$TMP/attempt2"; mkdir -p "$C"
-printf '2\tfailure\n' > "$C/run"
+printf '2\tfailure\tCUR\tpush\tmain\t\n' > "$C/run"
 printf '900001\n'      > "$C/jobs"
 printf '%s\n' "$ANN_LOST" > "$C/annotations"
 assert_case "an already-re-run run is declined even when the runner did die" "$C" no 0 "already re-run once"
@@ -158,7 +160,7 @@ assert_case "an already-re-run run is declined even when the runner did die" "$C
 # MUST-NOT-CATCH: a run that did not fail at all.
 # ---------------------------------------------------------------------------
 C="$TMP/success"; mkdir -p "$C"
-printf '1\tsuccess\n' > "$C/run"
+printf '1\tsuccess\tCUR\tpush\tmain\t\n' > "$C/run"
 printf '900001\n'      > "$C/jobs"
 printf '%s\n' "$ANN_LOST" > "$C/annotations"
 assert_case "a run that did not fail is never re-run" "$C" no 0 "nothing to re-run"
@@ -168,8 +170,8 @@ assert_case "a run that did not fail is never re-run" "$C" no 0 "nothing to re-r
 # is re-run -- a pool-wide reclamation takes several jobs at once, and a
 # genuinely-failing job swept along simply fails again in seconds.
 # ---------------------------------------------------------------------------
-C="$TMP/mixed"; mkdir -p "$C"
-printf '1\tfailure\n'   > "$C/run"
+C="$TMP/mixed"; mkdir -p "$C"; printf 'CUR\n' > "$C/branch-head"
+printf '1\tfailure\tCUR\tpush\tmain\t\n'   > "$C/run"
 printf '900001\n900002\n' > "$C/jobs"
 # The stub serves the same annotations to every job; the real-failure text is
 # present alongside the runner-loss text, which is what a mixed run looks like
@@ -188,7 +190,7 @@ assert_case "an unreadable run fails loudly rather than silently declining" "$C"
 # COULD-NOT-TELL, second shape: the run reads, the job list does not.
 # ---------------------------------------------------------------------------
 C="$TMP/nojobs"; mkdir -p "$C"
-printf '1\tfailure\n' > "$C/run"
+printf '1\tfailure\tCUR\tpush\tmain\t\n' > "$C/run"
 assert_case "an unreadable job list fails loudly" "$C" no 1 "could not list failed jobs"
 
 # ---------------------------------------------------------------------------
@@ -214,11 +216,11 @@ C="$TMP/err-run"; mkdir -p "$C"   # run read fails
 assert_case "a failed run read surfaces gh's own error" "$C" no 1 "HTTP 403"
 
 C="$TMP/err-jobs"; mkdir -p "$C"
-printf '1\tfailure\n' > "$C/run"
+printf '1\tfailure\tCUR\tpush\tmain\t\n' > "$C/run"
 assert_case "a failed job-list read surfaces gh's own error" "$C" no 1 "HTTP 403"
 
 C="$TMP/err-ann"; mkdir -p "$C"
-printf '1\tfailure\n' > "$C/run"
+printf '1\tfailure\tCUR\tpush\tmain\t\n' > "$C/run"
 printf '900001\n'      > "$C/jobs"
 assert_case "a failed annotation read surfaces gh's own error" "$C" no 1 "HTTP 403"
 
@@ -239,12 +241,44 @@ fi
 # not a terminal, so this script must judge it by exit code alone
 # (biffo-fleet#77 is that exact mistake, made and filed).
 # ---------------------------------------------------------------------------
-C="$TMP/refused"; mkdir -p "$C"
-printf '1\tfailure\n' > "$C/run"
+C="$TMP/refused"; mkdir -p "$C"; printf 'CUR\n' > "$C/branch-head"
+printf '1\tfailure\tCUR\tpush\tmain\t\n' > "$C/run"
 printf '900001\n'      > "$C/jobs"
 printf '%s\n' "$ANN_LOST" > "$C/annotations"
 printf '1\n'           > "$C/rerun-exit"
 assert_case "a refused re-run reports its own exit code" "$C" yes 2 "was refused"
+
+# ---------------------------------------------------------------------------
+# SUPERSEDED COMMITS (tabsii-platform#1579). Re-running an old commit's run
+# joins the current head's concurrency group and cancels its checks.
+# ---------------------------------------------------------------------------
+C="$TMP/pr-current"; mkdir -p "$C"
+printf '1\tfailure\tCUR\tpull_request\tfeat\t7\n' > "$C/run"
+printf '900001\n' > "$C/jobs"; printf '%s\n' "$ANN_LOST" > "$C/annotations"
+printf 'CUR\n' > "$C/pr-head"
+assert_case "a pull_request run still at its PR head is re-run" "$C" yes 0 "re-ran the failed jobs"
+
+C="$TMP/pr-moved"; mkdir -p "$C"
+printf '1\tfailure\tOLD\tpull_request\tfeat\t7\n' > "$C/run"
+printf '900001\n' > "$C/jobs"; printf '%s\n' "$ANN_LOST" > "$C/annotations"
+printf 'NEW\n' > "$C/pr-head"
+assert_case "a pull_request run whose PR moved on is declined" "$C" no 0 "has moved on to NEW"
+
+C="$TMP/push-moved"; mkdir -p "$C"
+printf '1\tfailure\tOLD\tpush\tmain\t\n' > "$C/run"
+printf '900001\n' > "$C/jobs"; printf '%s\n' "$ANN_LOST" > "$C/annotations"
+printf 'NEW\n' > "$C/branch-head"
+assert_case "a push run whose branch moved on is declined" "$C" no 0 "has moved on to NEW"
+
+C="$TMP/pr-unreadable"; mkdir -p "$C"
+printf '1\tfailure\tOLD\tpull_request\tfeat\t7\n' > "$C/run"
+printf '900001\n' > "$C/jobs"; printf '%s\n' "$ANN_LOST" > "$C/annotations"
+assert_case "an unreadable pull request exits undetermined" "$C" no 1 "could not read pull request"
+
+C="$TMP/branch-unreadable"; mkdir -p "$C"
+printf '1\tfailure\tOLD\tpush\tmain\t\n' > "$C/run"
+printf '900001\n' > "$C/jobs"; printf '%s\n' "$ANN_LOST" > "$C/annotations"
+assert_case "an unreadable branch exits undetermined" "$C" no 1 "could not read branch"
 
 if [ "$HAVE_DASH" -eq 0 ]; then
   printf '\n  NOTE: dash is not installed here, so no case was checked under it.\n'

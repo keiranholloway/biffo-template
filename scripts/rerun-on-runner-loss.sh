@@ -58,12 +58,17 @@ EXIT_RERUN_FAILED=2
 say() { printf '%s\n' "$*"; }
 
 run_json=$(gh api "repos/$REPO/actions/runs/$RUN_ID" \
-             --jq '[(.run_attempt|tostring), .conclusion] | @tsv') || {
+             --jq '[(.run_attempt|tostring), .conclusion, .head_sha, .event, .head_branch,
+                   ((.pull_requests[0].number // "")|tostring)] | @tsv') || {
   say "could not read run $RUN_ID in $REPO — cannot tell whether the runner died, so nothing was re-run."
   exit "$EXIT_UNDETERMINED"
 }
 attempt=$(printf '%s' "$run_json" | cut -f1)
 conclusion=$(printf '%s' "$run_json" | cut -f2)
+head_sha=$(printf '%s' "$run_json" | cut -f3)
+event=$(printf '%s' "$run_json" | cut -f4)
+head_branch=$(printf '%s' "$run_json" | cut -f5)
+pr_number=$(printf '%s' "$run_json" | cut -f6)
 
 # THE RECURSION GUARD AND THE ONCE-ONLY RULE ARE THE SAME CHECK. A re-run is
 # attempt 2, so a run this script has already acted on can never satisfy this
@@ -119,6 +124,36 @@ done
 
 if [ -z "$lost" ]; then
   say "run $RUN_ID failed, and no failed job blames a lost runner — leaving it red. A real failure must stay red."
+  exit 0
+fi
+
+# NEVER RE-RUN A SUPERSEDED COMMIT. CI and RLS Tests share a concurrency group
+# per ref (`refs/pull/<n>/merge` on a pull request) with cancel-in-progress, so
+# re-running an old commit's run cancels the CURRENT head's runs and spends CI
+# time passing a commit that can no longer merge (tabsii-platform#1579). Decline
+# when the run's commit is no longer the head of its PR (pull_request runs) or
+# branch (push runs). A failed read is "could not tell": loud, nothing re-run.
+current=""
+case "$event" in
+  pull_request|pull_request_target)
+    if [ -n "$pr_number" ]; then
+      current=$(gh api "repos/$REPO/pulls/$pr_number" --jq '.head.sha') || {
+        say "could not read pull request $pr_number — cannot tell whether run $RUN_ID's commit is still its head, so nothing was re-run."
+        exit "$EXIT_UNDETERMINED"
+      }
+      what="pull request $pr_number"
+    fi ;;
+  push)
+    if [ -n "$head_branch" ]; then
+      current=$(gh api "repos/$REPO/branches/$head_branch" --jq '.commit.sha') || {
+        say "could not read branch $head_branch — cannot tell whether run $RUN_ID's commit is still its head, so nothing was re-run."
+        exit "$EXIT_UNDETERMINED"
+      }
+      what="branch $head_branch"
+    fi ;;
+esac
+if [ -n "$current" ] && [ "$current" != "$head_sha" ]; then
+  say "run $RUN_ID is for commit $head_sha, but $what has moved on to $current — declining; re-running it would cancel the current head's checks."
   exit 0
 fi
 

@@ -70,7 +70,52 @@ jobs:
   # workflow rather than a second job here so the two triggers can differ at
   # all; the required check name it reports ("Release Guards") is unchanged,
   # and this file no longer defines a job with that name.
+  # Fast static and convention checks, run FIRST (seconds, not the 20-30
+  # minutes the full Python suite takes). The heavy jobs below declare
+  # `needs: static-checks`, so a commit that fails a convention test (DDL
+  # import numbering, router ordering, divergence declarations, ...) reports
+  # that failure within a couple of minutes and no heavy job is spent on it.
+  #
+  # Test selection is by file-name convention, so a new convention test is
+  # picked up with no edit here: any `test_*conventions*`, `test_*ordering*`,
+  # `test_*divergence*` or `test_*declaration*` file under services/ or
+  # packages/ (including `tests/instance/`). The full `python` job still runs
+  # them again as part of the whole suite.
+  #
+  # Required-check names are unchanged: this job is NOT added to the required
+  # set (status-checks.test.ts NOT_REQUIRED), so existing branch protection on
+  # every instance and sibling keeps matching what CI reports. Its failure
+  # turns the run red and makes the required heavy jobs skip.
+  static-checks:
+    name: Static checks (fast)
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - id: install
+        run: uv sync --all-groups --locked
+      - name: Lint
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: uv run ruff check .
+      - name: Format check
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: uv run ruff format --check .
+      - name: Static and convention tests
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: |
+          files=$(find services packages -type f \( -name 'test_*conventions*.py' -o -name 'test_*ordering*.py' -o -name 'test_*divergence*.py' -o -name 'test_*declaration*.py' \) -not -path '*/node_modules/*' -not -path '*/.venv/*' | sort)
+          if [ -z "$files" ]; then echo "no static/convention tests found"; exit 0; fi
+          echo "$files"
+          # shellcheck disable=SC2086
+          uv run pytest -q -p no:cacheprovider $files
+
   js:
+    needs: static-checks
     # This job's name has carried "...audit" since before #1880 moved the
     # audit step out to a separate non-required job (2026-09-04) and through
     # #2040 moving it back in (below) as a diff-aware, required check
@@ -494,6 +539,7 @@ jobs:
   # available in a job-level `if:`), so in an instance the job is skipped steps
   # only -- green, not failed. (ci-template-only-guard.test.ts)
   real-core-schema:
+    needs: static-checks
     name: Real Core schema (Postgres + live Core)
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     timeout-minutes: 30
@@ -522,6 +568,7 @@ jobs:
         run: pnpm vitest run src/lib/plugin-verify/real-core-schema.test.ts
 
   python:
+    needs: static-checks
     name: Python (lint, types, test, security)
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     # Repo variable PYTHON_JOB_TIMEOUT_MINUTES (default 20). Must exceed
@@ -1105,6 +1152,7 @@ jobs:
         run: gitleaks detect --no-git --redact -v --exit-code=2
 
   infra-validate:
+    needs: static-checks
     # Both Terraform validations run here as separate STEPS of one job, not as
     # two jobs. GitHub bills each *job* rounded up to a full minute, and the
     # infra/environments validation does ~33 seconds of work -- so as its own

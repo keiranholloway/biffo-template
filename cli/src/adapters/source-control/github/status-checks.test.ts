@@ -77,7 +77,13 @@ const CORE_WORKFLOWS = [CORE_CI, CORE_RELEASE_GUARDS]
  * safely be required again. See `js`/`python`'s own comments in `ci.yml` for
  * the full trade-off record.
  */
-const NOT_REQUIRED = new Set(['Release Guards', 'Real Core schema (Postgres + live Core)'])
+const NOT_REQUIRED = new Set([
+  'Release Guards',
+  'Real Core schema (Postgres + live Core)',
+  // Fast static gate the heavy jobs `need:`. Not required, so existing branch
+  // protection keeps matching the unchanged heavy-job names.
+  'Static checks (fast)',
+])
 
 /**
  * Extract the `name:` of every top-level job in a GitHub Actions workflow.

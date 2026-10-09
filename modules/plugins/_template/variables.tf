@@ -14,7 +14,7 @@ variable "plugin_name" {
 }
 
 variable "handler" {
-  description = "Lambda handler entrypoint, e.g. `src.lambda.main.handler` per the plugin repo layout in ADR-0003 section 2."
+  description = "Lambda handler entrypoint, e.g. `<name>.main.handler` per the plugin repo layout in ADR-0003 section 2."
   type        = string
 }
 

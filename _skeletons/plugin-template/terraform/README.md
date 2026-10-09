@@ -133,7 +133,7 @@ module "plugin_<name>" {
   project_name   = var.project_name
   environment    = local.environment
   plugin_name    = "<name>"
-  handler        = "src.lambda.main.handler"
+  handler        = "<name>.main.handler"
   event_bus_name = module.events.event_bus_name
   core_api_url   = module.api_gateway.api_endpoint
   tags           = local.tags

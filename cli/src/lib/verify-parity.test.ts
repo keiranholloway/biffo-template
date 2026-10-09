@@ -110,6 +110,10 @@ const EXCLUDED: Record<
     kind: 'slow',
     why: 'measured 51.2s in this repo on 2026-07-29, against a 15s budget. Included automatically wherever it measures faster — 1.7-2.7s in every sibling',
   },
+  'uv run pytest -q -p no:cacheprovider $files': {
+    kind: 'slow',
+    why: 'the static-checks CI job runs only the convention-named subset of the suite; the gate covers those files via the full pytest run (measured 51.2s in this repo on 2026-07-29, against a 15s budget), included automatically wherever it measures faster',
+  },
   // REMOVED IN #1666, deliberately, and this note is here so the removal is not
   // read later as an oversight.
   //

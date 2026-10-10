@@ -110,8 +110,6 @@ describe('deploy-app.yml wires the plugin column check into every environment', 
     for (const later of [
       'Package and deploy plugin Lambdas',
       'Package and deploy the shared plugin host',
-      'Build and deploy plugin frontends',
-      'Invalidate CloudFront for plugin frontends',
     ]) {
       expect(stepIndex(body, later), `${later} exists in ${job}`).toBeGreaterThan(-1)
       expect(stepIndex(body, later)).toBeGreaterThan(check)

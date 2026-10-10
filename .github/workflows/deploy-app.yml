@@ -979,9 +979,8 @@ jobs:
               mkdir -p "$pkg/services/$name/web-admin"
               cp -r "$plugin_dir/web-admin/dist" "$pkg/services/$name/web-admin/dist"
             fi
-            # user_frontend's built UI shell (ADR-0021 §2, biffo-template#558
-            # M2) is served by this SAME Lambda now too, from
-            # services/<name>/web/dist via BIFFO_PLUGINS_ROOT -- mirrors the
+            # user_frontend's built UI shell (ADR-0021 §2) is served by this SAME
+            # Lambda now too, from services/<name>/web/dist via BIFFO_PLUGINS_ROOT -- mirrors the
             # web-admin block above exactly, including its fail-CLOSED error:
             # declaring user_frontend with no web/ is a misconfiguration, not
             # a variant to tolerate (same biffo-plugin-idea-scout#22 shape the
@@ -1022,74 +1021,6 @@ jobs:
           # Publish a version and move the "live" alias to it (#1747) — see
           # the Core API's "Publish version and move alias" step.
           sh scripts/publish-lambda-version.sh "$fn"
-
-      # Build and deploy each installed user-facing plugin's static frontend
-      # (ADR-0018 §2 — the shape ADR-0021 reuses for the frontend until its own
-      # shared app-shell lands, #558). Unlike the backend loop above, this is
-      # keyed on user_frontend, not user_ingress — a plugin can ship a frontend
-      # with no backend page (or vice versa). A plugin's own web/ isn't a pnpm
-      # workspace member of this monorepo (services/<name>/web/ has its own
-      # package.json + lockfile), so it needs its own install — --ignore-workspace,
-      # or pnpm silently installs this repo's root deps and skips it entirely
-      # (observed the hard way shipping ideation's frontend by hand: this
-      # workflow never previously deployed a plugin frontend at all).
-      - name: Build and deploy plugin frontends
-        run: |
-          set -euo pipefail
-          shopt -s nullglob
-          prefix='${{ vars.CORE_API_LAMBDA_NAME }}'
-          prefix="${prefix%-core-api}"
-          for manifest in services/*/biffo.plugin.json services/_plugins/*/biffo.plugin.json; do
-            jq -e '.user_frontend' "$manifest" >/dev/null 2>&1 || continue
-            plugin_dir="$(dirname "$manifest")"
-            name="$(basename "$plugin_dir")"
-            web_dir="$plugin_dir/web"
-            [ -d "$web_dir" ] || { echo "skip $name (user_frontend declared but no web/ dir)"; continue; }
-            bucket="${prefix}-plugin-${name}-web"
-            if ! aws s3api head-bucket --bucket "$bucket" 2>/dev/null; then
-              echo "$bucket does not exist — $name's frontend bucket not provisioned in this env; skipping."
-              continue
-            fi
-            echo "::group::frontend $name -> $bucket"
-            (
-              cd "$web_dir"
-              pnpm install --ignore-workspace --frozen-lockfile
-              pnpm run build
-            )
-            # Same cache split as the portal sync above: hashed assets under
-            # assets/ are immutable and keep the long cache; index.html changes
-            # every deploy and must not be cached.
-            aws s3 sync "$web_dir/dist/" "s3://$bucket/$name/" \
-              --delete \
-              --cache-control "public, max-age=31536000, immutable" \
-              --exclude "index.html" \
-              --exclude "*.txt"
-            aws s3 sync "$web_dir/dist/" "s3://$bucket/$name/" \
-              --delete \
-              --cache-control "no-cache" \
-              --exclude "*" \
-              --include "index.html"
-            echo "::endgroup::"
-          done
-      - name: Invalidate CloudFront for plugin frontends
-        # Same fire-and-forget discipline as the portal's own invalidation step
-        # above (#478) — this one covers content the portal's earlier
-        # invalidation ran before, so it needs its own pass, not a duplicate of
-        # the same one.
-        continue-on-error: true
-        timeout-minutes: 3
-        run: |
-          for attempt in 1 2 3; do
-            if aws cloudfront create-invalidation \
-              --distribution-id ${{ vars.CLOUDFRONT_DISTRIBUTION_ID }} \
-              --paths "/*" \
-              --cli-read-timeout 20 --cli-connect-timeout 10; then
-              exit 0
-            fi
-            echo "CloudFront invalidation attempt ${attempt} failed; retrying..." >&2
-            sleep 5
-          done
-          echo "::warning::CloudFront invalidation did not succeed; deploy continues (cache self-heals via TTL)."
 
   # ─── STAGING ─────────────────────────────────────────────────────────────────
   # Manual only — run workflow_dispatch with environment=staging.
@@ -1945,9 +1876,8 @@ jobs:
               mkdir -p "$pkg/services/$name/web-admin"
               cp -r "$plugin_dir/web-admin/dist" "$pkg/services/$name/web-admin/dist"
             fi
-            # user_frontend's built UI shell (ADR-0021 §2, biffo-template#558
-            # M2) is served by this SAME Lambda now too, from
-            # services/<name>/web/dist via BIFFO_PLUGINS_ROOT -- mirrors the
+            # user_frontend's built UI shell (ADR-0021 §2) is served by this SAME
+            # Lambda now too, from services/<name>/web/dist via BIFFO_PLUGINS_ROOT -- mirrors the
             # web-admin block above exactly, including its fail-CLOSED error:
             # declaring user_frontend with no web/ is a misconfiguration, not
             # a variant to tolerate (same biffo-plugin-idea-scout#22 shape the
@@ -1988,74 +1918,6 @@ jobs:
           # Publish a version and move the "live" alias to it (#1747) — see
           # the Core API's "Publish version and move alias" step.
           sh scripts/publish-lambda-version.sh "$fn"
-
-      # Build and deploy each installed user-facing plugin's static frontend
-      # (ADR-0018 §2 — the shape ADR-0021 reuses for the frontend until its own
-      # shared app-shell lands, #558). Unlike the backend loop above, this is
-      # keyed on user_frontend, not user_ingress — a plugin can ship a frontend
-      # with no backend page (or vice versa). A plugin's own web/ isn't a pnpm
-      # workspace member of this monorepo (services/<name>/web/ has its own
-      # package.json + lockfile), so it needs its own install — --ignore-workspace,
-      # or pnpm silently installs this repo's root deps and skips it entirely
-      # (observed the hard way shipping ideation's frontend by hand: this
-      # workflow never previously deployed a plugin frontend at all).
-      - name: Build and deploy plugin frontends
-        run: |
-          set -euo pipefail
-          shopt -s nullglob
-          prefix='${{ vars.CORE_API_LAMBDA_NAME }}'
-          prefix="${prefix%-core-api}"
-          for manifest in services/*/biffo.plugin.json services/_plugins/*/biffo.plugin.json; do
-            jq -e '.user_frontend' "$manifest" >/dev/null 2>&1 || continue
-            plugin_dir="$(dirname "$manifest")"
-            name="$(basename "$plugin_dir")"
-            web_dir="$plugin_dir/web"
-            [ -d "$web_dir" ] || { echo "skip $name (user_frontend declared but no web/ dir)"; continue; }
-            bucket="${prefix}-plugin-${name}-web"
-            if ! aws s3api head-bucket --bucket "$bucket" 2>/dev/null; then
-              echo "$bucket does not exist — $name's frontend bucket not provisioned in this env; skipping."
-              continue
-            fi
-            echo "::group::frontend $name -> $bucket"
-            (
-              cd "$web_dir"
-              pnpm install --ignore-workspace --frozen-lockfile
-              pnpm run build
-            )
-            # Same cache split as the portal sync above: hashed assets under
-            # assets/ are immutable and keep the long cache; index.html changes
-            # every deploy and must not be cached.
-            aws s3 sync "$web_dir/dist/" "s3://$bucket/$name/" \
-              --delete \
-              --cache-control "public, max-age=31536000, immutable" \
-              --exclude "index.html" \
-              --exclude "*.txt"
-            aws s3 sync "$web_dir/dist/" "s3://$bucket/$name/" \
-              --delete \
-              --cache-control "no-cache" \
-              --exclude "*" \
-              --include "index.html"
-            echo "::endgroup::"
-          done
-      - name: Invalidate CloudFront for plugin frontends
-        # Same fire-and-forget discipline as the portal's own invalidation step
-        # above (#478) — this one covers content the portal's earlier
-        # invalidation ran before, so it needs its own pass, not a duplicate of
-        # the same one.
-        continue-on-error: true
-        timeout-minutes: 3
-        run: |
-          for attempt in 1 2 3; do
-            if aws cloudfront create-invalidation \
-              --distribution-id ${{ vars.CLOUDFRONT_DISTRIBUTION_ID }} \
-              --paths "/*" \
-              --cli-read-timeout 20 --cli-connect-timeout 10; then
-              exit 0
-            fi
-            echo "CloudFront invalidation attempt ${attempt} failed; retrying..." >&2
-            sleep 5
-          done
-          echo "::warning::CloudFront invalidation did not succeed; deploy continues (cache self-heals via TTL)."
 
   # ─── PROD ────────────────────────────────────────────────────────────────────
   # Manual only — run workflow_dispatch with environment=prod.
@@ -2923,9 +2785,8 @@ jobs:
               mkdir -p "$pkg/services/$name/web-admin"
               cp -r "$plugin_dir/web-admin/dist" "$pkg/services/$name/web-admin/dist"
             fi
-            # user_frontend's built UI shell (ADR-0021 §2, biffo-template#558
-            # M2) is served by this SAME Lambda now too, from
-            # services/<name>/web/dist via BIFFO_PLUGINS_ROOT -- mirrors the
+            # user_frontend's built UI shell (ADR-0021 §2) is served by this SAME
+            # Lambda now too, from services/<name>/web/dist via BIFFO_PLUGINS_ROOT -- mirrors the
             # web-admin block above exactly, including its fail-CLOSED error:
             # declaring user_frontend with no web/ is a misconfiguration, not
             # a variant to tolerate (same biffo-plugin-idea-scout#22 shape the
@@ -2966,74 +2827,6 @@ jobs:
           # Publish a version and move the "live" alias to it (#1747) — see
           # the Core API's "Publish version and move alias" step.
           sh scripts/publish-lambda-version.sh "$fn"
-
-      # Build and deploy each installed user-facing plugin's static frontend
-      # (ADR-0018 §2 — the shape ADR-0021 reuses for the frontend until its own
-      # shared app-shell lands, #558). Unlike the backend loop above, this is
-      # keyed on user_frontend, not user_ingress — a plugin can ship a frontend
-      # with no backend page (or vice versa). A plugin's own web/ isn't a pnpm
-      # workspace member of this monorepo (services/<name>/web/ has its own
-      # package.json + lockfile), so it needs its own install — --ignore-workspace,
-      # or pnpm silently installs this repo's root deps and skips it entirely
-      # (observed the hard way shipping ideation's frontend by hand: this
-      # workflow never previously deployed a plugin frontend at all).
-      - name: Build and deploy plugin frontends
-        run: |
-          set -euo pipefail
-          shopt -s nullglob
-          prefix='${{ vars.CORE_API_LAMBDA_NAME }}'
-          prefix="${prefix%-core-api}"
-          for manifest in services/*/biffo.plugin.json services/_plugins/*/biffo.plugin.json; do
-            jq -e '.user_frontend' "$manifest" >/dev/null 2>&1 || continue
-            plugin_dir="$(dirname "$manifest")"
-            name="$(basename "$plugin_dir")"
-            web_dir="$plugin_dir/web"
-            [ -d "$web_dir" ] || { echo "skip $name (user_frontend declared but no web/ dir)"; continue; }
-            bucket="${prefix}-plugin-${name}-web"
-            if ! aws s3api head-bucket --bucket "$bucket" 2>/dev/null; then
-              echo "$bucket does not exist — $name's frontend bucket not provisioned in this env; skipping."
-              continue
-            fi
-            echo "::group::frontend $name -> $bucket"
-            (
-              cd "$web_dir"
-              pnpm install --ignore-workspace --frozen-lockfile
-              pnpm run build
-            )
-            # Same cache split as the portal sync above: hashed assets under
-            # assets/ are immutable and keep the long cache; index.html changes
-            # every deploy and must not be cached.
-            aws s3 sync "$web_dir/dist/" "s3://$bucket/$name/" \
-              --delete \
-              --cache-control "public, max-age=31536000, immutable" \
-              --exclude "index.html" \
-              --exclude "*.txt"
-            aws s3 sync "$web_dir/dist/" "s3://$bucket/$name/" \
-              --delete \
-              --cache-control "no-cache" \
-              --exclude "*" \
-              --include "index.html"
-            echo "::endgroup::"
-          done
-      - name: Invalidate CloudFront for plugin frontends
-        # Same fire-and-forget discipline as the portal's own invalidation step
-        # above (#478) — this one covers content the portal's earlier
-        # invalidation ran before, so it needs its own pass, not a duplicate of
-        # the same one.
-        continue-on-error: true
-        timeout-minutes: 3
-        run: |
-          for attempt in 1 2 3; do
-            if aws cloudfront create-invalidation \
-              --distribution-id ${{ vars.CLOUDFRONT_DISTRIBUTION_ID }} \
-              --paths "/*" \
-              --cli-read-timeout 20 --cli-connect-timeout 10; then
-              exit 0
-            fi
-            echo "CloudFront invalidation attempt ${attempt} failed; retrying..." >&2
-            sleep 5
-          done
-          echo "::warning::CloudFront invalidation did not succeed; deploy continues (cache self-heals via TTL)."
 
   # ─── FAILURE VISIBILITY ──────────────────────────────────────────────────────
   # A failed deploy used to be exactly as visible as a failed CI run on a branch

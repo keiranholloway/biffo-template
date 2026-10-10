@@ -41,9 +41,8 @@ times, not two), positioned:
   missing `tenant_id` would otherwise surface first as #1554's row check
   failing to read the table at all, which is a true failure with a much worse
   message;
-- **before** "Package and deploy plugin Lambdas", "Package and deploy the
-  shared plugin host", "Build and deploy plugin frontends" and their
-  CloudFront invalidation — i.e. before the plugin's user-visible surface is
+- **before** "Package and deploy plugin Lambdas" and "Package and deploy the
+  shared plugin host" — i.e. before the plugin's user-visible surface is
   switched to the new build.
 
 **Honesty about "before traffic".** This cannot run before *all* traffic

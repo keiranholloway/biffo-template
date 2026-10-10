@@ -62,15 +62,15 @@ describe('renderGeneratedTerraform — generated from the module interface (#685
   })
 
   /**
-   * The other half: the module REQUIRES cdn_distribution_arn with no default,
-   * so omitting it is "No value for required variable" — which is what broke
-   * `terraform plan` for a whole environment in #685.
+   * ADR-0021 §2: the CDN ARN is no longer wired in. A module still declaring
+   * the variable is on the retired per-plugin frontend shape (#685's symptom)
+   * and must be migrated, not fed.
    */
-  it('passes cdn_distribution_arn to a module that declares it', () => {
+  it('does not pass cdn_distribution_arn even to a module that declares it', () => {
     const tf = renderGeneratedTerraform([
       { name: 'ideation', declaredVariables: new Set(['cdn_distribution_arn']) },
     ])
-    expect(tf).toContain('cdn_distribution_arn = module.cdn.distribution_arn')
+    expect(tf).not.toContain('module.cdn.distribution_arn')
   })
 
   it('does not pass cdn_distribution_arn to a module that does not declare it', () => {

@@ -29,6 +29,10 @@ concurrency:
 env:
   NODE_VERSION: '22'
   PYTHON_VERSION: '3.13'
+  # Pin uv's interpreter to the same version: an unpinned `uv sync` resolves the
+  # newest CPython (3.15 on 2026-10-10), where coverage's greenlet concurrency
+  # setting is unsupported and every Python test run dies before coverage.json.
+  UV_PYTHON: '3.13'
   # Defence in depth for the class of bug in #322: an interactive Terraform
   # prompt on a CI runner has no stdin to read and blocks until the job is
   # killed. Every invocation also passes -input=false explicitly and a drift

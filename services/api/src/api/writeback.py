@@ -183,6 +183,8 @@ async def _derived_value(
         return value if value not in (None, "") else None
     # from_lookup — a database read on the bound session, never the model's
     # output. `resolver` is validated non-None at registration (#672).
+    if derived.kind == "from_parent_tenant":
+        return await _parent_tenant(db, derived, event)
     if derived.kind == "from_lookup":
         if derived.resolver is None:  # pragma: no cover — registration refuses this
             return None
@@ -215,7 +217,31 @@ def _coerce_selector(column: Any, value: Any) -> Any:
         return value
 
 
-def _tenant_scope(target: WriteBackTarget, *, tenant_id: str) -> Any:
+async def _parent_tenant(
+    db: AsyncSession, derived: DerivedValue, event: dict[str, Any] | None
+) -> Any:
+    """``tenant_id`` of the row the trigger event names, read on the bound session.
+
+    ``None`` when the event carries no id or the row is not visible to the
+    workflow's owner, which the callers record as a denial.
+    """
+    raw = (event or {}).get(derived.payload_field or "")
+    model = derived.parent_model
+    if raw in (None, "") or model is None:
+        return None
+    row_id = _coerce_selector(model.id, raw)
+    return (
+        await db.execute(select(model.tenant_id).where(model.id == row_id))
+    ).scalar_one_or_none()
+
+
+async def _tenant_scope(
+    target: WriteBackTarget,
+    *,
+    tenant_id: str,
+    db: AsyncSession | None = None,
+    event: dict[str, Any] | None = None,
+) -> Any:
     """The value this target's rows are scoped by on their tenant column.
 
     **Not necessarily ADR-0001's seam string.** That seam ("default") is Core's
@@ -238,6 +264,8 @@ def _tenant_scope(target: WriteBackTarget, *, tenant_id: str) -> Any:
             return derived.value
         if derived.kind == "from_tenant":
             return tenant_id
+        if derived.kind == "from_parent_tenant" and db is not None:
+            return await _parent_tenant(db, derived, event)
     return tenant_id
 
 
@@ -757,6 +785,9 @@ async def _create_row(
         resolved = await _derived_value(
             derived, db=db, tenant_id=tenant_id, scope=scope, event=event
         )
+        if resolved is None and derived.kind == "from_parent_tenant":
+            # The parent row is not one the owner may see: nothing to write into.
+            return None
         if resolved is not None:
             fields[derived.column] = resolved
     row = target.model(**fields)
@@ -791,10 +822,13 @@ async def _update_row(
         return None
     column = getattr(target.model, selector.column)
     row_id = _coerce_selector(column, row_id)
+    row_tenant = await _tenant_scope(target, tenant_id=tenant_id, db=db, event=event)
+    if row_tenant is None:
+        return None
     row = (
         await db.execute(
             select(target.model).where(
-                target.model.tenant_id == _tenant_scope(target, tenant_id=tenant_id),  # type: ignore[attr-defined]
+                target.model.tenant_id == row_tenant,  # type: ignore[attr-defined]
                 column == row_id,
             )
         )

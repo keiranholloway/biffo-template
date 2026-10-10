@@ -87,6 +87,7 @@ DERIVED_KINDS: tuple[str, ...] = (
     "literal",
     "from_payload",
     "from_lookup",
+    "from_parent_tenant",
 )
 
 #: ``(db, tenant_id, scope) -> value``, for a ``from_lookup`` derived column.
@@ -220,6 +221,9 @@ class DerivedValue:
     #: The lookup itself, when ``kind`` is ``from_lookup``. A plain function,
     #: never a name resolved from config — see :func:`from_lookup`.
     resolver: DerivedResolver | None = None
+    #: The model whose row's ``tenant_id`` is read, when ``kind`` is
+    #: ``from_parent_tenant``. The row's id comes from ``payload_field``.
+    parent_model: Any = None
 
     def __post_init__(self) -> None:
         if self.kind not in DERIVED_KINDS:
@@ -234,6 +238,13 @@ class DerivedValue:
         if self.kind == "from_payload" and not self.payload_field:
             raise WriteBackConfigurationError(
                 f"Derived column {self.column!r} is from_payload but names no payload field."
+            )
+        if self.kind == "from_parent_tenant" and (
+            self.parent_model is None or not self.payload_field
+        ):
+            raise WriteBackConfigurationError(
+                f"Derived column {self.column!r} is from_parent_tenant but names no "
+                "parent model or payload field."
             )
         if self.kind == "from_lookup" and self.resolver is None:
             raise WriteBackConfigurationError(
@@ -272,6 +283,22 @@ def from_payload(column: str, payload_field: str) -> DerivedValue:
     anything.
     """
     return DerivedValue(column=column, kind="from_payload", payload_field=payload_field)
+
+
+def from_parent_tenant(column: str, parent_model: Any, payload_field: str) -> DerivedValue:
+    """The tenant of the row the **trigger event** identified — never the agent.
+
+    For deployments where one Core serves several tenants, a fixed tenant would
+    stamp (or match on) the wrong one. The row the event names already carries
+    the right tenant, read on the workflow owner's RLS-bound session, so a row
+    the owner cannot see resolves to nothing and the write is denied.
+    """
+    return DerivedValue(
+        column=column,
+        kind="from_parent_tenant",
+        payload_field=payload_field,
+        parent_model=parent_model,
+    )
 
 
 def from_lookup(column: str, resolver: DerivedResolver) -> DerivedValue:

@@ -29,6 +29,10 @@ concurrency:
 
 env:
   PYTHON_VERSION: '3.13'
+  # uv reads UV_PYTHON (or .python-version), never PYTHON_VERSION: without this an
+  # unpinned setup-uv resolves the newest CPython (3.15 on 2026-10-10), where
+  # pip-audit segfaults and the greenlet stack fails (biffo-plugin-marketing#218).
+  UV_PYTHON: '3.13'
   # Matches biffo-template's own root ci.yml NODE_VERSION (#2009) — the
   # `frontend` job below is the only consumer of this in the skeleton today.
   NODE_VERSION: '22'

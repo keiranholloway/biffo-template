@@ -75,6 +75,9 @@ permissions:
 
 env:
   NODE_VERSION: '22'
+  # uv reads UV_PYTHON (or .python-version), never PYTHON_VERSION: pin it so an
+  # unpinned uv cannot resolve CPython 3.15 (2026-10-10, biffo-plugin-marketing#218).
+  UV_PYTHON: '3.13'
 
 # Deploy jobs only run in repos where BIFFO_DEPLOY_ENABLED=true has been set.
 # The template repo itself has this unset, so all jobs are skipped there.

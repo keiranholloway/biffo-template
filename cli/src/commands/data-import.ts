@@ -142,12 +142,12 @@ export async function runDataImport(
       throw new Error(`No .sql files found at ${sourceDir}.`)
     }
 
-    const unsortable = sqlFiles.filter((f) => !/^\d/.test(f))
-    if (unsortable.length > 0) {
+    const unnumbered = sqlFiles.filter((f) => !/^\d/.test(f))
+    if (unnumbered.length > 0) {
       log.warn(
-        `${unsortable.length} file(s) don't start with a digit (e.g. '000_', '001_') — apply ` +
-          `order is alphabetical by filename, so files without a numeric prefix may not sort as ` +
-          `intended: ${unsortable.join(', ')}`,
+        `${String(unnumbered.length)} file(s) don't start with a digit. Unnumbered modules are ` +
+          `valid: they are applied after the numbered files, in the order they merged ` +
+          `(derived at build, so no number is needed): ${unnumbered.join(', ')}`,
       )
     }
 

@@ -145,7 +145,7 @@ jobs:
       - name: uv sync
         id: install_py
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        run: uv sync --all-groups --locked
+        run: uv sync --all-groups --locked --python 3.13
 
       # Authoritative pass/fail/inconclusive signal, exactly the hardened
       # scripts every PR's `js`/`python` job already runs -- no

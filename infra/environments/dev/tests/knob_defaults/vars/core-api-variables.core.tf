@@ -1,0 +1,1 @@
+../../../core-api-variables.core.tf

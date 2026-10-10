@@ -512,6 +512,83 @@ def test_a_create_files_the_row_under_the_targets_declared_tenant(app, client):
     assert asyncio.run(_read()).tenant_id == "tenant-in-another-value-space"
 
 
+def _parent_tenant_target(**over):
+    return _target(
+        derived=(
+            wb.from_parent_tenant("tenant_id", Note, "note_id"),
+            wb.from_scope("brand_id", "brand"),
+            wb.literal("source", "agent"),
+        ),
+        **over,
+    )
+
+
+def test_an_update_is_scoped_to_the_target_rows_own_tenant(app, client):
+    """A second tenant: the row's tenant is read from the row, not configured."""
+    _, factory = app
+    wb._targets.clear()  # noqa: SLF001
+    wb.register_writeback_target(_parent_tenant_target())
+
+    existing = Note(id="note-b", tenant_id="tenant-b", email="x@b.com", notes="Typed")
+    run_id = asyncio.run(
+        _seed(
+            factory,
+            writeback={"table": "wb_notes", "operation": "update", "columns": {"notes": "y"}},
+            result={"notes": "Agent"},
+            existing_note=existing,
+            input_payload={"note_id": "note-b"},
+        )
+    )
+
+    assert _post(client, run_id).json()["status"] == "written"
+
+    async def _read() -> Note:
+        async with factory() as session:
+            return (await session.execute(select(Note).where(Note.id == "note-b"))).scalar_one()
+
+    assert asyncio.run(_read()).notes == "Typed\n\nAgent"
+
+
+def test_a_create_takes_the_parent_rows_tenant_not_the_configured_one(app, client):
+    _, factory = app
+    wb._targets.clear()  # noqa: SLF001
+    wb.register_writeback_target(_parent_tenant_target())
+
+    run_id = asyncio.run(
+        _seed(
+            factory,
+            existing_note=Note(id="parent-b", tenant_id="tenant-b", email="p@b.com"),
+            input_payload={"note_id": "parent-b"},
+        )
+    )
+
+    assert _post(client, run_id).json()["status"] == "written"
+
+    async def _read() -> list[Note]:
+        async with factory() as session:
+            return list((await session.execute(select(Note))).scalars())
+
+    rows = asyncio.run(_read())
+    created = [n for n in rows if n.id != "parent-b"]
+    assert [n.tenant_id for n in created] == ["tenant-b"]
+
+
+def test_a_parent_the_owner_cannot_see_denies_the_write(app, client):
+    _, factory = app
+    wb._targets.clear()  # noqa: SLF001
+    wb.register_writeback_target(_parent_tenant_target())
+
+    run_id = asyncio.run(_seed(factory, input_payload={"note_id": "no-such-parent"}))
+
+    assert _post(client, run_id).json()["status"] == "denied"
+
+    async def _count() -> int:
+        async with factory() as session:
+            return len(list((await session.execute(select(Note))).scalars()))
+
+    assert asyncio.run(_count()) == 0
+
+
 # ── An instance's row id is not necessarily a string ─────────────────────────
 #
 # Core's own tables use String(36) primary keys; tabsii's `tabsii.*` tables use

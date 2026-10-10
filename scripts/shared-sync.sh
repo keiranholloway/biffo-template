@@ -723,8 +723,8 @@ applies() {
   # since these are template-owned paths in an instance.
   [ -f "$1/biffo.core.json" ] && return 1
   for m in $MARKERS; do [ -f "$1/$m" ] && return 0; done
-  # Also: any repo already receiving shared distribution. The runner repos, the
-  # design repo and tabsii-map have neither marker but are in scope, and a
+  # Also: any repo already receiving shared distribution. The runner repos and
+  # tabsii-map have neither marker but are in scope, and a
   # mechanism that distributes a file once and then stops tracking it is the
   # drift this script exists to end -- it would have recreated the exact hole in
   # the exact repos nobody watches.
@@ -779,8 +779,9 @@ applies() {
 #       the one that ships.
 #
 # Repos with NEITHER marker fall through to $SKELETON_DEFAULT. They are in scope
-# via the `scripts/biffo.sh` clause in applies() -- the runner repos, tabsii-map
-# and tabsii-data-model-design -- and the satellite ruleset applies to them
+# via the `scripts/biffo.sh` clause in applies() -- the runner repos and
+# tabsii-map (tabsii-data-model-design is in `excludes`, out of every upgrade path
+# since 2026-10-10) -- and the satellite ruleset applies to them
 # unchanged: it is dev-branch, worktrees, commits, PRs, never-merge-red, honest
 # pushes and security, with no deploy clause for a repo without a deploy to trim.
 skeleton_for() {
@@ -1308,8 +1309,8 @@ if [ -n "$BACKFILL" ]; then
     # Only repos carrying an actual marker. `skeleton_for` falls back to
     # $SKELETON_DEFAULT for marker-less repos, and using that here would be
     # wrong rather than merely noisy: the fallback exists so `filesFromSkeleton`
-    # can deliver AGENTS.md/CLAUDE.md to the runner fleets, tabsii-map and
-    # tabsii-data-model-design -- it is not a claim that those repos were
+    # can deliver AGENTS.md/CLAUDE.md to the runner fleets and tabsii-map
+    # -- it is not a claim that those repos were
     # scaffolded from the sibling skeleton. Comparing them against its full tree
     # reported `services/api/*` as "7 have / 5 lack" across five repos that will
     # never hold a FastAPI service, drowning the 20 real gaps in 39 fictional
@@ -1477,8 +1478,8 @@ if [ -n "$ADOPTION" ]; then
     done
     # Marker-less repos are skipped, same as --backfill and for the same
     # reason: $SKELETON_DEFAULT exists so `filesFromSkeleton` can deliver
-    # AGENTS.md/CLAUDE.md to the runner fleets, tabsii-map and
-    # tabsii-data-model-design, not as a claim that those repos were
+    # AGENTS.md/CLAUDE.md to the runner fleets and tabsii-map, not as a
+    # claim that those repos were
     # scaffolded from a repo skeleton. Comparing them against a full skeleton
     # tree would invent gaps in repos that will never hold the paths in
     # question.

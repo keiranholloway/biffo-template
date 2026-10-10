@@ -19,6 +19,15 @@ import inquirer from 'inquirer'
  *
  * The mode is also settable with `BIFFO_NON_INTERACTIVE=1` for environments
  * that inject configuration by env rather than argv.
+ *
+ * A missing terminal counts the same as the flag. Agents, CI and cron have no
+ * TTY, and an inquirer prompt fed by a pipe does not fail cleanly: on
+ * 2026-10-09 a fleet agent ran `yes y | biffo plugin upgrade --local ... | tail`,
+ * the prompt redrew endlessly with no newline, and `tail` held it all until the
+ * kernel OOM-killed it at 11.5 GB and took the fleet's poller down with it. On a
+ * closed stdin the prompt instead rejects inside Node's exit sequence and the
+ * process exits 0 (issue #1066). So `assertInteractive` refuses whenever stdin
+ * is not a TTY, flag or no flag, and every prompt goes through `promptOr`.
  */
 
 export const NON_INTERACTIVE_FLAG = '--non-interactive'
@@ -60,28 +69,43 @@ export function nonInteractiveMessage(question: string, remedy: string): string 
   return `Refusing to prompt for "${question}" — ${NON_INTERACTIVE_FLAG} is set.\n` + `  ${remedy}`
 }
 
+/** The refusal when no flag was passed but nothing could answer a prompt. */
+export function noTerminalMessage(question: string, remedy: string): string {
+  return `Refusing to prompt for "${question}" — no interactive terminal is attached.\n  ${remedy}`
+}
+
 /**
- * Throw if a prompt would be shown in non-interactive mode.
+ * Throw if a prompt would be shown in non-interactive mode or without a terminal.
  *
  * @param question What the user would have been asked.
  * @param remedy   How to supply the answer without a prompt, e.g.
  *                 "Pass --project <name> to choose one."
+ * @param isTTY    Whether stdin is a terminal; a parameter only so tests can
+ *                 drive both branches.
  */
-export function assertInteractive(question: string, remedy: string): void {
+export function assertInteractive(
+  question: string,
+  remedy: string,
+  isTTY: boolean = Boolean(process.stdin.isTTY),
+): void {
   if (isNonInteractive()) {
     throw new NonInteractiveError(nonInteractiveMessage(question, remedy))
+  }
+  if (!isTTY) {
+    throw new NonInteractiveError(noTerminalMessage(question, remedy))
   }
 }
 
 /**
- * `inquirer.prompt`, guarded. Use this at every prompt site so that adding a
- * prompt cannot silently reintroduce a hang.
+ * `inquirer.prompt`, guarded. The only call site of `inquirer.prompt` in the
+ * CLI (interactive-prompt-sites.test.ts enforces it), so adding a prompt cannot
+ * silently reintroduce a hang or a runaway.
  */
 export async function promptOr<T>(
-  guard: { question: string; remedy: string },
+  guard: { question: string; remedy: string; isTTY?: boolean },
   questions: readonly Record<string, unknown>[],
 ): Promise<T> {
-  assertInteractive(guard.question, guard.remedy)
+  assertInteractive(guard.question, guard.remedy, guard.isTTY)
   // inquirer's own question type is a discriminated union its overloads resolve
   // per literal; that inference is lost through this wrapper, so widen here.
   return (await inquirer.prompt(questions as never)) as T

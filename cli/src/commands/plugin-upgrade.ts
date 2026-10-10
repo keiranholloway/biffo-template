@@ -2,8 +2,8 @@ import { cpSync, existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
 import { join, relative, resolve } from 'node:path'
 import chalk from 'chalk'
 import { Command } from 'commander'
+import { promptOr } from '../lib/interactive.js'
 import { execa } from '../lib/exec.js'
-import inquirer from 'inquirer'
 import { GitAdapter } from '../adapters/git/index.js'
 import { PluginMigrationsAdapter } from '../adapters/plugin-migrations/index.js'
 import { RegistryAdapter, type RegistryPluginEntry } from '../adapters/registry/index.js'
@@ -888,21 +888,19 @@ async function confirmUpgrade(
   const message = currentVersion
     ? `Upgrade ${chalk.bold(name)} from ${currentVersion} to ${chalk.bold(newVersion)}?`
     : `Upgrade ${chalk.bold(name)} to ${chalk.bold(newVersion)}?`
-  const { confirmed } = await inquirer.prompt<{ confirmed: boolean }>([
-    { type: 'confirm', name: 'confirmed', message, default: false },
-  ])
+  const { confirmed } = await promptOr<{ confirmed: boolean }>(
+    { question: message, remedy: 'Re-run with --force to confirm the upgrade.' },
+    [{ type: 'confirm', name: 'confirmed', message, default: false }],
+  )
   return confirmed
 }
 
 async function confirmRefresh(name: string, origin: string): Promise<boolean> {
-  const { confirmed } = await inquirer.prompt<{ confirmed: boolean }>([
-    {
-      type: 'confirm',
-      name: 'confirmed',
-      message: `Refresh ${chalk.bold(name)} from ${origin}, replacing services/${name}/?`,
-      default: false,
-    },
-  ])
+  const message = `Refresh ${chalk.bold(name)} from ${origin}, replacing services/${name}/?`
+  const { confirmed } = await promptOr<{ confirmed: boolean }>(
+    { question: message, remedy: 'Re-run with --force to confirm the refresh.' },
+    [{ type: 'confirm', name: 'confirmed', message, default: false }],
+  )
   return confirmed
 }
 

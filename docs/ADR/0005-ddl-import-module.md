@@ -187,7 +187,7 @@ The design deliberately reuses precedent wherever one already exists — the ven
 
 ### Negative / Trade-offs
 
-- `db/imports/<name>/*.sql` files are only ever applied in filename-sorted order — the DDL author is responsible for correct numeric prefixes; the tool does not understand dependencies between files.
+- `db/imports/<name>/*.sql` files are applied in a fixed order the tool does not reason about: it does not understand dependencies between files. **Amended by biffo-template#2458:** numbered files apply first in filename order, as before; modules added later are unnumbered `<slug>.sql` files, applied after them in the order they merged into `dev` (derived from first-parent history by `api.ddl_order`, and carried into the Lambda as `db/imports/<name>/.apply-order`). An author-chosen number collided whenever two branches each added a module.
 - A single DDL file that genuinely needs more than the configured Lambda timeout is out of scope for v1 and must be split or applied manually.
 - No remote read-only "what's been applied" command exists yet (`biffo data status`) — deferred as a natural future extension.
 - No `biffo data uninstall` — dropping already-applied DDL/live tables is a genuinely dangerous, ambiguous operation and stays a manual, human-reviewed action.

@@ -12,9 +12,7 @@
 # right tag, clones it, and passes it through to the REAL production check
 # logic (`runOrphanRatchetCheck` via `checkCommand`), so a mock of that logic
 # would just assert whatever the mock author assumed rather than what the
-# real guard actually does with a real diverged tree. This is the same
-# "real git, not a mock" discipline scripts/allocate-module-number.test.sh
-# uses and for the same reason.
+# real guard actually does with a real diverged tree.
 #
 # The fixture "instance"'s own scripts/biffo.sh does not exec `npx
 # @biffo/cli@<version>` (the real dispatcher) -- that would need a published
@@ -31,8 +29,7 @@
 # repos below are a handful of files each, not a copy of a large working
 # tree, so cloning them into a temp dir is not the tmpfs-inode hazard
 # AGENTS.md warns about; the scratch dir holding the fixtures is kept
-# repo-local anyway, matching allocate-module-number.test.sh's own
-# precedent).
+# repo-local anyway).
 #
 # ## This script's own template-vs-instance gate (#1897)
 #
@@ -140,8 +137,7 @@ trap 'rm -rf "$WORK"' EXIT INT TERM
 
 git_c() {
   # A CI runner carries no global git identity; workstation .gitconfig
-  # should not leak into the fixture either. Explicit identity every time,
-  # same reasoning as allocate-module-number.test.sh's make_fixture().
+  # should not leak into the fixture either. Explicit identity every time.
   git -c user.email=t@example.invalid -c user.name=t "$@"
 }
 

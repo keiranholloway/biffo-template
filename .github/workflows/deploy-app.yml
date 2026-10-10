@@ -246,6 +246,10 @@ jobs:
           # Without this the resolver fails the build — which is the designed
           # behaviour, but the cause would be this line, not the deploy.
           fetch-tags: true
+          # Full history: the Lambda packaging step below derives the apply
+          # order of unnumbered DDL modules from first-parent history
+          # (biffo-template#2458), and a shallow clone cannot order them.
+          fetch-depth: 0
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v5
         with:
@@ -550,6 +554,11 @@ jobs:
             import_name=$(basename "$import_dir")
             mkdir -p "package/db/imports/$import_name"
             cp "$import_dir"*.sql "package/db/imports/$import_name/" 2>/dev/null || true
+            # The apply order of unnumbered modules is derived from this
+            # checkout's first-parent history (fetch-depth: 0 above), which the
+            # Lambda does not have, so it travels in the zip (biffo-template#2458).
+            # A failure here fails the deploy: the alternative is a guessed order.
+            python3 src/api/ddl_order.py --manifest "$import_dir" > "package/db/imports/$import_name/.apply-order"
           done
           # Precompile the whole package to bytecode (#724).
           #
@@ -1203,6 +1212,10 @@ jobs:
           # Without this the resolver fails the build — which is the designed
           # behaviour, but the cause would be this line, not the deploy.
           fetch-tags: true
+          # Full history: the Lambda packaging step below derives the apply
+          # order of unnumbered DDL modules from first-parent history
+          # (biffo-template#2458), and a shallow clone cannot order them.
+          fetch-depth: 0
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v5
         with:
@@ -1507,6 +1520,11 @@ jobs:
             import_name=$(basename "$import_dir")
             mkdir -p "package/db/imports/$import_name"
             cp "$import_dir"*.sql "package/db/imports/$import_name/" 2>/dev/null || true
+            # The apply order of unnumbered modules is derived from this
+            # checkout's first-parent history (fetch-depth: 0 above), which the
+            # Lambda does not have, so it travels in the zip (biffo-template#2458).
+            # A failure here fails the deploy: the alternative is a guessed order.
+            python3 src/api/ddl_order.py --manifest "$import_dir" > "package/db/imports/$import_name/.apply-order"
           done
           # Precompile the whole package to bytecode (#724).
           #
@@ -2172,6 +2190,10 @@ jobs:
           # Without this the resolver fails the build — which is the designed
           # behaviour, but the cause would be this line, not the deploy.
           fetch-tags: true
+          # Full history: the Lambda packaging step below derives the apply
+          # order of unnumbered DDL modules from first-parent history
+          # (biffo-template#2458), and a shallow clone cannot order them.
+          fetch-depth: 0
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v5
         with:
@@ -2476,6 +2498,11 @@ jobs:
             import_name=$(basename "$import_dir")
             mkdir -p "package/db/imports/$import_name"
             cp "$import_dir"*.sql "package/db/imports/$import_name/" 2>/dev/null || true
+            # The apply order of unnumbered modules is derived from this
+            # checkout's first-parent history (fetch-depth: 0 above), which the
+            # Lambda does not have, so it travels in the zip (biffo-template#2458).
+            # A failure here fails the deploy: the alternative is a guessed order.
+            python3 src/api/ddl_order.py --manifest "$import_dir" > "package/db/imports/$import_name/.apply-order"
           done
           # Precompile the whole package to bytecode (#724).
           #

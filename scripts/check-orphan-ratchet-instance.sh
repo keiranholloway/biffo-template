@@ -88,10 +88,8 @@
 #
 # `BIFFO_TEMPLATE_GIT_URL` overrides the clone source (default: the real
 # biffo-template on GitHub) so scripts/check-orphan-ratchet-instance.test.sh
-# can point this at a local, throwaway fixture repo instead of the network --
-# same "injectable remote" shape scripts/allocate-module-number.sh already
-# uses for its own --git-remote override, for the same reason (a hermetic
-# test must not depend on a live network call succeeding).
+# can point this at a local, throwaway fixture repo instead of the network
+# (a hermetic test must not depend on a live network call succeeding).
 #
 # POSIX sh; validated with BOTH `dash -n` and `bash -n` (no bashisms, no
 # `set -o pipefail` -- see scripts/interpreter-audit.sh's own header for why

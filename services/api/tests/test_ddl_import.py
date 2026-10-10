@@ -4,12 +4,15 @@ ddl_import_environment, and the derived apply order in api.ddl_order."""
 import subprocess
 
 import pytest
+from api import ddl_order
 from api.ddl_import import ddl_import_environment, discover_ddl_import_dirs, list_sql_files
 from api.ddl_order import (
     MANIFEST_NAME,
     DdlOrderUnavailableError,
     derived_numbers,
     format_manifest,
+    main,
+    new_numbered_modules,
 )
 
 
@@ -34,6 +37,19 @@ class TestDiscoverDdlImportDirs:
         _write_sql_file(tmp_path, "zeta", "000.sql")
         _write_sql_file(tmp_path, "alpha", "000.sql")
         assert discover_ddl_import_dirs(tmp_path) == ["alpha", "zeta"]
+
+    def test_unreadable_directory_is_skipped(self, tmp_path, monkeypatch):
+        _write_sql_file(tmp_path, "broken", "000.sql")
+        _write_sql_file(tmp_path, "fine", "000.sql")
+        real_glob = type(tmp_path).glob
+
+        def glob(self, pattern):
+            if self.name == "broken":
+                raise PermissionError("denied")
+            return real_glob(self, pattern)
+
+        monkeypatch.setattr(type(tmp_path), "glob", glob)
+        assert discover_ddl_import_dirs(tmp_path) == ["fine"]
 
     def test_directory_without_sql_files_is_ignored(self, tmp_path):
         empty_dir = tmp_path / "no-sql-here"
@@ -287,3 +303,61 @@ class TestDerivedApplyOrder:
     def test_derived_numbers_continue_after_the_highest_numbered_file(self, tmp_path):
         paths = [tmp_path / n for n in ("000_a.sql", "223_b.sql", "223_c.sql", "x.sql", "y.sql")]
         assert [n for n, _ in derived_numbers(paths)] == [0, 223, 223, 224, 225]
+
+
+class TestDdlOrderGitFailures:
+    """Each way git can fail to answer is reported as 'cannot tell', never guessed."""
+
+    @staticmethod
+    def _repo(tmp_path):
+        _git(tmp_path, "init", "-q", "-b", "dev")
+        _git(tmp_path, "config", "user.email", "ddl-order-test@example.invalid")
+        _git(tmp_path, "config", "user.name", "DDL Order Test")
+        _git(tmp_path, "config", "commit.gpgsign", "false")
+        for name in ("000_schema.sql", "a_mod.sql", "b_mod.sql"):
+            _write_sql_file(tmp_path, "acme", name)
+        _git(tmp_path, "add", "-A")
+        _git(tmp_path, "commit", "-q", "-m", "init")
+        _git(tmp_path, "update-ref", "refs/remotes/origin/dev", "HEAD")
+        return tmp_path / "acme"
+
+    @staticmethod
+    def _failing(monkeypatch, subcommand):
+        real = ddl_order._git
+
+        def fake(import_dir, *args):
+            if subcommand in args:
+                return None
+            return real(import_dir, *args)
+
+        monkeypatch.setattr(ddl_order, "_git", fake)
+
+    def test_git_binary_missing_means_no_answer(self, tmp_path, monkeypatch):
+        def boom(*args, **kwargs):
+            raise FileNotFoundError("git")
+
+        monkeypatch.setattr(ddl_order.subprocess, "run", boom)
+        assert ddl_order._git(tmp_path, "status") is None
+
+    def test_new_numbered_modules_is_none_when_the_base_tree_cannot_be_listed(
+        self, tmp_path, monkeypatch
+    ):
+        import_dir = self._repo(tmp_path)
+        self._failing(monkeypatch, "ls-tree")
+        assert new_numbered_modules(import_dir) is None
+
+    def test_history_that_cannot_be_read_falls_back_to_the_manifest_or_refuses(
+        self, tmp_path, monkeypatch
+    ):
+        import_dir = self._repo(tmp_path)
+        self._failing(monkeypatch, "log")
+        assert ddl_order._git_added_order(import_dir) is None
+        with pytest.raises(DdlOrderUnavailableError):
+            list_sql_files(import_dir)
+
+    def test_main_reports_an_underivable_order_and_exits_1(self, tmp_path, capsys):
+        _write_sql_file(tmp_path, "acme", "a_mod.sql")
+        _write_sql_file(tmp_path, "acme", "b_mod.sql")
+
+        assert main([str(tmp_path / "acme")]) == 1
+        assert "ddl_order:" in capsys.readouterr().err

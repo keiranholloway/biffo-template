@@ -589,6 +589,32 @@ def test_a_parent_the_owner_cannot_see_denies_the_write(app, client):
     assert asyncio.run(_count()) == 0
 
 
+def test_a_create_whose_trigger_names_no_parent_is_denied(app, client):
+    _, factory = app
+    wb._targets.clear()  # noqa: SLF001
+    wb.register_writeback_target(_parent_tenant_target())
+
+    run_id = asyncio.run(_seed(factory, input_payload={}))
+
+    assert _post(client, run_id).json()["status"] == "denied"
+
+
+def test_an_update_whose_parent_row_is_not_visible_is_denied(app, client):
+    _, factory = app
+    wb._targets.clear()  # noqa: SLF001
+    wb.register_writeback_target(_parent_tenant_target())
+
+    run_id = asyncio.run(
+        _seed(
+            factory,
+            writeback={"table": "wb_notes", "operation": "update", "columns": {"notes": "y"}},
+            input_payload={"note_id": "no-such-parent"},
+        )
+    )
+
+    assert _post(client, run_id).json()["status"] == "denied"
+
+
 # ── An instance's row id is not necessarily a string ─────────────────────────
 #
 # Core's own tables use String(36) primary keys; tabsii's `tabsii.*` tables use

@@ -225,9 +225,9 @@ describe('shared-files.json filesFromSkeleton', () => {
 
   it('is a non-empty mapping with a resolvable source for every repo flavour', () => {
     expect(entries.length).toBeGreaterThan(0)
-    // Repos with no marker at all — the runner repos, tabsii-map,
-    // tabsii-data-model-design — are in scope via `applies()`'s
-    // `scripts/verify.sh` clause and resolve through the default. Without one
+    // Repos with no marker at all — the runner repos and tabsii-map — are in
+    // scope via `applies()`'s shared-bridge clause and resolve through the
+    // default (tabsii-data-model-design is in `excludes`). Without one
     // they would silently receive nothing, which is the state #1150 reports.
     expect(manifest.skeletonDefault, 'marker-less repos need a fallback skeleton').toBeTruthy()
     expect(skeletons).toContain(manifest.skeletonDefault)

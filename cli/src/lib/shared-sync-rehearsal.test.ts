@@ -108,8 +108,8 @@ interface SatelliteOpts {
   gateFails?: boolean
   /**
    * The flavour marker this repo carries, or `null` for a repo with none —
-   * the runner repos, `tabsii-map` and `tabsii-data-model-design` are selected
-   * by `applies()` for holding `scripts/verify.sh` alone.
+   * the runner repos and `tabsii-map` are selected by `applies()` for holding
+   * the shared bridge alone (`tabsii-data-model-design` is in `excludes`).
    */
   marker?: 'biffo.sibling.json' | 'biffo.plugin.json' | null
   /** Extra files to commit before the run, as `path -> contents`. */

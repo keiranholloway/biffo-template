@@ -102,7 +102,8 @@ describe('the pinned Python version', () => {
       readFileSync(file, 'utf8')
         .split('\n')
         .forEach((line, i) => {
-          const m = /^\s*(?:python-version|PYTHON_VERSION):\s*['"]?([\d.]+)['"]?\s*$/.exec(line)
+          const m =
+            /^\s*(?:python-version|PYTHON_VERSION|UV_PYTHON):\s*['"]?([\d.]+)['"]?\s*$/.exec(line)
           if (m) {
             stated.push(m[1])
             expect(m[1], `${relative(repoRoot, file)}:${i + 1}`).toBe(pinned)
@@ -110,5 +111,45 @@ describe('the pinned Python version', () => {
         })
     }
     expect(stated.length).toBeGreaterThan(0)
+  })
+
+  // `PYTHON_VERSION` is only a name; uv never reads it. A repo with no `.python-version` (every satellite
+  // scaffolded before #2469) got whatever interpreter setup-uv resolved: CPython 3.15.0 on 2026-10-10, where
+  // pip-audit segfaults and the dependency audit read "no parseable output" (biffo-plugin-marketing#218). So a
+  // workflow that sets up uv must also tell uv which Python, by `UV_PYTHON` in its env or `python-version` on the
+  // setup-uv step itself.
+  it('is handed to uv by every workflow that sets up uv', () => {
+    let checked = 0
+    for (const file of workflowFiles()) {
+      const text = readFileSync(file, 'utf8')
+      const setups = text.match(/uses:\s*astral-sh\/setup-uv@/g)?.length ?? 0
+      if (setups === 0) continue
+      checked++
+      const viaEnv = /^\s*UV_PYTHON:\s*['"]?[\d.]+['"]?\s*$/m.test(text)
+      const viaStep =
+        (text.match(/^\s*python-version:\s*['"]?[\d.]+['"]?\s*$/gm)?.length ?? 0) >= setups
+      expect(
+        viaEnv || viaStep,
+        `${relative(repoRoot, file)} sets up uv without UV_PYTHON or a python-version on each setup-uv step`,
+      ).toBe(true)
+    }
+    expect(checked).toBeGreaterThan(0)
+  })
+
+  // The skeleton copies reach only repos scaffolded after #2469; shared-sync is the channel to the satellites that
+  // already exist. `files` (sourced from this repo's root copy, the same pin the skeletons carry) plus
+  // `requiresPython`, so a repo with no Python project is never handed a pin that governs nothing.
+  it('reaches existing satellites through shared-sync', () => {
+    const manifest = JSON.parse(readFileSync(join(repoRoot, 'shared-files.json'), 'utf8')) as {
+      files: string[]
+      requiresPython: string[]
+    }
+    expect(manifest.files, 'shared-files.json `files` has no .python-version').toContain(
+      '.python-version',
+    )
+    expect(
+      manifest.requiresPython,
+      '.python-version must be skipped in repos with no Python',
+    ).toContain('.python-version')
   })
 })

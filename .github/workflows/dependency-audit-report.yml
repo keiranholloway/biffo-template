@@ -88,6 +88,10 @@ concurrency:
 env:
   NODE_VERSION: '22'
   PYTHON_VERSION: '3.13'
+  # uv reads UV_PYTHON (or .python-version), never PYTHON_VERSION. This report
+  # runs the shared pip-audit wrapper, which segfaults on the CPython 3.15 an
+  # unpinned uv resolved on 2026-10-10 (biffo-plugin-marketing#218).
+  UV_PYTHON: '3.13'
 
 jobs:
   report:

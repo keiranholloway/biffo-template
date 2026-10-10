@@ -107,10 +107,10 @@ space. That is the same reasoning that made `domains/` safe.
 Rejected: it is what happens today, and it costs a three-way merge on `nav.tsx`
 for ever. The declaration itself says the file has "nowhere legitimate to go".
 
-### Option D — Wait for #558 (consolidate plugin frontend hosting)
+### Option D — Wait for the shared plugin frontend mount (consolidate plugin frontend hosting)
 
-Rejected: #558 is about *plugin* frontends. This is an instance's own admin
-route, and #558 has not moved since 2026-07-25.
+Rejected: that work is about *plugin* frontends. This is an instance's own admin
+route, and it had not moved since 2026-07-25.
 
 ## Consequences
 
@@ -170,5 +170,5 @@ route, and #558 has not moved since 2026-07-25.
 - **ADR-0022** — the API-side carve-out this mirrors, and the source of the
   "user-owned guest inside a template-owned tree" pattern.
 - **ADR-0006** — the ownership/upgrade model both extend (longest-prefix-wins).
-- **ADR-0021 / #558** — plugin frontend hosting; adjacent, but about plugins
+- **ADR-0021 shared plugin frontend mount** — plugin frontend hosting; adjacent, but about plugins
   rather than an instance's own admin routes.

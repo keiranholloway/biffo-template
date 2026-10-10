@@ -23,7 +23,7 @@
     "test": {
       "dependsOn": ["^build"],
       "cache": false,
-      "passThroughEnv": ["BIFFO_PRE_PUSH"],
+      "passThroughEnv": ["BIFFO_PRE_PUSH", "UV_PYTHON"],
       "inputs": [
         "$TURBO_DEFAULT$",
         ".env.test*",

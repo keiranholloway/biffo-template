@@ -2,7 +2,6 @@ import { execSync } from 'node:child_process'
 import { GetCallerIdentityCommand, STSClient } from '@aws-sdk/client-sts'
 import chalk from 'chalk'
 import { Command } from 'commander'
-import inquirer from 'inquirer'
 import { BiffoConfigSchema, resolveDnsConfig } from '../config/schema.js'
 import { AwsAdapter } from '../adapters/cloud/aws/index.js'
 import { GitHubAdapter } from '../adapters/source-control/github/index.js'
@@ -608,21 +607,19 @@ export async function confirmTeardown(
     return true
   }
 
-  if (isNonInteractive()) {
-    throw new NonInteractiveError(
-      `Refusing to prompt for the teardown confirmation of "${projectName}" — ` +
-        '--non-interactive is set.\n' +
-        `  Pass --confirm ${projectName} to confirm, or --yes to skip the check.`,
-    )
-  }
-
-  const { confirm } = await inquirer.prompt<{ confirm: string }>([
+  const { confirm } = await promptOr<{ confirm: string }>(
     {
-      type: 'input',
-      name: 'confirm',
-      message: `Type ${chalk.bold(projectName)} to confirm:`,
+      question: `the teardown confirmation of ${projectName}`,
+      remedy: `Pass --confirm ${projectName} to confirm, or --yes to skip the check.`,
     },
-  ])
+    [
+      {
+        type: 'input',
+        name: 'confirm',
+        message: `Type ${chalk.bold(projectName)} to confirm:`,
+      },
+    ],
+  )
 
   return confirm === projectName
 }

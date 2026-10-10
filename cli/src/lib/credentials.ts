@@ -4,7 +4,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { GetCallerIdentityCommand, STSClient } from '@aws-sdk/client-sts'
 import chalk from 'chalk'
-import inquirer from 'inquirer'
+import { promptOr } from './interactive.js'
 
 // Extracted out of commands/init.ts (originally private to it) so
 // `biffo sibling create` (ADR-0007) can resolve GitHub/AWS credentials the
@@ -26,14 +26,20 @@ export async function resolveGithubToken(nonInteractive = false): Promise<string
     const confirmed =
       nonInteractive ||
       (
-        await inquirer.prompt<{ confirmed: boolean }>([
+        await promptOr<{ confirmed: boolean }>(
           {
-            type: 'confirm',
-            name: 'confirmed',
-            message: 'Use these GitHub credentials?',
-            default: true,
+            question: 'Use these GitHub credentials?',
+            remedy: 'Pass -y to use the detected gh credentials, or set GITHUB_TOKEN.',
           },
-        ])
+          [
+            {
+              type: 'confirm',
+              name: 'confirmed',
+              message: 'Use these GitHub credentials?',
+              default: true,
+            },
+          ],
+        )
       ).confirmed
 
     if (confirmed) {
@@ -58,14 +64,20 @@ export async function resolveGithubToken(nonInteractive = false): Promise<string
       '               with scopes: repo, workflow, admin:org (if using an org)\n',
   )
 
-  const { token } = await inquirer.prompt<{ token: string }>([
+  const { token } = await promptOr<{ token: string }>(
     {
-      type: 'password',
-      name: 'token',
-      message: 'GitHub Personal Access Token:',
-      validate: (v: string) => v.trim().length > 0 || 'Token is required',
+      question: 'GitHub Personal Access Token',
+      remedy: 'Set GITHUB_TOKEN or run `gh auth login`.',
     },
-  ])
+    [
+      {
+        type: 'password',
+        name: 'token',
+        message: 'GitHub Personal Access Token:',
+        validate: (v: string) => v.trim().length > 0 || 'Token is required',
+      },
+    ],
+  )
 
   process.env['GITHUB_TOKEN'] = token
   return token
@@ -115,14 +127,20 @@ export async function resolveAwsCredentials(nonInteractive = false): Promise<{
     const confirmed =
       nonInteractive ||
       (
-        await inquirer.prompt<{ confirmed: boolean }>([
+        await promptOr<{ confirmed: boolean }>(
           {
-            type: 'confirm',
-            name: 'confirmed',
-            message: 'Use these AWS credentials?',
-            default: true,
+            question: 'Use these AWS credentials?',
+            remedy: 'Pass -y to use the detected AWS credentials, or set AWS_PROFILE.',
           },
-        ])
+          [
+            {
+              type: 'confirm',
+              name: 'confirmed',
+              message: 'Use these AWS credentials?',
+              default: true,
+            },
+          ],
+        )
       ).confirmed
 
     if (confirmed) {
@@ -152,36 +170,42 @@ async function promptForAwsProfile(
   const profiles = discoverAwsProfiles()
 
   if (profiles.length > 0) {
-    const answers = await inquirer.prompt<{
+    const answers = await promptOr<{
       selected_profile: string
       profile: string
       region: string
-    }>([
+    }>(
       {
-        type: 'list',
-        name: 'selected_profile',
-        message: 'AWS profile for the target account:',
-        choices: [
-          ...profiles.map((p) => ({ name: p, value: p })),
-          { name: 'Enter another profile name', value: '__manual__' },
-          { name: 'Use current environment credentials', value: '' },
-        ],
-        default: profiles.includes('default') ? 'default' : profiles[0],
+        question: 'AWS profile for the target account',
+        remedy: 'Set AWS_PROFILE and AWS_REGION for the target account, or run `aws configure`.',
       },
-      {
-        type: 'input',
-        name: 'profile',
-        message: 'AWS profile name:',
-        when: (a: { selected_profile?: string }) => a.selected_profile === '__manual__',
-        validate: (v: string) => v.trim().length > 0 || 'Profile is required',
-      },
-      {
-        type: 'input',
-        name: 'region',
-        message: 'AWS region:',
-        default: detectedRegion,
-      },
-    ])
+      [
+        {
+          type: 'list',
+          name: 'selected_profile',
+          message: 'AWS profile for the target account:',
+          choices: [
+            ...profiles.map((p) => ({ name: p, value: p })),
+            { name: 'Enter another profile name', value: '__manual__' },
+            { name: 'Use current environment credentials', value: '' },
+          ],
+          default: profiles.includes('default') ? 'default' : profiles[0],
+        },
+        {
+          type: 'input',
+          name: 'profile',
+          message: 'AWS profile name:',
+          when: (a: { selected_profile?: string }) => a.selected_profile === '__manual__',
+          validate: (v: string) => v.trim().length > 0 || 'Profile is required',
+        },
+        {
+          type: 'input',
+          name: 'region',
+          message: 'AWS region:',
+          default: detectedRegion,
+        },
+      ],
+    )
 
     const selectedProfile =
       answers.selected_profile === '__manual__' ? answers.profile.trim() : answers.selected_profile
@@ -203,20 +227,26 @@ async function promptForAwsProfile(
     }
   }
 
-  const answers = await inquirer.prompt<{ account_id: string; region: string }>([
+  const answers = await promptOr<{ account_id: string; region: string }>(
     {
-      type: 'input',
-      name: 'account_id',
-      message: 'AWS account ID (12 digits):',
-      validate: (v: string) => /^\d{12}$/.test(v) || 'Must be 12 digits',
+      question: 'AWS account ID and region',
+      remedy: 'Set AWS_PROFILE and AWS_REGION for the target account, or run `aws configure`.',
     },
-    {
-      type: 'input',
-      name: 'region',
-      message: 'AWS region:',
-      default: detectedRegion,
-    },
-  ])
+    [
+      {
+        type: 'input',
+        name: 'account_id',
+        message: 'AWS account ID (12 digits):',
+        validate: (v: string) => /^\d{12}$/.test(v) || 'Must be 12 digits',
+      },
+      {
+        type: 'input',
+        name: 'region',
+        message: 'AWS region:',
+        default: detectedRegion,
+      },
+    ],
+  )
 
   process.env['AWS_REGION'] = answers.region
   process.env['AWS_DEFAULT_REGION'] = answers.region

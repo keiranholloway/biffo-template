@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { RegistryPluginEntry } from '../adapters/registry/index.js'
 import { runPluginUpgrade } from './plugin-upgrade.js'
 import { makeTmpDir } from '../test-utils/tmp.js'
+import { useStdinTTY } from '../test-utils/tty.js'
 
 vi.mock('../lib/logger.js', () => ({
   log: { step: vi.fn(), success: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -102,6 +103,9 @@ function writeSeedFiles(pluginDir: string, seedDirRel: string, files: Record<str
 }
 
 describe('runPluginUpgrade', () => {
+  // The interactive branch needs a terminal; promptOr refuses without one.
+  useStdinTTY(true)
+
   let projectRoot: string
 
   beforeEach(() => {
@@ -395,6 +399,45 @@ describe('runPluginUpgrade', () => {
     expect(git.commit).not.toHaveBeenCalled()
   })
 
+  // 2026-10-09: a fleet agent (no TTY) ran `yes y | biffo plugin upgrade ... | tail`;
+  // the prompt redrew endlessly and `tail` was OOM-killed at 11.5 GB. Without a
+  // terminal the confirmation must fail at once and name --force, never prompt.
+  describe('without a terminal', () => {
+    useStdinTTY(false)
+
+    it('refuses to prompt, names --force, and changes nothing', async () => {
+      const registry = makeRegistryMock()
+      const git = makeGitMock(makeClonedPluginDir())
+      const migrations = makeMigrationsMock()
+
+      await expect(
+        runPluginUpgrade(
+          'widgets@1.1',
+          { dryRun: false, force: false, cwd: projectRoot },
+          { registry: registry as never, git: git as never, migrations: migrations as never },
+        ),
+      ).rejects.toThrow(/no interactive terminal is attached[\s\S]*--force/)
+      expect(promptMock).not.toHaveBeenCalled()
+      expect(git.cloneToTemp).not.toHaveBeenCalled()
+      expect(git.commit).not.toHaveBeenCalled()
+    })
+
+    it('proceeds with --force', async () => {
+      const registry = makeRegistryMock()
+      const git = makeGitMock(makeClonedPluginDir())
+      const migrations = makeMigrationsMock()
+
+      await runPluginUpgrade(
+        'widgets@1.1',
+        { dryRun: false, force: true, cwd: projectRoot },
+        { registry: registry as never, git: git as never, migrations: migrations as never },
+      )
+
+      expect(promptMock).not.toHaveBeenCalled()
+      expect(git.cloneToTemp).toHaveBeenCalled()
+    })
+  })
+
   it('rejects when cwd is not a git repository', async () => {
     const registry = makeRegistryMock()
     const git = makeGitMock(makeClonedPluginDir())
@@ -563,6 +606,9 @@ function makeLocalPluginDir(
 }
 
 describe('runPluginUpgrade --local', () => {
+  // The interactive branch needs a terminal; promptOr refuses without one.
+  useStdinTTY(true)
+
   let projectRoot: string
 
   beforeEach(() => {

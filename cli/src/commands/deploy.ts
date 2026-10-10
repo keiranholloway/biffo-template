@@ -6,12 +6,7 @@ import { Command } from 'commander'
 import { BiffoConfigSchema, resolveDnsConfig, type BiffoConfig } from '../config/schema.js'
 import { AwsAdapter } from '../adapters/cloud/aws/index.js'
 import { GitHubAdapter } from '../adapters/source-control/github/index.js'
-import {
-  NonInteractiveError,
-  isNonInteractive,
-  nonInteractiveMessage,
-  promptOr,
-} from '../lib/interactive.js'
+import { promptOr } from '../lib/interactive.js'
 import { isTemplatePlaceholderConfig } from '../lib/local-config.js'
 import { log } from '../lib/logger.js'
 import { listProjectConfigs, loadProjectConfig } from '../lib/session.js'
@@ -177,17 +172,9 @@ export function describeProject(config: BiffoConfig): string {
  * machine hung on a two-project machine, at deploy time.
  *
  * `--non-interactive` is one way to ask for that; the absence of a real
- * terminal is another, and `promptOr`'s own guard (`assertInteractive`) cannot
- * see it — it only reads the flag/env, not stdin. Without a check here, a
- * script or cron job that never passed the flag still reaches
- * `inquirer.prompt`, whose stdin then hits immediate EOF. That does not fail
- * like a normal rejection: inquirer's `create-prompt` rejects with
- * `ExitPromptError` from *inside Node's own process-exit sequence*
- * (`signal-exit`'s `onExit`), a point after which Node runs no further
- * microtasks — so neither this function's caller nor `index.ts`'s top-level
- * `.catch` ever observes it, and the process exits 0 despite failing (issue
- * #1066). The fix is to never create that prompt in the first place when
- * nothing could answer it.
+ * terminal is another, and `promptOr` refuses on both (issue #1066: a prompt on
+ * a closed stdin rejects inside Node's exit sequence, so the process exits 0
+ * despite failing; see `lib/interactive.ts`).
  *
  * `isTTY` defaults to the real terminal state and exists as a parameter only
  * so tests can drive both branches deterministically.
@@ -203,19 +190,11 @@ export async function chooseProject(
     'Pass --project <name> to choose one. Available:\n' +
     projects.map((p) => `    ${describeProject(p)}`).join('\n')
 
-  if (isNonInteractive()) {
-    throw new NonInteractiveError(nonInteractiveMessage(question, remedy))
-  }
-  if (!isTTY) {
-    throw new NonInteractiveError(
-      `Refusing to prompt for "${question}" — no interactive terminal is attached.\n  ${remedy}`,
-    )
-  }
-
   const { chosen } = await promptOr<{ chosen: string }>(
     {
       question,
       remedy,
+      isTTY,
     },
     [
       {

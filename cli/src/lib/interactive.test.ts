@@ -5,10 +5,12 @@ import {
   NonInteractiveError,
   assertInteractive,
   isNonInteractive,
+  noTerminalMessage,
   nonInteractiveMessage,
   promptOr,
   registerNonInteractive,
 } from './interactive.js'
+import { useStdinTTY } from '../test-utils/tty.js'
 
 const promptMock = vi.fn()
 vi.mock('inquirer', () => ({
@@ -51,6 +53,9 @@ describe('nonInteractiveMessage', () => {
 })
 
 describe('assertInteractive / promptOr', () => {
+  // The interactive branch needs a terminal; promptOr refuses without one.
+  useStdinTTY(true)
+
   const originalArgv = process.argv
 
   beforeEach(() => {
@@ -81,6 +86,46 @@ describe('assertInteractive / promptOr', () => {
     ).rejects.toThrow(NonInteractiveError)
     // The whole point: a script gets an error, not a hanging prompt.
     expect(promptMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('assertInteractive / promptOr without a terminal', () => {
+  // Agents, CI and cron have no TTY. A prompt there either hangs, exits 0 on a
+  // closed stdin (#1066), or redraws forever when fed by a pipe (the 2026-10-09
+  // fleet OOM), so it must be refused even when --non-interactive was not passed.
+  useStdinTTY(false)
+  const originalArgv = process.argv
+
+  beforeEach(() => {
+    promptMock.mockReset()
+    process.argv = ['node', 'biffo', 'plugin', 'upgrade'] // deliberately no flag
+  })
+
+  afterEach(() => {
+    process.argv = originalArgv
+    delete process.env['BIFFO_NON_INTERACTIVE']
+  })
+
+  it('refuses at once, naming the remedy, and never calls inquirer', async () => {
+    await expect(
+      promptOr({ question: 'Upgrade widgets?', remedy: 'Re-run with --force.' }, [{ name: 'a' }]),
+    ).rejects.toThrow(noTerminalMessage('Upgrade widgets?', 'Re-run with --force.'))
+    expect(promptMock).not.toHaveBeenCalled()
+  })
+
+  it('says the flag is set when it is, rather than blaming the terminal', () => {
+    process.argv = ['node', 'biffo', 'plugin', 'upgrade', NON_INTERACTIVE_FLAG]
+    expect(() => assertInteractive('q', 'r')).toThrow(nonInteractiveMessage('q', 'r'))
+  })
+
+  it('still prompts when the caller states a terminal is attached', async () => {
+    promptMock.mockResolvedValue({ a: 'yes' })
+    await expect(
+      promptOr({ question: 'q', remedy: 'r', isTTY: true }, [{ name: 'a' }]),
+    ).resolves.toEqual({
+      a: 'yes',
+    })
+    expect(promptMock).toHaveBeenCalledOnce()
   })
 })
 

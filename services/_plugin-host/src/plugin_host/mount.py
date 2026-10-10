@@ -113,7 +113,7 @@ class MountedPlugin:
     api_routes: tuple[DeclaredRoute, ...] = ()
     #: Filesystem directory to serve as the plugin's ``user_frontend`` shell at
     #: ``/<name>/ui`` (already resolved against ``BIFFO_PLUGINS_ROOT/<name>``,
-    #: see ``app.py``), or ``None`` if not declared (ADR-0021 §2, #558 M2).
+    #: see ``app.py``), or ``None`` if not declared (ADR-0021 §2, M2).
     user_frontend_dir: str | None = None
     #: ``True`` when the plugin declared an ``app_ref`` but importing it raised
     #: (biffo-template#2092/#2095). ``app`` is then ``None`` — there is nothing to
@@ -391,7 +391,7 @@ def build_host(
             )
             bare_admin_paths.add(f"/{p.name}/admin")
             mounted.append((admin_label, p.admin_app))
-        # user_frontend static shell mount (if declared) — ADR-0021 §2, #558 M2.
+        # user_frontend static shell mount (if declared) — ADR-0021 §2, M2.
         # Wholly unauthenticated: NO group_gate at all, unlike the admin mount
         # above. A plain browser navigation to this URL can never attach a
         # bearer token, and required_group has never gated this shell (see the

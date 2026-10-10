@@ -242,7 +242,7 @@ export async function runPluginUpgrade(
     )
 
     // Fail-closed on the retired ADR-0018 §2 per-plugin frontend hosting shape
-    // (biffo-template#1916, #558 milestone 3) — checked against the freshly-
+    // (biffo-template#1916, shared plugin frontend mount milestone 3) — checked against the freshly-
     // cloned source, before anything is mutated, same reasoning as the
     // reference guard below.
     const retiredShapeReasons = findRetiredFrontendShape(join(tmpDir, 'terraform'))
@@ -477,7 +477,7 @@ async function runLocalPluginRefresh(
     )
 
     // Fail-closed on the retired ADR-0018 §2 per-plugin frontend hosting shape
-    // (biffo-template#1916, #558 milestone 3) — checked against the checkout
+    // (biffo-template#1916, shared plugin frontend mount milestone 3) — checked against the checkout
     // on disk before anything is mutated, same reasoning as the reference
     // guard below. `source.sourceDir` is correct whether or not this is an
     // in-tree refresh.

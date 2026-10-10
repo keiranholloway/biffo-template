@@ -104,6 +104,37 @@ run "bootstrap_shared_log_key" {
   }
 }
 
+# The declared defaults themselves, read from the root's real variable file
+# with nothing passed in. The run below pins its inputs to the unset values, so
+# on its own it could not notice a default being flipped; this one does.
+run "declared_defaults_are_template_behaviour" {
+  command = plan
+
+  module {
+    source = "./tests/knob_defaults"
+  }
+
+  assert {
+    condition     = output.core_api_memory_size == 512
+    error_message = "Default core_api_memory_size must stay 512 MB."
+  }
+
+  assert {
+    condition     = output.core_api_timeout == 300
+    error_message = "Default core_api_timeout must stay 300s."
+  }
+
+  assert {
+    condition     = output.core_api_enable_warm_capacity == false
+    error_message = "Default core_api_enable_warm_capacity (SnapStart) must stay off."
+  }
+
+  assert {
+    condition     = length(output.core_api_extra_environment) == 0
+    error_message = "Default core_api_extra_environment must stay empty."
+  }
+}
+
 run "no_overrides_keeps_template_behaviour" {
   command = plan
 

@@ -2588,8 +2588,7 @@ ship_repo() {
   # reason to make the next round wait on that).
   require_staged_worktree "$wt" "$label" || { release_stage_lock "$d" "$label"; return 1; }
 
-  # Explicit identity env vars, same reasoning as allocate-module-number.sh's
-  # lock commit: this may be the first git-writing operation in a fresh CI
+  # Explicit identity env vars: this may be the first git-writing operation in a fresh CI
   # checkout, where no global user.name/user.email is configured. Without
   # them `git commit` fails with "Author identity unknown" -- and until now
   # the exit status was discarded (`>/dev/null 2>&1`, no `$?` check), so the

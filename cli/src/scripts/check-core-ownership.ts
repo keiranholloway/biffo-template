@@ -3,7 +3,9 @@
  *
  *   - `--staged <commit-msg-file>` — the `.husky/commit-msg` hook. Reads staged
  *     paths and the message being written, so the guard fires before the commit
- *     exists rather than after it is pushed.
+ *     exists rather than after it is pushed. During a merge, a staged path that
+ *     matches a parent being merged in is not this commit's edit and is not
+ *     checked (lib/merge-in-progress.ts, tabsii-platform#1648).
  *   - default — CI. Diffs the PR against its base. A hook is bypassable with
  *     `--no-verify`; this is not, which is why both exist.
  *
@@ -30,6 +32,7 @@ import {
 } from '../lib/core-ownership-guard.js'
 import { UPGRADE_BRANCH_PREFIX } from '../lib/core-upgrade.js'
 import { readCoreManifest } from '../lib/core-manifest.js'
+import { pathsFromMergeHeads, readMergeHeads } from '../lib/merge-in-progress.js'
 import { fetchTemplateShippedPaths } from '../lib/template-shipped-paths.js'
 import { firstCommitIsCliUpgrade, resolveUpgradeCommitFiles } from '../lib/upgrade-commit-files.js'
 
@@ -87,6 +90,20 @@ export async function runOwnershipCheck(argv: string[]): Promise<void> {
     // core file for ever. The two modes previously disagreed here (#411).
     const { stdout } = await execa('git', ['diff', '--cached', '--name-status'], { cwd: root })
     ;({ changed: changedFiles, deleted: deletedFiles } = parseNameStatus(stdout))
+    // A merge stages everything the other parent changed. Only a path that
+    // differs from every parent is this commit's edit (tabsii-platform#1648).
+    const heads = await readMergeHeads(root)
+    if (heads.length > 0) {
+      const mergedIn = await pathsFromMergeHeads(root, changedFiles, heads)
+      if (mergedIn.size > 0) {
+        changedFiles = changedFiles.filter((p) => !mergedIn.has(p))
+        deletedFiles = deletedFiles.filter((p) => !mergedIn.has(p))
+        console.log(
+          `${DIM}ℹ merge in progress: ${mergedIn.size} staged path(s) match a parent being merged in ` +
+            `and are not this commit's edit.${OFF}`,
+        )
+      }
+    }
     if (messageFile) {
       const { readFileSync, existsSync } = await import('node:fs')
       if (existsSync(messageFile)) commitMessage = readFileSync(messageFile, 'utf8')

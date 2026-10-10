@@ -18,12 +18,9 @@ Lambda (`services/_plugin-host/`) behind the Core API Gateway at
 asserted by a signed `X-Biffo-Plugin` header. Verified serving the Ideation
 Engine end-to-end on biffo-platform dev.
 
-The **frontend mount** (§2) is specified below but has no code behind it yet —
-building it (manifest plumbing, the `mount.py` static mount, the two API
-Gateway routes, and the deploy-packaging change) is Milestone 2 of #558.
-Until M2 and the cross-repo migration land, user-facing plugin frontends are
-still served the ADR-0018 way (a per-plugin static bucket + `<name>/*`
-CloudFront behaviour) — see §2's migration order for the full sequence.
+The **frontend mount** (§2) is built: the shared host serves a plugin's
+`user_frontend` bundle at `/api/v1/plugins/<name>/ui/*`, and the template no
+longer carries the ADR-0018 per-plugin frontend deploy path.
 
 **Fully supersedes ADR-0018.** ADR-0018's backend model (§1, a per-plugin
 authenticated Lambda) was already superseded by §1/§1a above; this amendment

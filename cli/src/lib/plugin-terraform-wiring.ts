@@ -105,13 +105,13 @@ function standardArguments(pluginName: string, handler: string): Array<[string, 
     ['event_bus_name', 'module.events.event_bus_name'],
     ['core_api_url', 'module.api_gateway.api_endpoint'],
     ['core_api_execution_arn', 'module.api_gateway.execution_arn'],
-    // ADR-0021: a user-facing plugin has no Lambda of its own — its module
-    // provisions a frontend S3 origin and REQUIRES the parent distribution's
-    // ARN, with no default. Without this the generated block cannot plan at
-    // all ("No value for required variable"), which is what made #685 break
-    // `terraform plan` for a whole environment. Filtered by declaration below,
-    // so a Lambda-backed legacy module that does not declare it is unaffected.
-    ['cdn_distribution_arn', 'module.cdn.distribution_arn'],
+    // Removed (ADR-0021 §2): the CDN distribution ARN used to be passed to a
+    // user-facing plugin's module, which provisioned its own frontend S3 origin
+    // and REQUIRED that ARN with no default. User frontends are now served by
+    // the shared plugin host, so nothing is emitted for it any more. Do NOT
+    // re-add it as a fix if an un-migrated instance's `terraform plan` fails
+    // with "No value for required variable" (the #685 symptom): that module is
+    // on the retired per-plugin shape and must be migrated, not fed.
     // biffo-template#1456: an installed plugin has no channel for
     // instance-specific configuration at all, and the first thing that needs
     // one is the deployment's own public origin — a plugin minting a

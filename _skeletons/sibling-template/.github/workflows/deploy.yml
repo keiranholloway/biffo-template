@@ -34,6 +34,10 @@ permissions:
 
 env:
   NODE_VERSION: '22'
+  # uv reads UV_PYTHON (or .python-version), never PYTHON_VERSION: without this an
+  # unpinned setup-uv resolves the newest CPython (3.15 on 2026-10-10), where
+  # pip-audit segfaults and the greenlet stack fails (biffo-plugin-marketing#218).
+  UV_PYTHON: '3.13'
   TERRAFORM_VERSION: '~> 1.9'
   # Defence in depth for the class of bug in #322: an interactive Terraform
   # prompt on a CI runner has no stdin to read and blocks until the job is

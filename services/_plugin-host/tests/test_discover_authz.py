@@ -151,7 +151,7 @@ def test_discover_leaves_admin_fields_none_when_absent(tmp_path):
 
 def test_discover_populates_user_frontend_when_present(tmp_path) -> None:
     """``user_frontend`` (dir, required_group) is carried onto DiscoveredPlugin
-    — plumbing, not new validation (ADR-0021 §2, #558 M2)."""
+    — plumbing, not new validation (ADR-0021 §2, M2)."""
     d = tmp_path / "ideation"
     d.mkdir()
     manifest = {
@@ -261,7 +261,7 @@ def test_build_plugin_host_resolves_and_serves_user_frontend(tmp_path) -> None:
     ``user_frontend_dir`` against ``BIFFO_PLUGINS_ROOT/<name>`` itself and the
     resulting mount actually serves the bundle end to end — the seam between
     discovery (relative path) and mounting (a real filesystem directory),
-    which neither module's own unit tests exercise alone (ADR-0021 §2, #558
+    which neither module's own unit tests exercise alone (ADR-0021 §2, M2
     M2)."""
     services_root = tmp_path / "services"
     plugin_dir = services_root / "demo"

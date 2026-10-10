@@ -329,7 +329,7 @@ def test_user_facing_mount_is_not_given_the_public_shell_exemption():
     assert r.status_code == 401
 
 
-# --- ADR-0021 §2 / #558 M2: the shared host serves a plugin's user_frontend ---
+# --- ADR-0021 §2 / M2: the shared host serves a plugin's user_frontend ---
 #
 # Against a SYNTHETIC fixture plugin (not Ideation's real bundle) per the
 # issue's own done-when — the suite must not depend on a real plugin's build

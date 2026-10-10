@@ -395,7 +395,7 @@ export async function runPluginInstall(
     )
 
     // Fail-closed on the retired ADR-0018 §2 per-plugin frontend hosting shape
-    // (biffo-template#1916, #558 milestone 3) — checked against the resolved
+    // (biffo-template#1916, shared plugin frontend mount milestone 3) — checked against the resolved
     // source before anything is copied, so a refusal leaves the checkout
     // untouched. `source.sourceDir` is correct whether this is a registry
     // clone, a local out-of-tree checkout, or an in-tree `--local` install

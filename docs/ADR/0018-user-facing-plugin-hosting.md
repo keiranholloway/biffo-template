@@ -12,10 +12,9 @@
 > - **§2 (a path-routed S3 + CloudFront origin per plugin)** is superseded by
 >   ADR-0021 §2's shared-host static mount
 >   (`/api/v1/plugins/<name>/ui/*`, no per-plugin origin), decided
->   2026-08-16/2026-09-06 (#558 Milestone 1, issue #1914) and **not yet built**
->   — see ADR-0021 §2 for what remains and the migration order. Until it
->   lands, `biffo-plugin-ideation` and `biffo-plugin-idea-scout` still serve
->   their frontends the way this section describes.
+>   2026-08-16/2026-09-06 (shared plugin frontend mount, Milestone 1, issue #1914) and
+>   **built**: the template no longer carries this section's per-plugin
+>   deploy path. See ADR-0021 §2 for the contract and migration order.
 >
 > **§2's `required_group` claim is corrected, not merely superseded.** This
 > section says `required_group` "gates the UI client-side (a non-founder is
@@ -24,9 +23,9 @@
 > that section, not this one, for the current, correct account of what the
 > field does.
 >
-> Full retirement of this ADR's remaining machinery (the per-plugin deploy
-> path in `deploy-app.yml`, `cdn_distribution_arn` wiring) is tracked in
-> [#558](https://github.com/keiranholloway/biffo-template/issues/558).
+> This ADR's remaining machinery (the per-plugin deploy path in
+> `deploy-app.yml`, `cdn_distribution_arn` wiring) has been removed from the
+> template (issue #1917); nothing is left to retire.
 
 ---
 

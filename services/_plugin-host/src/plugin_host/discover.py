@@ -99,7 +99,7 @@ REQUIRED_GROUP_OVERRIDE_CONFIG_NAME = "user_ingress_required_group"
 # without: an incomplete/malformed declaration on one of these must not discard
 # an otherwise-valid, unrelated surface on the same manifest. Anything else
 # failing validation means the manifest itself is broken. ``user_frontend`` joins
-# this set for the same reason as its siblings (ADR-0021 §2, #558 M2): a
+# this set for the same reason as its siblings (ADR-0021 §2, M2): a
 # malformed static-frontend declaration must drop only the UI mount, never the
 # plugin's API.
 _SALVAGEABLE_FIELDS = frozenset({"user_ingress", "admin_ingress", "user_frontend"})
@@ -170,7 +170,7 @@ class DiscoveredPlugin:
     #: ``user_frontend.dir`` (repo-relative, e.g. "web/dist"), or None if not
     #: declared. The host resolves this against ``BIFFO_PLUGINS_ROOT/<name>``
     #: (see ``app.py``'s ``build_plugin_host``) — plumbing only, PluginManifest
-    #: already validates the shape (ADR-0021 §2, #558 M2).
+    #: already validates the shape (ADR-0021 §2, M2).
     user_frontend_dir: str | None = None
     #: ``user_frontend.required_group``. Carried for the manifest contract's
     #: sake, not enforced anywhere yet — the shell is public by design (ADR-0021

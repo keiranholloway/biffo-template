@@ -10,7 +10,7 @@ name: Release Guards
 # (opened/synchronize/reopened) do not include `edited`, so editing a title
 # or body fires no event at all — the live-read fix existed but was only
 # reachable by a human re-running the job or pushing an unrelated commit.
-# Paid for twice on 2026-08-04 alone (tabsii-platform#558, #568 — the second
+# Paid for twice on 2026-08-04 alone (tabsii-platform PRs 558 and 568 — the second
 # with `--auto` merge armed, so the PR sat indefinitely on a check that would
 # never re-evaluate itself).
 #

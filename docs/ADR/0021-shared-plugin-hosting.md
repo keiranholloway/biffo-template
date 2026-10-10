@@ -4,7 +4,7 @@
 
 Accepted (partially implemented). Amended 2026-07-26 — see the trust-based
 isolation decision at the end of this document (#579). Amended 2026-09-07 (§2
-rewritten; [#558](https://github.com/keiranholloway/biffo-template/issues/558)
+rewritten; the shared plugin frontend mount epic,
 Milestone 1, issue #1914) — §2 below now specifies **option B**, decided
 2026-08-16 and reconfirmed 2026-09-06: extend the shared plugin host's
 already-live static-shell serving (built for `admin_ingress`) to
@@ -182,7 +182,7 @@ when first needed. See the amendment at the end of this document.
 
 ### 2. Frontend — the shared host serves a plugin's `user_frontend` bundle; no per-plugin origin
 
-**Decided 2026-08-16, reconfirmed 2026-09-06 (#558 Milestone 1, issue #1914):
+**Decided 2026-08-16, reconfirmed 2026-09-06 (shared plugin frontend mount Milestone 1, issue #1914):
 option B.** Extend the mechanism the host already runs in production for
 `admin_ingress` — serve a built static bundle from inside the host's own
 mount, exempt exactly those paths from the token check, and add matching
@@ -237,7 +237,7 @@ platform generates CRUD instead of asking each plugin to write it.
 **Converging `admin_ingress` onto this host-served shape is a deferred
 follow-up, not forgotten.** It would touch `biffo-plugin-ideation` and
 `biffo-plugin-idea-scout` as well as the template, which is out of scope for
-a template-only epic (#558); recorded here so the next reader of
+a template-only epic (the shared plugin frontend mount); recorded here so the next reader of
 `admin_app.py`'s static-mount code knows a shared replacement exists rather
 than assuming the duplication is permanent.
 
@@ -514,7 +514,7 @@ the tail.
 
 ## Migration
 
-This is the ADR-level plan as originally written, before #558 broke the
+This is the ADR-level plan as originally written, before the shared plugin frontend mount epic broke the
 frontend half into milestones. Step 2 described option A (not chosen); see
 §2's own "migration order" for the actual, current sequence across the four
 repos this now touches.

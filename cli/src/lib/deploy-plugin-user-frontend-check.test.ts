@@ -2,7 +2,7 @@
  * The "Package and deploy the shared plugin host" step must fail closed when
  * a plugin declares `user_frontend` but ships no `web/` directory to build —
  * mirroring the `admin_ingress`/`web-admin` guard right above it in
- * `deploy-app.yml` (ADR-0021 §2, biffo-template#558 Milestone 2).
+ * `deploy-app.yml` (ADR-0021 §2, biffo-template#1915, Milestone 2).
  *
  * Wired into ALL THREE deploy jobs, same reason `deploy-plugin-column-
  * check.test.ts` gives: `deploy-app.yml` duplicates its steps three times

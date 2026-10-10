@@ -15,20 +15,11 @@ Two top-level manifest keys let a marketplace plugin be user-facing or admin-fac
   enforces ``required_group`` (same schema as ``user_ingress``).
 
 A third manifest key, ``user_frontend``, declares a plugin's founder-facing static
-UI (a path-routed static app on its own S3 origin and ``<plugin>/*`` CloudFront
-behaviour — ADR-0018 §2, still how it is hosted today). It used to be parsed here
-too, via a ``UserFrontend`` model and a ``parse_user_frontend_from_manifest()``
-function mirroring the two above — but nothing in the Core API ever called either
-one (issue #558's decision memo, 2026-08-16): `admin_ingress` is live
-(``routers/admin/plugins.py``), `user_frontend` parsing was not, anywhere. Removed
-as dead code rather than kept "for symmetry". The manifest key itself is validated
-elsewhere and stays live: ``cli/src/lib/plugin-manifest.ts``'s ``UserFrontendSchema``
-(what ``biffo plugin install`` actually checks) and
-``biffo_plugin_sdk.plugin.UserFrontend`` (what a plugin's own manifest load-in
-validates). Issue #558 chose ADR-0021 option B — retiring ADR-0018 §2 by extending
-the shared plugin host's already-live static-shell serving to `user_frontend` — so
-a real `user_frontend`-aware model may return to this file once that mount is
-built; it was not resurrected speculatively here.
+UI. It is not parsed here: the shared plugin host serves the bundle itself at
+``/api/v1/plugins/<name>/ui/*`` (ADR-0021 §2), and the manifest key is validated
+by ``cli/src/lib/plugin-manifest.ts``'s ``UserFrontendSchema`` (what
+``biffo plugin install`` checks) and ``biffo_plugin_sdk.plugin.UserFrontend``
+(what a plugin's own manifest load-in validates).
 
 Both remaining keys are **distinct** from ADR-0013's public, unauthenticated
 ``http_ingress`` (webhooks): two declarations, two security postures, never one

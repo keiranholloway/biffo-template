@@ -2,7 +2,6 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import chalk from 'chalk'
 import { Command } from 'commander'
-import inquirer from 'inquirer'
 import { BiffoConfigSchema, resolveDnsConfig, type BiffoConfig } from '../config/schema.js'
 import { AwsAdapter } from '../adapters/cloud/aws/index.js'
 import { GitHubAdapter } from '../adapters/source-control/github/index.js'
@@ -14,7 +13,7 @@ import {
   serializeInstanceCoreVersion,
   INSTANCE_CORE_FILE,
 } from '../lib/core-version.js'
-import { assertInteractive, promptOr } from '../lib/interactive.js'
+import { promptOr } from '../lib/interactive.js'
 import { log } from '../lib/logger.js'
 import { resolveRepoIds } from '../lib/oidc.js'
 import {
@@ -787,58 +786,59 @@ async function promptForConfig(
   awsRegion: string,
   awsProfile?: string,
 ): Promise<Partial<BiffoConfig>> {
-  assertInteractive(
-    'Project configuration',
-    'Pass --config <path> with a pre-filled biffo.config.json (it implies -y).',
+  const answers = await promptOr<Record<string, unknown>>(
+    {
+      question: 'Project configuration',
+      remedy: 'Pass --config <path> with a pre-filled biffo.config.json (it implies -y).',
+    },
+    [
+      {
+        type: 'input',
+        name: 'project_name',
+        message: 'Project name (lowercase kebab-case):',
+        validate: (v: string) => /^[a-z0-9-]+$/.test(v) || 'Must be lowercase kebab-case',
+      },
+      { type: 'input', name: 'project_description', message: 'Project description:' },
+      {
+        type: 'list',
+        name: 'dns_mode',
+        message: 'DNS / custom domain mode:',
+        choices: [
+          {
+            name: 'Managed Route53 — create DNS zone, certificate, and records automatically',
+            value: 'managed-route53',
+          },
+          {
+            name: 'External DNS — request SSL certificate and print records for manual DNS changes',
+            value: 'external',
+          },
+          {
+            name: 'None — use the default CloudFront domain only',
+            value: 'none',
+          },
+        ],
+        default: 'managed-route53',
+      },
+      {
+        type: 'input',
+        name: 'domain',
+        message: 'Primary domain (e.g. myapp.com):',
+        when: (a: { dns_mode?: string }) => a.dns_mode !== 'none',
+        validate: (v: string) => v.trim().length > 0 || 'Domain is required for this DNS mode',
+      },
+      { type: 'input', name: 'github_org', message: 'GitHub org or username:' },
+      { type: 'input', name: 'github_repo', message: 'Repository name (will be created):' },
+      { type: 'input', name: 'admin_email', message: 'Admin email address:' },
+      { type: 'input', name: 'admin_username', message: 'Admin username:' },
+      {
+        type: 'checkbox',
+        name: 'environments',
+        message: 'Environments to provision:',
+        choices: ['dev', 'staging', 'prod'],
+        default: ['dev'],
+      },
+    ],
   )
-
-  const answers = await inquirer.prompt([
-    {
-      type: 'input',
-      name: 'project_name',
-      message: 'Project name (lowercase kebab-case):',
-      validate: (v: string) => /^[a-z0-9-]+$/.test(v) || 'Must be lowercase kebab-case',
-    },
-    { type: 'input', name: 'project_description', message: 'Project description:' },
-    {
-      type: 'list',
-      name: 'dns_mode',
-      message: 'DNS / custom domain mode:',
-      choices: [
-        {
-          name: 'Managed Route53 — create DNS zone, certificate, and records automatically',
-          value: 'managed-route53',
-        },
-        {
-          name: 'External DNS — request SSL certificate and print records for manual DNS changes',
-          value: 'external',
-        },
-        {
-          name: 'None — use the default CloudFront domain only',
-          value: 'none',
-        },
-      ],
-      default: 'managed-route53',
-    },
-    {
-      type: 'input',
-      name: 'domain',
-      message: 'Primary domain (e.g. myapp.com):',
-      when: (a: { dns_mode?: string }) => a.dns_mode !== 'none',
-      validate: (v: string) => v.trim().length > 0 || 'Domain is required for this DNS mode',
-    },
-    { type: 'input', name: 'github_org', message: 'GitHub org or username:' },
-    { type: 'input', name: 'github_repo', message: 'Repository name (will be created):' },
-    { type: 'input', name: 'admin_email', message: 'Admin email address:' },
-    { type: 'input', name: 'admin_username', message: 'Admin username:' },
-    {
-      type: 'checkbox',
-      name: 'environments',
-      message: 'Environments to provision:',
-      choices: ['dev', 'staging', 'prod'],
-      default: ['dev'],
-    },
-  ])
 
   return {
     project: {

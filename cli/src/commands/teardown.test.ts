@@ -7,6 +7,7 @@ import {
   type SiblingDiscoveryGithub,
 } from '../lib/sibling-teardown.js'
 import { assertSiblingsAreDestroyable, confirmTeardown, formatSiblingPlan } from './teardown.js'
+import { useStdinTTY } from '../test-utils/tty.js'
 
 vi.mock('../lib/logger.js', () => ({
   log: { step: vi.fn(), success: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -20,6 +21,9 @@ vi.mock('inquirer', () => ({
 const PROJECT = 'my-project'
 
 describe('confirmTeardown', () => {
+  // The interactive branch needs a terminal; promptOr refuses without one.
+  useStdinTTY(true)
+
   const originalArgv = process.argv
 
   beforeEach(() => {

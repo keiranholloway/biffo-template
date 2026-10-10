@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { runDataImport } from './data-import.js'
 import { makeTmpDir } from '../test-utils/tmp.js'
+import { useStdinTTY } from '../test-utils/tty.js'
 
 vi.mock('../lib/logger.js', () => ({
   log: { step: vi.fn(), success: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -282,6 +283,9 @@ describe('runDataImport', () => {
   })
 
   describe('token resolution (no explicit --token)', () => {
+    // The interactive branch needs a terminal; promptOr refuses without one.
+    useStdinTTY(true)
+
     const originalEnv = process.env['BIFFO_DATA_IMPORT_TOKEN']
 
     beforeEach(() => {

@@ -2,9 +2,9 @@ import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import chalk from 'chalk'
 import { Command } from 'commander'
-import inquirer from 'inquirer'
 import { GitAdapter } from '../adapters/git/index.js'
 import type { PluginMigrationsAdapter } from '../adapters/plugin-migrations/index.js'
+import { promptOr } from '../lib/interactive.js'
 import { commitPluginChange } from '../lib/plugin-commit.js'
 import { log } from '../lib/logger.js'
 import {
@@ -373,14 +373,11 @@ function readInstalledManifest(targetDir: string): PluginManifest | undefined {
 
 async function confirmUninstall(name: string, version: string | undefined): Promise<boolean> {
   const label = version ? `${name}@${version}` : name
-  const { confirmed } = await inquirer.prompt<{ confirmed: boolean }>([
-    {
-      type: 'confirm',
-      name: 'confirmed',
-      message: `Remove ${chalk.bold(label)} from services/${name}/? This cannot be undone from the CLI.`,
-      default: false,
-    },
-  ])
+  const message = `Remove ${chalk.bold(label)} from services/${name}/? This cannot be undone from the CLI.`
+  const { confirmed } = await promptOr<{ confirmed: boolean }>(
+    { question: message, remedy: 'Re-run with --force to confirm the uninstall.' },
+    [{ type: 'confirm', name: 'confirmed', message, default: false }],
+  )
   return confirmed
 }
 

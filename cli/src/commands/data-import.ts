@@ -3,8 +3,8 @@ import { cpSync, existsSync, mkdirSync, readdirSync, statSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import chalk from 'chalk'
 import { Command } from 'commander'
-import inquirer from 'inquirer'
 import { GitAdapter } from '../adapters/git/index.js'
+import { promptOr } from '../lib/interactive.js'
 import { log } from '../lib/logger.js'
 
 const NAME_PATTERN = /^[a-z][a-z0-9-]*$/
@@ -212,15 +212,21 @@ async function resolveDdlImportToken(): Promise<string | undefined> {
     /* gh not installed or not authenticated */
   }
 
-  const { token } = await inquirer.prompt<{ token: string }>([
+  const { token } = await promptOr<{ token: string }>(
     {
-      type: 'password',
-      name: 'token',
-      message:
-        'GitHub Personal Access Token for the source repo (read-only "repo" scope; leave blank if public):',
-      mask: '*',
+      question: 'GitHub Personal Access Token for the source repo',
+      remedy: 'Set BIFFO_DATA_IMPORT_TOKEN, or run `gh auth login`.',
     },
-  ])
+    [
+      {
+        type: 'password',
+        name: 'token',
+        message:
+          'GitHub Personal Access Token for the source repo (read-only "repo" scope; leave blank if public):',
+        mask: '*',
+      },
+    ],
+  )
   return token.trim() || undefined
 }
 

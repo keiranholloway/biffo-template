@@ -37,7 +37,7 @@ biffo data import tabsii --source https://github.com/your-org/data-model-design 
 
 What happens: the CLI copies the matching `.sql` files into `db/imports/<name>/` in your working tree, then runs `git add` + `git commit` for you (message: `feat(data): import <name> (<N> SQL file(s))`). It does **not** run `git push`, and it does not touch any deployed environment. You push and deploy when you're ready, same as any other change.
 
-**File naming matters.** Files are applied in filename-sorted order, so number your DDL files so alphabetical order matches execution order — `000_schema_setup.sql`, `001_tables.sql`, `002_indexes.sql`, and so on. If any file doesn't start with a digit, `import` prints a warning (it still imports the file — the warning is just telling you its position in the apply order might not be what you expect).
+**File naming matters for the initial import.** The files you import are applied in filename-sorted order, so number them so alphabetical order matches execution order — `000_schema_setup.sql`, `001_tables.sql`, `002_indexes.sql`, and so on. If any file doesn't start with a digit, `import` prints a warning (it still imports the file — the warning is just telling you its position in the apply order might not be what you expect). Modules you add **after** the import are the opposite: they carry no number at all (see [Adding more DDL later](#adding-more-ddl-later)).
 
 ### Private repositories
 
@@ -67,7 +67,7 @@ The deploy bundles the `.sql` files into the Core API Lambda's deployment packag
 biffo data apply tabsii --env dev
 ```
 
-This invokes the deployed Core API Lambda directly and asks it to run `db/imports/tabsii/`'s files against that environment's real database, in filename order. You'll see a report of what happened:
+This invokes the deployed Core API Lambda directly and asks it to run `db/imports/tabsii/`'s files against that environment's real database, in apply order: numbered files by name, then unnumbered modules in the order they merged. You'll see a report of what happened:
 
 ```
   DDL import 'tabsii' applied to dev
@@ -96,15 +96,19 @@ This invokes the deployed Core API Lambda directly and asks it to run `db/import
 
 ### Adding more DDL later
 
-`biffo data import <name>` refuses to run again once `db/imports/<name>/` already exists — you'll get an "already present" error telling you to remove it first. To add new statements to an existing import, add a **new** numbered file directly under `db/imports/<name>/` and commit it yourself. Push and `biffo data apply` again; only the new file shows up under "Applied", everything else stays "skipped".
+`biffo data import <name>` refuses to run again once `db/imports/<name>/` already exists — you'll get an "already present" error telling you to remove it first. To add new statements to an existing import, add a new file directly under `db/imports/<name>/`, named for what it does and **with no sequence number**: `db/imports/<name>/<slug>.sql`, e.g. `unit_formats.sql`. Commit it, push, and `biffo data apply` again; only the new file shows up under "Applied", everything else stays "skipped".
 
-**Don't pick the number by reading the directory listing.** `ls db/imports/<name>/ | tail` and "add one" is a race: two branches that read the same listing before either commits land on the identical "next" number, and the collision is only caught later, at merge time, by each instance's own convention guard (e.g. `test_no_new_duplicate_module_numbers_against_current_dev`) — a detector, not a preventer (biffo-template#1886). Allocate the number instead:
+**Its position is derived, not chosen** (biffo-template#2458). Numbered files apply first, by name, exactly as before. Unnumbered modules follow, in the order they merged into `dev`: by the first-parent commit that added each one. That is a valid order because each PR is tested against the base it merges onto. A module on a branch that has not merged yet comes after everything on `dev`, which is where it will land. So two open branches that each add a module never collide over a number, and neither has to be renamed or re-run when the other merges.
 
-```
-NUM=$(sh scripts/allocate-module-number.sh <name>)
-```
+A number picked by hand reintroduces that race — two branches read the same listing, take the same "next" number, and the second to merge fails (tabsii-platform, 2026-10-09: two modules numbered 221 three seconds apart). `services/api/tests/test_ddl_module_numbering.py` therefore fails a change that adds a numbered file to an import that already exists. A brand-new import may still bring its numbered chain, and a vendored plugin seed (`_plugin-<name>/`) keeps its plugin's numbering.
 
-This reserves the number atomically against the remote (a compare-and-swap on a git ref — see the script's own header comment for why a locked file or a plain push isn't equivalent), so two concurrent branches can never both win the same number; exit 0 with the number on stdout, exit 2 if it couldn't confirm an allocation (never treat that as "pick one yourself"). Create `db/imports/<name>/${NUM}_<description>.sql` with the allocated number and commit it as usual. The instance's own merge-time duplicate-number guard stays in place regardless — this removes the race, it does not remove the check that catches anything which still slips through it (a hand-authored file that skipped the allocator, for instance).
+Where the order comes from:
+
+- **A full git clone** (local, CI, the deploy's `fetch-depth: 0` checkout): `services/api/src/api/ddl_order.py` reads the history. A shallow clone cannot order the modules and is refused rather than trusted.
+- **The deployed Lambda**, which has no git: the deploy packaging writes the derived order into the zip as `db/imports/<name>/.apply-order`, one `<number>\t<filename>` line per module. The number is the module's derived position, the next after the highest numbered file; it is reported, never written into a filename, because the filename stays the module's identity in `ddl_import_history`.
+- Neither: an import with unnumbered modules fails to apply instead of guessing.
+
+To see the order locally: `python3 services/api/src/api/ddl_order.py db/imports/<name>`.
 
 ### If an already-applied file changes
 
@@ -117,7 +121,7 @@ This tool does not support modifying already-applied DDL — add a new file
 instead.
 ```
 
-Nothing else in the batch is touched when this happens — the whole `apply` run stops cleanly at that point. If you genuinely need to change already-applied DDL, write a new file that alters what the old one created (e.g. `013_fix_permission_catalog.sql` with an `ALTER TABLE`/`UPDATE`), rather than editing the original.
+Nothing else in the batch is touched when this happens — the whole `apply` run stops cleanly at that point. If you genuinely need to change already-applied DDL, write a new file that alters what the old one created (e.g. `fix_permission_catalog.sql` with an `ALTER TABLE`/`UPDATE`), rather than editing the original.
 
 ### Write every file so it can run twice
 

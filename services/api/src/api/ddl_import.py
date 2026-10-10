@@ -30,6 +30,7 @@ from pathlib import Path
 from aws_lambda_powertools import Logger
 
 from .config import settings
+from .ddl_order import apply_order
 
 logger = Logger()
 
@@ -73,13 +74,14 @@ def discover_ddl_import_dirs(root: Path | None = None) -> list[str]:
 
 
 def list_sql_files(import_dir: Path) -> list[Path]:
-    """Sorted `.sql` files directly under `import_dir` (non-recursive).
+    """`.sql` files directly under `import_dir` (non-recursive), in apply order.
 
-    Sort order is apply order — this is why real DDL import sources use a
-    numeric-prefix naming convention (`000_`, `001_`, ...), the same
-    convention Alembic's own `versions/` directory relies on.
+    Numbered files (`000_`, `001_`, ...) first, by name, as they always have;
+    then unnumbered `<slug>.sql` modules in the order they merged, derived at
+    build rather than picked by the author (biffo-template#2458). See
+    `api.ddl_order`. Raises `DdlOrderUnavailableError` rather than guess an order.
     """
-    return sorted(import_dir.glob("*.sql"))
+    return apply_order(import_dir)
 
 
 def _configured_ddl_import_root() -> Path:

@@ -213,7 +213,30 @@ cd "$REPO_ROOT"
 # `ddl_import.list_sql_files` reads at startup, so deriving from it means this
 # script and the running app agree by construction rather than by someone
 # remembering to update both.
-DDL_FILES=$(find db/imports -mindepth 2 -maxdepth 2 -name '*.sql' 2>/dev/null | LC_ALL=C sort || true)
+#
+# The apply ORDER comes from the same place: `api/ddl_order.py`, run as a plain
+# script. Numbered modules go first by name, unnumbered `<slug>.sql` modules
+# after them in merge order, derived from git history (biffo-template#2458).
+# A repo without that file (a plugin, or an instance not yet upgraded) keeps
+# name order, which is only right while an import has at most one unnumbered
+# module (a plugin's single `schema.sql`), so two there stop the build rather
+# than applying out of order.
+DDL_ORDER_SCRIPT=services/api/src/api/ddl_order.py
+DDL_DIRS=$(find db/imports -mindepth 1 -maxdepth 1 -type d 2>/dev/null | LC_ALL=C sort || true)
+DDL_FILES=""
+if [ -n "$DDL_DIRS" ] && [ -f "$DDL_ORDER_SCRIPT" ]; then
+  # shellcheck disable=SC2086 # one argument per import directory
+  DDL_FILES=$(python3 "$DDL_ORDER_SCRIPT" $DDL_DIRS) || {
+    say "could not derive the DDL apply order (see the ddl_order message above)"
+    exit 1
+  }
+elif [ -n "$DDL_DIRS" ]; then
+  DDL_FILES=$(find db/imports -mindepth 2 -maxdepth 2 -name '*.sql' 2>/dev/null | LC_ALL=C sort || true)
+  if echo "$DDL_FILES" | grep '/[^/0-9][^/]*$' | sed 's|/[^/]*$||' | uniq -d | grep -q .; then
+    say "an import in db/imports/ holds several unnumbered modules but $DDL_ORDER_SCRIPT is absent, so their apply order cannot be derived"
+    exit 1
+  fi
+fi
 ALEMBIC_DIR=""
 for _d in services/api .; do
   [ -f "$_d/alembic.ini" ] && ALEMBIC_DIR="$_d" && break
@@ -688,11 +711,11 @@ fi
 
 _module_count=0
 if [ -n "$DDL_FILES" ]; then
-  # ONE psql session, sorted by filename, mirroring the API's own DDL import.
+  # ONE psql session, in apply order, mirroring the API's own DDL import.
   # Session state an early module sets -- typically `SET search_path` in the
   # first file -- has to survive into later ones, so a per-file connection would
-  # silently change the meaning of every unqualified name after it. LC_ALL=C
-  # keeps the shell's sort byte-ordered to match Python's.
+  # silently change the meaning of every unqualified name after it. The order
+  # is DDL_FILES' own (see "what this repo's schema is made of" above).
   # shellcheck disable=SC2046
   psql -q -v ON_ERROR_STOP=1 -h "$HOST" -p "$PORT" -U "$USER_" -d "$DB" \
     --single-transaction $(echo "$DDL_FILES" | sed 's/^/-f /' | tr '\n' ' ') >/dev/null

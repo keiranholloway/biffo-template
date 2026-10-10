@@ -2,9 +2,9 @@ import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import chalk from 'chalk'
 import { Command } from 'commander'
-import inquirer from 'inquirer'
 import { AwsAdapter } from '../adapters/cloud/aws/index.js'
 import { BiffoConfigSchema, type BiffoConfig } from '../config/schema.js'
+import { promptOr } from '../lib/interactive.js'
 import { isTemplatePlaceholderConfig } from '../lib/local-config.js'
 import { log } from '../lib/logger.js'
 import { listProjectConfigs, loadProjectConfig } from '../lib/session.js'
@@ -177,17 +177,23 @@ async function resolveConfig(options: { project?: string; config?: string }): Pr
     return projects[0]!
   }
 
-  const { chosen } = await inquirer.prompt<{ chosen: string }>([
+  const { chosen } = await promptOr<{ chosen: string }>(
     {
-      type: 'list',
-      name: 'chosen',
-      message: 'Which project do you want to apply this DDL import to?',
-      choices: projects.map((p) => ({
-        name: `${p.project.name} (${(p.source_control as { config: { org: string; repo: string } }).config.org}/${(p.source_control as { config: { org: string; repo: string } }).config.repo})`,
-        value: p.project.name,
-      })),
+      question: 'Which project do you want to apply this DDL import to?',
+      remedy: 'Pass --project <name> or --config <path> to choose one.',
     },
-  ])
+    [
+      {
+        type: 'list',
+        name: 'chosen',
+        message: 'Which project do you want to apply this DDL import to?',
+        choices: projects.map((p) => ({
+          name: `${p.project.name} (${(p.source_control as { config: { org: string; repo: string } }).config.org}/${(p.source_control as { config: { org: string; repo: string } }).config.repo})`,
+          value: p.project.name,
+        })),
+      },
+    ],
+  )
 
   return projects.find((p) => p.project.name === chosen)!
 }

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PLUGIN_REGISTRY_RELATIVE_PATH } from '../lib/plugin-frontend-registry.js'
 import { runPluginUninstall } from './plugin-uninstall.js'
 import { makeTmpDir } from '../test-utils/tmp.js'
+import { useStdinTTY } from '../test-utils/tty.js'
 
 vi.mock('../lib/logger.js', () => ({
   log: { step: vi.fn(), success: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -119,6 +120,9 @@ function makeRealPlatformAppRegistryWithWidgets(root: string): void {
 }
 
 describe('runPluginUninstall', () => {
+  // The interactive branch needs a terminal; promptOr refuses without one.
+  useStdinTTY(true)
+
   let projectRoot: string
 
   beforeEach(() => {

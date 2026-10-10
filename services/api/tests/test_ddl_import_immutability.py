@@ -42,7 +42,7 @@ this test needs to forbid. Git already knows what the base branch holds.
 
 - **A module merged but never successfully applied** (its deploy failed) is
   frozen by this test even though editing it would be safe. Rare, and the
-  escape is to revert-and-replace with a new number rather than weaken this.
+  escape is to revert-and-replace with a new module rather than weaken this.
 - **A module applied to one environment and not another** is not modelled. The
   base branch is one boolean; reality is per-environment. When staging and prod
   exist this becomes materially wrong, and the honest fix then is to read
@@ -153,7 +153,7 @@ def _modified_against(ref: str) -> list[str]:
     # `--diff-filter=d` (lowercase d = exclude deletions) is deliberate: without it,
     # `git diff --name-only` reports a DELETED already-applied file as "modified", which
     # blocks the docstring's own sanctioned escape for a module that was merged but never
-    # successfully applied -- revert-and-replace with a new number requires deleting the
+    # successfully applied -- revert-and-replace with a new module requires deleting the
     # old file, and the guard used to fail on that deletion too. Deletion is safe to
     # exclude here because the importer's read phase (`main.py::_apply_batch`) only
     # checksums files it finds ON DISK; a history row whose file is gone is never
@@ -197,7 +197,7 @@ class TestAppliedDdlIsNeverModified:
             + "\n  ".join(sorted(modified))
             + "\n\nApplied DDL is immutable INCLUDING ITS COMMENTS: the recorded "
             "checksum is over the whole file, so a reworded comment breaks it "
-            "exactly as a changed statement would. Add a new numbered module "
+            "exactly as a changed statement would. Add a new module "
             "instead. If you are deliberately reverting one of these files back "
             "to its applied bytes, this test passes once they match again."
         )

@@ -17,6 +17,7 @@ overrides:
   browserslist@<4.28.7: '>=4.28.7'
   esbuild@<0.28.1: '>=0.28.1'
   source-map-js@<1.2.2: '>=1.2.2'
+  cli@<1.0.0: '>=1.0.0'
 
 importers:
 

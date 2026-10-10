@@ -628,7 +628,7 @@ jobs:
           # the bucket's Terraform in one PR, and nothing orders Deploy Application
           # after Deploy Infrastructure. Without the head-bucket probe the first
           # upgrade would trade a size failure for a missing-bucket failure. Same
-          # shape as the plugin frontend loop below, for the same reason.
+          # shape as the shared plugin host's own bucket-existence gate.
           artifacts_bucket="${{ vars.ARTIFACTS_BUCKET_NAME }}"
           if [ -n "$artifacts_bucket" ] && aws s3api head-bucket --bucket "$artifacts_bucket" 2>/dev/null; then
             key="core-api/${GITHUB_SHA}.zip"
@@ -951,9 +951,9 @@ jobs:
             cp "$manifest" "$pkg/services/$name/biffo.plugin.json"
             # admin_ingress's built UI shell (biffo-template#627/#632) is served
             # by this same Lambda, read from services/<name>/web-admin/dist via
-            # BIFFO_PLUGINS_ROOT -- build it here (same pnpm shape as the
-            # plugin-frontend step below) and copy the output in. Skipped if the
-            # plugin declares no admin_ingress.
+            # BIFFO_PLUGINS_ROOT -- build it here (pnpm install and
+            # build) and copy the output in. Skipped if the plugin declares no
+            # admin_ingress.
             #
             # Declaring admin_ingress WITHOUT a web-admin/ is a misconfiguration,
             # not a variant to tolerate. This condition used to be a single
@@ -1525,7 +1525,7 @@ jobs:
           # the bucket's Terraform in one PR, and nothing orders Deploy Application
           # after Deploy Infrastructure. Without the head-bucket probe the first
           # upgrade would trade a size failure for a missing-bucket failure. Same
-          # shape as the plugin frontend loop below, for the same reason.
+          # shape as the shared plugin host's own bucket-existence gate.
           artifacts_bucket="${{ vars.ARTIFACTS_BUCKET_NAME }}"
           if [ -n "$artifacts_bucket" ] && aws s3api head-bucket --bucket "$artifacts_bucket" 2>/dev/null; then
             key="core-api/${GITHUB_SHA}.zip"
@@ -1848,9 +1848,9 @@ jobs:
             cp "$manifest" "$pkg/services/$name/biffo.plugin.json"
             # admin_ingress's built UI shell (biffo-template#627/#632) is served
             # by this same Lambda, read from services/<name>/web-admin/dist via
-            # BIFFO_PLUGINS_ROOT -- build it here (same pnpm shape as the
-            # plugin-frontend step below) and copy the output in. Skipped if the
-            # plugin declares no admin_ingress.
+            # BIFFO_PLUGINS_ROOT -- build it here (pnpm install and
+            # build) and copy the output in. Skipped if the plugin declares no
+            # admin_ingress.
             #
             # Declaring admin_ingress WITHOUT a web-admin/ is a misconfiguration,
             # not a variant to tolerate. This condition used to be a single
@@ -2434,7 +2434,7 @@ jobs:
           # the bucket's Terraform in one PR, and nothing orders Deploy Application
           # after Deploy Infrastructure. Without the head-bucket probe the first
           # upgrade would trade a size failure for a missing-bucket failure. Same
-          # shape as the plugin frontend loop below, for the same reason.
+          # shape as the shared plugin host's own bucket-existence gate.
           artifacts_bucket="${{ vars.ARTIFACTS_BUCKET_NAME }}"
           if [ -n "$artifacts_bucket" ] && aws s3api head-bucket --bucket "$artifacts_bucket" 2>/dev/null; then
             key="core-api/${GITHUB_SHA}.zip"
@@ -2757,9 +2757,9 @@ jobs:
             cp "$manifest" "$pkg/services/$name/biffo.plugin.json"
             # admin_ingress's built UI shell (biffo-template#627/#632) is served
             # by this same Lambda, read from services/<name>/web-admin/dist via
-            # BIFFO_PLUGINS_ROOT -- build it here (same pnpm shape as the
-            # plugin-frontend step below) and copy the output in. Skipped if the
-            # plugin declares no admin_ingress.
+            # BIFFO_PLUGINS_ROOT -- build it here (pnpm install and
+            # build) and copy the output in. Skipped if the plugin declares no
+            # admin_ingress.
             #
             # Declaring admin_ingress WITHOUT a web-admin/ is a misconfiguration,
             # not a variant to tolerate. This condition used to be a single

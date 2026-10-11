@@ -609,3 +609,31 @@ async def test_embed_rejects_a_misaligned_or_malformed_reply(monkeypatch, body):
     handler, _ = _ok(body)
     with pytest.raises(LLMError):
         await _client(handler).embed(model="m", texts=["a", "b"], timeout=5.0)
+
+
+async def test_embed_transport_failure_is_an_llm_error(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", _FAKE_KEY)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("down", request=request)
+
+    with pytest.raises(LLMError) as exc:
+        await _client(handler).embed(model="m", texts=["a"], timeout=5.0)
+    assert _FAKE_KEY not in str(exc.value)
+
+
+async def test_embed_non_json_reply_is_an_llm_error(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", _FAKE_KEY)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="<html>not json</html>")
+
+    with pytest.raises(LLMError, match="not JSON"):
+        await _client(handler).embed(model="m", texts=["a"], timeout=5.0)
+
+
+def test_sse_delta_ignores_non_object_and_choiceless_payloads():
+    from agent_runtime.openrouter import _parse_sse_delta
+
+    assert _parse_sse_delta("data: [1, 2]") == ""
+    assert _parse_sse_delta('data: {"choices": []}') == ""

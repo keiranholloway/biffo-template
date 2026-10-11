@@ -89,3 +89,12 @@ def test_wrong_vector_count_is_a_typed_failure() -> None:
 def test_unconfigured_runtime_is_a_typed_failure() -> None:
     with pytest.raises(EmbeddingError):
         embed_texts(["a"], "m", function_name="")
+
+
+def test_unreadable_runtime_reply_is_a_typed_failure() -> None:
+    class _Garbled(_FakeLambda):
+        def invoke(self, **kwargs: Any) -> dict[str, Any]:
+            return {"Payload": io.BytesIO(b"<not json>")}
+
+    with pytest.raises(EmbeddingError):
+        embed_texts(["a"], "m", invoker=_invoker(_Garbled()))

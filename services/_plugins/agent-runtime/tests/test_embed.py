@@ -83,3 +83,15 @@ def test_handler_routes_an_embed_invoke(monkeypatch):
     out = main.handler(_event(), _ctx())
 
     assert out == {"ok": True, "embeddings": [[3.0]], "model": "openai/text-embedding-3-small"}
+
+
+async def test_a_wall_clock_overrun_is_a_clean_failure():
+    result = await run_embed(_event(), llm=FakeEmbedder(error=TimeoutError()))  # type: ignore[arg-type]
+    assert result["ok"] is False
+    assert "wall clock" in result["error"]
+
+
+async def test_an_unexpected_exception_is_a_clean_failure():
+    result = await run_embed(_event(), llm=FakeEmbedder(error=RuntimeError("kaput")))  # type: ignore[arg-type]
+    assert result["ok"] is False
+    assert "kaput" in result["error"]

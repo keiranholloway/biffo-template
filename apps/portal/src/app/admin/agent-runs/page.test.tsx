@@ -4,8 +4,11 @@ import AgentRunsPage from './page'
 import type * as AgentRunsApiModule from '@/lib/agent-runs-api'
 import type { AgentRunSummary, AgentRunCostAggregate } from '@/lib/agent-runs-api'
 
+// Stable reference: the page memoises its client on getIdToken, and a fresh
+// function per render would re-trigger the initial load forever.
+const authValue = { getIdToken: () => 'fake-token' }
 vi.mock('@/context/auth-context', () => ({
-  useAuth: () => ({ getIdToken: () => 'fake-token' }),
+  useAuth: () => authValue,
 }))
 
 vi.mock('@/lib/api-client', () => ({

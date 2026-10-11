@@ -184,6 +184,9 @@ class AgentRunEventPayload(BaseModel):
     status: Literal["pending", "running", "completed", "failed"]
     causation_id: str | None
     depth: int
+    #: Why a ``failed`` run failed, when Core can say (e.g. the model provider is
+    #: out of credits). ``None`` for any other status or an unclassified failure.
+    failure_reason: str | None = None
 
 
 # ── Canonical Core events ────────────────────────────────────────────────────

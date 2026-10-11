@@ -39,3 +39,30 @@ describe('formatMeanCost', () => {
     expect(formatMeanCost(0.05, 10)).toBe('$0.0050')
   })
 })
+
+import { summarizeRunError, splitUrls } from './agent-runs-format'
+
+describe('summarizeRunError', () => {
+  const raw =
+    'LLM call failed on turn 1: OpenRouter returned 402: {"error":{"message":"Insufficient credits. Add more using https://openrouter.ai/settings/credits","code":402}}'
+  it('extracts the upstream message', () => {
+    expect(summarizeRunError(raw)).toBe('OpenRouter 402: Insufficient credits.')
+  })
+  it('handles truncated JSON', () => {
+    expect(summarizeRunError(raw.slice(0, 120))).toBe('OpenRouter 402: Insufficient credits.')
+  })
+  it('falls back to plain text and null', () => {
+    expect(summarizeRunError('boom')).toBe('boom')
+    expect(summarizeRunError(null)).toBeNull()
+  })
+})
+
+describe('splitUrls', () => {
+  it('separates urls', () => {
+    expect(splitUrls('see https://a.io/x. ok')).toEqual([
+      { url: false, text: 'see ' },
+      { url: true, text: 'https://a.io/x' },
+      { url: false, text: '. ok' },
+    ])
+  })
+})

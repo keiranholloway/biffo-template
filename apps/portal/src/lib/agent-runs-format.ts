@@ -44,3 +44,64 @@ export function formatMeanCost(totalCost: number | null, pricedRunCount: number)
   const mean = totalCost / pricedRunCount
   return `$${mean.toFixed(4)}`
 }
+
+/**
+ * Pull a one-line, human-readable cause out of a run's raw error text.
+ *
+ * The runtime stores errors like
+ * `LLM call failed on turn 1: OpenRouter returned 402: {"error":{"message":"Insufficient credits. …"}}`.
+ * The useful part is inside the JSON, which may also be truncated (the runtime
+ * clips upstream bodies), so we try a real parse and fall back to a regex.
+ */
+export function summarizeRunError(raw: string | null | undefined): string | null {
+  if (raw == null) return null
+  const text = raw.trim()
+  if (text === '') return null
+
+  const braceAt = text.indexOf('{')
+  const prefix = (braceAt === -1 ? text : text.slice(0, braceAt)).trim().replace(/[:\s]+$/, '')
+  const upstream = /(OpenRouter) returned (\d{3})/.exec(prefix)
+  const label = upstream != null ? `${upstream[1] ?? ''} ${upstream[2] ?? ''}` : null
+
+  let message: string | null = null
+  if (braceAt !== -1) {
+    const body = text.slice(braceAt)
+    try {
+      const parsed: unknown = JSON.parse(body)
+      const err = (parsed as { error?: unknown } | null)?.error
+      if (typeof err === 'string') message = err
+      else if (err != null && typeof (err as { message?: unknown }).message === 'string') {
+        message = (err as { message: string }).message
+      } else if (typeof (parsed as { message?: unknown } | null)?.message === 'string') {
+        message = (parsed as { message: string }).message
+      }
+    } catch {
+      const m = /"message"\s*:\s*"((?:[^"\\]|\\.)*)/.exec(body)
+      if (m?.[1] != null) message = m[1].replace(/\\(.)/g, '$1')
+    }
+  }
+
+  if (message != null && message.trim() !== '') {
+    // First sentence only: the rest is usually remedy text with URLs.
+    const first = /^.*?[.!?](?=\s|$)/.exec(message.trim())?.[0] ?? message.trim()
+    return label != null ? `${label}: ${first}` : first
+  }
+  return text.length > 120 ? `${text.slice(0, 117)}…` : text
+}
+
+/** Split text into plain and http(s) URL parts, so URLs can be rendered as links. */
+export function splitUrls(text: string): { url: boolean; text: string }[] {
+  const parts: { url: boolean; text: string }[] = []
+  let last = 0
+  for (const m of text.matchAll(/https?:\/\/[^\s"'<>\\]+/g)) {
+    let url = m[0]
+    const trimmed = url.replace(/[.,;:)\]}]+$/, '')
+    const start = m.index
+    if (start > last) parts.push({ url: false, text: text.slice(last, start) })
+    parts.push({ url: true, text: trimmed })
+    url = trimmed
+    last = start + url.length
+  }
+  if (last < text.length) parts.push({ url: false, text: text.slice(last) })
+  return parts
+}

@@ -8,6 +8,7 @@ import {
   fetchInstalledPlugins,
   type InstalledPlugin,
   type PluginRouteDefinition,
+  type PluginTableDefinition,
 } from '@/lib/plugin-api'
 
 interface InstalledPluginDetailProps {
@@ -35,6 +36,59 @@ function groupRoutesByTable(
     else groups.set(route.table, [route])
   }
   return [...groups].map(([table, tableRoutes]) => ({ table, routes: tableRoutes }))
+}
+
+const METHOD_COLOR: Record<string, string> = {
+  GET: 'bg-sky-100 text-sky-700',
+  POST: 'bg-emerald-100 text-emerald-700',
+  PUT: 'bg-amber-100 text-amber-700',
+  PATCH: 'bg-amber-100 text-amber-700',
+  DELETE: 'bg-rose-100 text-rose-700',
+}
+
+function BackLink() {
+  return (
+    <Link href="/admin/plugins/" className="text-sm text-indigo-700 hover:underline">
+      ← Back to installed plugins
+    </Link>
+  )
+}
+
+function TableRow({ table }: { table: PluginTableDefinition }) {
+  const [open, setOpen] = useState(false)
+  const count = table.columns.length
+  return (
+    <li className="rounded-lg bg-gray-50">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => {
+          setOpen((o) => !o)
+        }}
+        className="flex w-full items-center gap-2 px-3 py-2 text-left"
+      >
+        <span aria-hidden="true" className="text-xs text-gray-400">
+          {open ? '▾' : '▸'}
+        </span>
+        <code className="font-mono text-sm text-gray-800">{table.name}</code>
+        <span className="ml-2 text-xs text-gray-400">
+          {count} {count === 1 ? 'column' : 'columns'}
+        </span>
+      </button>
+      {open && (
+        <ul className="border-t border-gray-200 px-3 py-2">
+          {table.columns.map((col) => (
+            <li key={col.name} className="flex flex-wrap items-center gap-2 py-0.5 text-xs">
+              <code className="font-mono text-gray-800">{col.name}</code>
+              <span className="font-mono text-gray-500">{col.type}</span>
+              {col.primary_key && <span className="text-gray-500">primary key</span>}
+              {col.nullable && <span className="text-gray-500">nullable</span>}
+            </li>
+          ))}
+        </ul>
+      )}
+    </li>
+  )
 }
 
 type LoadState =
@@ -98,9 +152,12 @@ export function InstalledPluginDetail({ name }: InstalledPluginDetailProps) {
 
   if (state.status === 'error') {
     return (
-      <div className="rounded-xl border border-red-200 bg-red-50 p-6">
-        <h1 className="text-lg font-semibold text-red-800">Could not load installed plugins</h1>
-        <p className="mt-1 text-sm text-red-700">{state.message}</p>
+      <div>
+        <BackLink />
+        <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-6">
+          <h1 className="text-lg font-semibold text-red-800">Could not load installed plugins</h1>
+          <p className="mt-1 text-sm text-red-700">{state.message}</p>
+        </div>
       </div>
     )
   }
@@ -130,6 +187,7 @@ export function InstalledPluginDetail({ name }: InstalledPluginDetailProps) {
 
   return (
     <div className="flex flex-col gap-6">
+      <BackLink />
       <div className="rounded-xl border bg-white p-6 shadow-sm">
         <div className="flex items-start justify-between">
           <div>
@@ -166,12 +224,7 @@ export function InstalledPluginDetail({ name }: InstalledPluginDetailProps) {
         ) : (
           <ul className="mt-3 flex flex-col gap-2">
             {plugin.tables.map((table) => (
-              <li key={table.name} className="rounded-lg bg-gray-50 px-3 py-2">
-                <code className="font-mono text-sm text-gray-800">{table.name}</code>
-                <span className="ml-2 text-xs text-gray-400">
-                  {table.columns.length} {table.columns.length === 1 ? 'column' : 'columns'}
-                </span>
-              </li>
+              <TableRow key={table.name} table={table} />
             ))}
           </ul>
         )}
@@ -198,7 +251,11 @@ export function InstalledPluginDetail({ name }: InstalledPluginDetailProps) {
                       key={`${route.method} ${route.path}`}
                       className="flex flex-wrap items-center gap-3 rounded-lg bg-gray-50 px-3 py-2"
                     >
-                      <span className="w-16 shrink-0 rounded bg-gray-900 px-2 py-0.5 text-center font-mono text-xs font-medium text-white">
+                      <span
+                        className={`w-16 shrink-0 rounded px-2 py-0.5 text-center font-mono text-xs font-medium ${
+                          METHOD_COLOR[route.method] ?? 'bg-gray-100 text-gray-600'
+                        }`}
+                      >
                         {route.method}
                       </span>
                       <code className="font-mono text-sm text-gray-800">

@@ -375,6 +375,11 @@ export async function deleteWorkflow(client: Pick<Client, 'delete'>, id: string)
 }
 
 /** Most-recent-first run history: what fired, when, and how it turned out. */
-export function fetchRuns(client: Pick<Client, 'get'>, limit = 25): Promise<WorkflowRun[]> {
-  return client.get<WorkflowRun[]>(`${RUNS_BASE}?limit=${String(limit)}`)
+export function fetchRuns(
+  client: Pick<Client, 'get'>,
+  limit = 25,
+  offset = 0,
+): Promise<WorkflowRun[]> {
+  const offsetParam = offset > 0 ? `&offset=${String(offset)}` : ''
+  return client.get<WorkflowRun[]>(`${RUNS_BASE}?limit=${String(limit)}${offsetParam}`)
 }

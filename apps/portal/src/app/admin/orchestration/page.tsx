@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { ConfirmButton } from '@/components/ConfirmButton'
 import { useAuth } from '@/context/auth-context'
 import { ApiError, createApiClient } from '@/lib/api-client'
 import {
@@ -84,6 +85,9 @@ function toFilterRows(filter: Record<string, string> | null | undefined): Filter
 // The field-select sentinel that reveals the free-text "custom field" input —
 // the escape hatch so a trigger's undeclared field (and observed events with no
 // declared fields at all) can still be filtered on.
+/** Recent-runs rows per page. One extra row is requested so "more exist" is exact. */
+const RUNS_PAGE_SIZE = 25
+
 const CUSTOM_FIELD = '__custom__'
 
 // A condition's chosen field definition, if it names one the trigger declares.
@@ -495,6 +499,8 @@ export default function OrchestrationPage() {
 
   const [workflows, setWorkflows] = useState<WorkflowDefinition[] | null>(null)
   const [runs, setRuns] = useState<WorkflowRun[] | null>(null)
+  const [runsHaveMore, setRunsHaveMore] = useState(false)
+  const [loadingMoreRuns, setLoadingMoreRuns] = useState(false)
   const [catalog, setCatalog] = useState<WorkflowCatalog | null>(null)
   // Library components available to reference from a parts field (ADR-0015).
   // Sourced from the prompt-library CRUD API, NOT the action catalog. A fetch
@@ -614,9 +620,13 @@ export default function OrchestrationPage() {
 
   const reload = useCallback(async () => {
     try {
-      const [definitions, history] = await Promise.all([fetchWorkflows(client), fetchRuns(client)])
+      const [definitions, history] = await Promise.all([
+        fetchWorkflows(client),
+        fetchRuns(client, RUNS_PAGE_SIZE + 1),
+      ])
       setWorkflows(definitions)
-      setRuns(history)
+      setRunsHaveMore(history.length > RUNS_PAGE_SIZE)
+      setRuns(history.slice(0, RUNS_PAGE_SIZE))
       setError(null)
     } catch (err: unknown) {
       setError(errorMessage(err))
@@ -626,6 +636,20 @@ export default function OrchestrationPage() {
   useEffect(() => {
     void reload()
   }, [reload])
+
+  const loadMoreRuns = useCallback(async () => {
+    if (runs == null) return
+    setLoadingMoreRuns(true)
+    try {
+      const more = await fetchRuns(client, RUNS_PAGE_SIZE + 1, runs.length)
+      setRunsHaveMore(more.length > RUNS_PAGE_SIZE)
+      setRuns([...runs, ...more.slice(0, RUNS_PAGE_SIZE)])
+    } catch (err: unknown) {
+      setError(errorMessage(err))
+    } finally {
+      setLoadingMoreRuns(false)
+    }
+  }, [client, runs])
 
   // Load the referenceable prompt components once. A failure is non-fatal to
   // the builder — the parts editor renders with no options and warns on any
@@ -2448,15 +2472,16 @@ export default function OrchestrationPage() {
                       >
                         {w.enabled ? 'Disable' : 'Enable'}
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => {
+                      <ConfirmButton
+                        prompt={`Delete workflow "${w.name}"? This cannot be undone.`}
+                        confirmLabel="Confirm delete"
+                        onConfirm={() => {
                           void run(() => deleteWorkflow(client, w.id))
                         }}
                         className="rounded border border-rose-200 px-2 py-1 text-xs text-rose-700 hover:bg-rose-50"
                       >
                         Delete
-                      </button>
+                      </ConfirmButton>
                     </div>
                   </td>
                 </tr>
@@ -2521,6 +2546,28 @@ export default function OrchestrationPage() {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {runs != null && runs.length > 0 && (
+        <div className="mt-3 flex items-center gap-3 text-sm text-gray-600">
+          <span>
+            {runsHaveMore
+              ? `Showing the newest ${String(runs.length)} runs — older runs exist`
+              : `Showing all ${String(runs.length)} runs`}
+          </span>
+          {runsHaveMore && (
+            <button
+              type="button"
+              disabled={loadingMoreRuns}
+              onClick={() => {
+                void loadMoreRuns()
+              }}
+              className="rounded border px-3 py-1 text-sm font-medium text-gray-800 disabled:opacity-50"
+            >
+              {loadingMoreRuns ? 'Loading…' : 'Load older runs'}
+            </button>
+          )}
         </div>
       )}
     </div>

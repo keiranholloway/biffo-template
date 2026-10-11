@@ -5,6 +5,7 @@ import EndpointsPage from './page'
 import { ApiError } from '@/lib/api-client'
 import type * as ApiClientModule from '@/lib/api-client'
 import type * as EndpointApiModule from '@/lib/endpoint-api'
+import type * as UserAdminApiModule from '@/lib/user-admin-api'
 import type { Endpoint } from '@/lib/endpoint-api'
 
 vi.mock('@/context/auth-context', () => ({
@@ -28,6 +29,12 @@ const { fetchEndpoints, changeEndpointPermission, fetchEndpointDetail } = vi.hoi
 vi.mock('@/lib/endpoint-api', async () => {
   const actual = await vi.importActual<typeof EndpointApiModule>('@/lib/endpoint-api')
   return { ...actual, fetchEndpoints, changeEndpointPermission, fetchEndpointDetail }
+})
+
+const { fetchGroups } = vi.hoisted(() => ({ fetchGroups: vi.fn() }))
+vi.mock('@/lib/user-admin-api', async () => {
+  const actual = await vi.importActual<typeof UserAdminApiModule>('@/lib/user-admin-api')
+  return { ...actual, fetchGroups }
 })
 
 const endpoints: Endpoint[] = [
@@ -74,6 +81,8 @@ describe('EndpointsPage', () => {
     fetchEndpoints.mockReset()
     changeEndpointPermission.mockReset()
     fetchEndpointDetail.mockReset()
+    fetchGroups.mockReset()
+    fetchGroups.mockResolvedValue({ groups: ['founder', 'editor', 'admin', 'viewer'] })
   })
 
   it('renders the live endpoints with method, path and role', async () => {
@@ -85,7 +94,7 @@ describe('EndpointsPage', () => {
       expect(screen.getAllByText('/api/v1/plugins/rbac/roles')).toHaveLength(2)
     })
     expect(screen.getAllByText('POST').length).toBeGreaterThanOrEqual(1)
-    expect(screen.getByText('admin')).toBeInTheDocument()
+    expect(screen.getByText('admin', { selector: 'span' })).toBeInTheDocument()
     // empty required_role renders as "any authenticated"
     expect(screen.getAllByText('any authenticated').length).toBeGreaterThanOrEqual(1)
     // hand-written routes are listed too (all routes, swagger-ish), owned by core
@@ -239,5 +248,50 @@ describe('EndpointsPage', () => {
     })
     // No success banner on failure.
     expect(screen.queryByRole('link', { name: 'Review pull request' })).not.toBeInTheDocument()
+  })
+
+  it('filters by path text and by source', async () => {
+    fetchEndpoints.mockResolvedValue(endpoints)
+    render(<EndpointsPage />)
+    await screen.findByText('/api/v1/public/demo-requests')
+    const user = userEvent.setup()
+
+    await user.selectOptions(screen.getByLabelText('Source'), 'plugins')
+    expect(screen.queryByText('/api/v1/public/demo-requests')).not.toBeInTheDocument()
+    expect(screen.getAllByText('/api/v1/plugins/rbac/roles')).toHaveLength(2)
+
+    await user.selectOptions(screen.getByLabelText('Source'), 'all')
+    await user.type(screen.getByLabelText('Search path'), 'demo')
+    expect(screen.getByText('/api/v1/public/demo-requests')).toBeInTheDocument()
+    expect(screen.queryByText('/api/v1/plugins/rbac/roles')).not.toBeInTheDocument()
+  })
+
+  it('shows a one-line summary and the full description on expand', async () => {
+    const long = 'Record one spend entry (admin only). Written by something that confirms things.'
+    fetchEndpoints.mockResolvedValue([{ ...endpoints[2], summary: long }])
+    fetchEndpointDetail.mockResolvedValue(null)
+    render(<EndpointsPage />)
+    expect(await screen.findByText('Record one spend entry (admin only).')).toBeInTheDocument()
+    expect(screen.queryByText(long)).not.toBeInTheDocument()
+    await userEvent.setup().click(screen.getByRole('button', { name: /Show details/ }))
+    expect(await screen.findByText(long)).toBeInTheDocument()
+  })
+
+  it('offers the live group list, including groups outside the built-in list', async () => {
+    fetchEndpoints.mockResolvedValue(endpoints)
+    const user = userEvent.setup()
+
+    render(<EndpointsPage />)
+    await waitFor(() => {
+      expect(screen.getAllByRole('button', { name: 'Change' })).toHaveLength(2)
+    })
+    const firstChange = screen.getAllByRole('button', { name: 'Change' }).at(0)
+    if (firstChange == null) throw new Error('expected a Change button')
+    await user.click(firstChange)
+    const form = screen.getByLabelText('Change permission for GET /api/v1/plugins/rbac/roles')
+    await waitFor(() => {
+      expect(within(form).getByLabelText('founder')).toBeInTheDocument()
+    })
+    expect(within(form).getAllByRole('button', { name: 'Cancel' })).toHaveLength(1)
   })
 })

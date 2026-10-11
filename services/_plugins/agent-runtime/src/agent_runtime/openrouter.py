@@ -279,6 +279,51 @@ class OpenRouterClient:
 
         return _parse_completion(response.json(), fallback_model=model)
 
+    async def embed(
+        self,
+        *,
+        model: str,
+        texts: list[str],
+        timeout: float,
+        dimensions: int | None = None,
+    ) -> list[list[float]]:
+        """Embed *texts* via ``POST /embeddings``; vectors come back in input order.
+
+        The provider tags each ``data`` entry with an ``index`` and does not
+        promise to return them sorted, so the result is reordered by that index
+        here — a caller can zip the vectors against its inputs. A reply that does
+        not carry exactly one vector per input (a missing, duplicate or
+        out-of-range index) is an error rather than a silently misaligned result.
+        ``dimensions`` is omitted from the body when ``None``.
+
+        Raises :class:`LLMError` for a non-2xx status, a transport failure or a
+        malformed reply; the key-bearing request headers are never echoed.
+        """
+        headers = {
+            "Authorization": f"Bearer {self._resolve_api_key()}",
+            "Content-Type": "application/json",
+        }
+        body: dict[str, Any] = {"model": model, "input": texts}
+        if dimensions is not None:
+            body["dimensions"] = dimensions
+        try:
+            response = await self._http.post(
+                f"{self._base_url}/embeddings",
+                headers=headers,
+                json=body,
+                timeout=timeout,
+            )
+        except httpx.HTTPError as exc:
+            raise LLMError(f"OpenRouter request failed: {exc}") from exc
+
+        if response.status_code >= 400:
+            raise LLMError(f"OpenRouter returned {response.status_code}: {response.text[:500]}")
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise LLMError("OpenRouter embeddings response was not JSON") from exc
+        return _parse_embeddings(data, expected=len(texts))
+
     async def stream(
         self,
         *,
@@ -331,6 +376,34 @@ class OpenRouterClient:
                         yield chunk
         except httpx.HTTPError as exc:
             raise LLMError(f"OpenRouter request failed: {exc}") from exc
+
+
+def _parse_embeddings(data: Any, *, expected: int) -> list[list[float]]:
+    """Vectors from an ``/embeddings`` reply, ordered by each entry's ``index``."""
+    items = data.get("data") if isinstance(data, dict) else None
+    if not isinstance(items, list):
+        raise LLMError(f"OpenRouter returned no embeddings: {str(data)[:300]}")
+    if len(items) != expected:
+        raise LLMError(f"OpenRouter returned {len(items)} embeddings for {expected} inputs")
+    ordered: list[list[float] | None] = [None] * expected
+    for position, item in enumerate(items):
+        if not isinstance(item, dict):
+            raise LLMError("OpenRouter returned a malformed embedding entry")
+        raw_index = item.get("index", position)
+        vector = item.get("embedding")
+        if (
+            not isinstance(raw_index, int)
+            or isinstance(raw_index, bool)
+            or not 0 <= raw_index < expected
+            or ordered[raw_index] is not None
+        ):
+            raise LLMError("OpenRouter returned an embedding with an invalid index")
+        if not isinstance(vector, list) or not all(
+            isinstance(v, (int, float)) and not isinstance(v, bool) for v in vector
+        ):
+            raise LLMError("OpenRouter returned a malformed embedding vector")
+        ordered[raw_index] = [float(v) for v in vector]
+    return [v for v in ordered if v is not None]
 
 
 def _parse_sse_delta(line: str) -> str:

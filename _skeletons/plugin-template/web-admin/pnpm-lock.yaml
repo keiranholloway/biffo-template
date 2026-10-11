@@ -16,8 +16,8 @@ importers:
   .:
     dependencies:
       '@biffo/design-tokens':
-        specifier: ^0.152.0
-        version: 0.152.0
+        specifier: ^0.427.0
+        version: 0.427.0
       amazon-cognito-identity-js:
         specifier: ^6.3.12
         version: 6.3.20
@@ -184,8 +184,9 @@ packages:
     resolution: {integrity: sha512-Vj1jF3cPfxg7OAfoI7QnVKLoILlm2JF9pnVHrX8qx7AHMiYWT+NDAA7jChlNgRS4WTLc/fD1lXLmPixluj+3Gg==}
     engines: {node: '>=6.9.0'}
 
-  '@biffo/design-tokens@0.152.0':
-    resolution: {integrity: sha512-GzlSKRqrvVudPuZGO0N/Ge/LcSjXD8+cXAlc/ge6wJHv9a0YOFtG6T21r3UnxJiGD5frwWGv2OSxZBCZ0M1l4w==}
+  '@biffo/design-tokens@0.427.0':
+    resolution: {integrity: sha512-3OjpF0hYAlg3k7ez/25LrkDVz+wgpx1mwaRhVkAtG0XEj0cfNhJ3In9Nk5XCh3JBy7HaIYn9tuILmXmIDYIS6w==}
+    hasBin: true
 
   '@bramus/specificity@2.4.2':
     resolution: {integrity: sha512-ctxtJ/eA+t+6q2++vj5j7FYX3nRu311q1wfYH3xjlLOsczhlhxAg2FWNUXhpGvAw3BWo1xBcvOV6/YLc2r5FJw==}
@@ -1711,7 +1712,7 @@ snapshots:
       '@babel/helper-string-parser': 7.29.7
       '@babel/helper-validator-identifier': 7.29.7
 
-  '@biffo/design-tokens@0.152.0': {}
+  '@biffo/design-tokens@0.427.0': {}
 
   '@bramus/specificity@2.4.2':
     dependencies:

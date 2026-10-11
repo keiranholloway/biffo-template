@@ -762,6 +762,8 @@ describe('OrchestrationPage', () => {
 
     render(<OrchestrationPage />)
     fireEvent.click(await screen.findByRole('button', { name: 'Delete' }))
+    expect(deleteWorkflow).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm delete' }))
 
     await waitFor(() => {
       expect(deleteWorkflow).toHaveBeenCalledWith(expect.anything(), 'wf1')

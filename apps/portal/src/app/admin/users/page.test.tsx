@@ -200,6 +200,8 @@ describe('UsersPage', () => {
 
     render(<UsersPage />)
     fireEvent.click(await screen.findByRole('button', { name: 'Suspend' }))
+    expect(suspendUser).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm suspend' }))
 
     await waitFor(() => {
       expect(suspendUser).toHaveBeenCalledWith(expect.anything(), 'alice@example.com')
@@ -224,6 +226,9 @@ describe('UsersPage', () => {
 
     render(<UsersPage />)
     fireEvent.click(await screen.findByRole('button', { name: 'Delete' }))
+    expect(deleteUser).not.toHaveBeenCalled()
+    expect(screen.getByText('Delete alice@example.com? This cannot be undone.')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm delete' }))
 
     await waitFor(() => {
       expect(deleteUser).toHaveBeenCalledWith(expect.anything(), 'alice@example.com')
@@ -251,6 +256,8 @@ describe('UsersPage', () => {
     fireEvent.click(
       await screen.findByRole('button', { name: 'Remove editor from alice@example.com' }),
     )
+    expect(removeGroup).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm remove editor' }))
 
     await waitFor(() => {
       expect(removeGroup).toHaveBeenCalledWith(expect.anything(), 'alice@example.com', 'editor')

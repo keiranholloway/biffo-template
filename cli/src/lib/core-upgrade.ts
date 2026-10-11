@@ -2,11 +2,14 @@ import { isUtf8 } from 'node:buffer'
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readlinkSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -82,6 +85,12 @@ export interface MergeEntry {
    * may re-derive a string from this Buffer, or the byte-for-byte guarantee
    * breaks the same way it did before the fix. */
   content?: string | Buffer
+  /**
+   * True when `content` is the target of a symlink the template ships (git
+   * mode 120000): the path must be written as a symlink to that target, not as
+   * a regular file holding it. Absent for regular files.
+   */
+  symlink?: boolean
   /**
    * True only for the subset of `keep-ours` entries produced when a
    * template-owned path exists SOLELY in the instance — no base, no theirs
@@ -196,11 +205,31 @@ export const gitMergeFile: MergeFileFn = async (base, ours, theirs) => {
 interface FileRead {
   buffer: Buffer
   text: string | null
+  /** True when the path is a symlink; `buffer` is then its target, unfollowed. */
+  link: boolean
 }
 
 function readFile(root: string, rel: string): FileRead {
-  const buffer = readFileSync(join(root, rel))
-  return { buffer, text: isUtf8(buffer) ? buffer.toString('utf8') : null }
+  const abs = join(root, rel)
+  // A symlink is read as its target string, never followed: that is exactly the
+  // blob git stores for mode 120000, and a dangling or relative link would
+  // otherwise throw or silently read some other file's bytes. `text` is null so
+  // a link is never routed through the text merge.
+  if (lstatSync(abs).isSymbolicLink()) {
+    return { buffer: Buffer.from(readlinkSync(abs), 'utf8'), text: null, link: true }
+  }
+  const buffer = readFileSync(abs)
+  return { buffer, text: isUtf8(buffer) ? buffer.toString('utf8') : null, link: false }
+}
+
+/** Same kind (link vs file) and same bytes. */
+function sameRead(a: FileRead, b: FileRead): boolean {
+  return a.link === b.link && a.buffer.equals(b.buffer)
+}
+
+/** `content` (+ `symlink`) of an entry resolved to `file`. */
+function payload(file: FileRead): { content: string | Buffer; symlink?: true } {
+  return file.link ? { content: file.buffer, symlink: true } : { content: contentOf(file) }
 }
 
 /** What to hand back as `MergeEntry.content`: the decoded string for text (so
@@ -635,12 +664,11 @@ async function classify(
   // Added upstream (not in base).
   if (!inBase && inTheirs) {
     const theirsFile = readFile(opts.theirsDir, path)
-    if (!inOurs) return { path, status: 'added', conflicted: false, content: contentOf(theirsFile) }
+    if (!inOurs) return { path, status: 'added', conflicted: false, ...payload(theirsFile) }
     const oursFile = readFile(opts.oursDir, path)
-    if (oursFile.buffer.equals(theirsFile.buffer))
-      return { path, status: 'unchanged', conflicted: false }
+    if (sameRead(oursFile, theirsFile)) return { path, status: 'unchanged', conflicted: false }
     // Both added the same path with different content.
-    return { path, status: 'add-conflict', conflicted: true, content: contentOf(theirsFile) }
+    return { path, status: 'add-conflict', conflicted: true, ...payload(theirsFile) }
   }
 
   // Removed upstream (in base, not in theirs).
@@ -648,8 +676,7 @@ async function classify(
     if (!inOurs) return { path, status: 'removed', conflicted: false } // already gone
     const baseFile = readFile(opts.baseDir, path)
     const oursFile = readFile(opts.oursDir, path)
-    if (oursFile.buffer.equals(baseFile.buffer))
-      return { path, status: 'removed', conflicted: false }
+    if (sameRead(oursFile, baseFile)) return { path, status: 'removed', conflicted: false }
     // Upstream deleted a file the instance had modified — needs a human.
     return { path, status: 'remove-conflict', conflicted: true }
   }
@@ -670,12 +697,12 @@ async function classify(
       noteDivergenceSkip(path)
       return { path, status: 'removed', conflicted: false }
     }
-    return { path, status: 'restored', conflicted: false, content: contentOf(theirsFile) }
+    return { path, status: 'restored', conflicted: false, ...payload(theirsFile) }
   }
 
   const oursFile = readFile(opts.oursDir, path)
-  const oursChanged = !oursFile.buffer.equals(baseFile.buffer)
-  const theirsChanged = !theirsFile.buffer.equals(baseFile.buffer)
+  const oursChanged = !sameRead(oursFile, baseFile)
+  const theirsChanged = !sameRead(theirsFile, baseFile)
 
   if (!theirsChanged) {
     // Upstream didn't touch it; keep whatever the instance has.
@@ -683,9 +710,9 @@ async function classify(
   }
   if (!oursChanged) {
     // Instance never diverged; fast-forward to theirs.
-    return { path, status: 'take-theirs', conflicted: false, content: contentOf(theirsFile) }
+    return { path, status: 'take-theirs', conflicted: false, ...payload(theirsFile) }
   }
-  if (oursFile.buffer.equals(theirsFile.buffer)) {
+  if (sameRead(oursFile, theirsFile)) {
     // Both made the identical change.
     return { path, status: 'unchanged', conflicted: false }
   }
@@ -700,12 +727,20 @@ async function classify(
   // `plan.conflicts` exactly like a text conflict, just without markers a
   // binary has no way to carry.
   if (baseFile.text === null || oursFile.text === null || theirsFile.text === null) {
-    return { path, status: 'conflict', conflicted: true, content: contentOf(theirsFile) }
+    return { path, status: 'conflict', conflicted: true, ...payload(theirsFile) }
   }
 
   // All three are text — the normal three-way merge.
   const { conflicted, content } = await mergeFile(baseFile.text, oursFile.text, theirsFile.text)
   return { path, status: conflicted ? 'conflict' : 'merged', conflicted, content }
+}
+
+function isSymlink(abs: string): boolean {
+  try {
+    return lstatSync(abs).isSymbolicLink()
+  } catch {
+    return false
+  }
 }
 
 export interface ApplyResult {
@@ -738,6 +773,14 @@ export function applyUpgradePlan(
     }
     if (e.content !== undefined) {
       mkdirSync(dirname(abs), { recursive: true })
+      // Never write through an existing symlink (it would clobber its target),
+      // and replace whatever is there when delivering one.
+      if (isSymlink(abs) || (e.symlink === true && existsSync(abs))) rmSync(abs)
+      if (e.symlink === true) {
+        symlinkSync(e.content.toString('utf8'), abs)
+        written.push(e.path)
+        continue
+      }
       writeFileSync(abs, e.content)
       // Mirror the executable bit from upstream. `writeFileSync` creates 0644,
       // so without this a shell script delivered by an upgrade arrives

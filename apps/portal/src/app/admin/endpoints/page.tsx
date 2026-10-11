@@ -12,6 +12,7 @@ import {
   fetchEndpointDetail,
   fetchEndpoints,
 } from '@/lib/endpoint-api'
+import { ASSIGNABLE_GROUPS, fetchGroups } from '@/lib/user-admin-api'
 
 const METHOD_COLOR: Record<string, string> = {
   GET: 'bg-sky-100 text-sky-700',
@@ -21,9 +22,9 @@ const METHOD_COLOR: Record<string, string> = {
   DELETE: 'bg-rose-100 text-rose-700',
 }
 
-// The baseline Cognito groups Terraform seeds (modules/cloud/aws/auth). Offered
-// as checkboxes; an empty selection means "any authenticated caller".
-const KNOWN_ROLES = ['admin', 'editor', 'viewer']
+// Roles are offered as checkboxes; an empty selection means "any authenticated
+// caller". The list is the live group list (same source as the Users page),
+// falling back to the baseline groups if it cannot be loaded.
 
 // Unique per mounted route — used as the React key and the expand/edit handle.
 function endpointKey(e: Endpoint): string {
@@ -83,6 +84,7 @@ export default function EndpointsPage() {
   const { getIdToken } = useAuth()
   const [endpoints, setEndpoints] = useState<Endpoint[] | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [knownRoles, setKnownRoles] = useState<string[]>([...ASSIGNABLE_GROUPS])
 
   // Expandable schema-detail state (one open at a time; results cached by key).
   const [expandedKey, setExpandedKey] = useState<string | null>(null)
@@ -134,6 +136,17 @@ export default function EndpointsPage() {
       return true
     })
   }, [endpoints, search, sourceFilter, methodFilter, roleFilter])
+
+  useEffect(() => {
+    Promise.resolve()
+      .then(() => fetchGroups(createApiClient(getIdToken)))
+      .then((res) => {
+        if (res.groups.length > 0) setKnownRoles(res.groups)
+      })
+      .catch(() => {
+        /* keep the fallback groups */
+      })
+  }, [getIdToken])
 
   const toggleExpand = useCallback(
     (e: Endpoint) => {
@@ -297,7 +310,7 @@ export default function EndpointsPage() {
               className="rounded border border-gray-300 px-2 py-1 text-sm font-normal text-gray-800"
             >
               <option value="all">Any role</option>
-              {KNOWN_ROLES.map((r) => (
+              {knownRoles.map((r) => (
                 <option key={r} value={r}>
                   {r}
                 </option>
@@ -408,7 +421,7 @@ export default function EndpointsPage() {
                             }}
                             className="rounded border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50"
                           >
-                            {editing ? 'Cancel' : 'Change'}
+                            Change
                           </button>
                         ) : (
                           <span className="text-xs text-gray-400">in code</span>
@@ -457,7 +470,10 @@ export default function EndpointsPage() {
                               <legend className="text-xs font-semibold uppercase tracking-wide text-gray-500">
                                 Required role (any of; none = any authenticated)
                               </legend>
-                              {KNOWN_ROLES.map((role) => (
+                              {[
+                                ...knownRoles,
+                                ...formRoles.filter((r) => !knownRoles.includes(r)),
+                              ].map((role) => (
                                 <label
                                   key={role}
                                   className="flex items-center gap-1.5 text-sm text-gray-700"

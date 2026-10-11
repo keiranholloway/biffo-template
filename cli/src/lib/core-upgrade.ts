@@ -214,9 +214,12 @@ function readFile(root: string, rel: string): FileRead {
   // A symlink is read as its target string, never followed: that is exactly the
   // blob git stores for mode 120000, and a dangling or relative link would
   // otherwise throw or silently read some other file's bytes. `text` is null so
-  // a link is never routed through the text merge.
-  if (lstatSync(abs).isSymbolicLink()) {
+  // a link is never routed through the text merge. `readlink` is tried first
+  // (EINVAL = not a link) so there is no lstat-then-read window.
+  try {
     return { buffer: Buffer.from(readlinkSync(abs), 'utf8'), text: null, link: true }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'EINVAL') throw err
   }
   const buffer = readFileSync(abs)
   return { buffer, text: isUtf8(buffer) ? buffer.toString('utf8') : null, link: false }

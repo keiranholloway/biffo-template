@@ -38,6 +38,12 @@ describe('PluginDetailPageClient', () => {
     expect(screen.queryByTestId('installed-detail')).not.toBeInTheDocument()
   })
 
+  it('renders no heading of its own', () => {
+    useSearchParamsMock.mockReturnValue(searchParamsFrom('source=installed&name=rbac'))
+    render(<PluginDetailPageClient />)
+    expect(screen.queryByRole('heading')).not.toBeInTheDocument()
+  })
+
   it('defaults to marketplace when source is absent', () => {
     useSearchParamsMock.mockReturnValue(searchParamsFrom('name=analytics'))
     render(<PluginDetailPageClient />)

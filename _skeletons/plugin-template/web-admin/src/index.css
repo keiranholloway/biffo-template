@@ -1,7 +1,9 @@
-/* Shares the design tokens the rest of the estate uses so a plugin admin panel
-   does not become its own brand blue (the drift @biffo/design-tokens was
-   created to end). */
+/* Look comes from the shared kit (#2495): headings, buttons, delete, status
+   badges and the in-page confirm are the kit's classes. Do not add local
+   colour, font, heading or button overrides here; change the kit instead.
+   tokens.css must load before kit.css. */
 @import '@biffo/design-tokens/tokens.css';
+@import '@biffo/design-tokens/kit.css';
 
 * {
   box-sizing: border-box;
@@ -9,32 +11,23 @@
 
 body {
   margin: 0;
-  font-family: var(--font-sans, system-ui, sans-serif);
-  color: var(--text, #1b1c1f);
-  background: var(--bg, #f7f8fa);
 }
 
-.page {
-  max-width: 60rem;
-  margin: 0 auto;
+/* Layout only. */
+.layout {
+  min-height: 100vh;
   padding: 2rem 1.5rem 4rem;
 }
 
-h1 {
-  font-size: 1.55rem;
-  margin: 0 0 0.35rem;
+.layout > * {
+  max-width: 80rem;
+  margin-left: auto;
+  margin-right: auto;
 }
 
-.muted {
-  color: var(--text-muted, #5b6070);
-  font-size: 0.9rem;
-  margin: 0 0 1.25rem;
-}
-
-.error {
-  background: var(--state-negative-soft, #fdeaea);
-  color: var(--state-negative, #8c2b2b);
-  padding: 0.6rem 0.8rem;
-  border-radius: 6px;
-  font-size: 0.9rem;
+.row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0.75rem auto;
 }

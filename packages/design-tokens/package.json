@@ -13,6 +13,11 @@
   ],
   "exports": {
     "./tokens.css": "./tokens.css",
+    "./kit.css": "./kit.css",
+    "./status.mjs": {
+      "types": "./status.d.mts",
+      "default": "./status.mjs"
+    },
     "./package.json": "./package.json"
   },
   "bin": {
@@ -20,6 +25,9 @@
   },
   "files": [
     "tokens.css",
+    "kit.css",
+    "status.mjs",
+    "status.d.mts",
     "bin/scale-guard.mjs",
     "bin/scale-guard-lib.mjs"
   ],

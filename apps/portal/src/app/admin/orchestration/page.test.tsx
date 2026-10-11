@@ -932,7 +932,7 @@ describe('OrchestrationPage', () => {
     const observed = Array.from(select.querySelectorAll('option')).find(
       (o) => o.value === 'tabsii.billing|invoice.paid',
     )
-    expect(observed?.textContent).toBe('invoice.paid (observed)')
+    expect(observed?.textContent).toBe('Invoice paid (observed)')
     expect(observed?.title).toBe('Seen on the event bus.')
   })
 

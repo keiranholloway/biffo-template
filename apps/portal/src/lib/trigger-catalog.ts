@@ -91,5 +91,17 @@ export function groupTriggersBySource(triggers: CatalogTrigger[]): TriggerGroup[
  * select for whichever trigger is currently selected.
  */
 export function optionLabel(trigger: CatalogTrigger): string {
-  return originOf(trigger) === 'observed' ? `${trigger.label} (observed)` : trigger.label
+  const label = humanTriggerLabel(trigger.label)
+  return originOf(trigger) === 'observed' ? `${label} (observed)` : label
+}
+
+/**
+ * An observed trigger has no catalogue label, so Core falls back to its raw
+ * event key (`orchestration.runs.reap_due`). Turn such an identifier into
+ * words; any label that already reads as words is returned untouched.
+ */
+export function humanTriggerLabel(label: string): string {
+  if (!/^[A-Za-z0-9_.:/-]+$/.test(label) || !/[._]/.test(label)) return label
+  const words = label.replace(/[._:/-]+/g, ' ').trim()
+  return words === '' ? label : words.charAt(0).toUpperCase() + words.slice(1)
 }

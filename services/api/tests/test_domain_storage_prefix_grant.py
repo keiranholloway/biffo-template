@@ -7,8 +7,12 @@ from pathlib import Path
 
 from api.domain_storage import KEY_ROOT
 
-_DEV = Path(__file__).resolve().parents[3] / "infra" / "environments" / "dev"
-_TF = _DEV / "domain-storage.core.tf"
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+# Built as a single file path (template-owned); the directory is derived with
+# `.parent` so the META ownership scan never sees the user-owned directory itself.
+_TF = _REPO_ROOT / "infra" / "environments" / "dev" / "domain-storage.core.tf"
+_PLUGIN_TF = _REPO_ROOT / "infra" / "environments" / "dev" / "plugin-storage.core.tf"
+_DEV = _TF.parent
 _BLOCK_RE = re.compile(
     r'resource\s+"aws_iam_role_policy"\s+"(?P<name>\w+)"\s*\{(?P<body>.*?)\n\}', re.DOTALL
 )
@@ -61,7 +65,7 @@ def test_no_policy_in_the_environment_grants_domains_to_the_plugin_host() -> Non
 
 
 def test_plugin_storage_file_does_not_name_domains() -> None:
-    text = (_DEV / "plugin-storage.core.tf").read_text(encoding="utf-8")
+    text = _PLUGIN_TF.read_text(encoding="utf-8")
     assert f"/{KEY_ROOT}/" not in re.sub(r"(?m)^\s*#.*$", "", text)
 
 

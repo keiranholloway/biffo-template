@@ -85,6 +85,16 @@ export function derivePluginAdminHref(name: string): string {
  * label degrades to a slightly-off word, not a broken link — falling back
  * to the plugin's `name`.
  */
+/**
+ * Turn a plugin slug (`idea-scout`) into readable title case (`Idea Scout`)
+ * for use when the manifest declares no label.
+ */
+export function humanizePluginName(name: string): string {
+  const words = name.split(/[-_\s]+/).filter((w) => w !== '')
+  if (words.length === 0) return name
+  return words.map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
+}
+
 export function resolvePluginNavLinks(
   plugins: readonly unknown[] | undefined,
   callerGroups: readonly string[] | undefined,
@@ -110,7 +120,8 @@ export function resolvePluginNavLinks(
     const declaredLabel = entry.admin_nav_label?.trim()
     resolved.push({
       href,
-      label: declaredLabel != null && declaredLabel !== '' ? declaredLabel : name,
+      label:
+        declaredLabel != null && declaredLabel !== '' ? declaredLabel : humanizePluginName(name),
     })
   }
   return resolved

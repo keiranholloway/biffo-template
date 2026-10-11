@@ -130,3 +130,34 @@ def test_lambda_handler_unknown_job_raises_not_http():
 
     with pytest.raises(jobs.UnknownJobError):
         main.lambda_handler({"source": "biffo:domain-job", "job": "ghost", "payload": {}}, _CTX)
+
+
+def test_async_handler_runs_outside_a_loop():
+    seen: list[dict] = []
+
+    async def handler(p: dict) -> None:
+        seen.append(p)
+
+    jobs.register_job("demo", handler)
+    assert jobs.run_domain_job({"job": "demo", "payload": {"a": 1}})["status"] == "completed"
+    assert seen == [{"a": 1}]
+
+
+@pytest.mark.filterwarnings("ignore:coroutine .* was never awaited:RuntimeWarning")
+async def test_async_handler_refused_inside_running_loop():
+    async def handler(p: dict) -> None:
+        return None
+
+    jobs.register_job("demo", handler)
+    with pytest.raises(RuntimeError, match="running loop"):
+        jobs.run_domain_job({"job": "demo", "payload": {}})
+
+
+async def test_dispatch_failure_is_logged_not_raised():
+    def boom(p: dict) -> None:
+        raise ValueError("handler failed")
+
+    jobs.register_job("demo", boom)
+    db = _FakeSession()
+    jobs.enqueue_job(cast(AsyncSession, db), "demo", {})
+    assert await jobs.dispatch_pending_jobs(cast(AsyncSession, db)) == 0

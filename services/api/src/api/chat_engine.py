@@ -42,6 +42,13 @@ ASSISTANT = "assistant"
 #: Mirrors ``agent_runtime.chat_turn.CHAT_TURN_KIND`` — keep in step.
 CHAT_TURN_KIND = "agent.chat.turn"
 
+#: Discriminator for the synchronous embed invoke. Mirrors
+#: ``agent_runtime.embed.EMBED_KIND`` — keep in step.
+EMBED_KIND = "agent.embed"
+
+#: Most texts sent in one embed invoke. The runtime enforces the same ceiling.
+EMBED_MAX_BATCH = 64
+
 #: Fence markers around untrusted content — identical to
 #: ``agent_runtime.messages.UNTRUSTED_OPEN`` / ``UNTRUSTED_CLOSE``. Core cannot
 #: import that plugin module (separate package), so the correspondence is by
@@ -162,6 +169,10 @@ class RuntimeInvocationError(RuntimeError):
     """The runtime Lambda could not be invoked, or returned an unusable reply."""
 
 
+class EmbeddingError(RuntimeInvocationError):
+    """An embedding request failed (provider error, bad reply or unusable invoke)."""
+
+
 class RuntimeInvoker(Protocol):
     """Synchronously invokes the agent runtime for one chat turn and returns its reply."""
 
@@ -186,10 +197,6 @@ class LambdaRuntimeInvoker:
     def invoke_chat_turn(
         self, *, model: str, messages: list[Message], max_output_tokens: int, timeout_seconds: float
     ) -> ChatTurnResult:
-        if self._client is None:
-            import boto3
-
-            self._client = boto3.client("lambda")
         payload = {
             "kind": CHAT_TURN_KIND,
             "model": model,
@@ -197,6 +204,50 @@ class LambdaRuntimeInvoker:
             "max_output_tokens": max_output_tokens,
             "timeout_seconds": timeout_seconds,
         }
+        return _result_from_payload(self._invoke(payload, what="a chat turn"))
+
+    def invoke_embed(
+        self,
+        *,
+        model: str,
+        texts: list[str],
+        dimensions: int | None = None,
+        timeout_seconds: float = 25.0,
+    ) -> list[list[float]]:
+        """One synchronous embed invoke; vectors come back in input order.
+
+        Raises :class:`EmbeddingError` on any failure.
+        """
+        payload: dict[str, Any] = {
+            "kind": EMBED_KIND,
+            "model": model,
+            "texts": texts,
+            "timeout_seconds": timeout_seconds,
+        }
+        if dimensions is not None:
+            payload["dimensions"] = dimensions
+        try:
+            result = self._invoke(payload, what="an embed request")
+        except RuntimeInvocationError as exc:
+            raise EmbeddingError(str(exc)) from exc
+        if not isinstance(result, dict):
+            raise EmbeddingError("the agent runtime returned an unexpected reply")
+        if not result.get("ok"):
+            raise EmbeddingError(str(result.get("error") or "the agent runtime embed failed"))
+        vectors = result.get("embeddings")
+        if (
+            not isinstance(vectors, list)
+            or len(vectors) != len(texts)
+            or not all(isinstance(v, list) for v in vectors)
+        ):
+            raise EmbeddingError("the agent runtime returned a malformed embedding reply")
+        return vectors
+
+    def _invoke(self, payload: dict[str, Any], *, what: str) -> Any:
+        if self._client is None:
+            import boto3
+
+            self._client = boto3.client("lambda")
         response = self._client.invoke(
             FunctionName=self._function_name,
             InvocationType="RequestResponse",
@@ -204,16 +255,51 @@ class LambdaRuntimeInvoker:
         )
         if response.get("FunctionError"):
             logger.error(
-                "Agent runtime returned an unhandled error on a chat turn",
+                f"Agent runtime returned an unhandled error on {what}",
                 extra={"function_error": response["FunctionError"]},
             )
             raise RuntimeInvocationError("the agent runtime failed to process the turn")
         body = response["Payload"].read()
         try:
-            result = json.loads(body)
+            return json.loads(body)
         except (ValueError, TypeError) as exc:
             raise RuntimeInvocationError("the agent runtime returned an unreadable reply") from exc
-        return _result_from_payload(result)
+
+
+def embed_texts(
+    texts: list[str],
+    model: str,
+    dimensions: int | None = None,
+    *,
+    invoker: Any = None,
+    function_name: str | None = None,
+) -> list[list[float]]:
+    """Embed *texts* through the agent runtime; vectors are returned in input order.
+
+    Calls are made synchronously, at most :data:`EMBED_MAX_BATCH` texts each.
+    Core never holds a provider credential — the runtime does. Any failure raises
+    :class:`EmbeddingError` (catchable as :class:`RuntimeInvocationError`).
+    *invoker* (anything with ``invoke_embed``) is injectable for tests; otherwise
+    a :class:`LambdaRuntimeInvoker` is built from the configured function name.
+    """
+    if not texts:
+        return []
+    if invoker is None:
+        if function_name is None:
+            from .config import settings
+
+            function_name = settings.agent_runtime_function_name
+        if not function_name:
+            raise EmbeddingError("the agent runtime is not configured on this deployment")
+        invoker = LambdaRuntimeInvoker(function_name)
+    vectors: list[list[float]] = []
+    for start in range(0, len(texts), EMBED_MAX_BATCH):
+        batch = texts[start : start + EMBED_MAX_BATCH]
+        got = invoker.invoke_embed(model=model, texts=batch, dimensions=dimensions)
+        if len(got) != len(batch):
+            raise EmbeddingError("the agent runtime returned the wrong number of embeddings")
+        vectors.extend(got)
+    return vectors
 
 
 def _result_from_payload(result: Any) -> ChatTurnResult:

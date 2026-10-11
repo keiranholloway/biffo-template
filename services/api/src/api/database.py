@@ -269,3 +269,8 @@ async def get_db() -> AsyncGenerator[AsyncSession]:
             from .events.emit import publish_pending
 
             await publish_pending(session)
+
+            # Background jobs, same discipline (ADR-0030).
+            from .domain_jobs import dispatch_pending_jobs
+
+            await dispatch_pending_jobs(session)

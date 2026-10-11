@@ -37,9 +37,41 @@
 // its own response — so the real JSON the API returned is untouched end to
 // end. This function only ever reads/writes `status` and one header.
 //
+//
+// SECOND JOB — an unknown address under /admin/ (portal not-found). The
+// portal's `admin` and `admin/*` behaviours carry this same pair. A missing
+// portal PAGE would otherwise be a 403/404 from S3, which the distribution-wide
+// `custom_error_response` answers with the ROOT sibling's /index.html — for a
+// signed-in admin who mistyped an address, the public marketing home page with
+// a "Sign in" header, at an /admin/ URL. CloudFront cannot scope that fallback
+// per path, so here, on an origin 403/404 for a page document under /admin/
+// (the request URI has already been rewritten by rewrite.js to
+// `/admin/<route>/index.html`), the response is turned into a 302 to /admin/.
+// 302 is outside custom_error_response's range, so it is delivered as-is.
+// `/admin/index.html` itself is excluded (a redirect there would loop), and so
+// is anything that is not a page document (`_next` assets, `index.txt` RSC
+// payloads), which keep the demote/restore behaviour below.
+function isAdminPageDocument(uri) {
+  if (typeof uri !== 'string') return false
+  return uri.startsWith('/admin/') && uri.endsWith('/index.html') && uri !== '/admin/index.html'
+}
+
 exports.handler = (event, context, callback) => {
-  const response = event.Records[0].cf.response
+  const cf = event.Records[0].cf
+  const response = cf.response
   const status = response.status
+  // The request is consulted ONLY by isAdminPageDocument (a fixed /admin/
+  // prefix check) — never to branch on a tracked-link token under c/*.
+  const uri = cf.request ? cf.request.uri : undefined
+
+  if ((status === '403' || status === '404') && isAdminPageDocument(uri)) {
+    response.status = '302'
+    response.statusDescription = 'Found'
+    response.headers['location'] = [{ key: 'Location', value: '/admin/' }]
+    response.headers['cache-control'] = [{ key: 'Cache-Control', value: 'no-store' }]
+    callback(null, response)
+    return
+  }
 
   if (status === '403' || status === '404') {
     response.headers['x-biffo-true-status'] = [{ key: 'X-Biffo-True-Status', value: status }]

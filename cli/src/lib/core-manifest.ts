@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, readFileSync, readdirSync, readlinkSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, readlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -448,13 +448,27 @@ export interface CoreDiff {
   entries: CoreDiffEntry[]
 }
 
+/**
+ * The link target when `path` is a symlink, else null. Tries `readlink` first
+ * and treats EINVAL ("not a link") as the answer, so there is no stat-then-use
+ * window (CodeQL js/file-system-race). Any other error (e.g. ENOENT) propagates.
+ */
+function readLinkTarget(path: string): string | null {
+  try {
+    return readlinkSync(path)
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'EINVAL') return null
+    throw err
+  }
+}
+
 function sameFile(a: string, b: string): boolean {
   // Read both and compare buffers directly — no stat-then-read (that's a
   // check-then-use race, CodeQL js/file-system-race). Core-owned files are
   // source-sized, so reading both in full is cheap.
-  const la = lstatSync(a).isSymbolicLink()
-  const lb = lstatSync(b).isSymbolicLink()
-  if (la || lb) return la && lb && readlinkSync(a) === readlinkSync(b)
+  const ta = readLinkTarget(a)
+  const tb = readLinkTarget(b)
+  if (ta !== null || tb !== null) return ta === tb
   return readFileSync(a).equals(readFileSync(b))
 }
 

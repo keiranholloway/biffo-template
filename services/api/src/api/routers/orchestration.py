@@ -756,6 +756,7 @@ async def list_workflow_runs(
         None, alias="status", description=f"One of: {', '.join(RUN_STATUSES)}."
     ),
     limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     caller: AuthenticatedUser = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ) -> list[WorkflowRunSummary]:
@@ -778,5 +779,6 @@ async def list_workflow_runs(
         definition_id=definition_id,
         status=run_status,
         limit=limit,
+        offset=offset,
     )
     return [_run_summary(item) for item in runs]

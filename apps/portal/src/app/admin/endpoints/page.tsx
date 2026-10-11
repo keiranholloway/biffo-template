@@ -35,7 +35,7 @@ const SUMMARY_MAX = 90
 
 // One-line row summary: first line / sentence of the description, capped in length.
 // The full text is shown when the row is expanded.
-export function shortSummary(text: string): string {
+function shortSummary(text: string): string {
   const firstLine = text.trim().split('\n')[0] ?? ''
   const sentence = /^.*?[.!?](?=\s|$)/.exec(firstLine)?.[0] ?? firstLine
   if (sentence.length <= SUMMARY_MAX) return sentence

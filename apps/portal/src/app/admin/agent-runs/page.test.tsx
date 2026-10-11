@@ -80,7 +80,24 @@ describe('AgentRunsPage', () => {
       expect(fetchAgentRuns).toHaveBeenLastCalledWith(expect.anything(), {
         agent_name: 'demo-enricher',
         status: 'failed',
+        limit: 51,
+        offset: 0,
       })
+    })
+  })
+
+  it('says the list is partial and loads older runs', async () => {
+    const page = Array.from({ length: 51 }, (_, i) => ({ ...run, id: `r${String(i)}` }))
+    fetchAgentRuns.mockResolvedValueOnce(page)
+    fetchAgentRuns.mockResolvedValueOnce([{ ...run, id: 'older' }])
+    render(<AgentRunsPage />)
+    expect(await screen.findByText(/Showing the newest 50 runs/)).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Load older runs' }))
+    expect(await screen.findByText('Showing all 51 runs')).toBeInTheDocument()
+    expect(fetchAgentRuns).toHaveBeenLastCalledWith(expect.anything(), {
+      limit: 51,
+      offset: 50,
     })
   })
 })

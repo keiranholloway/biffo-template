@@ -29,6 +29,9 @@ const statusClass: Record<string, string> = {
 // Mirrors AGENT_RUN_STATUSES in services/api/src/api/models/agent_run.py.
 const STATUSES = ['pending', 'running', 'completed', 'failed'] as const
 
+/** Rows per page. One extra row is requested so "more exist" is exact. */
+const PAGE_SIZE = 50
+
 const inputClass = 'mt-1 rounded border px-2 py-1 text-sm'
 
 /** The detail route is a single statically-generated placeholder page; the run
@@ -49,17 +52,23 @@ export default function AgentRunsPage() {
   const [error, setError] = useState<string | null>(null)
   const [agentName, setAgentName] = useState('')
   const [status, setStatus] = useState('')
+  const [appliedFilters, setAppliedFilters] = useState<AgentRunFilters>({})
+  const [hasMore, setHasMore] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
 
   const reload = useCallback(
     async (filters: AgentRunFilters) => {
       setRuns(null)
       setCosts(null)
+      setHasMore(false)
+      setAppliedFilters(filters)
       try {
         const [rows, costData] = await Promise.all([
-          fetchAgentRuns(client, filters),
+          fetchAgentRuns(client, { ...filters, limit: PAGE_SIZE + 1, offset: 0 }),
           fetchAgentRunCosts(client, { agent_name: filters.agent_name }),
         ])
-        setRuns(rows)
+        setHasMore(rows.length > PAGE_SIZE)
+        setRuns(rows.slice(0, PAGE_SIZE))
         setCosts(costData)
         setError(null)
       } catch (err: unknown) {
@@ -72,6 +81,25 @@ export default function AgentRunsPage() {
   useEffect(() => {
     void reload({})
   }, [reload])
+
+  async function loadMore() {
+    if (runs == null) return
+    setLoadingMore(true)
+    try {
+      const rows = await fetchAgentRuns(client, {
+        ...appliedFilters,
+        limit: PAGE_SIZE + 1,
+        offset: runs.length,
+      })
+      setHasMore(rows.length > PAGE_SIZE)
+      setRuns([...runs, ...rows.slice(0, PAGE_SIZE)])
+      setError(null)
+    } catch (err: unknown) {
+      setError(errorMessage(err))
+    } finally {
+      setLoadingMore(false)
+    }
+  }
 
   function applyFilters() {
     void reload({
@@ -247,6 +275,28 @@ export default function AgentRunsPage() {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {runs != null && runs.length > 0 && (
+        <div className="mt-3 flex items-center gap-3 text-sm text-gray-600">
+          <span>
+            {hasMore
+              ? `Showing the newest ${String(runs.length)} runs — older runs exist`
+              : `Showing all ${String(runs.length)} runs`}
+          </span>
+          {hasMore && (
+            <button
+              type="button"
+              disabled={loadingMore}
+              onClick={() => {
+                void loadMore()
+              }}
+              className="rounded border px-3 py-1 text-sm font-medium text-gray-800 disabled:opacity-50"
+            >
+              {loadingMore ? 'Loading…' : 'Load older runs'}
+            </button>
+          )}
         </div>
       )}
     </div>

@@ -136,3 +136,29 @@ module "core_api" {
   }, local.core_api_instance_environment, var.core_api_extra_environment)
   tags = local.tags
 }
+
+# Background jobs for product domains (ADR-0030): Core invokes ITSELF
+# asynchronously (InvocationType=Event) to run `biffo:domain-job` work off the
+# request path. The ARN is built from the compute module's naming convention
+# (<project>-<env>-<function>) rather than module.core_api.function_arn, which
+# would make the role policy depend on the module whose role it attaches to
+# and so create a dependency cycle.
+resource "aws_iam_role_policy" "core_api_self_invoke" {
+  name = "domain-jobs-self-invoke"
+  role = module.core_api.role_name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "InvokeSelfForDomainJobs"
+        Effect = "Allow"
+        Action = ["lambda:InvokeFunction"]
+        Resource = [
+          "arn:aws:lambda:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:function:${var.project_name}-${local.environment}-core-api",
+          "arn:aws:lambda:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:function:${var.project_name}-${local.environment}-core-api:*",
+        ]
+      },
+    ]
+  })
+}

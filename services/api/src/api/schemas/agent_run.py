@@ -152,6 +152,9 @@ class AgentRunSummary(BiffoBaseSchema):
     # Same reason as on the full response: a persisted preview must be labellable
     # in the list, not just on the detail page (#726).
     dry_run: bool = False
+    #: The failure text, bounded for a list row (the full text is on the detail
+    #: response). ``None`` for a run that did not fail.
+    error: str | None = None
     input_tokens: int | None = None
     output_tokens: int | None = None
     cost_usd: float | None = None

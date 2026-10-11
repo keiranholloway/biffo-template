@@ -1,6 +1,7 @@
 'use client'
 
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
+import { ConfirmButton } from '@/components/ConfirmButton'
 import { useAuth } from '@/context/auth-context'
 import { createApiClient } from '@/lib/api-client'
 import {
@@ -596,18 +597,19 @@ function GroupChips({
             className="flex items-center gap-1 rounded bg-gray-100 px-1.5 py-0.5 font-mono text-xs text-gray-700"
           >
             {group}
-            <button
-              type="button"
-              aria-label={`Remove ${group} from ${user.email}`}
+            <ConfirmButton
+              ariaLabel={`Remove ${group} from ${user.email}`}
               disabled={removeDisabled}
               title={removeDisabled ? "You can't remove yourself from this group" : undefined}
-              onClick={() => {
+              prompt={`Remove ${group} from ${user.email}?`}
+              confirmLabel={`Confirm remove ${group}`}
+              onConfirm={() => {
                 onRemove(group)
               }}
               className="text-gray-400 hover:text-gray-700 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:text-gray-400"
             >
               ×
-            </button>
+            </ConfirmButton>
           </span>
         )
       })}
@@ -831,17 +833,18 @@ export default function UsersPage() {
                       <td className="px-4 py-2">
                         <div className="flex justify-end gap-2">
                           {user.enabled ? (
-                            <button
-                              type="button"
+                            <ConfirmButton
                               disabled={isSelf}
                               title={isSelf ? "You can't suspend your own account" : undefined}
-                              onClick={() => {
+                              prompt={`Suspend ${user.email || user.username}? They will be unable to sign in.`}
+                              confirmLabel="Confirm suspend"
+                              onConfirm={() => {
                                 void run(() => suspendUser(client, user.username))
                               }}
                               className="rounded border px-2 py-1 text-xs text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
                             >
                               Suspend
-                            </button>
+                            </ConfirmButton>
                           ) : (
                             <button
                               type="button"
@@ -853,17 +856,18 @@ export default function UsersPage() {
                               Reactivate
                             </button>
                           )}
-                          <button
-                            type="button"
+                          <ConfirmButton
                             disabled={isSelf}
                             title={isSelf ? "You can't delete your own account" : undefined}
-                            onClick={() => {
+                            prompt={`Delete ${user.email || user.username}? This cannot be undone.`}
+                            confirmLabel="Confirm delete"
+                            onConfirm={() => {
                               void run(() => deleteUser(client, user.username))
                             }}
                             className="rounded border border-rose-200 px-2 py-1 text-xs text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
                           >
                             Delete
-                          </button>
+                          </ConfirmButton>
                           <button
                             type="button"
                             onClick={() => {

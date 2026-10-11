@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { formatCost, formatDuration, formatMeanCost, formatWhen } from './agent-runs-format'
+import {
+  formatCost,
+  formatDuration,
+  formatMeanCost,
+  formatWhen,
+  splitUrls,
+  summarizeRunError,
+} from './agent-runs-format'
 
 describe('formatDuration', () => {
   it('renders sub-second, second, minute and null cases', () => {
@@ -46,5 +53,30 @@ describe('formatWhen', () => {
     expect(formatWhen('2026-10-11T07:21:51')).toBe('11 Oct 2026, 07:21:51')
     expect(formatWhen(null)).toBe('—')
     expect(formatWhen('nope')).toBe('—')
+  })
+})
+
+describe('summarizeRunError', () => {
+  const raw =
+    'LLM call failed on turn 1: OpenRouter returned 402: {"error":{"message":"Insufficient credits. Add more using https://openrouter.ai/settings/credits","code":402}}'
+  it('extracts the upstream message', () => {
+    expect(summarizeRunError(raw)).toBe('OpenRouter 402: Insufficient credits.')
+  })
+  it('handles truncated JSON', () => {
+    expect(summarizeRunError(raw.slice(0, 120))).toBe('OpenRouter 402: Insufficient credits.')
+  })
+  it('falls back to plain text and null', () => {
+    expect(summarizeRunError('boom')).toBe('boom')
+    expect(summarizeRunError(null)).toBeNull()
+  })
+})
+
+describe('splitUrls', () => {
+  it('separates urls', () => {
+    expect(splitUrls('see https://a.io/x. ok')).toEqual([
+      { url: false, text: 'see ' },
+      { url: true, text: 'https://a.io/x' },
+      { url: false, text: '. ok' },
+    ])
   })
 })

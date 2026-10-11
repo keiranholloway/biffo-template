@@ -1,0 +1,152 @@
+/**
+ * Biffo admin UI kit — the shared look for the portal and for plugin admin
+ * panels, so a panel opened from the portal reads as part of it (#2495).
+ *
+ *     import '@biffo/design-tokens/tokens.css'
+ *     import '@biffo/design-tokens/kit.css'
+ *
+ * Built only from the tokens in tokens.css (every colour is a `var(--…)`), so
+ * a token change reaches the kit too. tokens.css must be loaded first.
+ *
+ * Matches the portal's current look: near-black primary button, outline
+ * "delete" button in the negative (rose) tone, 24px bold page heading, and the
+ * `ui-sans-serif, system-ui` font stack.
+ *
+ * CLASSES
+ *   .biffo-kit            optional wrapper/body class: font stack, text colour
+ *   .biffo-heading        page heading (use on the page's h1)
+ *   .biffo-btn-primary    primary action, near-black fill
+ *   .biffo-btn-delete     outline destructive action
+ *   .biffo-badge          status badge; add one modifier:
+ *                         .biffo-badge--positive | --caution | --negative
+ *   .biffo-confirm        in-page confirm row (replaces window.confirm):
+ *                         <span class="biffo-confirm">
+ *                           <span class="biffo-confirm__prompt">Delete this agent?</span>
+ *                           <button class="biffo-btn-delete biffo-confirm__yes">Delete</button>
+ *                           <button class="biffo-confirm__no">Cancel</button>
+ *                         </span>
+ *
+ * STATUS WORDING
+ *   One canonical wording and casing: Title case ("Active", "Enabled",
+ *   "Disabled", …). Never "ACTIVE" or "enabled". Rendering the stored value
+ *   through `statusLabel()` from '@biffo/design-tokens/status.mjs' gives it;
+ *   the CSS `text-transform: none` on .biffo-badge stops a stylesheet
+ *   upper-casing it. `statusTone()` returns the matching badge modifier.
+ */
+
+.biffo-kit {
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  color: var(--text);
+  background: var(--bg);
+}
+
+.biffo-heading {
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1.25;
+  color: var(--text);
+  margin: 0 0 1rem;
+}
+
+.biffo-btn-primary,
+.biffo-btn-delete,
+.biffo-confirm__no {
+  font-family: inherit;
+  font-size: 0.875rem;
+  font-weight: 500;
+  line-height: 1.25rem;
+  padding: 0.375rem 0.75rem;
+  border-radius: 0.25rem;
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+
+.biffo-btn-primary {
+  background: var(--text);
+  border-color: var(--text);
+  color: var(--text-invert);
+}
+
+.biffo-btn-primary:hover:not(:disabled) {
+  background: var(--ink);
+}
+
+.biffo-btn-delete {
+  background: var(--bg);
+  border-color: var(--state-negative);
+  color: var(--state-negative);
+}
+
+.biffo-btn-delete:hover:not(:disabled) {
+  background: var(--state-negative-soft);
+}
+
+.biffo-confirm__no {
+  background: var(--bg);
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.biffo-btn-primary:disabled,
+.biffo-btn-delete:disabled,
+.biffo-confirm__no:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.biffo-btn-primary:focus-visible,
+.biffo-btn-delete:focus-visible,
+.biffo-confirm__no:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+.biffo-badge {
+  display: inline-block;
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1rem;
+  padding: 0.125rem 0.5rem;
+  border-radius: var(--radius-lg);
+  text-transform: none;
+  background: var(--bg-subtle);
+  color: var(--text-muted);
+}
+
+.biffo-badge--positive {
+  background: var(--state-positive-soft);
+  color: var(--state-positive);
+}
+
+.biffo-badge--caution {
+  background: var(--state-caution-soft);
+  color: var(--state-caution);
+}
+
+.biffo-badge--negative {
+  background: var(--state-negative-soft);
+  color: var(--state-negative);
+}
+
+.biffo-confirm {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.biffo-confirm__prompt {
+  font-size: 0.75rem;
+  color: var(--state-negative);
+}
+
+.biffo-confirm__yes {
+  background: var(--state-negative);
+  border-color: var(--state-negative);
+  color: var(--text-invert);
+}
+
+.biffo-confirm__yes:hover:not(:disabled) {
+  background: var(--state-negative);
+  opacity: 0.9;
+}

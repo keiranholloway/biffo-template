@@ -34,6 +34,7 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from biffo_plugin_sdk import create_event_handler
 
 from .chat_turn import is_chat_turn, run_chat_turn
+from .embed import is_embed, run_embed
 from .openrouter import OpenRouterClient
 from .plugin import AgentRuntimePlugin
 
@@ -92,6 +93,10 @@ def handler(event: dict, context: LambdaContext) -> dict:
     # Returns the reply payload directly; never reaches the EventBridge path.
     if is_chat_turn(event):
         return loop.run_until_complete(run_chat_turn(event, llm=_get_llm()))
+
+    # Synchronous embedding request — same direct-invoke seam, no Core or DB.
+    if is_embed(event):
+        return loop.run_until_complete(run_embed(event, llm=_get_llm()))
 
     biffo_event = create_event_handler(event)
     plugin = _get_plugin()

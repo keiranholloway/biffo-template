@@ -353,6 +353,14 @@ def lambda_handler(event: dict, context: LambdaContext) -> dict:
         from .plugin_baseline_check import assert_plugin_baselines_populated
 
         return assert_plugin_baselines_populated()
+    if event.get("source") == "biffo:domain-job":
+        # Background job enqueued by a product domain (ADR-0030). Dispatched
+        # before the HTTP handler so an unknown job fails loudly instead of
+        # being treated as a malformed API Gateway event.
+        from .domain_jobs import run_domain_job
+
+        _ensure_event_loop()
+        return run_domain_job(event)
     _ensure_event_loop()
     return handler(event, context)  # type: ignore[reportArgumentType]
 

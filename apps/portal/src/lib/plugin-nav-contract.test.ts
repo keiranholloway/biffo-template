@@ -43,9 +43,17 @@ describe('resolvePluginNavLinks', () => {
     expect(links[0]?.href).toBe('/api/v1/plugins/marketing/admin')
   })
 
-  it('falls back to the plugin name when no nav label is declared', () => {
+  it('title-cases a hyphenated slug', () => {
+    const links = resolvePluginNavLinks(
+      [plugin({ name: 'idea-scout', admin_nav_label: null })],
+      ['admin'],
+    )
+    expect(links[0]?.label).toBe('Idea Scout')
+  })
+
+  it('falls back to a title-cased plugin name when no nav label is declared', () => {
     const links = resolvePluginNavLinks([plugin({ admin_nav_label: null })], ['admin'])
-    expect(links).toEqual([{ href: '/api/v1/plugins/marketing/admin', label: 'marketing' }])
+    expect(links).toEqual([{ href: '/api/v1/plugins/marketing/admin', label: 'Marketing' }])
   })
 
   it('drops a plugin with no admin surface', () => {

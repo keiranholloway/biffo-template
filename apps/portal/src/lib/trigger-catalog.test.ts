@@ -5,6 +5,7 @@ import {
   groupTriggersBySource,
   matchesQuery,
   optionLabel,
+  humanTriggerLabel,
   originOf,
   triggerKeyOf,
 } from './trigger-catalog'
@@ -116,7 +117,14 @@ describe('groupTriggersBySource', () => {
 
 describe('optionLabel', () => {
   it('marks observed triggers inline, since an <option> cannot carry a badge', () => {
-    expect(optionLabel(billing)).toBe('invoice.paid (observed)')
+    expect(optionLabel(billing)).toBe('Invoice paid (observed)')
     expect(optionLabel(demo)).toBe('Demo requested')
+  })
+})
+
+describe('humanTriggerLabel', () => {
+  it('turns a raw event key into words and leaves real labels alone', () => {
+    expect(humanTriggerLabel('orchestration.runs.reap_due')).toBe('Orchestration runs reap due')
+    expect(humanTriggerLabel('User created')).toBe('User created')
   })
 })

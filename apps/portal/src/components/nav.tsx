@@ -51,33 +51,54 @@ export function Nav() {
   }, [session, getIdToken])
 
   return (
-    <nav className="flex items-center justify-between border-b px-6 py-4">
-      <div className="flex items-center gap-6">
+    <nav className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3 border-b px-6 py-4">
+      <div className="flex min-w-0 flex-wrap items-center gap-x-6 gap-y-2">
         <span className="text-lg font-semibold">{PORTAL_TITLE}</span>
-        <Link href="/admin/microservices/" className="text-sm text-gray-600 hover:text-gray-900">
+        <Link
+          href="/admin/microservices/"
+          className="whitespace-nowrap text-sm text-gray-600 hover:text-gray-900"
+        >
           Microservices
         </Link>
-        <Link href="/admin/marketplace/" className="text-sm text-gray-600 hover:text-gray-900">
+        <Link
+          href="/admin/marketplace/"
+          className="whitespace-nowrap text-sm text-gray-600 hover:text-gray-900"
+        >
           Marketplace
         </Link>
-        <Link href="/admin/plugins/" className="text-sm text-gray-600 hover:text-gray-900">
+        <Link
+          href="/admin/plugins/"
+          className="whitespace-nowrap text-sm text-gray-600 hover:text-gray-900"
+        >
           Plugins
         </Link>
-        <Link href="/admin/endpoints/" className="text-sm text-gray-600 hover:text-gray-900">
+        <Link
+          href="/admin/endpoints/"
+          className="whitespace-nowrap text-sm text-gray-600 hover:text-gray-900"
+        >
           Endpoints
         </Link>
-        <Link href="/admin/users/" className="text-sm text-gray-600 hover:text-gray-900">
+        <Link
+          href="/admin/users/"
+          className="whitespace-nowrap text-sm text-gray-600 hover:text-gray-900"
+        >
           Users
         </Link>
-        <Link href="/admin/orchestration/" className="text-sm text-gray-600 hover:text-gray-900">
+        <Link
+          href="/admin/orchestration/"
+          className="whitespace-nowrap text-sm text-gray-600 hover:text-gray-900"
+        >
           Workflows
         </Link>
-        <Link href="/admin/agent-runs/" className="text-sm text-gray-600 hover:text-gray-900">
+        <Link
+          href="/admin/agent-runs/"
+          className="whitespace-nowrap text-sm text-gray-600 hover:text-gray-900"
+        >
           Agent runs
         </Link>
         <Link
           href="/admin/prompt-components/"
-          className="text-sm text-gray-600 hover:text-gray-900"
+          className="whitespace-nowrap text-sm text-gray-600 hover:text-gray-900"
         >
           Prompt library
         </Link>
@@ -91,7 +112,7 @@ export function Nav() {
           <Link
             key={link.href}
             href={link.href}
-            className="text-sm text-gray-600 hover:text-gray-900"
+            className="whitespace-nowrap text-sm text-gray-600 hover:text-gray-900"
           >
             {link.label}
           </Link>
@@ -104,14 +125,18 @@ export function Nav() {
          * routing (and its trailing-slash normalisation) doesn't apply.
          */}
         {pluginLinks.map((link) => (
-          <a key={link.href} href={link.href} className="text-sm text-gray-600 hover:text-gray-900">
+          <a
+            key={link.href}
+            href={link.href}
+            className="whitespace-nowrap text-sm text-gray-600 hover:text-gray-900"
+          >
             {link.label}
           </a>
         ))}
       </div>
-      <div className="flex items-center gap-4">
-        {email != null && <span className="text-sm text-gray-600">{email}</span>}
-        <Button variant="secondary" onClick={logout} className="text-sm">
+      <div className="flex min-w-0 max-w-full items-center gap-4">
+        {email != null && <span className="truncate text-sm text-gray-600">{email}</span>}
+        <Button variant="secondary" onClick={logout} className="shrink-0 whitespace-nowrap text-sm">
           Sign out
         </Button>
       </div>

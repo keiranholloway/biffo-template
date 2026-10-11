@@ -82,6 +82,35 @@ from ..writeback_targets import apply_writeback_output_tool
 
 logger = Logger()
 
+# Bound on the logged error: it is runtime/model-derived text, so it is both
+# attacker-influenceable and unbounded.
+_FAILED_RUN_LOG_ERROR_MAX = 500
+
+
+def _log_failed_run(run: AgentRun, *, source: str) -> None:
+    """Log why a run was recorded ``failed``.
+
+    The reason lives only on the run record, and the ``agent.run.completed``
+    event is a reference with no result, so without this a failed run leaves no
+    trace in Core's logs (biffo-plugin-idea-scout#197). ``failure_reason`` is the
+    run result's ``failure_reason`` when the runtime supplied one.
+    """
+    if run.status != "failed":
+        return
+    result = run.result if isinstance(run.result, dict) else {}
+    reason = result.get("failure_reason")
+    logger.warning(
+        "Agent run recorded as failed",
+        extra={
+            "run_id": run.id,
+            "agent": run.agent_name,
+            "error": (run.error or "")[:_FAILED_RUN_LOG_ERROR_MAX] or None,
+            "failure_reason": str(reason)[:_FAILED_RUN_LOG_ERROR_MAX] if reason else None,
+            "source": source,
+        },
+    )
+
+
 router = APIRouter(prefix="/internal/agent-runs", tags=["internal:agents"])
 
 
@@ -273,6 +302,7 @@ def _summary(run: AgentRun) -> AgentRunSummary:
         dry_run=run.dry_run,
         model=model if isinstance(model, str) else None,
         caller_plugin=run.caller_plugin,
+        error=run.error[:1000] if run.error else None,
         input_tokens=run.input_tokens,
         output_tokens=run.output_tokens,
         cost_usd=run.cost_usd,
@@ -434,6 +464,7 @@ async def complete_agent_run(
     if run is None:
         raise _not_found()
 
+    _log_failed_run(run, source="completion")
     if not run.dry_run:
         emit_event(
             db, AGENT_RUN_COMPLETED, run_reference_payload(run), tenant_id=principal.tenant_id
@@ -474,6 +505,7 @@ async def reap_stale_agent_runs(
         unclaimed_after_seconds=settings.agent_run_unclaimed_after_seconds,
     )
     for run in reaped:
+        _log_failed_run(run, source="reaper")
         if run.dry_run:
             continue
         emit_event(

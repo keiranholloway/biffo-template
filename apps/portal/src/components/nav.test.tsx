@@ -60,7 +60,10 @@ const instanceLinks = vi.hoisted(() => [] as { href: string; label: string }[])
 vi.mock('@/instance-nav', () => ({ INSTANCE_NAV_LINKS: instanceLinks }))
 
 const pathnameMock = vi.hoisted(() => ({ value: null as string | null }))
-vi.mock('next/navigation', () => ({ usePathname: () => pathnameMock.value }))
+vi.mock('next/navigation', () => ({
+  usePathname: () => pathnameMock.value,
+  useSearchParams: () => new URLSearchParams(),
+}))
 
 beforeEach(() => {
   pathnameMock.value = null
@@ -206,9 +209,10 @@ describe('Nav — plugin-declared entries (#1555)', () => {
     await waitFor(() => {
       expect(screen.getByRole('link', { name: 'Marketing' })).toBeInTheDocument()
     })
-    expect(screen.getByRole('link', { name: 'Marketing' })).toHaveAttribute(
-      'href',
-      '/api/v1/plugins/marketing/admin',
+    // Outside a Next router the rendered href loses its trailing slash.
+    const href = screen.getByRole('link', { name: 'Marketing' }).getAttribute('href')
+    expect(href?.replace('/plugin-panel/?', '/plugin-panel?')).toBe(
+      '/admin/plugin-panel?name=marketing',
     )
   })
 

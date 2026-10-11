@@ -1,3 +1,4 @@
+import { Suspense } from 'react'
 import type { ReactNode } from 'react'
 import { Nav } from '@/components/nav'
 import { AuthGuard } from '@/components/auth-guard'
@@ -14,7 +15,10 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
   return (
     <AuthGuard requireGroup={ADMIN_GROUP}>
       <div className="min-h-screen bg-gray-50">
-        <Nav />
+        {/* Nav reads useSearchParams (plugin panel highlighting). */}
+        <Suspense fallback={null}>
+          <Nav />
+        </Suspense>
         <main className="mx-auto max-w-7xl px-6 py-8">{children}</main>
       </div>
     </AuthGuard>

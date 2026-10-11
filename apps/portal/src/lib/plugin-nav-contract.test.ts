@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   derivePluginAdminHref,
+  derivePluginPanelHref,
   type PluginNavSource,
   resolvePluginNavLinks,
 } from './plugin-nav-contract'
@@ -25,6 +26,12 @@ describe('derivePluginAdminHref', () => {
   })
 })
 
+describe('derivePluginPanelHref', () => {
+  it('points at the portal panel route with the name as a query', () => {
+    expect(derivePluginPanelHref('idea-scout')).toBe('/admin/plugin-panel/?name=idea-scout')
+  })
+})
+
 describe('resolvePluginNavLinks', () => {
   it('is empty when no plugins are installed', () => {
     expect(resolvePluginNavLinks([], ['admin'])).toEqual([])
@@ -33,14 +40,14 @@ describe('resolvePluginNavLinks', () => {
 
   it('renders a plugin with a declared admin surface the caller can reach', () => {
     const links = resolvePluginNavLinks([plugin()], ['admin'])
-    expect(links).toEqual([{ href: '/api/v1/plugins/marketing/admin', label: 'Marketing' }])
+    expect(links).toEqual([{ href: '/admin/plugin-panel/?name=marketing', label: 'Marketing' }])
   })
 
   it('derives the href from the name, ignoring any manifest path the caller might send', () => {
     // The API response never actually carries `path` (see plugin-api.ts's
     // InstalledPlugin type), but nothing here should trust one even if it did.
     const links = resolvePluginNavLinks([{ ...plugin(), path: '/admin/marketing' }], ['admin'])
-    expect(links[0]?.href).toBe('/api/v1/plugins/marketing/admin')
+    expect(links[0]?.href).toBe('/admin/plugin-panel/?name=marketing')
   })
 
   it('title-cases a hyphenated slug', () => {
@@ -53,7 +60,7 @@ describe('resolvePluginNavLinks', () => {
 
   it('falls back to a title-cased plugin name when no nav label is declared', () => {
     const links = resolvePluginNavLinks([plugin({ admin_nav_label: null })], ['admin'])
-    expect(links).toEqual([{ href: '/api/v1/plugins/marketing/admin', label: 'Marketing' }])
+    expect(links).toEqual([{ href: '/admin/plugin-panel/?name=marketing', label: 'Marketing' }])
   })
 
   it('drops a plugin with no admin surface', () => {
@@ -81,7 +88,7 @@ describe('resolvePluginNavLinks', () => {
     const entries = [undefined, null, 'not-an-object', plugin({ name: 'rbac' })] as unknown[]
     expect(() => resolvePluginNavLinks(entries, ['admin'])).not.toThrow()
     expect(resolvePluginNavLinks(entries, ['admin'])).toEqual([
-      { href: '/api/v1/plugins/rbac/admin', label: 'Marketing' },
+      { href: '/admin/plugin-panel/?name=rbac', label: 'Marketing' },
     ])
   })
 
@@ -100,7 +107,7 @@ describe('resolvePluginNavLinks', () => {
       [plugin({ admin_nav_label: 'First' }), plugin({ admin_nav_label: 'Second' })],
       ['admin'],
     )
-    expect(links).toEqual([{ href: '/api/v1/plugins/marketing/admin', label: 'First' }])
+    expect(links).toEqual([{ href: '/admin/plugin-panel/?name=marketing', label: 'First' }])
   })
 
   it('preserves declaration order and includes only what the caller can reach', () => {

@@ -253,13 +253,33 @@ if [ -z "$DDL_FILES" ] && [ -z "$ALEMBIC_DIR" ]; then
   exit 1
 fi
 
-# PostGIS or plain, decided by what the DDL asks for. A plain `postgres` image
-# fails on the first `CREATE EXTENSION postgis`, and picking the heavier image
-# unconditionally would slow every repo that does not need it.
-if [ -n "$DDL_FILES" ] && echo "$DDL_FILES" | xargs grep -liE 'EXTENSION[[:space:]]+(IF[[:space:]]+NOT[[:space:]]+EXISTS[[:space:]]+)?postgis' >/dev/null 2>&1; then
-  IMAGE="${BIFFO_PG_IMAGE:-postgis/postgis:16-3.4}"
+# PostGIS, pgvector or plain, decided by what the DDL asks for. A plain
+# `postgres` image fails on the first `CREATE EXTENSION postgis` (or `vector`),
+# and picking a heavier image unconditionally would slow every repo that does
+# not need it. No single stock image carries both extensions, so DDL asking for
+# both is an explicit failure naming the override rather than a guess.
+_ext_re() {
+  printf '%s' "EXTENSION[[:space:]]+(IF[[:space:]]+NOT[[:space:]]+EXISTS[[:space:]]+)?[\"]?$1[\"]?([^[:alnum:]_]|\$)"
+}
+_wants_ext() {
+  [ -n "$DDL_FILES" ] &&
+    echo "$DDL_FILES" | xargs grep -liE "$(_ext_re "$1")" >/dev/null 2>&1
+}
+_want_postgis=0
+_want_vector=0
+_wants_ext postgis && _want_postgis=1
+_wants_ext vector && _want_vector=1
+if [ -n "${BIFFO_PG_IMAGE:-}" ]; then
+  IMAGE="$BIFFO_PG_IMAGE"
+elif [ "$_want_postgis" = 1 ] && [ "$_want_vector" = 1 ]; then
+  say "the DDL requests both the postgis and vector extensions and no single stock image provides both; build or choose an image that does and set BIFFO_PG_IMAGE to it"
+  exit 1
+elif [ "$_want_postgis" = 1 ]; then
+  IMAGE="postgis/postgis:16-3.4"
+elif [ "$_want_vector" = 1 ]; then
+  IMAGE="pgvector/pgvector:pg16"
 else
-  IMAGE="${BIFFO_PG_IMAGE:-postgres:16}"
+  IMAGE="postgres:16"
 fi
 
 export PGPASSWORD="$PASS"
@@ -440,9 +460,9 @@ if [ "$BIFFO_PG_REAP_HOURS" -gt 0 ] 2>/dev/null && command -v docker >/dev/null 
       while read -r _c _img; do
         [ "$_c" = "$CONTAINER" ] && continue
         case "$_reapable_flat" in *" $_c "*) continue ;; esac
-        # Both images this script can choose (see IMAGE above), matched by
+        # The images this script can choose (see IMAGE above), matched by
         # repository rather than tag so a BIFFO_PG_IMAGE override still lands.
-        case "$_img" in postgres:* | postgis/*) ;; *) continue ;; esac
+        case "$_img" in postgres:* | postgis/* | pgvector/*) ;; *) continue ;; esac
         _made=$(docker inspect -f '{{.Created}}' "$_c" 2>/dev/null | cut -c1-19)
         [ -z "$_made" ] && continue
         awk -v a="$_made" -v b="$_reap_cutoff" 'BEGIN { exit !(a < b) }' &&

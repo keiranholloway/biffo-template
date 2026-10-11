@@ -65,6 +65,27 @@ export function derivePluginAdminHref(name: string): string {
   return `/api/v1/plugins/${name}/admin`
 }
 
+/** The only shape of plugin name the panel route will frame. */
+const PLUGIN_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/
+
+export function isValidPluginName(name: string): boolean {
+  return PLUGIN_NAME_RE.test(name)
+}
+
+/**
+ * The portal route that embeds a plugin's admin surface in an iframe inside
+ * the shared admin layout (biffo-template#2495). The plugin name travels as a
+ * `?name=` query string: the portal is a static export, so a dynamic path
+ * segment would 404 for any name not generated at build time (see
+ * `app/admin/plugins/[slug]/page.tsx`). Trailing slash, because this IS a
+ * statically exported portal route (#275).
+ */
+export function derivePluginPanelHref(name: string): string {
+  return `${PLUGIN_PANEL_PATH}?name=${encodeURIComponent(name)}`
+}
+
+export const PLUGIN_PANEL_PATH = '/admin/plugin-panel/'
+
 /**
  * Filter and resolve plugin-declared nav entries, gated by the caller's
  * Cognito groups.
@@ -114,7 +135,8 @@ export function resolvePluginNavLinks(
     const requiredGroup = entry.admin_required_group?.trim()
     if (requiredGroup == null || requiredGroup === '') continue
     if (!groups.has(requiredGroup)) continue
-    const href = derivePluginAdminHref(name)
+    if (!isValidPluginName(name)) continue
+    const href = derivePluginPanelHref(name)
     if (seen.has(href)) continue
     seen.add(href)
     const declaredLabel = entry.admin_nav_label?.trim()

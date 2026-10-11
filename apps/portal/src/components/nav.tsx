@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { usePathname } from 'next/navigation'
+import { usePathname, useSearchParams } from 'next/navigation'
 import type { ReactNode } from 'react'
 import { useAuth } from '@/context/auth-context'
 import { INSTANCE_NAV_LINKS } from '@/instance-nav'
@@ -11,7 +11,11 @@ import { PORTAL_TITLE } from '@/lib/branding'
 import { sessionGroups } from '@/lib/cognito-groups'
 import { resolveInstanceNavLinks } from '@/lib/instance-nav-contract'
 import { fetchInstalledPlugins } from '@/lib/plugin-api'
-import { type PluginNavLink, resolvePluginNavLinks } from '@/lib/plugin-nav-contract'
+import {
+  PLUGIN_PANEL_PATH,
+  type PluginNavLink,
+  resolvePluginNavLinks,
+} from '@/lib/plugin-nav-contract'
 import { Button } from '@biffo/ui'
 
 const CORE_LINKS = [
@@ -37,31 +41,38 @@ export function isCurrentPath(href: string, pathname: string | null): boolean {
   return here === target || here.startsWith(`${target}/`)
 }
 
+/**
+ * Plugin panel links share one path and differ by `?name=`, so path matching
+ * alone would mark every plugin current at once.
+ */
+function isCurrentPanel(href: string, pathname: string | null, search: string | null): boolean {
+  if (!isCurrentPath(PLUGIN_PANEL_PATH, pathname)) return false
+  const want = new URL(href, 'http://x').searchParams.get('name')
+  return want != null && want === search
+}
+
 function NavLink({
   href,
   pathname,
-  plain = false,
+  panelName,
   children,
 }: {
   href: string
   pathname: string | null
-  plain?: boolean
+  /** For plugin panel links: the `name` currently shown, if any. */
+  panelName?: string | null
   children: ReactNode
 }) {
-  const current = isCurrentPath(href, pathname)
+  const isPanel = href.startsWith(PLUGIN_PANEL_PATH)
+  const current = isPanel
+    ? isCurrentPanel(href, pathname, panelName ?? null)
+    : isCurrentPath(href, pathname)
   const className = `whitespace-nowrap text-sm ${
     current
       ? 'font-semibold text-gray-900 underline underline-offset-4'
       : 'text-gray-600 hover:text-gray-900'
   }`
   const ariaCurrent = current ? 'page' : undefined
-  if (plain) {
-    return (
-      <a href={href} className={className} aria-current={ariaCurrent}>
-        {children}
-      </a>
-    )
-  }
   return (
     <Link href={href} className={className} aria-current={ariaCurrent}>
       {children}
@@ -71,6 +82,7 @@ function NavLink({
 
 export function Nav() {
   const pathname = usePathname()
+  const panelName = useSearchParams().get('name') ?? null
   const { session, logout, getIdToken } = useAuth()
   // The email address, not `cognito:username`. The pool uses
   // username_attributes = ["email"], so Cognito generates the username as an
@@ -132,13 +144,12 @@ export function Nav() {
         ))}
         {/*
          * Installed plugins' declared admin surfaces (issue #1555). Renders
-         * after the instance's own links, using a plain `<a>` rather than
-         * `next/link`: the target is served by the shared plugin host
-         * through the API, not by this static export, so client-side
-         * routing (and its trailing-slash normalisation) doesn't apply.
+         * after the instance's own links. Each links to the portal's
+         * plugin-panel route, which frames the plugin's admin surface so the
+         * nav and account controls stay visible (biffo-template#2495).
          */}
         {pluginLinks.map((link) => (
-          <NavLink key={link.href} href={link.href} pathname={pathname} plain>
+          <NavLink key={link.href} href={link.href} pathname={pathname} panelName={panelName}>
             {link.label}
           </NavLink>
         ))}

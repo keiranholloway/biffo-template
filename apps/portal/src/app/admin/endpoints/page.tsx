@@ -1,6 +1,6 @@
 'use client'
 
-import { Fragment, useCallback, useEffect, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
 import { EndpointDetail } from '@/components/EndpointDetail'
 import { useAuth } from '@/context/auth-context'
 import { ApiError, createApiClient } from '@/lib/api-client'
@@ -28,6 +28,17 @@ const KNOWN_ROLES = ['admin', 'editor', 'viewer']
 // Unique per mounted route — used as the React key and the expand/edit handle.
 function endpointKey(e: Endpoint): string {
   return `${e.method} ${e.path}`
+}
+
+const SUMMARY_MAX = 90
+
+// One-line row summary: first line / sentence of the description, capped in length.
+// The full text is shown when the row is expanded.
+export function shortSummary(text: string): string {
+  const firstLine = text.trim().split('\n')[0] ?? ''
+  const sentence = /^.*?[.!?](?=\s|$)/.exec(firstLine)?.[0] ?? firstLine
+  if (sentence.length <= SUMMARY_MAX) return sentence
+  return `${sentence.slice(0, SUMMARY_MAX - 1).trimEnd()}…`
 }
 
 interface DetailState {
@@ -77,6 +88,12 @@ export default function EndpointsPage() {
   const [expandedKey, setExpandedKey] = useState<string | null>(null)
   const [details, setDetails] = useState<Record<string, DetailState>>({})
 
+  // List filters.
+  const [search, setSearch] = useState('')
+  const [sourceFilter, setSourceFilter] = useState('all') // all | core | plugins | plugin:<name>
+  const [methodFilter, setMethodFilter] = useState('all')
+  const [roleFilter, setRoleFilter] = useState('all')
+
   // Inline permission editor state.
   const [editingKey, setEditingKey] = useState<string | null>(null)
   const [formAllowed, setFormAllowed] = useState(true)
@@ -93,6 +110,30 @@ export default function EndpointsPage() {
         setError(err instanceof Error ? err.message : 'Unknown error')
       })
   }, [getIdToken])
+
+  const pluginNames = useMemo(
+    () =>
+      Array.from(
+        new Set((endpoints ?? []).flatMap((e) => (e.plugin != null ? [e.plugin] : []))),
+      ).sort(),
+    [endpoints],
+  )
+  const methods = useMemo(
+    () => Array.from(new Set((endpoints ?? []).map((e) => e.method))).sort(),
+    [endpoints],
+  )
+  const visible = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    return (endpoints ?? []).filter((e) => {
+      if (q !== '' && !e.path.toLowerCase().includes(q)) return false
+      if (sourceFilter === 'core' && e.source !== 'core') return false
+      if (sourceFilter === 'plugins' && e.source !== 'plugin') return false
+      if (sourceFilter.startsWith('plugin:') && e.plugin !== sourceFilter.slice(7)) return false
+      if (methodFilter !== 'all' && e.method !== methodFilter) return false
+      if (roleFilter !== 'all' && !(e.required_role ?? []).includes(roleFilter)) return false
+      return true
+    })
+  }, [endpoints, search, sourceFilter, methodFilter, roleFilter])
 
   const toggleExpand = useCallback(
     (e: Endpoint) => {
@@ -197,7 +238,86 @@ export default function EndpointsPage() {
       )}
 
       {endpoints != null && endpoints.length > 0 && (
-        <div className="mt-6 overflow-x-auto rounded-xl border bg-white shadow-sm">
+        <div className="mt-6 flex flex-wrap items-end gap-3">
+          <label className="flex flex-col gap-1 text-xs font-medium text-gray-600">
+            Search path
+            <input
+              type="search"
+              value={search}
+              onChange={(ev) => {
+                setSearch(ev.target.value)
+              }}
+              placeholder="e.g. spends"
+              className="rounded border border-gray-300 px-2 py-1 text-sm font-normal text-gray-800"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-xs font-medium text-gray-600">
+            Source
+            <select
+              value={sourceFilter}
+              onChange={(ev) => {
+                setSourceFilter(ev.target.value)
+              }}
+              className="rounded border border-gray-300 px-2 py-1 text-sm font-normal text-gray-800"
+            >
+              <option value="all">All sources</option>
+              <option value="core">Core</option>
+              <option value="plugins">All plugins (editable)</option>
+              {pluginNames.map((p) => (
+                <option key={p} value={`plugin:${p}`}>
+                  Plugin: {p}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="flex flex-col gap-1 text-xs font-medium text-gray-600">
+            Method
+            <select
+              value={methodFilter}
+              onChange={(ev) => {
+                setMethodFilter(ev.target.value)
+              }}
+              className="rounded border border-gray-300 px-2 py-1 text-sm font-normal text-gray-800"
+            >
+              <option value="all">All methods</option>
+              {methods.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="flex flex-col gap-1 text-xs font-medium text-gray-600">
+            Required role
+            <select
+              value={roleFilter}
+              onChange={(ev) => {
+                setRoleFilter(ev.target.value)
+              }}
+              className="rounded border border-gray-300 px-2 py-1 text-sm font-normal text-gray-800"
+            >
+              <option value="all">Any role</option>
+              {KNOWN_ROLES.map((r) => (
+                <option key={r} value={r}>
+                  {r}
+                </option>
+              ))}
+            </select>
+          </label>
+          <p className="pb-1 text-xs text-gray-500" aria-live="polite">
+            Showing {visible.length} of {endpoints.length} endpoints
+          </p>
+        </div>
+      )}
+
+      {endpoints != null && endpoints.length > 0 && visible.length === 0 && (
+        <div className="mt-4 rounded-xl border border-dashed border-gray-300 bg-white p-8 text-center">
+          <p className="text-sm font-medium text-gray-600">No endpoints match these filters</p>
+        </div>
+      )}
+
+      {endpoints != null && visible.length > 0 && (
+        <div className="mt-4 overflow-x-auto rounded-xl border bg-white shadow-sm">
           <table className="min-w-full divide-y divide-gray-200 text-sm">
             <thead className="bg-gray-50 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
               <tr>
@@ -210,7 +330,7 @@ export default function EndpointsPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {endpoints.map((e) => {
+              {visible.map((e) => {
                 const key = endpointKey(e)
                 const editing = editingKey === key
                 const expanded = expandedKey === key
@@ -255,7 +375,12 @@ export default function EndpointsPage() {
                           {e.path}
                         </button>
                         {e.summary != null && e.summary !== '' && (
-                          <span className="ml-2 font-sans text-gray-400">{e.summary}</span>
+                          <span
+                            className="ml-2 inline-block max-w-md truncate align-bottom font-sans text-gray-400"
+                            title={e.summary}
+                          >
+                            {shortSummary(e.summary)}
+                          </span>
                         )}
                       </td>
                       <td className="px-4 py-2 text-xs text-gray-600">
@@ -295,6 +420,11 @@ export default function EndpointsPage() {
                       <tr className="bg-gray-50">
                         <td />
                         <td colSpan={5} className="px-4 py-4">
+                          {e.summary != null && shortSummary(e.summary) !== e.summary.trim() && (
+                            <p className="mb-3 whitespace-pre-line text-sm text-gray-600">
+                              {e.summary}
+                            </p>
+                          )}
                           <EndpointDetail
                             detail={detailState?.detail ?? null}
                             loading={detailState?.loading ?? true}

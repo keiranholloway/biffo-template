@@ -544,3 +544,96 @@ async def test_a_non_list_annotations_value_is_treated_as_none(monkeypatch):
     response = await _client(handler).complete(model="m", messages=[], timeout=5.0)
 
     assert response.annotations == ()
+
+
+# ── embeddings ───────────────────────────────────────────────────────────────
+
+
+async def test_embed_posts_to_embeddings_and_reorders_out_of_order_data(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", _FAKE_KEY)
+    handler, seen = _ok(
+        {
+            "data": [
+                {"index": 2, "embedding": [2.0]},
+                {"index": 0, "embedding": [0.0]},
+                {"index": 1, "embedding": [1.0]},
+            ]
+        }
+    )
+
+    vectors = await _client(handler).embed(
+        model="openai/text-embedding-3-small", texts=["a", "b", "c"], timeout=5.0, dimensions=1536
+    )
+
+    assert vectors == [[0.0], [1.0], [2.0]]
+    request = seen[0]
+    assert request.url.path.endswith("/embeddings")
+    assert json.loads(request.content) == {
+        "model": "openai/text-embedding-3-small",
+        "input": ["a", "b", "c"],
+        "dimensions": 1536,
+    }
+
+
+async def test_embed_omits_dimensions_when_unset(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", _FAKE_KEY)
+    handler, seen = _ok({"data": [{"index": 0, "embedding": [0.5]}]})
+    await _client(handler).embed(model="m", texts=["a"], timeout=5.0)
+    assert "dimensions" not in json.loads(seen[0].content)
+
+
+async def test_embed_provider_error_is_an_llm_error_without_the_key(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", _FAKE_KEY)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, text="rate limited")
+
+    with pytest.raises(LLMError) as exc:
+        await _client(handler).embed(model="m", texts=["a"], timeout=5.0)
+    assert "429" in str(exc.value)
+    assert _FAKE_KEY not in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"data": []},
+        {"data": [{"index": 0, "embedding": [1.0]}, {"index": 0, "embedding": [2.0]}]},
+        {"data": [{"index": 5, "embedding": [1.0]}, {"index": 0, "embedding": [2.0]}]},
+        {"data": [{"index": 0, "embedding": "x"}, {"index": 1, "embedding": [2.0]}]},
+        {"nope": 1},
+    ],
+)
+async def test_embed_rejects_a_misaligned_or_malformed_reply(monkeypatch, body):
+    monkeypatch.setenv("OPENROUTER_API_KEY", _FAKE_KEY)
+    handler, _ = _ok(body)
+    with pytest.raises(LLMError):
+        await _client(handler).embed(model="m", texts=["a", "b"], timeout=5.0)
+
+
+async def test_embed_transport_failure_is_an_llm_error(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", _FAKE_KEY)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("down", request=request)
+
+    with pytest.raises(LLMError) as exc:
+        await _client(handler).embed(model="m", texts=["a"], timeout=5.0)
+    assert _FAKE_KEY not in str(exc.value)
+
+
+async def test_embed_non_json_reply_is_an_llm_error(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", _FAKE_KEY)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="<html>not json</html>")
+
+    with pytest.raises(LLMError, match="not JSON"):
+        await _client(handler).embed(model="m", texts=["a"], timeout=5.0)
+
+
+def test_sse_delta_ignores_non_object_and_choiceless_payloads():
+    from agent_runtime.openrouter import _parse_sse_delta
+
+    assert _parse_sse_delta("data: [1, 2]") == ""
+    assert _parse_sse_delta('data: {"choices": []}') == ""

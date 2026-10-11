@@ -1,7 +1,14 @@
 import Link from 'next/link'
 import type { RegistryPlugin } from '@/lib/plugin-api'
 
-export function PluginCard({ plugin }: { plugin: RegistryPlugin }) {
+export function PluginCard({
+  plugin,
+  installed = null,
+}: {
+  plugin: RegistryPlugin
+  /** true/false once the deployment's installed plugins are known; null while unknown. */
+  installed?: boolean | null
+}) {
   const isBuiltIn = plugin.tags?.includes('built-in') ?? false
 
   return (
@@ -16,7 +23,7 @@ export function PluginCard({ plugin }: { plugin: RegistryPlugin }) {
       <div className="flex items-start justify-between gap-2">
         <h2 className="text-lg font-medium text-gray-900">
           <Link
-            href={`/admin/plugins/placeholder?source=marketplace&name=${encodeURIComponent(plugin.name)}`}
+            href={`/admin/plugins/placeholder?source=${installed === true ? 'installed' : 'marketplace'}&name=${encodeURIComponent(plugin.name)}`}
             className="after:absolute after:inset-0 after:content-['']"
           >
             {plugin.name}
@@ -26,6 +33,22 @@ export function PluginCard({ plugin }: { plugin: RegistryPlugin }) {
           v{plugin.version}
         </span>
       </div>
+
+      {installed === true && (
+        <p className="mt-2 text-xs font-medium text-green-700">
+          <span className="rounded-full bg-green-50 px-2 py-0.5">Installed</span>{' '}
+          <span className="text-gray-500">Open the heading to see it under Plugins.</span>
+        </p>
+      )}
+      {installed === false && (
+        <p className="mt-2 text-xs text-gray-500">
+          <span className="rounded-full bg-gray-100 px-2 py-0.5 font-medium text-gray-600">
+            Not installed
+          </span>{' '}
+          To add it, place the plugin under <code className="font-mono">services/</code> in your
+          deployment and redeploy.
+        </p>
+      )}
 
       {plugin.description != null && plugin.description !== '' && (
         <p className="mt-2 text-sm text-gray-600">{plugin.description}</p>

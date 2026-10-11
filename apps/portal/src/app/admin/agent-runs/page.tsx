@@ -11,7 +11,13 @@ import {
   type AgentRunCostAggregate,
   type AgentRunFilters,
 } from '@/lib/agent-runs-api'
-import { formatCost, formatDuration, formatMeanCost, formatWhen } from '@/lib/agent-runs-format'
+import {
+  formatCost,
+  formatDuration,
+  formatMeanCost,
+  formatWhen,
+  summarizeRunError,
+} from '@/lib/agent-runs-format'
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : 'Unknown error'
@@ -239,6 +245,7 @@ export default function AgentRunsPage() {
                 <th className="px-4 py-2">Created</th>
                 <th className="px-4 py-2">Duration</th>
                 <th className="px-4 py-2">Model</th>
+                <th className="px-4 py-2">Reason</th>
                 <th className="px-4 py-2 text-right">Cost</th>
               </tr>
             </thead>
@@ -267,6 +274,15 @@ export default function AgentRunsPage() {
                   </td>
                   <td className="px-4 py-2 text-gray-600">
                     {run.model ?? <span className="text-gray-400">—</span>}
+                  </td>
+                  <td className="max-w-xs truncate px-4 py-2 text-rose-700">
+                    {run.status === 'failed' ? (
+                      (summarizeRunError(run.error) ?? (
+                        <span className="text-gray-400">No reason recorded</span>
+                      ))
+                    ) : (
+                      <span className="text-gray-400">—</span>
+                    )}
                   </td>
                   <td className="whitespace-nowrap px-4 py-2 text-right text-gray-600">
                     {formatCost(run.cost_usd)}

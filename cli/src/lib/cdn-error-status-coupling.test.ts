@@ -122,8 +122,10 @@ describe('CDN error-status demote/restore coupling (#1529, #1574)', () => {
   })
 
   it('gates both halves on the same single variable, so one cannot be set without the other', () => {
+    // Three API behaviours plus the generic portal/sibling block, which attaches
+    // the pair only to the portal's admin patterns (unknown /admin/ paths).
     const coupled = behaviours().filter(hasDemote)
-    expect(coupled).toHaveLength(3)
+    expect(coupled).toHaveLength(4)
 
     for (const block of coupled) {
       const demote = blocksMatching(block, /dynamic\s+"lambda_function_association"/)
@@ -157,7 +159,7 @@ describe('CDN error-status demote/restore coupling (#1529, #1574)', () => {
     // No demote anywhere outside those three — including default_cache_behavior,
     // which is a static block the extractor above deliberately does not read.
     const allDemotes = stripComments(mainTf).match(/event_type\s*=\s*"origin-response"/g) ?? []
-    expect(allDemotes).toHaveLength(3)
+    expect(allDemotes).toHaveLength(4)
   })
 
   it('creates the restore CloudFront Function under the same gate', () => {

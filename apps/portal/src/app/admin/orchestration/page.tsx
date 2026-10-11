@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { ConfirmButton } from '@/components/ConfirmButton'
 import { useAuth } from '@/context/auth-context'
 import { ApiError, createApiClient } from '@/lib/api-client'
 import {
@@ -2471,15 +2472,16 @@ export default function OrchestrationPage() {
                       >
                         {w.enabled ? 'Disable' : 'Enable'}
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => {
+                      <ConfirmButton
+                        prompt={`Delete workflow "${w.name}"? This cannot be undone.`}
+                        confirmLabel="Confirm delete"
+                        onConfirm={() => {
                           void run(() => deleteWorkflow(client, w.id))
                         }}
                         className="rounded border border-rose-200 px-2 py-1 text-xs text-rose-700 hover:bg-rose-50"
                       >
                         Delete
-                      </button>
+                      </ConfirmButton>
                     </div>
                   </td>
                 </tr>

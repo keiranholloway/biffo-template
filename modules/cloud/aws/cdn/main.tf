@@ -780,6 +780,30 @@ resource "aws_cloudfront_distribution" "portal" {
         event_type   = "viewer-request"
         function_arn = aws_cloudfront_function.rewrite.arn
       }
+
+      # An unknown address under /admin/ must not fall through to the root
+      # sibling's index.html (the public marketing home page) via
+      # custom_error_response. On the portal's admin behaviours ONLY, the same
+      # demote/restore pair as the API behaviours is attached; for a missing
+      # page document the demote Lambda answers 302 -> /admin/ (see the
+      # SECOND JOB note in error-status-demote.js). Both halves share the one
+      # gate, as everywhere else.
+      dynamic "lambda_function_association" {
+        for_each = (var.error_status_demote_lambda_arn == "" || !contains([local.path_contract_pattern["admin"], local.path_contract_pattern["admin-wildcard"]], ordered_cache_behavior.value.path_pattern)) ? [] : [var.error_status_demote_lambda_arn]
+        content {
+          event_type   = "origin-response"
+          lambda_arn   = lambda_function_association.value
+          include_body = false
+        }
+      }
+
+      dynamic "function_association" {
+        for_each = (var.error_status_demote_lambda_arn == "" || !contains([local.path_contract_pattern["admin"], local.path_contract_pattern["admin-wildcard"]], ordered_cache_behavior.value.path_pattern)) ? [] : [1]
+        content {
+          event_type   = "viewer-response"
+          function_arn = one(aws_cloudfront_function.error_status_restore[*].arn)
+        }
+      }
     }
   }
 

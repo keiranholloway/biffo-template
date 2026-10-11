@@ -83,7 +83,13 @@ describe('cdn API error-status demote (Lambda@Edge origin-response) — biffo-te
     // string) to "improve" the demotion would quietly break that guarantee,
     // and nothing else in this repo would catch it: this function has no
     // origin visibility into what the token means, so it must never look.
-    expect(source).not.toMatch(/\.request\b/)
+    //
+    // The /admin/ not-found redirect (an unknown portal address must not render
+    // the marketing home page) legitimately needs the request URI, so the guard
+    // is now: the only use is the single fixed-prefix `isAdminPageDocument` check.
+    expect(source.match(/cf\.request\b/g) ?? []).toHaveLength(2)
+    expect(source).toContain('isAdminPageDocument(uri)')
+    expect(source).not.toMatch(/uri\.(split|slice|substring|match)/)
   })
 
   it('produces an identical demotion for two requests that differ only in their tracked-link token', async () => {
@@ -115,4 +121,29 @@ describe('cdn API error-status demote (Lambda@Edge origin-response) — biffo-te
     ])
     expect(unknown).toEqual(expired)
   })
+
+  it('redirects a missing /admin/ page document to /admin/ instead of letting the marketing index render', async () => {
+    const r = await runUri('/admin/does-not-exist/index.html', '404')
+    expect(r.status).toBe('302')
+    expect(r.headers['location']).toEqual([{ key: 'Location', value: '/admin/' }])
+    expect(r.headers['x-biffo-true-status']).toBeUndefined()
+    const r403 = await runUri('/admin/users/nope/index.html', '403')
+    expect(r403.status).toBe('302')
+  })
+
+  it('does not redirect /admin/index.html itself (loop) nor non-page admin objects', async () => {
+    const loop = await runUri('/admin/index.html', '404')
+    expect(loop.status).toBe('200')
+    const asset = await runUri('/admin/_next/static/x.js', '404')
+    expect(asset.status).toBe('200')
+    const rsc = await runUri('/admin/nope/index.txt', '404')
+    expect(rsc.status).toBe('200')
+  })
 })
+
+function runUri(uri: string, status: string): Promise<CfEdgeResponse> {
+  return new Promise((resolve, reject) => {
+    const event = { Records: [{ cf: { request: { uri }, response: { status, headers: {} } } }] }
+    handler!(event, {}, (err, response) => (err ? reject(err) : resolve(response)))
+  })
+}

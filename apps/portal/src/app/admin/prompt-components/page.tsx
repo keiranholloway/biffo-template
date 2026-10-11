@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { ConfirmButton } from '@/components/ConfirmButton'
 import { useAuth } from '@/context/auth-context'
 import { createApiClient } from '@/lib/api-client'
 import {
@@ -396,15 +397,16 @@ export default function PromptComponentsPage() {
                       >
                         Edit
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => {
+                      <ConfirmButton
+                        prompt={`Delete prompt component "${c.name}"? This cannot be undone.`}
+                        confirmLabel="Confirm delete"
+                        onConfirm={() => {
                           void run(() => deletePromptComponent(client, c.id))
                         }}
                         className="rounded border border-rose-200 px-2 py-1 text-xs text-rose-700 hover:bg-rose-50"
                       >
                         Delete
-                      </button>
+                      </ConfirmButton>
                     </div>
                   </td>
                 </tr>

@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { ConfirmButton } from '@/components/ConfirmButton'
 import { useAuth } from '@/context/auth-context'
 import { ApiError, createApiClient } from '@/lib/api-client'
 import {
@@ -29,6 +30,7 @@ import { fetchAgentRun, type AgentRunResponse } from '@/lib/agent-runs-api'
 import {
   filterTriggers,
   groupTriggersBySource,
+  humanTriggerLabel,
   optionLabel,
   originOf,
   triggerKeyOf,
@@ -84,6 +86,9 @@ function toFilterRows(filter: Record<string, string> | null | undefined): Filter
 // The field-select sentinel that reveals the free-text "custom field" input —
 // the escape hatch so a trigger's undeclared field (and observed events with no
 // declared fields at all) can still be filtered on.
+/** Recent-runs rows per page. One extra row is requested so "more exist" is exact. */
+const RUNS_PAGE_SIZE = 25
+
 const CUSTOM_FIELD = '__custom__'
 
 // A condition's chosen field definition, if it names one the trigger declares.
@@ -153,6 +158,34 @@ function formatWhen(iso: string | null): string {
 function runError(run: WorkflowRun): string | null {
   const last = run.logs.at(-1)
   return last?.error ?? null
+}
+
+/** Turn a Python list repr (`['a', 'b']`) into prose: "a, b and c". */
+function proseFromPyList(repr: string): string {
+  const items = [...repr.matchAll(/'([^']*)'|"([^"]*)"/g)].map((m) => m[1] ?? m[2] ?? '')
+  if (items.length === 0) return repr
+  if (items.length === 1) return items[0] ?? repr
+  return `${items.slice(0, -1).join(', ')} and ${items[items.length - 1] ?? ''}`
+}
+
+/** Split a run's raw error into a sentence and the chain id it refers to, so the
+ *  Detail column reads as words with the id shown separately. */
+function describeRunError(raw: string | null): { message: string; chainId: string | null } | null {
+  if (raw == null) return null
+  let text = raw
+  let chainId: string | null = null
+  const chain = /\s+in chain ([0-9a-fA-F-]{8,})\s*$/.exec(text)
+  if (chain != null) {
+    chainId = chain[1] ?? null
+    text = text.slice(0, chain.index)
+  }
+  const fanIn =
+    /^agent_fan_in has nothing to run '([^']*)' on: every agent in (\[[^\]]*\]) failed$/.exec(text)
+  if (fanIn != null) {
+    const names = proseFromPyList(fanIn[2] ?? '')
+    text = `The “${fanIn[1] ?? ''}” agent had nothing to run on: every agent it was waiting for (${names}) failed.`
+  }
+  return { message: text, chainId }
 }
 
 // The redaction sentinel Core returns for a stored secret (#432): a set-but-hidden
@@ -495,6 +528,8 @@ export default function OrchestrationPage() {
 
   const [workflows, setWorkflows] = useState<WorkflowDefinition[] | null>(null)
   const [runs, setRuns] = useState<WorkflowRun[] | null>(null)
+  const [runsHaveMore, setRunsHaveMore] = useState(false)
+  const [loadingMoreRuns, setLoadingMoreRuns] = useState(false)
   const [catalog, setCatalog] = useState<WorkflowCatalog | null>(null)
   // Library components available to reference from a parts field (ADR-0015).
   // Sourced from the prompt-library CRUD API, NOT the action catalog. A fetch
@@ -614,9 +649,13 @@ export default function OrchestrationPage() {
 
   const reload = useCallback(async () => {
     try {
-      const [definitions, history] = await Promise.all([fetchWorkflows(client), fetchRuns(client)])
+      const [definitions, history] = await Promise.all([
+        fetchWorkflows(client),
+        fetchRuns(client, RUNS_PAGE_SIZE + 1),
+      ])
       setWorkflows(definitions)
-      setRuns(history)
+      setRunsHaveMore(history.length > RUNS_PAGE_SIZE)
+      setRuns(history.slice(0, RUNS_PAGE_SIZE))
       setError(null)
     } catch (err: unknown) {
       setError(errorMessage(err))
@@ -626,6 +665,20 @@ export default function OrchestrationPage() {
   useEffect(() => {
     void reload()
   }, [reload])
+
+  const loadMoreRuns = useCallback(async () => {
+    if (runs == null) return
+    setLoadingMoreRuns(true)
+    try {
+      const more = await fetchRuns(client, RUNS_PAGE_SIZE + 1, runs.length)
+      setRunsHaveMore(more.length > RUNS_PAGE_SIZE)
+      setRuns([...runs, ...more.slice(0, RUNS_PAGE_SIZE)])
+    } catch (err: unknown) {
+      setError(errorMessage(err))
+    } finally {
+      setLoadingMoreRuns(false)
+    }
+  }, [client, runs])
 
   // Load the referenceable prompt components once. A failure is non-fatal to
   // the builder — the parts editor renders with no options and warns on any
@@ -1052,11 +1105,25 @@ export default function OrchestrationPage() {
     }
   }
 
+  function actionLabel(type: string): string {
+    return catalog?.actions.find((a) => a.type === type)?.label ?? type
+  }
+
+  // Workflows sharing a name get a short id suffix so they can be told apart.
+  const duplicateNames = new Set<string>()
+  {
+    const seen = new Set<string>()
+    for (const w of workflows ?? []) {
+      if (seen.has(w.name)) duplicateNames.add(w.name)
+      seen.add(w.name)
+    }
+  }
+
   function triggerLabel(w: WorkflowDefinition): string {
     const match = catalog?.triggers.find(
       (t) => triggerKeyOf(t) === `${w.trigger_source}|${w.trigger_detail_type}`,
     )
-    return match?.label ?? `${w.trigger_source} / ${w.trigger_detail_type}`
+    return humanTriggerLabel(match?.label ?? `${w.trigger_source} / ${w.trigger_detail_type}`)
   }
 
   // Plain-language recap of what the workflow will do — shown in the action bar
@@ -1097,7 +1164,7 @@ export default function OrchestrationPage() {
               }}
               className="mt-2 rounded border px-2 py-1 text-xs text-gray-700 hover:bg-gray-50"
             >
-              ✨ Draft {label} with AI
+              ✨ Draft {label.split(' — ')[0]} with AI
             </button>
           )}
         </div>
@@ -2380,6 +2447,14 @@ export default function OrchestrationPage() {
                 <tr key={w.id}>
                   <td className="px-4 py-2 text-gray-800">
                     {w.name}
+                    {duplicateNames.has(w.name) && (
+                      <span
+                        className="ml-2 rounded bg-gray-100 px-1.5 py-0.5 font-mono text-xs text-gray-600"
+                        title={`Workflow id ${w.id}`}
+                      >
+                        #{w.id.slice(0, 8)}
+                      </span>
+                    )}
                     {/* ADR-0027 §2: a workflow that writes runs under a stored
                         principal, so who that is belongs next to the rule, not
                         buried in a detail view. Re-saving or re-enabling it
@@ -2416,7 +2491,7 @@ export default function OrchestrationPage() {
                       </span>
                     )}
                   </td>
-                  <td className="px-4 py-2 text-gray-600">{w.action_type}</td>
+                  <td className="px-4 py-2 text-gray-600">{actionLabel(w.action_type)}</td>
                   <td className="px-4 py-2">
                     {w.enabled ? (
                       <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-xs text-emerald-700">
@@ -2448,15 +2523,16 @@ export default function OrchestrationPage() {
                       >
                         {w.enabled ? 'Disable' : 'Enable'}
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => {
+                      <ConfirmButton
+                        prompt={`Delete workflow "${w.name}"? This cannot be undone.`}
+                        confirmLabel="Confirm delete"
+                        onConfirm={() => {
                           void run(() => deleteWorkflow(client, w.id))
                         }}
                         className="rounded border border-rose-200 px-2 py-1 text-xs text-rose-700 hover:bg-rose-50"
                       >
                         Delete
-                      </button>
+                      </ConfirmButton>
                     </div>
                   </td>
                 </tr>
@@ -2501,7 +2577,11 @@ export default function OrchestrationPage() {
                   <td className="px-4 py-2 text-gray-800">
                     {r.definition_name ?? <span className="text-gray-400">(deleted)</span>}
                   </td>
-                  <td className="px-4 py-2 text-gray-600">{r.logs.at(-1)?.action_type ?? '—'}</td>
+                  <td className="px-4 py-2 text-gray-600">
+                    {r.logs.at(-1)?.action_type != null
+                      ? actionLabel(r.logs.at(-1)?.action_type ?? '')
+                      : '—'}
+                  </td>
                   <td className="px-4 py-2">
                     <span
                       className={`rounded px-1.5 py-0.5 text-xs ${
@@ -2516,11 +2596,48 @@ export default function OrchestrationPage() {
                       </span>
                     )}
                   </td>
-                  <td className="px-4 py-2 text-xs text-rose-700">{runError(r)}</td>
+                  <td className="px-4 py-2 text-xs text-rose-700">
+                    {(() => {
+                      const d = describeRunError(runError(r))
+                      if (d == null) return null
+                      return (
+                        <>
+                          <span>{d.message}</span>
+                          {d.chainId != null && (
+                            <span className="mt-0.5 block text-gray-500">
+                              Chain <code>{d.chainId}</code>
+                            </span>
+                          )}
+                        </>
+                      )
+                    })()}
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {runs != null && runs.length > 0 && (
+        <div className="mt-3 flex items-center gap-3 text-sm text-gray-600">
+          <span>
+            {runsHaveMore
+              ? `Showing the newest ${String(runs.length)} runs — older runs exist`
+              : `Showing all ${String(runs.length)} runs`}
+          </span>
+          {runsHaveMore && (
+            <button
+              type="button"
+              disabled={loadingMoreRuns}
+              onClick={() => {
+                void loadMoreRuns()
+              }}
+              className="rounded border px-3 py-1 text-sm font-medium text-gray-800 disabled:opacity-50"
+            >
+              {loadingMoreRuns ? 'Loading…' : 'Load older runs'}
+            </button>
+          )}
         </div>
       )}
     </div>

@@ -16,6 +16,17 @@ module "cdn" {
 }
 ```
 
+## Unknown `/admin/` addresses
+
+The distribution-wide `custom_error_response` serves the ROOT sibling's
+`/index.html` for a missing object, so an unknown `/admin/<path>` used to
+render the public marketing home page. The `admin` and `admin/*` behaviours
+therefore also carry the demote/restore pair (same
+`error_status_demote_lambda_arn` gate); for a missing page document under
+`/admin/` the Lambda@Edge answers `302 /admin/` (a 302 is outside
+`custom_error_response`'s range). `/admin/index.html`, `_next` assets and
+`index.txt` payloads are not redirected.
+
 ## API 403/404 bodies (`error_status_demote_lambda_arn`) — biffo-template#1529
 
 `custom_error_response` (in `main.tf`, below the behaviours) exists so a deep

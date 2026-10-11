@@ -36,6 +36,7 @@ export interface AgentRunSummary {
   model: string | null
   input_tokens: number | null
   output_tokens: number | null
+  error?: string | null
   cost_usd: number | null
   started_at: string | null
   completed_at: string | null

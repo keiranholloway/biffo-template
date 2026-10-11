@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
+import { usePathname } from 'next/navigation'
+import type { ReactNode } from 'react'
 import { useAuth } from '@/context/auth-context'
 import { INSTANCE_NAV_LINKS } from '@/instance-nav'
 import { createApiClient } from '@/lib/api-client'
@@ -12,7 +14,63 @@ import { fetchInstalledPlugins } from '@/lib/plugin-api'
 import { type PluginNavLink, resolvePluginNavLinks } from '@/lib/plugin-nav-contract'
 import { Button } from '@biffo/ui'
 
+const CORE_LINKS = [
+  { href: '/admin/microservices/', label: 'Microservices' },
+  { href: '/admin/marketplace/', label: 'Marketplace' },
+  { href: '/admin/plugins/', label: 'Plugins' },
+  { href: '/admin/endpoints/', label: 'Endpoints' },
+  { href: '/admin/users/', label: 'Users' },
+  { href: '/admin/orchestration/', label: 'Workflows' },
+  { href: '/admin/agent-runs/', label: 'Agent runs' },
+  { href: '/admin/prompt-components/', label: 'Prompt library' },
+]
+
+function stripSlash(p: string): string {
+  return p.length > 1 && p.endsWith('/') ? p.slice(0, -1) : p
+}
+
+/** True when `pathname` is the link's page or one of its detail pages. */
+export function isCurrentPath(href: string, pathname: string | null): boolean {
+  if (pathname == null) return false
+  const target = stripSlash(href.split(/[?#]/)[0] ?? href)
+  const here = stripSlash(pathname)
+  return here === target || here.startsWith(`${target}/`)
+}
+
+function NavLink({
+  href,
+  pathname,
+  plain = false,
+  children,
+}: {
+  href: string
+  pathname: string | null
+  plain?: boolean
+  children: ReactNode
+}) {
+  const current = isCurrentPath(href, pathname)
+  const className = `whitespace-nowrap text-sm ${
+    current
+      ? 'font-semibold text-gray-900 underline underline-offset-4'
+      : 'text-gray-600 hover:text-gray-900'
+  }`
+  const ariaCurrent = current ? 'page' : undefined
+  if (plain) {
+    return (
+      <a href={href} className={className} aria-current={ariaCurrent}>
+        {children}
+      </a>
+    )
+  }
+  return (
+    <Link href={href} className={className} aria-current={ariaCurrent}>
+      {children}
+    </Link>
+  )
+}
+
 export function Nav() {
+  const pathname = usePathname()
   const { session, logout, getIdToken } = useAuth()
   // The email address, not `cognito:username`. The pool uses
   // username_attributes = ["email"], so Cognito generates the username as an
@@ -53,55 +111,14 @@ export function Nav() {
   return (
     <nav className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3 border-b px-6 py-4">
       <div className="flex min-w-0 flex-wrap items-center gap-x-6 gap-y-2">
-        <span className="text-lg font-semibold">{PORTAL_TITLE}</span>
-        <Link
-          href="/admin/microservices/"
-          className="whitespace-nowrap text-sm text-gray-600 hover:text-gray-900"
-        >
-          Microservices
+        <Link href="/admin/" className="text-lg font-semibold">
+          {PORTAL_TITLE}
         </Link>
-        <Link
-          href="/admin/marketplace/"
-          className="whitespace-nowrap text-sm text-gray-600 hover:text-gray-900"
-        >
-          Marketplace
-        </Link>
-        <Link
-          href="/admin/plugins/"
-          className="whitespace-nowrap text-sm text-gray-600 hover:text-gray-900"
-        >
-          Plugins
-        </Link>
-        <Link
-          href="/admin/endpoints/"
-          className="whitespace-nowrap text-sm text-gray-600 hover:text-gray-900"
-        >
-          Endpoints
-        </Link>
-        <Link
-          href="/admin/users/"
-          className="whitespace-nowrap text-sm text-gray-600 hover:text-gray-900"
-        >
-          Users
-        </Link>
-        <Link
-          href="/admin/orchestration/"
-          className="whitespace-nowrap text-sm text-gray-600 hover:text-gray-900"
-        >
-          Workflows
-        </Link>
-        <Link
-          href="/admin/agent-runs/"
-          className="whitespace-nowrap text-sm text-gray-600 hover:text-gray-900"
-        >
-          Agent runs
-        </Link>
-        <Link
-          href="/admin/prompt-components/"
-          className="whitespace-nowrap text-sm text-gray-600 hover:text-gray-900"
-        >
-          Prompt library
-        </Link>
+        {CORE_LINKS.map((link) => (
+          <NavLink key={link.href} href={link.href} pathname={pathname}>
+            {link.label}
+          </NavLink>
+        ))}
         {/*
          * An instance's OWN admin surfaces (ADR-0028). Declared in the
          * user-owned `@/instance-nav`, rendered after the core links, so
@@ -109,13 +126,9 @@ export function Nav() {
          * base template declares none, so this renders nothing.
          */}
         {resolveInstanceNavLinks(INSTANCE_NAV_LINKS).map((link) => (
-          <Link
-            key={link.href}
-            href={link.href}
-            className="whitespace-nowrap text-sm text-gray-600 hover:text-gray-900"
-          >
+          <NavLink key={link.href} href={link.href} pathname={pathname}>
             {link.label}
-          </Link>
+          </NavLink>
         ))}
         {/*
          * Installed plugins' declared admin surfaces (issue #1555). Renders
@@ -125,13 +138,9 @@ export function Nav() {
          * routing (and its trailing-slash normalisation) doesn't apply.
          */}
         {pluginLinks.map((link) => (
-          <a
-            key={link.href}
-            href={link.href}
-            className="whitespace-nowrap text-sm text-gray-600 hover:text-gray-900"
-          >
+          <NavLink key={link.href} href={link.href} pathname={pathname} plain>
             {link.label}
-          </a>
+          </NavLink>
         ))}
       </div>
       <div className="flex min-w-0 max-w-full items-center gap-4">

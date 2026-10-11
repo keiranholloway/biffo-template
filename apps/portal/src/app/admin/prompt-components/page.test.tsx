@@ -160,6 +160,8 @@ describe('PromptComponentsPage', () => {
     await screen.findByText('house-style')
 
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    expect(deletePromptComponent).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm delete' }))
     await waitFor(() => {
       expect(deletePromptComponent).toHaveBeenCalledWith(expect.anything(), 'pc-1')
     })

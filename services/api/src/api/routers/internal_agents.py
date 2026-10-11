@@ -55,6 +55,7 @@ from ..agent_runs import (
     list_runs_by_ids,
     list_thread_runs,
     reap_stale_runs,
+    run_failure_reason,
     run_reference_payload,
     total_run_costs,
 )
@@ -97,8 +98,7 @@ def _log_failed_run(run: AgentRun, *, source: str) -> None:
     """
     if run.status != "failed":
         return
-    result = run.result if isinstance(run.result, dict) else {}
-    reason = result.get("failure_reason")
+    reason = run_failure_reason(run)
     logger.warning(
         "Agent run recorded as failed",
         extra={

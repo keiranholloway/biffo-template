@@ -164,6 +164,7 @@ def test_create_emits_agent_run_requested_with_a_reference(client, publisher):
         "status": "pending",
         "causation_id": "demo.requested/d1",
         "depth": 0,
+        "failure_reason": None,
     }
 
 
@@ -315,7 +316,15 @@ def test_complete_emits_with_status_and_no_result(client, publisher):
     assert event.payload["status"] == "completed"
     assert event.payload["run_id"] == run_id
     # The result and transcript stay behind the authenticated fetch (§5).
-    assert set(event.payload) == {"run_id", "agent", "status", "causation_id", "depth"}
+    assert set(event.payload) == {
+        "run_id",
+        "agent",
+        "status",
+        "causation_id",
+        "depth",
+        "failure_reason",
+    }
+    assert event.payload["failure_reason"] is None
 
 
 def test_terminal_failure_emits_too(client, publisher):
@@ -1030,3 +1039,25 @@ def test_caller_plugin_is_null_when_the_caller_is_not_a_plugin(agents_app):
     resp = client.post("/api/v1/internal/agent-runs", json=_create_body())
     assert resp.status_code == 201, resp.text
     assert resp.json()["caller_plugin"] is None
+
+
+def test_provider_out_of_credits_failure_has_distinct_plugin_visible_reason(client, publisher):
+    run_id = _create(client).json()["id"]
+    publisher.events.clear()
+
+    resp = client.post(
+        f"{_RUNS}/{run_id}/complete",
+        json={
+            "status": "failed",
+            "error": 'LLM call failed on turn 1: OpenRouter returned 402: {"error":'
+            '{"message":"Insufficient credits."}}',
+        },
+    )
+
+    assert resp.status_code == 200
+    assert len(publisher.events) == 1
+    payload = publisher.events[0].payload
+    assert payload["status"] == "failed"
+    assert payload["failure_reason"] == "model provider out of credits"
+    # The raw provider text stays out of the broadcast payload.
+    assert "OpenRouter" not in str(payload)

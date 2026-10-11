@@ -86,6 +86,32 @@ class RunNotClaimableError(Exception):
         )
 
 
+#: The plugin-visible reason for a run that failed because the model provider
+#: refused it for lack of credit. Distinct on purpose: the runtime's raw error
+#: ("OpenRouter returned 402: Insufficient credits...") otherwise reaches only
+#: Core's log, and a plugin falls back to a generic "the analysis failed" message
+#: (biffo-plugin-idea-scout#197).
+PROVIDER_OUT_OF_CREDITS_REASON = "model provider out of credits"
+
+
+def run_failure_reason(run: AgentRun) -> str | None:
+    """A short, plugin-safe reason for a ``failed`` run, or ``None``.
+
+    The credit-exhaustion case is recognised from the runtime's
+    ``OpenRouter returned 402`` error and reported as a fixed string, so no
+    provider or model text reaches subscribers. Otherwise the run result's own
+    ``failure_reason`` is returned when the runtime supplied one.
+    """
+    if run.status != "failed":
+        return None
+    error = run.error or ""
+    if "returned 402" in error or "Insufficient credits" in error:
+        return PROVIDER_OUT_OF_CREDITS_REASON
+    result = run.result if isinstance(run.result, dict) else {}
+    reason = result.get("failure_reason")
+    return str(reason)[:500] if reason else None
+
+
 def run_reference_payload(run: AgentRun) -> dict[str, object]:
     """The event payload for a run: a **reference**, never the result (ADR-0014 §5).
 
@@ -105,6 +131,7 @@ def run_reference_payload(run: AgentRun) -> dict[str, object]:
         "status": run.status,
         "causation_id": run.causation_id,
         "depth": run.depth,
+        "failure_reason": run_failure_reason(run),
     }
 
 

@@ -59,7 +59,11 @@ vi.mock('@/lib/plugin-api', () => ({
 const instanceLinks = vi.hoisted(() => [] as { href: string; label: string }[])
 vi.mock('@/instance-nav', () => ({ INSTANCE_NAV_LINKS: instanceLinks }))
 
+const pathnameMock = vi.hoisted(() => ({ value: null as string | null }))
+vi.mock('next/navigation', () => ({ usePathname: () => pathnameMock.value }))
+
 beforeEach(() => {
+  pathnameMock.value = null
   // mockReturnValue fixes ONE object, returned by reference on every call —
   // unlike a default implementation closure, which would build a fresh one
   // per call. See SIGNED_OUT_AUTH's comment for why that distinction matters.
@@ -248,5 +252,26 @@ describe('Nav — plugin-declared entries (#1555)', () => {
     render(<Nav />)
 
     expect(fetchInstalledPluginsMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('Nav current page and title', () => {
+  afterEach(cleanup)
+
+  it('marks the current link and its detail pages with aria-current', () => {
+    useAuthMock.mockReturnValue(SIGNED_OUT_AUTH)
+    pathnameMock.value = '/admin/agent-runs/abc/'
+    render(<Nav />)
+    expect(screen.getByRole('link', { name: 'Agent runs' }).getAttribute('aria-current')).toBe(
+      'page',
+    )
+    expect(screen.getByRole('link', { name: 'Users' }).getAttribute('aria-current')).toBeNull()
+  })
+
+  it('links the portal title to /admin/', () => {
+    render(<Nav />)
+    const title = screen.getAllByRole('link')[0]
+    // Outside a Next router the rendered href loses its trailing slash.
+    expect(title?.getAttribute('href')?.replace(/\/$/, '')).toBe('/admin')
   })
 })

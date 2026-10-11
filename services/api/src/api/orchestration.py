@@ -582,6 +582,7 @@ async def list_runs(
     definition_id: str | None = None,
     status: str | None = None,
     limit: int = 50,
+    offset: int = 0,
 ) -> list[RunWithLogs]:
     """Most-recent-first run history, each run carrying its action log.
 
@@ -601,6 +602,7 @@ async def list_runs(
         # two runs claimed from one event share it.
         .order_by(WorkflowRun.created_at.desc(), WorkflowRun.id.desc())
         .limit(limit)
+        .offset(offset)
     )
     if definition_id is not None:
         query = query.where(WorkflowRun.definition_id == definition_id)

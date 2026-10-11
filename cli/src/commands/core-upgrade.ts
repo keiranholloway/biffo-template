@@ -590,6 +590,7 @@ async function runCoreUpgradeResolved(
     toVersion,
     theirsDir,
     explicitTargetTree: options.theirsDir !== undefined,
+    manifest,
   })
 
   const heading = options.apply ? 'Biffo core upgrade' : 'Biffo core upgrade (dry run)'

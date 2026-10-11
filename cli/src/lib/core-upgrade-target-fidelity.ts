@@ -1,8 +1,9 @@
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, lstatSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { coreTag } from './core-template-trees.js'
+import { type CoreManifest, isTemplateOwned } from './core-manifest.js'
 import type { MergeEntry } from './core-upgrade.js'
 import { MIGRATIONS_VERSIONS_DIR, migrationBodyHash } from './core-migrations.js'
 import type { MigrationCarryEntry } from './core-migrations.js'
@@ -88,6 +89,10 @@ export type FidelityReason =
   | 'content-differs'
   /** The upgrade resolved content for a path the target tag does not contain. */
   | 'absent-from-tag'
+  /** The tag ships a symlink here and the upgrade would not leave one (#symlinks). */
+  | 'symlink-missing'
+  /** The tag ships a symlink here but the upgrade resolved a regular file. */
+  | 'symlink-not-delivered'
 
 export interface FidelityFinding {
   path: string
@@ -145,7 +150,12 @@ function blobId(content: string | Buffer): string {
  * quoting, so a path is taken literally rather than parsed out of a C-style
  * string.
  */
-function tagBlobIds(repo: string, tag: string, git: GitRunner): Map<string, string> {
+function tagBlobIds(
+  repo: string,
+  tag: string,
+  git: GitRunner,
+  symlinks: Set<string> = new Set(),
+): Map<string, string> {
   const out = git(['-C', repo, 'ls-tree', '-r', '-z', tag])
   const blobs = new Map<string, string>()
   for (const record of out.split('\0')) {
@@ -158,6 +168,8 @@ function tagBlobIds(repo: string, tag: string, git: GitRunner): Map<string, stri
     // and would otherwise read as a path whose bytes never match anything.
     if (meta[1] !== 'blob' || id === undefined) continue
     blobs.set(record.slice(tab + 1), id)
+    // Mode 120000 is a symlink; its blob is the link target.
+    if (meta[0] === '120000') symlinks.add(record.slice(tab + 1))
   }
   return blobs
 }
@@ -183,6 +195,13 @@ export interface AssertTargetFidelityOptions {
    * — and says so, rather than passing silently.
    */
   explicitTargetTree?: boolean
+  /**
+   * When supplied, every symlink the tag ships at a template-owned path must be
+   * delivered as a symlink: a missing or regular-file result is reported. Not
+   * derivable from `entries` alone — a planner that never enumerated the link
+   * would produce no entry at all, which is exactly the bug this guards.
+   */
+  manifest?: CoreManifest
   git?: GitRunner
 }
 
@@ -205,8 +224,9 @@ export function assertTargetFidelity(options: AssertTargetFidelityOptions): Fide
 
   const tag = coreTag(options.toVersion)
   let blobs: Map<string, string>
+  const tagSymlinks = new Set<string>()
   try {
-    blobs = tagBlobIds(options.templateRepo, tag, git)
+    blobs = tagBlobIds(options.templateRepo, tag, git, tagSymlinks)
   } catch (err) {
     // Cannot-tell is never a pass (AGENTS.md §5/§6). The tag was readable
     // moments ago — the trees came from it — so a failure here is a real
@@ -254,6 +274,34 @@ export function assertTargetFidelity(options: AssertTargetFidelityOptions): Fide
     }
     if (blobId(content) !== expected) {
       findings.push({ path: entry.path, reason: 'content-differs', source })
+      continue
+    }
+    if (tagSymlinks.has(entry.path)) {
+      const delivered =
+        source === 'output'
+          ? entry.symlink === true
+          : (() => {
+              try {
+                return lstatSync(join(options.theirsDir, entry.path)).isSymbolicLink()
+              } catch {
+                return false
+              }
+            })()
+      if (!delivered) {
+        findings.push({ path: entry.path, reason: 'symlink-not-delivered', source })
+      }
+    }
+  }
+
+  if (options.manifest !== undefined) {
+    const byPath = new Map(options.entries.map((e) => [e.path, e]))
+    for (const path of [...tagSymlinks].sort()) {
+      if (!isTemplateOwned(path, options.manifest)) continue
+      checked++
+      const entry = byPath.get(path)
+      if (entry === undefined || entry.status === 'removed' || entry.status === 'remove-conflict') {
+        findings.push({ path, reason: 'symlink-missing', source: 'output' })
+      }
     }
   }
 
@@ -325,7 +373,11 @@ export function fidelityFailure(report: FidelityReport, toVersion: string): stri
     const why =
       f.reason === 'absent-from-tag'
         ? 'resolved content for a path the tag does not contain'
-        : 'content differs from the tag'
+        : f.reason === 'symlink-missing'
+          ? 'the tag ships a symlink here and the upgrade does not deliver it'
+          : f.reason === 'symlink-not-delivered'
+            ? 'the tag ships a symlink here but the upgrade resolved a regular file'
+            : 'content differs from the tag'
     return `  ${f.path} — ${why} (${f.source})`
   })
   return (

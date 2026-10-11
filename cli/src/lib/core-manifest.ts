@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import { existsSync, lstatSync, readFileSync, readdirSync, readlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -402,7 +402,9 @@ export function listTemplateOwnedFiles(
       const abs = join(dir, entry.name)
       if (entry.isDirectory()) {
         walk(abs)
-      } else if (entry.isFile()) {
+      } else if (entry.isFile() || entry.isSymbolicLink()) {
+        // Symlinks are delivered as symlinks (never followed): a template
+        // that ships one must have it reach the instance as one.
         const rel = toPosix(relative(root, abs))
         if (tracked && !tracked.has(rel)) continue
         if (isTemplateOwned(rel, manifest)) out.push(rel)
@@ -450,6 +452,9 @@ function sameFile(a: string, b: string): boolean {
   // Read both and compare buffers directly — no stat-then-read (that's a
   // check-then-use race, CodeQL js/file-system-race). Core-owned files are
   // source-sized, so reading both in full is cheap.
+  const la = lstatSync(a).isSymbolicLink()
+  const lb = lstatSync(b).isSymbolicLink()
+  if (la || lb) return la && lb && readlinkSync(a) === readlinkSync(b)
   return readFileSync(a).equals(readFileSync(b))
 }
 

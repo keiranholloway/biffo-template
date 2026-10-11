@@ -441,6 +441,61 @@ def test_a_claimed_run_still_completes_normally(client):
 # ever. The sweep makes that a definite "failed".
 
 
+def test_failed_completion_logs_run_agent_error_and_reason(client, monkeypatch):
+    calls: list[dict] = []
+    monkeypatch.setattr(
+        internal_agents.logger,
+        "warning",
+        lambda msg, *a, **kw: calls.append({"msg": msg, **kw.get("extra", {})}),
+    )
+    run_id = _create(client).json()["id"]
+
+    resp = client.post(
+        f"{_RUNS}/{run_id}/complete",
+        json={
+            "status": "failed",
+            "error": "x" * 5000,
+            "result": {"failure_reason": "output tool schema rejected"},
+        },
+    )
+
+    assert resp.status_code == 200
+    logged = [c for c in calls if c["msg"] == "Agent run recorded as failed"]
+    assert len(logged) == 1
+    assert logged[0]["run_id"] == run_id
+    assert logged[0]["agent"] == resp.json()["agent_name"]
+    assert logged[0]["failure_reason"] == "output tool schema rejected"
+    assert logged[0]["error"] == "x" * 500
+
+
+def test_succeeded_completion_logs_no_failure(client, monkeypatch):
+    calls: list[str] = []
+    monkeypatch.setattr(internal_agents.logger, "warning", lambda msg, *a, **kw: calls.append(msg))
+    run_id = _create(client).json()["id"]
+    client.post(f"{_RUNS}/{run_id}/complete", json={"status": "completed"})
+    assert "Agent run recorded as failed" not in calls
+
+
+def test_reaped_run_logs_run_agent_and_error(client, monkeypatch):
+    calls: list[dict] = []
+    monkeypatch.setattr(
+        internal_agents.logger,
+        "warning",
+        lambda msg, *a, **kw: calls.append({"msg": msg, **kw.get("extra", {})}),
+    )
+    monkeypatch.setattr(settings, "agent_run_stale_after_seconds", 0)
+    run_id = _create(client).json()["id"]
+    client.post(f"{_RUNS}/{run_id}/claim", json={})
+
+    client.post(f"{_RUNS}/reap", json={})
+
+    logged = [c for c in calls if c["msg"] == "Agent run recorded as failed"]
+    assert len(logged) == 1
+    assert logged[0]["run_id"] == run_id
+    assert logged[0]["source"] == "reaper"
+    assert "Reaped" in logged[0]["error"]
+
+
 def _claimed_run(client: TestClient) -> str:
     """A run in `running` — the only state the reaper considers."""
     run_id = _create(client).json()["id"]

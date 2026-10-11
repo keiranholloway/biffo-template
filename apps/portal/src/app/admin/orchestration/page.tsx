@@ -34,6 +34,7 @@ import {
   triggerKeyOf,
 } from '@/lib/trigger-catalog'
 import { fetchPromptComponents, type PromptComponent } from '@/lib/prompt-components-api'
+import { formatWhen } from '@/lib/agent-runs-format'
 import { isInlinePart, normalizeParts, type PromptPart } from '@/lib/prompt-parts'
 import { AssistantDrawer } from '@/components/assistant-drawer'
 import { PartsField } from './parts-field'
@@ -141,12 +142,6 @@ function secondsToScheduleValue(seconds: number): { value: string; unit: Schedul
     }
   }
   return { value: String(Math.round(seconds / SCHEDULE_UNIT_SECONDS.minutes)), unit: 'minutes' }
-}
-
-function formatWhen(iso: string | null): string {
-  if (iso == null) return '—'
-  const date = new Date(iso)
-  return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString()
 }
 
 /** The error from a run's last recorded action, if it failed. */

@@ -2,10 +2,20 @@
  *  they can be unit-tested — a Next.js page file may only export a default and
  *  the framework's reserved fields. */
 
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+const pad2 = (n: number): string => String(n).padStart(2, '0')
+
+/** Portal-wide timestamp: day first, abbreviated month, 24-hour clock, in the
+ *  viewer's timezone — e.g. "10 Oct 2026, 20:23:11". Independent of the browser's
+ *  language so it reads the same for every admin. */
 export function formatWhen(iso: string | null): string {
   if (iso == null) return '—'
-  const date = new Date(iso)
-  return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString()
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return '—'
+  const day = String(d.getDate())
+  const time = `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`
+  return `${day} ${MONTHS[d.getMonth()] ?? ''} ${String(d.getFullYear())}, ${time}`
 }
 
 /** Human-readable run duration from the two timings, e.g. "1.4s" or "—". */

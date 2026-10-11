@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatCost, formatDuration, formatMeanCost } from './agent-runs-format'
+import { formatCost, formatDuration, formatMeanCost, formatWhen } from './agent-runs-format'
 
 describe('formatDuration', () => {
   it('renders sub-second, second, minute and null cases', () => {
@@ -37,5 +37,14 @@ describe('formatMeanCost', () => {
 
   it('renders four-decimal dollars for typical values', () => {
     expect(formatMeanCost(0.05, 10)).toBe('$0.0050')
+  })
+})
+
+describe('formatWhen', () => {
+  it('is day-first with a 24-hour clock, independent of locale', () => {
+    expect(formatWhen('2026-10-10T20:23:11')).toBe('10 Oct 2026, 20:23:11')
+    expect(formatWhen('2026-10-11T07:21:51')).toBe('11 Oct 2026, 07:21:51')
+    expect(formatWhen(null)).toBe('—')
+    expect(formatWhen('nope')).toBe('—')
   })
 })

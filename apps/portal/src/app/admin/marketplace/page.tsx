@@ -2,11 +2,21 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { PluginCard } from '@/components/PluginCard'
-import { fetchActivePlugins, PluginRegistryError, type RegistryPlugin } from '@/lib/plugin-api'
+import { useAuth } from '@/context/auth-context'
+import { createApiClient } from '@/lib/api-client'
+import {
+  fetchActivePlugins,
+  fetchInstalledPlugins,
+  PluginRegistryError,
+  type RegistryPlugin,
+} from '@/lib/plugin-api'
 
 export default function MarketplacePage() {
   const [plugins, setPlugins] = useState<RegistryPlugin[] | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const { getIdToken } = useAuth()
+  // null = not known (request pending or failed): cards then show no install state.
+  const [installedNames, setInstalledNames] = useState<Set<string> | null>(null)
   const [search, setSearch] = useState('')
   const [selectedTag, setSelectedTag] = useState<string | null>(null)
 
@@ -19,6 +29,17 @@ export default function MarketplacePage() {
         )
       })
   }, [])
+
+  useEffect(() => {
+    const client = createApiClient(getIdToken)
+    fetchInstalledPlugins(client)
+      .then((installed) => {
+        setInstalledNames(new Set(installed.map((p) => p.name)))
+      })
+      .catch(() => {
+        setInstalledNames(null)
+      })
+  }, [getIdToken])
 
   const tags = useMemo(() => {
     const seen = new Set<string>()
@@ -128,7 +149,11 @@ export default function MarketplacePage() {
           ) : (
             <div className="mt-6 grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
               {filteredPlugins.map((plugin) => (
-                <PluginCard key={plugin.name} plugin={plugin} />
+                <PluginCard
+                  key={plugin.name}
+                  plugin={plugin}
+                  installed={installedNames == null ? null : installedNames.has(plugin.name)}
+                />
               ))}
             </div>
           )}

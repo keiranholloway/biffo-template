@@ -94,7 +94,7 @@ describe('EndpointsPage', () => {
       expect(screen.getAllByText('/api/v1/plugins/rbac/roles')).toHaveLength(2)
     })
     expect(screen.getAllByText('POST').length).toBeGreaterThanOrEqual(1)
-    expect(screen.getByText('admin')).toBeInTheDocument()
+    expect(screen.getByText('admin', { selector: 'span' })).toBeInTheDocument()
     // empty required_role renders as "any authenticated"
     expect(screen.getAllByText('any authenticated').length).toBeGreaterThanOrEqual(1)
     // hand-written routes are listed too (all routes, swagger-ish), owned by core
@@ -248,6 +248,33 @@ describe('EndpointsPage', () => {
     })
     // No success banner on failure.
     expect(screen.queryByRole('link', { name: 'Review pull request' })).not.toBeInTheDocument()
+  })
+
+  it('filters by path text and by source', async () => {
+    fetchEndpoints.mockResolvedValue(endpoints)
+    render(<EndpointsPage />)
+    await screen.findByText('/api/v1/public/demo-requests')
+    const user = userEvent.setup()
+
+    await user.selectOptions(screen.getByLabelText('Source'), 'plugins')
+    expect(screen.queryByText('/api/v1/public/demo-requests')).not.toBeInTheDocument()
+    expect(screen.getAllByText('/api/v1/plugins/rbac/roles')).toHaveLength(2)
+
+    await user.selectOptions(screen.getByLabelText('Source'), 'all')
+    await user.type(screen.getByLabelText('Search path'), 'demo')
+    expect(screen.getByText('/api/v1/public/demo-requests')).toBeInTheDocument()
+    expect(screen.queryByText('/api/v1/plugins/rbac/roles')).not.toBeInTheDocument()
+  })
+
+  it('shows a one-line summary and the full description on expand', async () => {
+    const long = 'Record one spend entry (admin only). Written by something that confirms things.'
+    fetchEndpoints.mockResolvedValue([{ ...endpoints[2], summary: long }])
+    fetchEndpointDetail.mockResolvedValue(null)
+    render(<EndpointsPage />)
+    expect(await screen.findByText('Record one spend entry (admin only).')).toBeInTheDocument()
+    expect(screen.queryByText(long)).not.toBeInTheDocument()
+    await userEvent.setup().click(screen.getByRole('button', { name: /Show details/ }))
+    expect(await screen.findByText(long)).toBeInTheDocument()
   })
 
   it('offers the live group list, including groups outside the built-in list', async () => {

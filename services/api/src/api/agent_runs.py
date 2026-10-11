@@ -410,6 +410,9 @@ async def list_runs(
                 # MissingGreenlet under async SQLAlchemy. The existing list tests
                 # caught exactly that.
                 AgentRun.caller_plugin,
+                # The summary carries a bounded copy so the list can say why a
+                # run failed; unloaded would raise MissingGreenlet in `_summary`.
+                AgentRun.error,
                 AgentRun.definition_snapshot,
                 AgentRun.input_tokens,
                 AgentRun.output_tokens,

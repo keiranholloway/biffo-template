@@ -5,6 +5,7 @@ import EndpointsPage from './page'
 import { ApiError } from '@/lib/api-client'
 import type * as ApiClientModule from '@/lib/api-client'
 import type * as EndpointApiModule from '@/lib/endpoint-api'
+import type * as UserAdminApiModule from '@/lib/user-admin-api'
 import type { Endpoint } from '@/lib/endpoint-api'
 
 vi.mock('@/context/auth-context', () => ({
@@ -28,6 +29,12 @@ const { fetchEndpoints, changeEndpointPermission, fetchEndpointDetail } = vi.hoi
 vi.mock('@/lib/endpoint-api', async () => {
   const actual = await vi.importActual<typeof EndpointApiModule>('@/lib/endpoint-api')
   return { ...actual, fetchEndpoints, changeEndpointPermission, fetchEndpointDetail }
+})
+
+const { fetchGroups } = vi.hoisted(() => ({ fetchGroups: vi.fn() }))
+vi.mock('@/lib/user-admin-api', async () => {
+  const actual = await vi.importActual<typeof UserAdminApiModule>('@/lib/user-admin-api')
+  return { ...actual, fetchGroups }
 })
 
 const endpoints: Endpoint[] = [
@@ -74,6 +81,8 @@ describe('EndpointsPage', () => {
     fetchEndpoints.mockReset()
     changeEndpointPermission.mockReset()
     fetchEndpointDetail.mockReset()
+    fetchGroups.mockReset()
+    fetchGroups.mockResolvedValue({ groups: ['founder', 'editor', 'admin', 'viewer'] })
   })
 
   it('renders the live endpoints with method, path and role', async () => {
@@ -239,5 +248,23 @@ describe('EndpointsPage', () => {
     })
     // No success banner on failure.
     expect(screen.queryByRole('link', { name: 'Review pull request' })).not.toBeInTheDocument()
+  })
+
+  it('offers the live group list, including groups outside the built-in list', async () => {
+    fetchEndpoints.mockResolvedValue(endpoints)
+    const user = userEvent.setup()
+
+    render(<EndpointsPage />)
+    await waitFor(() => {
+      expect(screen.getAllByRole('button', { name: 'Change' })).toHaveLength(2)
+    })
+    const firstChange = screen.getAllByRole('button', { name: 'Change' }).at(0)
+    if (firstChange == null) throw new Error('expected a Change button')
+    await user.click(firstChange)
+    const form = screen.getByLabelText('Change permission for GET /api/v1/plugins/rbac/roles')
+    await waitFor(() => {
+      expect(within(form).getByLabelText('founder')).toBeInTheDocument()
+    })
+    expect(within(form).getAllByRole('button', { name: 'Cancel' })).toHaveLength(1)
   })
 })

@@ -6,7 +6,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useAuth } from '@/context/auth-context'
 import { createApiClient } from '@/lib/api-client'
 import { fetchAgentRun, type AgentRunMessage, type AgentRunResponse } from '@/lib/agent-runs-api'
-import { formatCost, formatWhen } from '@/lib/agent-runs-format'
+import { formatCost, formatWhen, splitUrls, summarizeRunError } from '@/lib/agent-runs-format'
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : 'Unknown error'
@@ -244,9 +244,29 @@ export function AgentRunDetailClient() {
       {run.error != null && run.error !== '' && (
         <section className="mt-8">
           <h2 className="text-lg font-semibold text-rose-700">Error</h2>
-          <pre className="mt-2 overflow-x-auto whitespace-pre-wrap break-words rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">
-            {run.error}
-          </pre>
+          <p className="mt-2 text-sm font-medium text-rose-800">{summarizeRunError(run.error)}</p>
+          <details className="mt-2">
+            <summary className="cursor-pointer text-xs text-gray-500">
+              Full upstream response
+            </summary>
+            <pre className="mt-2 overflow-x-auto whitespace-pre-wrap break-words rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">
+              {splitUrls(run.error).map((part, i) =>
+                part.url ? (
+                  <a
+                    key={i}
+                    href={part.text}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="underline"
+                  >
+                    {part.text}
+                  </a>
+                ) : (
+                  <span key={i}>{part.text}</span>
+                ),
+              )}
+            </pre>
+          </details>
         </section>
       )}
 

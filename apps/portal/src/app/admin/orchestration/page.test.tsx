@@ -1247,6 +1247,20 @@ describe('OrchestrationPage', () => {
     expect(await screen.findByText('succeeded')).toBeInTheDocument()
   })
 
+  it('says the run history is partial and loads older runs', async () => {
+    fetchWorkflows.mockResolvedValue([notify])
+    const page = Array.from({ length: 26 }, (_, i) => ({ ...succeededRun, id: `r${String(i)}` }))
+    fetchRuns.mockResolvedValueOnce(page)
+    fetchRuns.mockResolvedValueOnce([{ ...succeededRun, id: 'older' }])
+
+    render(<OrchestrationPage />)
+
+    expect(await screen.findByText(/Showing the newest 25 runs/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Load older runs' }))
+    expect(await screen.findByText('Showing all 26 runs')).toBeInTheDocument()
+    expect(fetchRuns).toHaveBeenLastCalledWith(expect.anything(), 26, 25)
+  })
+
   it('shows the error of a failed run', async () => {
     fetchWorkflows.mockResolvedValue([notify])
     fetchRuns.mockResolvedValue([

@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { InstalledPluginDetail } from './InstalledPluginDetail'
 import type * as PluginApiModule from '@/lib/plugin-api'
@@ -95,6 +95,24 @@ describe('InstalledPluginDetail', () => {
     expect(screen.getByText('POST')).toBeInTheDocument()
     expect(screen.getAllByText('list')).toHaveLength(2)
     expect(screen.getByText('create')).toBeInTheDocument()
+  })
+
+  it('has a back link, colours methods, and expands table columns', async () => {
+    fetchInstalledPlugins.mockResolvedValue([rbacPlugin])
+    render(<InstalledPluginDetail name="rbac" />)
+
+    expect(await screen.findByRole('link', { name: /Back to installed plugins/ })).toHaveAttribute(
+      'href',
+      '/admin/plugins',
+    )
+    expect(screen.getAllByText('GET')[0]).toHaveClass('bg-sky-100')
+    expect(screen.getByText('POST')).toHaveClass('bg-emerald-100')
+
+    const row = screen.getByRole('button', { name: /rbac_roles/ })
+    expect(row).toHaveAttribute('aria-expanded', 'false')
+    fireEvent.click(row)
+    expect(row).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByText('String(100)')).toBeInTheDocument()
   })
 
   it('shows an empty state when a plugin declares no routes', async () => {

@@ -560,7 +560,7 @@ jobs:
                   '```' \
                   "git clone ${source} ../${repo_slug}   # if you do not already have it checked out" \
                   "cd ${instance}" \
-                  "npx @biffo/cli plugin upgrade ${plugin} --local ../${repo_slug}" \
+                  "npx @biffo/cli plugin upgrade --local ../${repo_slug} --force --non-interactive" \
                   '```')
                 ;;
               *)

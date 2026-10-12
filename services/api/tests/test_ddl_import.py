@@ -288,6 +288,30 @@ class TestDerivedApplyOrder:
         with pytest.raises(DdlOrderUnavailableError, match="shallow"):
             list_sql_files(clone / "acme")
 
+    def test_history_is_untrusted_when_git_cannot_name_the_shallow_file(self, repo, monkeypatch):
+        monkeypatch.setattr(ddl_order, "_git", lambda *_a, **_k: None)
+        assert ddl_order._history_is_shallow(repo / "acme", ("HEAD",)) is True
+
+    def test_history_is_untrusted_when_the_shallow_file_cannot_be_read(self, repo):
+        (repo / ".git" / "shallow").mkdir()
+        assert ddl_order._history_is_shallow(repo / "acme", ("HEAD",)) is True
+
+    def test_an_empty_shallow_file_is_not_a_boundary(self, repo):
+        (repo / ".git" / "shallow").write_text("\n")
+        assert ddl_order._history_is_shallow(repo / "acme", ("HEAD",)) is False
+
+    def test_history_is_untrusted_when_a_ref_cannot_be_walked(self, repo, monkeypatch):
+        (repo / ".git" / "shallow").write_text("0" * 40 + "\n")
+        real_git = ddl_order._git
+
+        def fake_git(import_dir, *args):
+            if args and args[0] == "rev-list":
+                return None
+            return real_git(import_dir, *args)
+
+        monkeypatch.setattr(ddl_order, "_git", fake_git)
+        assert ddl_order._history_is_shallow(repo / "acme", ("HEAD",)) is True
+
     def test_a_repo_with_no_shallow_file_orders_as_before(self, repo):
         self._commit(repo, "zeta_first_merged.sql")
         self._commit(repo, "alpha_second_merged.sql")

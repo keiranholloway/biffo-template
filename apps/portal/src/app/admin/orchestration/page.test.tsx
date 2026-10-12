@@ -656,7 +656,7 @@ describe('OrchestrationPage', () => {
     expect(await screen.findByText('Notify sales')).toBeInTheDocument()
     // The trigger is shown by its catalog label, not the raw source/detail_type.
     expect(screen.getAllByText('Demo requested').length).toBeGreaterThanOrEqual(1)
-    expect(screen.getByText('disabled')).toBeInTheDocument()
+    expect(screen.getByText('Disabled')).toBeInTheDocument()
   })
 
   it('shows an empty state when there are no workflows', async () => {

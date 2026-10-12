@@ -30,8 +30,9 @@ different names, and each one's position is decided only when it merges.
 
 ## Where the order comes from at runtime
 
-From git when this is a full (non-shallow) clone; a shallow clone reports every
-file as added by its one commit, so it is refused rather than trusted. The
+From git when the history it reads is complete; a shallow boundary on the first-parent
+history of `origin/dev` or `HEAD` reports every file as added by one commit, so it is
+refused rather than trusted. Shallow entries for unrelated commits do not matter. The
 deployed Lambda has no git, so the deploy packaging writes the order into the
 zip as `<import>/.apply-order` (`python3 ddl_order.py --manifest <dir>`, from a
 `fetch-depth: 0` checkout) and the Lambda reads that. With neither, the order
@@ -75,7 +76,7 @@ def apply_order(import_dir: Path) -> list[Path]:
     if len(unnumbered) <= 1:
         return numbered + unnumbered
 
-    added = _git_added_order(import_dir)
+    added, reason = _derive_added_order(import_dir)
     if added is not None:
         never = len(added) + 1
         unnumbered.sort(key=lambda f: (added.get(f.name, never), f.name))
@@ -85,10 +86,19 @@ def apply_order(import_dir: Path) -> list[Path]:
     if manifest.is_file():
         return _read_manifest(manifest, files)
 
+    if reason is not None and reason.shallow:
+        why = (
+            "The git history is shallow, which cannot order them; "
+            "fetch full history (fetch-depth: 0)."
+        )
+    else:
+        why = (
+            f"Git could not read the history: {reason.detail if reason else 'git is unavailable'}."
+        )
     raise DdlOrderUnavailableError(
         f"Cannot derive the apply order of {import_dir}: it has unnumbered modules "
-        f"({', '.join(f.name for f in unnumbered)}), and neither a full git clone nor "
-        f"an {MANIFEST_NAME} manifest is available. {_explain_git_failure(import_dir)}"
+        f"({', '.join(f.name for f in unnumbered)}), and neither a usable git history nor "
+        f"an {MANIFEST_NAME} manifest is available. {why}"
     )
 
 
@@ -117,27 +127,44 @@ def format_manifest(import_dir: Path) -> str:
 
 def new_numbered_modules(import_dir: Path, base_ref: str = DEFAULT_BRANCH_REF) -> list[str] | None:
     """Numbered files this change adds to an import that already exists at its merge
-    base with `base_ref`. None when git cannot tell (no repo, shallow, no `base_ref`).
+    base with `base_ref`. None when git cannot tell (no repo, shallow, no `base_ref`);
+    `new_numbered_modules_or_reason` says why.
 
     A new import (absent at the merge base) may bring its numbered chain with it:
     `biffo data import` vendors an existing chain in one commit.
     """
-    if _git(import_dir, "rev-parse", "--show-toplevel") is None or _is_shallow(import_dir):
-        return None
+    return new_numbered_modules_or_reason(import_dir, base_ref)[0]
+
+
+def new_numbered_modules_or_reason(
+    import_dir: Path, base_ref: str = DEFAULT_BRANCH_REF
+) -> tuple[list[str] | None, _Unavailable | None]:
+    """`new_numbered_modules`' result, with the reason when there is none: shallow
+    history (`.shallow`), or the failing git command, exit code and stderr (`.detail`)."""
+    if _git(import_dir, "rev-parse", "--show-toplevel") is None:
+        return None, _Unavailable(_failure_detail())
+    problem = _history_problem(import_dir, (base_ref, "HEAD"))
+    if problem is not None:
+        return None, problem
     base = _git(import_dir, "merge-base", "HEAD", base_ref)
     if base is None:
-        return None
+        return None, _Unavailable(_failure_detail())
     base = base.strip()
     existing_at_base = _git(import_dir, "ls-tree", "--name-only", base, "--", ".")
     if existing_at_base is None:
-        return None
+        return None, _Unavailable(_failure_detail())
     base_names = {
         Path(line).name for line in existing_at_base.splitlines() if line.endswith(".sql")
     }
     if not base_names:
-        return []
-    return sorted(
-        f.name for f in import_dir.glob("*.sql") if is_numbered(f.name) and f.name not in base_names
+        return [], None
+    return (
+        sorted(
+            f.name
+            for f in import_dir.glob("*.sql")
+            if is_numbered(f.name) and f.name not in base_names
+        ),
+        None,
     )
 
 
@@ -160,8 +187,24 @@ def _read_manifest(manifest: Path, files: list[Path]) -> list[Path]:
     return [by_name[name] for name in names]
 
 
-def _git_run(import_dir: Path, *args: str) -> tuple[int, str, str]:
-    """Run git; (exit code, stdout, stderr). Exit code -1 when git cannot be started."""
+class _Unavailable:
+    """Why git could not give an answer: shallow history, or a git command that failed."""
+
+    def __init__(self, detail: str, *, shallow: bool = False) -> None:
+        self.detail = detail
+        self.shallow = shallow
+
+
+# The most recent failed git call (command, exit code, stderr), so the caller that
+# got `None` from `_git` can say what actually failed instead of guessing "shallow".
+_last_failure: str | None = None
+
+
+def _git(import_dir: Path, *args: str) -> str | None:
+    """Stdout of `git -C import_dir args`, or None on failure. The failure (command,
+    exit code, stderr) is kept in `_last_failure`."""
+    global _last_failure
+    command = f"git -C {import_dir} {' '.join(args)}"
     try:
         result = subprocess.run(  # noqa: S603 -- fixed git argv, no shell
             ["git", "-C", str(import_dir), *args],  # noqa: S607
@@ -170,64 +213,60 @@ def _git_run(import_dir: Path, *args: str) -> tuple[int, str, str]:
             check=False,
         )
     except OSError as exc:
-        return -1, "", str(exc)
-    return result.returncode, result.stdout, result.stderr
-
-
-def _explain_git_failure(import_dir: Path) -> str:
-    """Why `_git_added_order` returned None, with git's own stderr, so a failed git
-    call is never reported as a shallow clone."""
-    steps: list[tuple[str, ...]] = [
-        ("rev-parse", "--show-toplevel"),
-        ("rev-parse", "--is-shallow-repository"),
-    ]
-    for args in steps:
-        code, out, err = _git_run(import_dir, *args)
-        if code != 0:
-            return (
-                f"`git {' '.join(args)}` failed with exit code {code}: "
-                f"{err.strip() or '(no stderr)'}. This is a git failure, not a shallow "
-                "clone (a 'dubious ownership' refusal needs `safe.directory`)."
-            )
-        if args[1] == "--is-shallow-repository" and out != "false\n":
-            return (
-                f"`git rev-parse --is-shallow-repository` printed {out.strip()!r}: "
-                "a shallow clone cannot order them; fetch full history (fetch-depth: 0)."
-            )
-    return (
-        "git rev-parse succeeded on a full clone, so `git log` must have failed "
-        "(see its stderr below, or run it by hand); fetch full history (fetch-depth: 0)."
-        + _log_failure_detail(import_dir)
-    )
-
-
-def _log_failure_detail(import_dir: Path) -> str:
-    for ref in (DEFAULT_BRANCH_REF, "HEAD"):
-        code, _, err = _git_run(import_dir, "log", "-1", "--format=%H", ref, "--", ".")
-        if code != 0 and _git_run(import_dir, "rev-parse", "--verify", "--quiet", ref)[0] == 0:
-            return f" `git log {ref}` exit code {code}: {err.strip() or '(no stderr)'}"
-    return ""
-
-
-def _git(import_dir: Path, *args: str) -> str | None:
-    try:
-        result = subprocess.run(  # noqa: S603 -- fixed git argv, no shell
-            ["git", "-C", str(import_dir), *args],  # noqa: S607
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-    except OSError:
+        _last_failure = f"`{command}` could not run: {exc}"
         return None
-    return result.stdout if result.returncode == 0 else None
+    if result.returncode != 0:
+        stderr = (result.stderr or "").strip() or "<no stderr>"
+        _last_failure = f"`{command}` exited {result.returncode}: {stderr}"
+        return None
+    return result.stdout
 
 
-def _is_shallow(import_dir: Path) -> bool:
-    return _git(import_dir, "rev-parse", "--is-shallow-repository") != "false\n"
+def _failure_detail() -> str:
+    return _last_failure or "git returned no output"
+
+
+def _history_is_shallow(import_dir: Path, refs: tuple[str, ...]) -> bool:
+    """True when the history cannot be trusted (`_history_problem`)."""
+    return _history_problem(import_dir, refs) is not None
+
+
+def _history_problem(import_dir: Path, refs: tuple[str, ...]) -> _Unavailable | None:
+    """None when the history is complete; else why not: a shallow boundary cuts the
+    history reachable from `refs` short, or a git command failed.
+
+    `git rev-parse --is-shallow-repository` is repo-wide: a depth-1 fetch of some
+    unrelated commit (a PR merge ref on a reused runner) leaves an entry in
+    `.git/shallow` that `fetch --unshallow` of the branches never removes, although
+    every branch's history is complete. So read the boundary commits themselves and
+    refuse only when one is reachable from a ref that is actually read.
+    """
+    shallow_path = _git(import_dir, "rev-parse", "--git-path", "shallow")
+    if shallow_path is None:
+        return _Unavailable(_failure_detail())  # git cannot tell: do not trust the history
+    path = Path(import_dir) / shallow_path.strip()
+    try:
+        boundary = {line.strip() for line in path.read_text().splitlines() if line.strip()}
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        return _Unavailable(f"cannot read {path}: {exc}")
+    if not boundary:
+        return None
+    for ref in refs:
+        if _git(import_dir, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}") is None:
+            continue
+        reachable = _git(import_dir, "rev-list", ref)
+        if reachable is None:
+            return _Unavailable(_failure_detail())
+        if boundary.intersection(reachable.split()):
+            return _Unavailable(f"{ref} reaches a shallow boundary", shallow=True)
+    return None
 
 
 def _git_added_order(import_dir: Path) -> dict[str, int] | None:
-    """filename -> its merge position, or None when this is not a full git clone.
+    """filename -> its merge position, or None when this is not a full git clone
+    (`_derive_added_order` also says why).
 
     The position is the index of the first-parent commit that added the file on
     the default branch (`DEFAULT_BRANCH_REF`) when it is there, else on `HEAD`,
@@ -235,8 +274,16 @@ def _git_added_order(import_dir: Path) -> dict[str, int] | None:
     a promotion branch (staging, main) receives dev's modules in one promotion
     commit, and its own first-parent history would order them by name.
     """
-    if _git(import_dir, "rev-parse", "--show-toplevel") is None or _is_shallow(import_dir):
-        return None
+    return _derive_added_order(import_dir)[0]
+
+
+def _derive_added_order(import_dir: Path) -> tuple[dict[str, int] | None, _Unavailable | None]:
+    """`_git_added_order`'s result, with the reason when there is none."""
+    if _git(import_dir, "rev-parse", "--show-toplevel") is None:
+        return None, _Unavailable(_failure_detail())
+    problem = _history_problem(import_dir, (DEFAULT_BRANCH_REF, "HEAD"))
+    if problem is not None:
+        return None, problem
     added: dict[str, int] = {}
     offset = 0
     for ref in (DEFAULT_BRANCH_REF, "HEAD"):
@@ -258,7 +305,7 @@ def _git_added_order(import_dir: Path) -> dict[str, int] | None:
             ".",
         )
         if log is None:
-            return None
+            return None, _Unavailable(_failure_detail())
         commits = log.split("\x00")
         on_ref: dict[str, int] = {}
         for index, commit in enumerate(commits):
@@ -268,7 +315,7 @@ def _git_added_order(import_dir: Path) -> dict[str, int] | None:
         for name, position in on_ref.items():
             added.setdefault(name, position)
         offset += len(commits)
-    return added
+    return added, None
 
 
 def main(argv: list[str]) -> int:

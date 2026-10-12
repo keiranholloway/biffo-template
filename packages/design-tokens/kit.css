@@ -63,8 +63,9 @@
 }
 
 .biffo-btn-primary {
-  background: var(--text);
-  border-color: var(--text);
+  /* Portal parity: --action-primary is rgb(17,24,39), not --text. */
+  background: var(--action-primary);
+  border-color: var(--action-primary);
   color: var(--text-invert);
 }
 
@@ -74,8 +75,9 @@
 
 .biffo-btn-delete {
   background: var(--bg);
-  border-color: var(--state-negative);
-  color: var(--state-negative);
+  /* Portal parity: --action-destructive is rgb(190,18,60), not --state-negative. */
+  border-color: var(--action-destructive);
+  color: var(--action-destructive);
 }
 
 .biffo-btn-delete:hover:not(:disabled) {

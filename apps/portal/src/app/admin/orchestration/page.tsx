@@ -1583,10 +1583,10 @@ export default function OrchestrationPage() {
                 Status:{' '}
                 {editingId != null && enabled ? (
                   <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-emerald-700">
-                    enabled
+                    Enabled
                   </span>
                 ) : (
-                  <span className="rounded bg-gray-100 px-1.5 py-0.5 text-gray-600">draft</span>
+                  <span className="rounded bg-gray-100 px-1.5 py-0.5 text-gray-600">Draft</span>
                 )}
                 <span className="ml-1">— enable it below once a test passes.</span>
               </p>
@@ -2490,11 +2490,11 @@ export default function OrchestrationPage() {
                   <td className="px-4 py-2">
                     {w.enabled ? (
                       <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-xs text-emerald-700">
-                        enabled
+                        Enabled
                       </span>
                     ) : (
                       <span className="rounded bg-gray-100 px-1.5 py-0.5 text-xs text-gray-600">
-                        disabled
+                        Disabled
                       </span>
                     )}
                   </td>

@@ -23,7 +23,11 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from api.ddl_order import DEFAULT_BRANCH_REF, new_numbered_modules
+from api import ddl_order
+from api.ddl_order import (
+    new_numbered_modules,
+    new_numbered_modules_or_reason,
+)
 
 # services/api/tests/ -> services/api -> services -> <repo root>
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -64,11 +68,16 @@ class TestNoNewNumberedModules:
             pytest.skip("no authored db/imports/<name>/ in this repo")
         found: dict[str, list[str]] = {}
         for import_dir in dirs:
-            added = new_numbered_modules(import_dir)
+            added, reason = new_numbered_modules_or_reason(import_dir)
             assert added is not None, (
                 f"Cannot tell which modules this change adds to {import_dir.name}: "
-                f"{DEFAULT_BRANCH_REF} does not resolve, or the clone is shallow. "
-                "It is NOT passing. In CI, add `fetch-depth: 0` to the job's checkout."
+                + (
+                    f"the git history is shallow ({reason.detail}); in CI, add "
+                    "`fetch-depth: 0` to the job's checkout."
+                    if reason is not None and reason.shallow
+                    else f"git failed: {reason.detail if reason else 'unknown'}"
+                )
+                + ". It is NOT passing."
             )
             if added:
                 found[import_dir.name] = added
@@ -131,3 +140,31 @@ class TestNewNumberedModules:
         (tmp_path / "widgets").mkdir()
         (tmp_path / "widgets" / "002_more.sql").write_text("SELECT 1;\n")
         assert new_numbered_modules(tmp_path / "widgets") is None
+
+    def test_a_git_failure_on_a_full_clone_is_reported_not_called_shallow(
+        self, repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        real_run = ddl_order.subprocess.run
+
+        def fake(cmd, *args, **kwargs):
+            if "merge-base" in cmd:
+                return subprocess.CompletedProcess(cmd, 128, "", "fatal: dubious ownership")
+            return real_run(cmd, *args, **kwargs)
+
+        monkeypatch.setattr(ddl_order.subprocess, "run", fake)
+        added, reason = new_numbered_modules_or_reason(repo / "db/imports/widgets")
+        assert added is None
+        assert reason is not None
+        assert not reason.shallow
+        assert "merge-base" in reason.detail
+        assert "128" in reason.detail
+        assert "dubious ownership" in reason.detail
+        assert new_numbered_modules(repo / "db/imports/widgets") is None
+
+    def test_shallow_history_is_flagged_shallow(self, repo: Path) -> None:
+        head = _git_ok(repo, "rev-parse", "HEAD").strip()
+        (repo / ".git" / "shallow").write_text(head + "\n")
+        added, reason = new_numbered_modules_or_reason(repo / "db/imports/widgets")
+        assert added is None
+        assert reason is not None
+        assert reason.shallow

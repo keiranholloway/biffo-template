@@ -30,8 +30,9 @@ different names, and each one's position is decided only when it merges.
 
 ## Where the order comes from at runtime
 
-From git when this is a full (non-shallow) clone; a shallow clone reports every
-file as added by its one commit, so it is refused rather than trusted. The
+From git when the history it reads is complete; a shallow boundary on the first-parent
+history of `origin/dev` or `HEAD` reports every file as added by one commit, so it is
+refused rather than trusted. Shallow entries for unrelated commits do not matter. The
 deployed Lambda has no git, so the deploy packaging writes the order into the
 zip as `<import>/.apply-order` (`python3 ddl_order.py --manifest <dir>`, from a
 `fetch-depth: 0` checkout) and the Lambda reads that. With neither, the order
@@ -123,7 +124,9 @@ def new_numbered_modules(import_dir: Path, base_ref: str = DEFAULT_BRANCH_REF) -
     A new import (absent at the merge base) may bring its numbered chain with it:
     `biffo data import` vendors an existing chain in one commit.
     """
-    if _git(import_dir, "rev-parse", "--show-toplevel") is None or _is_shallow(import_dir):
+    if _git(import_dir, "rev-parse", "--show-toplevel") is None or _history_is_shallow(
+        import_dir, (base_ref, "HEAD")
+    ):
         return None
     base = _git(import_dir, "merge-base", "HEAD", base_ref)
     if base is None:
@@ -174,8 +177,36 @@ def _git(import_dir: Path, *args: str) -> str | None:
     return result.stdout if result.returncode == 0 else None
 
 
-def _is_shallow(import_dir: Path) -> bool:
-    return _git(import_dir, "rev-parse", "--is-shallow-repository") != "false\n"
+def _history_is_shallow(import_dir: Path, refs: tuple[str, ...]) -> bool:
+    """True when the history reachable from `refs` is cut short by a shallow boundary.
+
+    `git rev-parse --is-shallow-repository` is repo-wide: a depth-1 fetch of some
+    unrelated commit (a PR merge ref on a reused runner) leaves an entry in
+    `.git/shallow` that `fetch --unshallow` of the branches never removes, although
+    every branch's history is complete. So read the boundary commits themselves and
+    refuse only when one is reachable from a ref that is actually read.
+    """
+    shallow_path = _git(import_dir, "rev-parse", "--git-path", "shallow")
+    if shallow_path is None:
+        return True  # git cannot tell: do not trust the history
+    path = Path(import_dir) / shallow_path.strip()
+    try:
+        boundary = {line.strip() for line in path.read_text().splitlines() if line.strip()}
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    if not boundary:
+        return False
+    for ref in refs:
+        if _git(import_dir, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}") is None:
+            continue
+        reachable = _git(import_dir, "rev-list", ref)
+        if reachable is None:
+            return True
+        if boundary.intersection(reachable.split()):
+            return True
+    return False
 
 
 def _git_added_order(import_dir: Path) -> dict[str, int] | None:
@@ -187,7 +218,9 @@ def _git_added_order(import_dir: Path) -> dict[str, int] | None:
     a promotion branch (staging, main) receives dev's modules in one promotion
     commit, and its own first-parent history would order them by name.
     """
-    if _git(import_dir, "rev-parse", "--show-toplevel") is None or _is_shallow(import_dir):
+    if _git(import_dir, "rev-parse", "--show-toplevel") is None or _history_is_shallow(
+        import_dir, (DEFAULT_BRANCH_REF, "HEAD")
+    ):
         return None
     added: dict[str, int] = {}
     offset = 0

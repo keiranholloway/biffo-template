@@ -414,6 +414,27 @@ class TestDdlOrderGitFailures:
         self._failing(monkeypatch, "ls-tree")
         assert new_numbered_modules(import_dir) is None
 
+    def test_a_git_failure_on_a_full_clone_is_reported_not_called_shallow(self, tmp_path):
+        import_dir = self._repo(tmp_path)
+        real_run = ddl_order.subprocess.run
+
+        def failing_run(argv, **kwargs):
+            if "log" in argv:
+                return subprocess.CompletedProcess(
+                    argv, 128, "", "fatal: detected dubious ownership"
+                )
+            return real_run(argv, **kwargs)
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(ddl_order.subprocess, "run", failing_run)
+            with pytest.raises(DdlOrderUnavailableError) as excinfo:
+                list_sql_files(import_dir)
+        message = str(excinfo.value)
+        assert "exited 128" in message
+        assert "dubious ownership" in message
+        assert " log " in message
+        assert "shallow" not in message
+
     def test_history_that_cannot_be_read_falls_back_to_the_manifest_or_refuses(
         self, tmp_path, monkeypatch
     ):

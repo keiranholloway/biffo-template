@@ -76,7 +76,7 @@ def apply_order(import_dir: Path) -> list[Path]:
     if len(unnumbered) <= 1:
         return numbered + unnumbered
 
-    added = _git_added_order(import_dir)
+    added, reason = _derive_added_order(import_dir)
     if added is not None:
         never = len(added) + 1
         unnumbered.sort(key=lambda f: (added.get(f.name, never), f.name))
@@ -86,11 +86,19 @@ def apply_order(import_dir: Path) -> list[Path]:
     if manifest.is_file():
         return _read_manifest(manifest, files)
 
+    if reason is not None and reason.shallow:
+        why = (
+            "The git history is shallow, which cannot order them; "
+            "fetch full history (fetch-depth: 0)."
+        )
+    else:
+        why = (
+            f"Git could not read the history: {reason.detail if reason else 'git is unavailable'}."
+        )
     raise DdlOrderUnavailableError(
         f"Cannot derive the apply order of {import_dir}: it has unnumbered modules "
-        f"({', '.join(f.name for f in unnumbered)}), and neither a full git clone nor "
-        f"an {MANIFEST_NAME} manifest is available. A shallow clone cannot order them; "
-        "fetch full history (fetch-depth: 0)."
+        f"({', '.join(f.name for f in unnumbered)}), and neither a usable git history nor "
+        f"an {MANIFEST_NAME} manifest is available. {why}"
     )
 
 
@@ -164,7 +172,24 @@ def _read_manifest(manifest: Path, files: list[Path]) -> list[Path]:
     return [by_name[name] for name in names]
 
 
+class _Unavailable:
+    """Why git could not give an answer: shallow history, or a git command that failed."""
+
+    def __init__(self, detail: str, *, shallow: bool = False) -> None:
+        self.detail = detail
+        self.shallow = shallow
+
+
+# The most recent failed git call (command, exit code, stderr), so the caller that
+# got `None` from `_git` can say what actually failed instead of guessing "shallow".
+_last_failure: str | None = None
+
+
 def _git(import_dir: Path, *args: str) -> str | None:
+    """Stdout of `git -C import_dir args`, or None on failure. The failure (command,
+    exit code, stderr) is kept in `_last_failure`."""
+    global _last_failure
+    command = f"git -C {import_dir} {' '.join(args)}"
     try:
         result = subprocess.run(  # noqa: S603 -- fixed git argv, no shell
             ["git", "-C", str(import_dir), *args],  # noqa: S607
@@ -172,13 +197,28 @@ def _git(import_dir: Path, *args: str) -> str | None:
             text=True,
             check=False,
         )
-    except OSError:
+    except OSError as exc:
+        _last_failure = f"`{command}` could not run: {exc}"
         return None
-    return result.stdout if result.returncode == 0 else None
+    if result.returncode != 0:
+        stderr = (result.stderr or "").strip() or "<no stderr>"
+        _last_failure = f"`{command}` exited {result.returncode}: {stderr}"
+        return None
+    return result.stdout
+
+
+def _failure_detail() -> str:
+    return _last_failure or "git returned no output"
 
 
 def _history_is_shallow(import_dir: Path, refs: tuple[str, ...]) -> bool:
-    """True when the history reachable from `refs` is cut short by a shallow boundary.
+    """True when the history cannot be trusted (`_history_problem`)."""
+    return _history_problem(import_dir, refs) is not None
+
+
+def _history_problem(import_dir: Path, refs: tuple[str, ...]) -> _Unavailable | None:
+    """None when the history is complete; else why not: a shallow boundary cuts the
+    history reachable from `refs` short, or a git command failed.
 
     `git rev-parse --is-shallow-repository` is repo-wide: a depth-1 fetch of some
     unrelated commit (a PR merge ref on a reused runner) leaves an entry in
@@ -188,29 +228,30 @@ def _history_is_shallow(import_dir: Path, refs: tuple[str, ...]) -> bool:
     """
     shallow_path = _git(import_dir, "rev-parse", "--git-path", "shallow")
     if shallow_path is None:
-        return True  # git cannot tell: do not trust the history
+        return _Unavailable(_failure_detail())  # git cannot tell: do not trust the history
     path = Path(import_dir) / shallow_path.strip()
     try:
         boundary = {line.strip() for line in path.read_text().splitlines() if line.strip()}
     except FileNotFoundError:
-        return False
-    except OSError:
-        return True
+        return None
+    except OSError as exc:
+        return _Unavailable(f"cannot read {path}: {exc}")
     if not boundary:
-        return False
+        return None
     for ref in refs:
         if _git(import_dir, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}") is None:
             continue
         reachable = _git(import_dir, "rev-list", ref)
         if reachable is None:
-            return True
+            return _Unavailable(_failure_detail())
         if boundary.intersection(reachable.split()):
-            return True
-    return False
+            return _Unavailable(f"{ref} reaches a shallow boundary", shallow=True)
+    return None
 
 
 def _git_added_order(import_dir: Path) -> dict[str, int] | None:
-    """filename -> its merge position, or None when this is not a full git clone.
+    """filename -> its merge position, or None when this is not a full git clone
+    (`_derive_added_order` also says why).
 
     The position is the index of the first-parent commit that added the file on
     the default branch (`DEFAULT_BRANCH_REF`) when it is there, else on `HEAD`,
@@ -218,10 +259,16 @@ def _git_added_order(import_dir: Path) -> dict[str, int] | None:
     a promotion branch (staging, main) receives dev's modules in one promotion
     commit, and its own first-parent history would order them by name.
     """
-    if _git(import_dir, "rev-parse", "--show-toplevel") is None or _history_is_shallow(
-        import_dir, (DEFAULT_BRANCH_REF, "HEAD")
-    ):
-        return None
+    return _derive_added_order(import_dir)[0]
+
+
+def _derive_added_order(import_dir: Path) -> tuple[dict[str, int] | None, _Unavailable | None]:
+    """`_git_added_order`'s result, with the reason when there is none."""
+    if _git(import_dir, "rev-parse", "--show-toplevel") is None:
+        return None, _Unavailable(_failure_detail())
+    problem = _history_problem(import_dir, (DEFAULT_BRANCH_REF, "HEAD"))
+    if problem is not None:
+        return None, problem
     added: dict[str, int] = {}
     offset = 0
     for ref in (DEFAULT_BRANCH_REF, "HEAD"):
@@ -243,7 +290,7 @@ def _git_added_order(import_dir: Path) -> dict[str, int] | None:
             ".",
         )
         if log is None:
-            return None
+            return None, _Unavailable(_failure_detail())
         commits = log.split("\x00")
         on_ref: dict[str, int] = {}
         for index, commit in enumerate(commits):
@@ -253,7 +300,7 @@ def _git_added_order(import_dir: Path) -> dict[str, int] | None:
         for name, position in on_ref.items():
             added.setdefault(name, position)
         offset += len(commits)
-    return added
+    return added, None
 
 
 def main(argv: list[str]) -> int:

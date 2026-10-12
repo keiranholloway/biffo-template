@@ -88,4 +88,11 @@
   --state-caution-soft: #fdf6e6;
   --state-negative: #8a5a5a;
   --state-negative-soft: #fbeeee;
+
+  /*
+   * Action colours: the portal's button colours (Tailwind gray-900 and
+   * rose-700), so kit buttons compute the same RGB as the portal's.
+   */
+  --action-primary: #111827;
+  --action-destructive: #be123c;
 }

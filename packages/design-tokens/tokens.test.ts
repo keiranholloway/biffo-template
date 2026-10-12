@@ -59,6 +59,8 @@ const PUBLISHED = [
   '--text-invert',
   '--text-invert-muted',
   '--text-muted',
+  '--action-primary',
+  '--action-destructive',
 ]
 
 describe('design tokens', () => {

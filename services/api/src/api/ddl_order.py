@@ -127,29 +127,44 @@ def format_manifest(import_dir: Path) -> str:
 
 def new_numbered_modules(import_dir: Path, base_ref: str = DEFAULT_BRANCH_REF) -> list[str] | None:
     """Numbered files this change adds to an import that already exists at its merge
-    base with `base_ref`. None when git cannot tell (no repo, shallow, no `base_ref`).
+    base with `base_ref`. None when git cannot tell (no repo, shallow, no `base_ref`);
+    `new_numbered_modules_or_reason` says why.
 
     A new import (absent at the merge base) may bring its numbered chain with it:
     `biffo data import` vendors an existing chain in one commit.
     """
-    if _git(import_dir, "rev-parse", "--show-toplevel") is None or _history_is_shallow(
-        import_dir, (base_ref, "HEAD")
-    ):
-        return None
+    return new_numbered_modules_or_reason(import_dir, base_ref)[0]
+
+
+def new_numbered_modules_or_reason(
+    import_dir: Path, base_ref: str = DEFAULT_BRANCH_REF
+) -> tuple[list[str] | None, _Unavailable | None]:
+    """`new_numbered_modules`' result, with the reason when there is none: shallow
+    history (`.shallow`), or the failing git command, exit code and stderr (`.detail`)."""
+    if _git(import_dir, "rev-parse", "--show-toplevel") is None:
+        return None, _Unavailable(_failure_detail())
+    problem = _history_problem(import_dir, (base_ref, "HEAD"))
+    if problem is not None:
+        return None, problem
     base = _git(import_dir, "merge-base", "HEAD", base_ref)
     if base is None:
-        return None
+        return None, _Unavailable(_failure_detail())
     base = base.strip()
     existing_at_base = _git(import_dir, "ls-tree", "--name-only", base, "--", ".")
     if existing_at_base is None:
-        return None
+        return None, _Unavailable(_failure_detail())
     base_names = {
         Path(line).name for line in existing_at_base.splitlines() if line.endswith(".sql")
     }
     if not base_names:
-        return []
-    return sorted(
-        f.name for f in import_dir.glob("*.sql") if is_numbered(f.name) and f.name not in base_names
+        return [], None
+    return (
+        sorted(
+            f.name
+            for f in import_dir.glob("*.sql")
+            if is_numbered(f.name) and f.name not in base_names
+        ),
+        None,
     )
 
 

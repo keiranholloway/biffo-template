@@ -72,8 +72,14 @@ plugin's publish workflow has run at least once. `biffo plugin upgrade --local
 upgrade does, resolving from disk instead:
 
 ```bash
-biffo plugin upgrade --local ~/code/biffo-plugin-acme-crm
+biffo plugin upgrade --local ~/code/biffo-plugin-acme-crm --force --non-interactive
 ```
+
+Do not pass a plugin name with `--local` — the plugin is identified from the
+checkout's manifest, and combining the two is an error. Without `--force` the
+command asks for confirmation, and `--non-interactive` makes any remaining
+question fail with an error instead of hanging; use both from scripts and
+agents, and never pipe `yes` into it.
 
 It replaces `services/<name>/` and `modules/plugins/<name>/` with the local
 checkout's current contents, re-applies the `[tool.uv.sources]` workspace

@@ -355,6 +355,16 @@ class TestDdlOrderGitFailures:
         with pytest.raises(DdlOrderUnavailableError):
             list_sql_files(import_dir)
 
+    def test_a_failed_git_call_is_reported_with_its_stderr_not_as_shallow(self, tmp_path):
+        # Not a git repo: rev-parse fails, which must not be blamed on a shallow clone.
+        _write_sql_file(tmp_path, "acme", "a_mod.sql")
+        _write_sql_file(tmp_path, "acme", "b_mod.sql")
+        with pytest.raises(DdlOrderUnavailableError) as info:
+            list_sql_files(tmp_path / "acme")
+        message = str(info.value)
+        assert "failed with exit code" in message
+        assert "not a shallow clone" in message
+
     def test_main_reports_an_underivable_order_and_exits_1(self, tmp_path, capsys):
         _write_sql_file(tmp_path, "acme", "a_mod.sql")
         _write_sql_file(tmp_path, "acme", "b_mod.sql")

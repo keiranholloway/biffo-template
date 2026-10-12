@@ -88,8 +88,7 @@ def apply_order(import_dir: Path) -> list[Path]:
     raise DdlOrderUnavailableError(
         f"Cannot derive the apply order of {import_dir}: it has unnumbered modules "
         f"({', '.join(f.name for f in unnumbered)}), and neither a full git clone nor "
-        f"an {MANIFEST_NAME} manifest is available. A shallow clone cannot order them; "
-        "fetch full history (fetch-depth: 0)."
+        f"an {MANIFEST_NAME} manifest is available. {_explain_git_failure(import_dir)}"
     )
 
 
@@ -159,6 +158,55 @@ def _read_manifest(manifest: Path, files: list[Path]) -> list[Path]:
             "It is written by the deploy packaging from the same files; rebuild the package."
         )
     return [by_name[name] for name in names]
+
+
+def _git_run(import_dir: Path, *args: str) -> tuple[int, str, str]:
+    """Run git; (exit code, stdout, stderr). Exit code -1 when git cannot be started."""
+    try:
+        result = subprocess.run(  # noqa: S603 -- fixed git argv, no shell
+            ["git", "-C", str(import_dir), *args],  # noqa: S607
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError as exc:
+        return -1, "", str(exc)
+    return result.returncode, result.stdout, result.stderr
+
+
+def _explain_git_failure(import_dir: Path) -> str:
+    """Why `_git_added_order` returned None, with git's own stderr, so a failed git
+    call is never reported as a shallow clone."""
+    steps: list[tuple[str, ...]] = [
+        ("rev-parse", "--show-toplevel"),
+        ("rev-parse", "--is-shallow-repository"),
+    ]
+    for args in steps:
+        code, out, err = _git_run(import_dir, *args)
+        if code != 0:
+            return (
+                f"`git {' '.join(args)}` failed with exit code {code}: "
+                f"{err.strip() or '(no stderr)'}. This is a git failure, not a shallow "
+                "clone (a 'dubious ownership' refusal needs `safe.directory`)."
+            )
+        if args[1] == "--is-shallow-repository" and out != "false\n":
+            return (
+                f"`git rev-parse --is-shallow-repository` printed {out.strip()!r}: "
+                "a shallow clone cannot order them; fetch full history (fetch-depth: 0)."
+            )
+    return (
+        "git rev-parse succeeded on a full clone, so `git log` must have failed "
+        "(see its stderr below, or run it by hand); fetch full history (fetch-depth: 0)."
+        + _log_failure_detail(import_dir)
+    )
+
+
+def _log_failure_detail(import_dir: Path) -> str:
+    for ref in (DEFAULT_BRANCH_REF, "HEAD"):
+        code, _, err = _git_run(import_dir, "log", "-1", "--format=%H", ref, "--", ".")
+        if code != 0 and _git_run(import_dir, "rev-parse", "--verify", "--quiet", ref)[0] == 0:
+            return f" `git log {ref}` exit code {code}: {err.strip() or '(no stderr)'}"
+    return ""
 
 
 def _git(import_dir: Path, *args: str) -> str | None:

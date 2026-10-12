@@ -552,6 +552,12 @@ jobs:
           # discover_ddl_import_dirs() can find them at runtime — same reasoning
           # as the plugin manifest loop above. See api.ddl_import module docstring.
           mkdir -p package/db/imports
+          # The checkout's safe.directory lives in a temporary HOME, so git here
+          # can refuse the repo as "dubious ownership"; trust it explicitly, and
+          # show the real git error now rather than a misleading "shallow clone".
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git -C .. rev-parse --is-shallow-repository
+          git -C .. log -1 --format='%H %s'
           for import_dir in ../db/imports/*/; do
             [ -d "$import_dir" ] || continue
             import_name=$(basename "$import_dir")
@@ -1449,6 +1455,12 @@ jobs:
           # discover_ddl_import_dirs() can find them at runtime — same reasoning
           # as the plugin manifest loop above. See api.ddl_import module docstring.
           mkdir -p package/db/imports
+          # The checkout's safe.directory lives in a temporary HOME, so git here
+          # can refuse the repo as "dubious ownership"; trust it explicitly, and
+          # show the real git error now rather than a misleading "shallow clone".
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git -C .. rev-parse --is-shallow-repository
+          git -C .. log -1 --format='%H %s'
           for import_dir in ../db/imports/*/; do
             [ -d "$import_dir" ] || continue
             import_name=$(basename "$import_dir")
@@ -2358,6 +2370,12 @@ jobs:
           # discover_ddl_import_dirs() can find them at runtime — same reasoning
           # as the plugin manifest loop above. See api.ddl_import module docstring.
           mkdir -p package/db/imports
+          # The checkout's safe.directory lives in a temporary HOME, so git here
+          # can refuse the repo as "dubious ownership"; trust it explicitly, and
+          # show the real git error now rather than a misleading "shallow clone".
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git -C .. rev-parse --is-shallow-repository
+          git -C .. log -1 --format='%H %s'
           for import_dir in ../db/imports/*/; do
             [ -d "$import_dir" ] || continue
             import_name=$(basename "$import_dir")

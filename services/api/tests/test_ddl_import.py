@@ -254,6 +254,50 @@ class TestDerivedApplyOrder:
         with pytest.raises(DdlOrderUnavailableError, match="shallow"):
             list_sql_files(clone / "acme")
 
+    def test_a_shallow_entry_for_an_unrelated_commit_does_not_block_the_order(self, repo):
+        """A reused runner's depth-1 checkout of a PR merge ref leaves a `.git/shallow`
+        entry for a commit on neither `dev` nor `HEAD`; the history read is complete."""
+        self._commit(repo, "zeta_first_merged.sql")
+        self._commit(repo, "alpha_second_merged.sql")
+        _git(repo, "update-ref", "refs/remotes/origin/dev", "HEAD")
+        _git(repo, "checkout", "-q", "-b", "unrelated", "HEAD~2")
+        self._commit(repo, "unrelated.sql")
+        unrelated = _git(repo, "rev-parse", "HEAD").strip()
+        _git(repo, "checkout", "-q", "dev")
+        _git(repo, "branch", "-q", "-D", "unrelated")
+        (repo / ".git" / "shallow").write_text(f"{unrelated}\n")
+        assert _git(repo, "rev-parse", "--is-shallow-repository").strip() == "true"
+
+        assert self._names(repo / "acme") == [
+            "000_schema.sql",
+            "001_tables.sql",
+            "zeta_first_merged.sql",
+            "alpha_second_merged.sql",
+        ]
+
+    def test_a_depth_one_dev_history_is_refused(self, repo, tmp_path_factory):
+        self._commit(repo, "zeta_first_merged.sql")
+        self._commit(repo, "alpha_second_merged.sql")
+        clone = tmp_path_factory.mktemp("depth1") / "clone"
+        clone.mkdir()
+        _git(clone, "init", "-q", "-b", "dev")
+        _git(clone, "fetch", "-q", "--depth", "1", f"file://{repo}", "dev:refs/remotes/origin/dev")
+        _git(clone, "checkout", "-q", "-b", "work", "origin/dev")
+        assert (clone / ".git" / "shallow").is_file()
+
+        with pytest.raises(DdlOrderUnavailableError, match="shallow"):
+            list_sql_files(clone / "acme")
+
+    def test_a_repo_with_no_shallow_file_orders_as_before(self, repo):
+        self._commit(repo, "zeta_first_merged.sql")
+        self._commit(repo, "alpha_second_merged.sql")
+        assert not (repo / ".git" / "shallow").exists()
+        assert ddl_order._git_added_order(repo / "acme") is not None
+        assert self._names(repo / "acme")[2:] == [
+            "zeta_first_merged.sql",
+            "alpha_second_merged.sql",
+        ]
+
     def test_without_git_or_a_manifest_unnumbered_modules_are_refused(self, tmp_path):
         _write_sql_file(tmp_path, "acme", "000_schema.sql")
         _write_sql_file(tmp_path, "acme", "slug_module.sql")

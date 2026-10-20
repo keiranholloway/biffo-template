@@ -136,7 +136,7 @@ class Settings(BaseSettings):
     agent_runtime_function_name: str = ""
     # The assistant's model — a platform config value, not per-user (ADR-0016 §4).
     # Any OpenRouter model slug; the runtime resolves the one OpenRouter key.
-    agent_assistant_model: str = "anthropic/claude-sonnet-4"
+    agent_assistant_model: str = "anthropic/claude-sonnet-4.6"
     # Hard turn bounds sized for the API Gateway ~29s integration cap the amendment
     # accepts (ADR-0016 §8). The runtime clamps to its own ceilings too; these are
     # what Core asks for.

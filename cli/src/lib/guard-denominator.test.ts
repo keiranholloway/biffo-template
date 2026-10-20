@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process'
 import { mkdirSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { beforeAll, describe, expect, it } from 'vitest'
@@ -13,6 +14,7 @@ import {
   outputStatesADenominator,
 } from './guard-denominator.js'
 import { makeTmpDir } from '../test-utils/tmp.js'
+import { TSX_TMP_BASE_ENV } from '../test-utils/tsx-env.js'
 
 /**
  * #1363's closing condition, enforced forward: *a new or modified gate cannot
@@ -171,12 +173,29 @@ beforeAll(async () => {
           : `HEAD — no copy of ${DENOMINATOR_MECHANISM_FILE} at the base commit (establishing run)`
 
   baseline = mechanism.readDenominatorBaseline(repoRoot)
-  observed = mechanism.observeDenominatorPrints(repoRoot, guards)
 
-  // Head's copy is exercised too whenever it differs, so an edit to the
-  // mechanism cannot land untested by the run that merges it.
-  if (loaded !== null && baseBlob !== headBlob) {
-    headObserved = head.observeDenominatorPrints(repoRoot, guards)
+  // The observation spawns `tsx` through `biffo.sh`, and the copy that runs it
+  // may be base's, which passes `process.env` through untouched. tsx binds its
+  // IPC pipe under `$TMPDIR/tsx-<uid>/`; under the per-run TMPDIR that path
+  // overruns the 107-char unix socket limit in the sandbox, every pipe gets the
+  // same truncated name, and children die with `listen EADDRINUSE`. So run the
+  // observation with a short private TMPDIR, then restore.
+  const scratch = makeTmpDir('tsx', process.env[TSX_TMP_BASE_ENV] ?? tmpdir())
+  const saved = { TMPDIR: process.env.TMPDIR, TMP: process.env.TMP, TEMP: process.env.TEMP }
+  process.env.TMPDIR = process.env.TMP = process.env.TEMP = scratch
+  try {
+    observed = mechanism.observeDenominatorPrints(repoRoot, guards)
+
+    // Head's copy is exercised too whenever it differs, so an edit to the
+    // mechanism cannot land untested by the run that merges it.
+    if (loaded !== null && baseBlob !== headBlob) {
+      headObserved = head.observeDenominatorPrints(repoRoot, guards)
+    }
+  } finally {
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k]
+      else process.env[k] = v
+    }
   }
 }, 600_000)
 

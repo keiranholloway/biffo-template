@@ -1,5 +1,14 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
+import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import ts from 'typescript'
 
@@ -776,9 +785,14 @@ export interface CommandRun {
  * result to record, not an error to propagate — a guard that fails here is
  * simply not observed to have printed anything. */
 export function runCheckCommand(repoRoot: string, name: string): CommandRun {
+  // Each check runs `tsx`, whose IPC pipe lives under `$TMPDIR/tsx-<uid>/`
+  // and must fit a unix socket path (107 chars). A short private TMPDIR per
+  // spawn keeps the pipe names unique and short (the sandbox `EADDRINUSE`).
+  const scratch = mkdtempSync(join(process.env['BIFFO_TSX_TMP_BASE'] ?? tmpdir(), 'tsx-'))
   try {
     const output = execFileSync('sh', ['scripts/biffo.sh', 'check', name], {
       cwd: repoRoot,
+      env: { ...process.env, TMPDIR: scratch, TMP: scratch, TEMP: scratch },
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
       timeout: 120_000,
@@ -792,6 +806,8 @@ export function runCheckCommand(repoRoot: string, name: string): CommandRun {
       output: `${err.stdout ?? ''}\n${err.stderr ?? ''}`,
       status: err.status ?? null,
     }
+  } finally {
+    rmSync(scratch, { recursive: true, force: true })
   }
 }
 

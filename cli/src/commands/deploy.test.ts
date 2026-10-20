@@ -14,6 +14,7 @@ import {
   warnIfDispatchRefStale,
 } from './deploy.js'
 import { makeTmpDir } from '../test-utils/tmp.js'
+import { tsxChildEnv } from '../test-utils/tsx-env.js'
 
 vi.mock('../lib/logger.js', () => ({
   log: { step: vi.fn(), success: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -323,7 +324,7 @@ describe('deploy — project-picker fallback under automation (issue #1066, real
   it('exits non-zero, names --project, and never renders the picker, with closed stdin and no flag', () => {
     const result = spawnSync(TSX_BIN, [ENTRY, 'deploy', 'dev'], {
       cwd,
-      env: { ...process.env, BIFFO_PROJECTS_DIR: projectsDir },
+      env: tsxChildEnv({ BIFFO_PROJECTS_DIR: projectsDir }),
       input: '', // closed stdin — no TTY, exactly the automation scenario in #1066
       encoding: 'utf8',
       timeout: 30_000,

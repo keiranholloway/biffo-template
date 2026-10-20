@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { makeTmpDir } from '../test-utils/tmp.js'
+import { tsxChildEnv } from '../test-utils/tsx-env.js'
 
 /**
  * `scripts/biffo.sh` resolves which copy of the CLI to run, and at which
@@ -57,7 +58,7 @@ describe('scripts/biffo.sh version resolution (#667)', () => {
     return execFileSync('sh', [SCRIPT, 'check', 'ownership'], {
       cwd: repo,
       encoding: 'utf8',
-      env: { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ''}` },
+      env: tsxChildEnv({ PATH: `${binDir}:${process.env.PATH ?? ''}` }),
     })
   }
 

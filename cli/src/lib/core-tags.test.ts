@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { CoreManifest } from './core-manifest.js'
 import { coreVersionTag, releasePathspecs, templateOwnedPathspecs } from './core-tags.js'
 import { makeTmpDir } from '../test-utils/tmp.js'
+import { tsxChildEnv } from '../test-utils/tsx-env.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(here, '../../..')
@@ -106,7 +107,14 @@ describe('sync-core-tag script', () => {
   /** Run the script against the temp repo. Without args it never pushes. */
   const run = (...args: string[]): { code: number; out: string } => {
     try {
-      return { code: 0, out: execFileSync(tsx, [script, ...args], { cwd: repo, encoding: 'utf8' }) }
+      return {
+        code: 0,
+        out: execFileSync(tsx, [script, ...args], {
+          cwd: repo,
+          encoding: 'utf8',
+          env: tsxChildEnv(),
+        }),
+      }
     } catch (err) {
       const e = err as { status: number; stdout: string; stderr: string }
       return { code: e.status, out: `${e.stdout}${e.stderr}` }

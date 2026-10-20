@@ -2,6 +2,7 @@ import { mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { defineConfig } from 'vitest/config'
+import { TSX_TMP_BASE_ENV } from './src/test-utils/tsx-env.js'
 import { RUN_DIR_ENV } from './src/test-utils/scratch-root-global-teardown.js'
 import { sweepScratchRoot } from './src/test-utils/scratch-root.js'
 
@@ -69,6 +70,16 @@ import { sweepScratchRoot } from './src/test-utils/scratch-root.js'
  * tests.
  */
 const TMP_ROOT = join(tmpdir(), 'biffo-tests')
+
+// tsx binds a unix socket at `$TMPDIR/tsx-<uid>/<pid>.pipe`, and `sun_path`
+// holds only 107 characters. Under the per-run directory below that path runs
+// well past the limit in any deeply-nested TMPDIR (the fleet sandbox's is ~70
+// characters before `biffo-tests/run-<pid>-<ms>/` is added), the kernel cuts
+// it short, and every pipe in the run then has the SAME truncated name: the
+// second concurrent tsx child dies with `listen EADDRINUSE`. Test helpers that
+// spawn tsx therefore put a short, private TMPDIR under this pre-override
+// base instead (`test-utils/tsx-env.ts`).
+process.env[TSX_TMP_BASE_ENV] ??= tmpdir()
 const STALE_MS = 2 * 60 * 60 * 1000
 
 mkdirSync(TMP_ROOT, { recursive: true })

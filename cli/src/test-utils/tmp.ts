@@ -28,8 +28,8 @@ const created = new Set<string>()
 /** Create a fresh temp directory under the OS tmp root, prefixed for easy
  * identification on disk. Registered for automatic cleanup — callers do not
  * need their own `rmSync`. */
-export function makeTmpDir(prefix: string): string {
-  const dir = mkdtempSync(join(tmpdir(), `${prefix}-`))
+export function makeTmpDir(prefix: string, base: string = tmpdir()): string {
+  const dir = mkdtempSync(join(base, `${prefix}-`))
   created.add(dir)
   return dir
 }

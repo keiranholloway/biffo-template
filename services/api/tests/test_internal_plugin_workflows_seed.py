@@ -212,6 +212,44 @@ def test_redeclaring_with_a_changed_value_updates_the_stored_row():
     asyncio.run(engine.dispose())
 
 
+def test_seed_adopts_unowned_keyless_row_with_same_name():
+    """A hand-seeded row (no owner, no key) with the same name is adopted."""
+    app, session_factory, engine = _build_app(principal=_principal("marketing"))
+
+    async def _insert(owner: str | None, name: str) -> str:
+        async with session_factory() as session:
+            row = WorkflowDefinition(
+                tenant_id="default",
+                owner_plugin=owner,
+                name=name,
+                trigger_source=_TRIGGER_SOURCE,
+                trigger_detail_type=_TRIGGER_DETAIL_TYPE,
+                action_type="email",
+                action_config={"subject": "OLD"},
+                enabled=True,
+            )
+            session.add(row)
+            await session.commit()
+            return row.id
+
+    old_id = asyncio.run(_insert(None, "Synthesis fan-in"))
+    asyncio.run(_insert("other", "Synthesis fan-in"))
+    client = TestClient(app)
+
+    resp = client.post(_SEED_URL, json=[_definition()])
+    assert resp.status_code == 200, resp.text
+    assert resp.json()[0]["definition_id"] == old_id
+    assert resp.json()[0]["created"] is False
+
+    row = asyncio.run(_get_fan_in_row(session_factory, "marketing"))
+    assert row is not None and row.id == old_id
+    assert row.action_config["subject"] == "Synthesis complete"
+    # The other plugin's same-named row was left alone (no third row created).
+    assert asyncio.run(_get_row_count(session_factory, tenant_id="default")) == 2
+
+    asyncio.run(engine.dispose())
+
+
 def test_plugin_a_cannot_write_plugin_bs_definition():
     """3. Plugin A cannot write plugin B's definition — the scope comes from
     the verified ServicePrincipal, never the request body (there is no field

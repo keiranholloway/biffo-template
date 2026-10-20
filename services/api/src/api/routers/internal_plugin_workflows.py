@@ -30,6 +30,10 @@ never at risk of being silently overwritten by a plugin's cold-start seed,
 and a plugin's own declared workflow is never visible to — or editable by —
 the admin CRUD surface, which has no ``owner_plugin`` concept at all.
 
+Adoption of hand-seeded rows: a pre-existing row with the same ``name`` and
+a NULL ``definition_key`` (unowned, or owned by the caller) is adopted rather
+than duplicated — see ``seed_workflows``.
+
 Deliberately deferred, and named here rather than left silent:
 
 - **No emitted ``WORKFLOW_DEFINITION_CREATED``/``UPDATED`` events.** Those
@@ -49,7 +53,7 @@ Deliberately deferred, and named here rather than left silent:
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -106,6 +110,31 @@ async def _existing_by_key(
         )
     )
     return {row.definition_key: row for row in rows if row.definition_key is not None}
+
+
+async def _adoptable_by_name(
+    db: AsyncSession, *, tenant_id: str, plugin_name: str, name: str
+) -> WorkflowDefinition | None:
+    """A hand-seeded row this plugin may adopt: same ``name``, no ``definition_key``.
+
+    Matches rows whose ``owner_plugin`` is this plugin or NULL (an unowned,
+    hand-seeded row). Rows owned by another plugin are never matched. When
+    several match, the oldest id is adopted so the choice is deterministic.
+    """
+    return await db.scalar(
+        select(WorkflowDefinition)
+        .where(
+            WorkflowDefinition.tenant_id == tenant_id,
+            WorkflowDefinition.definition_key.is_(None),
+            WorkflowDefinition.name == name,
+            or_(
+                WorkflowDefinition.owner_plugin == plugin_name,
+                WorkflowDefinition.owner_plugin.is_(None),
+            ),
+        )
+        .order_by(WorkflowDefinition.id)
+        .limit(1)
+    )
 
 
 def _apply_fields(row: WorkflowDefinition, definition: SeedWorkflowDefinitionRequest) -> None:
@@ -192,6 +221,20 @@ async def seed_workflows(
     since every concurrent caller in this scenario is the *same* build
     declaring the *same* values, that is a no-op in practice.
 
+    Adoption: when no row carries the declared ``definition_key``, an existing
+    row in the same tenant with the same ``name`` and a NULL ``definition_key``
+    (owned by this plugin, or unowned/hand-seeded) is adopted: its
+    ``definition_key`` and ``owner_plugin`` are set and every field is
+    overwritten, and the result reports ``created=False``. Rows owned by other
+    plugins are never adopted.
+
+    Request body: a JSON array of objects, each with ``definition_key``
+    (``^[a-z][a-z0-9-]*$``, max 100), ``name``, ``trigger_source``,
+    ``trigger_detail_type``, ``action_type``, ``action_config``, and optional
+    ``trigger_filter``, ``enabled``, ``schedule_config``, ``scope``
+    (see ``SeedWorkflowDefinitionRequest``). Response: a list of
+    ``{definition_key, definition_id, created}``.
+
     Args:
         definitions: Definitions to declare. Each must include all required
             fields plus ``definition_key``. Empty list is valid and changes
@@ -229,6 +272,21 @@ async def seed_workflows(
 
         row = existing.get(definition.definition_key)
         created = row is None
+
+        if row is None:
+            # Adopt a hand-seeded row of the same name that has no key yet
+            # (owned by this plugin or unowned), so the seed does not leave a
+            # duplicate firing alongside it.
+            adopted = await _adoptable_by_name(
+                db, tenant_id=principal.tenant_id, plugin_name=plugin_name, name=definition.name
+            )
+            if adopted is not None:
+                adopted.owner_plugin = plugin_name
+                adopted.definition_key = definition.definition_key
+                _apply_fields(adopted, definition)
+                await db.flush()
+                row = adopted
+                created = False
 
         if row is None:
             row = WorkflowDefinition(

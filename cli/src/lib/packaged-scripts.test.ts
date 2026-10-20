@@ -10,6 +10,7 @@ import { describe, expect, it } from 'vitest'
 import { makeTmpDir } from '../test-utils/tmp.js'
 import { isInstanceRepo } from './core-version.js'
 import { findPackagedScript } from './packaged-scripts.js'
+import { tsxChildEnv } from '../test-utils/tsx-env.js'
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 const runningInInstance = isInstanceRepo(repoRoot)
@@ -64,7 +65,12 @@ describe('scripts/biffo.sh preserves the child exit code', () => {
         '-R',
         'keiranholloway/biffo-template',
       ],
-      { encoding: 'utf8', cwd: repoRoot, stdio: ['ignore', 'pipe', 'pipe'] },
+      {
+        encoding: 'utf8',
+        cwd: repoRoot,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: tsxChildEnv(),
+      },
     )
     // 2 = cannot tell (no such PR). If this ever reads 1, the bridge has gone
     // back to a wrapper that rewrites its child's status.
@@ -95,7 +101,7 @@ describe('scripts/biffo.sh resolves a satellite through its shared-version pin',
       const result = spawnSync('sh', [join(repoRoot, 'scripts/biffo.sh'), 'wait-for-checks', '1'], {
         cwd: dir,
         encoding: 'utf8',
-        env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ''}` },
+        env: tsxChildEnv({ PATH: `${bin}:${process.env.PATH ?? ''}` }),
       })
 
       expect(`${result.stdout}${result.stderr}`).toContain('@biffo/cli@0.231.2')
@@ -116,6 +122,7 @@ describe('scripts/biffo.sh resolves a satellite through its shared-version pin',
       const result = spawnSync('sh', [join(repoRoot, 'scripts/biffo.sh'), 'wait-for-checks', '1'], {
         cwd: dir,
         encoding: 'utf8',
+        env: tsxChildEnv(),
       })
       expect(result.status).toBe(2)
       expect(`${result.stdout}${result.stderr}`).toContain('carries no readable version')

@@ -10,6 +10,7 @@ import {
   type PublishAttempt,
 } from './npm-publish.js'
 import { makeTmpDir } from '../test-utils/tmp.js'
+import { tsxChildEnv } from '../test-utils/tsx-env.js'
 
 /**
  * The logs below are npm's real output shapes, not paraphrases. The whole point
@@ -289,12 +290,11 @@ describe('report-publish-failure script', () => {
     try {
       const out = execFileSync(tsx, [script], {
         encoding: 'utf8',
-        env: {
-          ...process.env,
+        env: tsxChildEnv({
           PUBLISH_LOG: logPath,
           GITHUB_STEP_SUMMARY: summaryPath,
           ...env,
-        },
+        }),
       })
       return { code: 0, out, summary: readFileSync(summaryPath, 'utf8') }
     } catch (err) {
